@@ -90,8 +90,62 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
         notifyForId(playingId);
     }
 
+    /** Single-notify reset of the playing state (avoids double-rebind flicker). */
+    public void clearPlaying() {
+        long old = playingId;
+        playingId = -1;
+        paused = false;
+        notifyForId(old);
+    }
+
     public void refreshItem(long id) {
         notifyForId(id);
+    }
+
+    /** Update only the heart artwork, no rebind (no flicker on favorite taps). */
+    public void paintFavorite(RecyclerView rv, long id, boolean fav) {
+        RecyclerView.ViewHolder vh = rv.findViewHolderForItemId(id);
+        if (vh instanceof Vh) {
+            Vh h = (Vh) vh;
+            h.fav.setImageResource(fav ? R.drawable.ic_heart_filled : R.drawable.ic_heart);
+            h.fav.setAlpha(fav ? 1f : 0.55f);
+        }
+    }
+
+    /** Toggle the expanded section in place, no rebind (no flicker on expand). */
+    public void toggleExpandedDirect(RecyclerView rv, long id) {
+        boolean expand = expandedId != id;
+        expandedId = expand ? id : -1;
+        RecyclerView.ViewHolder vh = rv.findViewHolderForItemId(id);
+        if (vh instanceof Vh) {
+            Vh h = (Vh) vh;
+            h.expanded.setVisibility(expand ? View.VISIBLE : View.GONE);
+            h.chevron.animate().rotation(expand ? 180f : 0f).setDuration(180).start();
+            if (expand) {
+                Take t = findTake(id);
+                if (t != null) {
+                    h.totalTime.setText(Take.formatDuration(t.durationMs));
+                    if (t.id != playingId) {
+                        h.curTime.setText(Take.formatDuration(0));
+                        if (!h.tracking) h.scrubber.setProgress(0);
+                    }
+                    h.btnExport.setVisibility(t.hasFile() ? View.VISIBLE : View.GONE);
+                }
+            }
+        }
+    }
+
+    /** True while the user is actively dragging this take's scrubber. */
+    public boolean isTracking(long id, RecyclerView rv) {
+        RecyclerView.ViewHolder vh = rv.findViewHolderForItemId(id);
+        return vh instanceof Vh && ((Vh) vh).tracking;
+    }
+
+    private Take findTake(long id) {
+        for (Take t : takes) {
+            if (t.id == id) return t;
+        }
+        return null;
     }
 
     public void setSelection(Set<Long> selected, boolean mode) {

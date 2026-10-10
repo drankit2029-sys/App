@@ -1,14 +1,21 @@
 package com.example.hello;
 
+import android.Manifest;
+import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.media.MediaPlayer;
+import android.media.MediaScannerConnection;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.provider.MediaStore;
 import android.text.Editable;
 import android.text.InputType;
 import android.text.TextWatcher;
@@ -24,17 +31,25 @@ import android.widget.LinearLayout;
 import android.widget.PopupMenu;
 import android.widget.TextView;
 
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AlertDialog;
+import androidx.core.content.ContextCompat;
 import androidx.core.content.FileProvider;
 import androidx.fragment.app.Fragment;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
+import androidx.recyclerview.widget.SimpleItemAnimator;
 
 import com.google.android.material.snackbar.Snackbar;
 
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -84,6 +99,40 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
 
     private long lastBackPress = 0;
 
+    private ActivityResultLauncher<String> createDocLauncher;
+    private ActivityResultLauncher<String> storagePermLauncher;
+    private Take pendingSaveTake;
+    private List<Take> pendingSaveMany;
+
+    @Override
+    public void onCreate(@Nullable Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        createDocLauncher = registerForActivityResult(
+                new ActivityResultContracts.CreateDocument("audio/mp4"), uri -> {
+                    Take t = pendingSaveTake;
+                    pendingSaveTake = null;
+                    if (uri != null && t != null && t.hasFile()) {
+                        copyToUri(new File(t.filePath), uri);
+                    }
+                });
+        storagePermLauncher = registerForActivityResult(
+                new ActivityResultContracts.RequestPermission(), granted -> {
+                    if (granted) {
+                        if (pendingSaveTake != null) {
+                            Take t = pendingSaveTake;
+                            pendingSaveTake = null;
+                            saveToMusicFolder(singleton(t));
+                        } else if (pendingSaveMany != null) {
+                            List<Take> many = pendingSaveMany;
+                            pendingSaveMany = null;
+                            saveToMusicFolder(many);
+                        }
+                    } else {
+                        snack(R.string.need_storage);
+                    }
+                });
+    }
+
     @Nullable
     @Override
     public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container,
@@ -129,6 +178,10 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
 
         adapter = new TakesAdapter(this);
         list.setLayoutManager(new LinearLayoutManager(requireContext()));
+        // No fade animation on change events: kills the card flicker on updates.
+        if (list.getItemAnimator() instanceof SimpleItemAnimator) {
+            ((SimpleItemAnimator) list.getItemAnimator()).setSupportsChangeAnimations(false);
+        }
         list.setAdapter(adapter);
 
         v.findViewById(R.id.searchToggle).setOnClickListener(view -> toggleSearch());
@@ -153,17 +206,13 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         });
         searchClear.setOnClickListener(view -> searchInput.setText(""));
 
-        selClose(v);
+        v.findViewById(R.id.selClose).setOnClickListener(view -> exitSelection());
         selAll.setOnClickListener(view -> toggleSelectAll());
         selDelete.setOnClickListener(view -> deleteSelected());
-        selExport.setOnClickListener(view -> exportSelected());
+        selExport.setOnClickListener(view -> showMassExportOptions());
 
         paintChips();
         refresh();
-    }
-
-    private void selClose(View v) {
-        v.findViewById(R.id.selClose).setOnClickListener(view -> exitSelection());
     }
 
     @Override
@@ -184,13 +233,11 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         super.onDestroyView();
     }
 
-    // ---- filtering / sorting / search ----
+    // ---- search ----
 
     private void toggleSearch() {
         if (searchBar.getVisibility() == View.VISIBLE) {
-            searchBar.setVisibility(View.GONE);
-            hideKeyboard();
-            if (!query.isEmpty()) searchInput.setText("");
+            closeSearch();
         } else {
             searchBar.setVisibility(View.VISIBLE);
             searchInput.requestFocus();
@@ -200,6 +247,17 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         }
     }
 
+    private void closeSearch() {
+        searchBar.setVisibility(View.GONE);
+        hideKeyboard();
+        searchInput.clearFocus();
+        if (!query.isEmpty()) searchInput.setText("");
+    }
+
+    private boolean isSearchOpen() {
+        return searchBar != null && searchBar.getVisibility() == View.VISIBLE;
+    }
+
     private void hideKeyboard() {
         InputMethodManager imm = (InputMethodManager)
                 requireContext().getSystemService(Context.INPUT_METHOD_SERVICE);
@@ -207,6 +265,8 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             imm.hideSoftInputFromWindow(getView().getWindowToken(), 0);
         }
     }
+
+    // ---- filtering / sorting ----
 
     private void paintChips() {
         for (int i = 0; i < chips.length; i++) {
@@ -280,13 +340,10 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         Collections.sort(out, cmp);
         visible = out;
 
-        // Prune selection of takes that no longer exist.
         Set<Long> alive = new HashSet<>();
         for (Take t : TakesRepository.all()) alive.add(t.id);
         selection.retainAll(alive);
-        if (selectionMode && selection.isEmpty()) {
-            selectionMode = false;
-        }
+        if (selectionMode && selection.isEmpty()) selectionMode = false;
 
         adapter.setTakes(out);
         adapter.setPlayingId(playingId);
@@ -376,7 +433,7 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         selDelete.setAlpha(selection.isEmpty() ? 0.35f : 1f);
     }
 
-    // ---- playback (silent: no toasts) ----
+    // ---- playback (silent: no popups) ----
 
     @Override
     public void onPlay(Take take) {
@@ -405,7 +462,19 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                     } catch (Exception ignored) {}
                 }
                 final long id = take.id;
-                player.setOnCompletionListener(mp -> completePlayback(id));
+                player.setOnCompletionListener(mp -> {
+                    // Loop while the user is still scrubbing; otherwise finish.
+                    if (adapter.isTracking(id, list)) {
+                        try {
+                            mp.seekTo(0);
+                            mp.start();
+                        } catch (Exception e) {
+                            completePlayback(id);
+                        }
+                    } else {
+                        completePlayback(id);
+                    }
+                });
                 player.start();
                 simMode = false;
             } catch (Exception e) {
@@ -459,19 +528,14 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
 
     private void completePlayback(long id) {
         if (playingId != id) return;
-        long done = playingId;
-        stopPlayback();
-        if (getView() != null) adapter.paintProgress(list, done, 0);
+        stopPlayback(); // single UI update; rebind already restores scrubber + icon
     }
 
     private void stopPlayback() {
         handler.removeCallbacks(progressTick);
         playingId = -1;
         playPaused = false;
-        if (adapter != null) {
-            adapter.setPaused(false);
-            adapter.setPlayingId(-1);
-        }
+        if (adapter != null) adapter.clearPlaying();
         if (player != null) {
             try {
                 player.stop();
@@ -502,6 +566,14 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             if (simMode) {
                 pos = simPosition();
                 if (pos >= t.durationMs) {
+                    // Loop while the user is still scrubbing; otherwise finish.
+                    if (adapter.isTracking(playingId, list)) {
+                        simBase = 0;
+                        simStartedAt = SystemClock.elapsedRealtime();
+                        adapter.paintProgress(list, playingId, 0);
+                        handler.postDelayed(this, 250);
+                        return;
+                    }
                     completePlayback(playingId);
                     return;
                 }
@@ -531,7 +603,6 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                 simStartedAt = SystemClock.elapsedRealtime();
             }
         } else if (playingId == take.id) {
-            // Paused: move the resume point.
             if (!simMode && player != null) {
                 try {
                     player.seekTo((int) posMs);
@@ -553,7 +624,8 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             toggleSelection(take);
             return;
         }
-        adapter.setExpandedId(adapter.getExpandedId() == take.id ? -1 : take.id);
+        // In-place expand, no list rebind -> no flicker.
+        adapter.toggleExpandedDirect(list, take.id);
     }
 
     @Override
@@ -568,8 +640,12 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             return;
         }
         TakesRepository.toggleFavorite(take.id);
-        if (filter == Filter.FAV && !take.favorite) refresh();
-        else adapter.refreshItem(take.id);
+        if (filter == Filter.FAV && !take.favorite) {
+            refresh(); // item leaves the Favorites filter
+        } else {
+            // Paint only the heart, no rebind -> no flicker, pop animation survives.
+            adapter.paintFavorite(list, take.id, take.favorite);
+        }
     }
 
     @Override
@@ -603,7 +679,20 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
     @Override
     public void onExport(Take take) {
         if (!take.hasFile()) return;
-        shareFiles(java.util.Collections.singletonList(take));
+        new AlertDialog.Builder(requireContext())
+                .setTitle(R.string.action_export)
+                .setItems(new CharSequence[]{
+                        getString(R.string.export_share),
+                        getString(R.string.export_save_device)}, (d, which) -> {
+                    if (which == 0) {
+                        shareFiles(singleton(take));
+                    } else {
+                        pendingSaveTake = take;
+                        createDocLauncher.launch(safeName(new File(take.filePath).getName()));
+                    }
+                })
+                .setNegativeButton(R.string.cancel, null)
+                .show();
     }
 
     @Override
@@ -633,24 +722,46 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         View root = getView();
         if (root == null) return;
         Snackbar.make(root, text, Snackbar.LENGTH_LONG)
-                .setAction(R.string.undo, v -> refreshAfterUndo(op))
+                .setAction(R.string.undo, v -> {
+                    TakesRepository.restore(op);
+                    refresh();
+                })
                 .show();
     }
 
-    private void refreshAfterUndo(TakesRepository.RestoreOp op) {
-        TakesRepository.restore(op);
-        refresh();
+    private void snack(int resId) {
+        View root = getView();
+        if (root != null) Snackbar.make(root, resId, Snackbar.LENGTH_SHORT).show();
     }
 
-    // ---- export ----
+    // ---- export: share + save to device ----
 
-    private void exportSelected() {
+    private List<Take> singleton(Take t) {
+        List<Take> l = new ArrayList<>();
+        l.add(t);
+        return l;
+    }
+
+    private void showMassExportOptions() {
         List<Take> files = new ArrayList<>();
         for (Take t : TakesRepository.all()) {
             if (selection.contains(t.id) && t.hasFile()) files.add(t);
         }
         if (files.isEmpty()) return;
-        shareFiles(files);
+        final int n = files.size();
+        new AlertDialog.Builder(requireContext())
+                .setTitle(R.string.action_export)
+                .setItems(new CharSequence[]{
+                        getString(R.string.export_share_multi, n),
+                        getString(R.string.export_save_multi, n)}, (d, which) -> {
+                    if (which == 0) {
+                        shareFiles(files);
+                    } else {
+                        saveToMusicFolderWithPerm(files);
+                    }
+                })
+                .setNegativeButton(R.string.cancel, null)
+                .show();
     }
 
     private void shareFiles(List<Take> takes) {
@@ -673,17 +784,139 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
             startActivity(Intent.createChooser(intent, getString(R.string.action_export)));
         } catch (Exception e) {
-            View root = getView();
-            if (root != null) Snackbar.make(root, "Couldn't export", Snackbar.LENGTH_SHORT).show();
+            snack(R.string.couldnt_export);
         }
     }
 
+    /** Save into the permanent, user-visible Music/TakeOne folder. */
+    private void saveToMusicFolderWithPerm(List<Take> takes) {
+        if (takes.isEmpty()) return;
+        if (Build.VERSION.SDK_INT < 29 && ContextCompat.checkSelfPermission(requireContext(),
+                Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+            pendingSaveTake = null;
+            pendingSaveMany = new ArrayList<>(takes);
+            storagePermLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE);
+            return;
+        }
+        saveToMusicFolder(takes);
+    }
+
+    private void saveToMusicFolder(List<Take> takes) {
+        final Context app = requireContext().getApplicationContext();
+        final List<Take> copy = new ArrayList<>(takes);
+        new Thread(() -> {
+            int saved = 0;
+            for (Take t : copy) {
+                if (saveOneToMusic(app, t)) saved++;
+            }
+            final int n = saved;
+            handler.post(() -> {
+                View root = getView();
+                if (root == null) return;
+                Snackbar.make(root, n == 1 ? getString(R.string.saved_music_one)
+                        : getString(R.string.saved_music_many, n),
+                        Snackbar.LENGTH_LONG).show();
+            });
+        }).start();
+    }
+
+    private boolean saveOneToMusic(Context ctx, Take t) {
+        File src = new File(t.filePath);
+        if (!src.exists()) return false;
+        try {
+            if (Build.VERSION.SDK_INT >= 29) {
+                ContentValues cv = new ContentValues();
+                cv.put(MediaStore.Audio.Media.DISPLAY_NAME, src.getName());
+                cv.put(MediaStore.Audio.Media.MIME_TYPE, "audio/mp4");
+                cv.put(MediaStore.Audio.Media.RELATIVE_PATH, "Music/TakeOne");
+                cv.put(MediaStore.Audio.Media.IS_PENDING, 1);
+                Uri uri = ctx.getContentResolver().insert(
+                        MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, cv);
+                if (uri == null) return false;
+                try (InputStream in = new FileInputStream(src);
+                     OutputStream out = ctx.getContentResolver().openOutputStream(uri)) {
+                    if (out == null) return false;
+                    copyStream(in, out);
+                }
+                ContentValues done = new ContentValues();
+                done.put(MediaStore.Audio.Media.IS_PENDING, 0);
+                ctx.getContentResolver().update(uri, done, null, null);
+                return true;
+            } else {
+                File dir = new File(Environment.getExternalStoragePublicDirectory(
+                        Environment.DIRECTORY_MUSIC), "TakeOne");
+                if (!dir.exists() && !dir.mkdirs()) return false;
+                File dst = unique(new File(dir, src.getName()));
+                try (InputStream in = new FileInputStream(src);
+                     OutputStream out = new FileOutputStream(dst)) {
+                    copyStream(in, out);
+                }
+                MediaScannerConnection.scanFile(ctx,
+                        new String[]{dst.getAbsolutePath()}, null, null);
+                return true;
+            }
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private File unique(File dst) {
+        if (!dst.exists()) return dst;
+        String name = dst.getName();
+        String base = name;
+        String ext = "";
+        int dot = name.lastIndexOf('.');
+        if (dot > 0) {
+            base = name.substring(0, dot);
+            ext = name.substring(dot);
+        }
+        int i = 2;
+        while (true) {
+            File c = new File(dst.getParent(), base + " (" + i + ")" + ext);
+            if (!c.exists()) return c;
+            i++;
+        }
+    }
+
+    /** Copy the take into a user-picked document (Save to device). */
+    private void copyToUri(File src, Uri dst) {
+        final Context app = requireContext().getApplicationContext();
+        new Thread(() -> {
+            boolean ok;
+            try (InputStream in = new FileInputStream(src);
+                 OutputStream out = app.getContentResolver().openOutputStream(dst)) {
+                if (out == null) throw new IllegalStateException("no stream");
+                copyStream(in, out);
+                ok = true;
+            } catch (Exception e) {
+                ok = false;
+            }
+            final boolean done = ok;
+            handler.post(() -> snack(done ? R.string.take_saved : R.string.couldnt_save));
+        }).start();
+    }
+
+    private void copyStream(InputStream in, OutputStream out) throws Exception {
+        byte[] buf = new byte[8192];
+        int n;
+        while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
+        out.flush();
+    }
+
+    private String safeName(String name) {
+        return name.replaceAll("[\\\\/:*?\"<>|]", "_");
+    }
+
     // ---- back handling ----
-    // @return true if the press was consumed.
+    // Order: selection -> open search -> double-press exit. True = consumed.
 
     public boolean onBackPressed() {
         if (selectionMode) {
             exitSelection();
+            return true;
+        }
+        if (isSearchOpen()) {
+            closeSearch();
             return true;
         }
         long now = SystemClock.elapsedRealtime();
