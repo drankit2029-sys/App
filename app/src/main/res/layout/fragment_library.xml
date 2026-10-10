@@ -5,8 +5,9 @@
     android:background="@color/bg"
     android:orientation="vertical">
 
-    <!-- Header -->
+    <!-- Normal header -->
     <LinearLayout
+        android:id="@+id/normalHeader"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:gravity="center_vertical"
@@ -48,12 +49,73 @@
             android:src="@drawable/ic_search" />
 
         <ImageView
-            android:id="@+id/libraryMore"
+            android:id="@+id/sortBtn"
             android:layout_width="44dp"
             android:layout_height="44dp"
-            android:alpha="0.7"
+            android:contentDescription="@string/sort_by"
             android:padding="11dp"
-            android:src="@drawable/ic_more" />
+            android:src="@drawable/ic_sort" />
+    </LinearLayout>
+
+    <!-- Selection action bar -->
+    <LinearLayout
+        android:id="@+id/selectionBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingLeft="8dp"
+        android:paddingTop="12dp"
+        android:paddingRight="12dp"
+        android:paddingBottom="4dp"
+        android:visibility="gone">
+
+        <ImageView
+            android:id="@+id/selClose"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:contentDescription="@string/clear_selection"
+            android:padding="11dp"
+            android:src="@drawable/ic_close" />
+
+        <TextView
+            android:id="@+id/selCount"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:fontFamily="sans-serif-medium"
+            android:textColor="@color/text_primary"
+            android:textSize="18sp" />
+
+        <TextView
+            android:id="@+id/selAll"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
+            android:clickable="true"
+            android:focusable="true"
+            android:fontFamily="sans-serif-medium"
+            android:gravity="center"
+            android:paddingLeft="12dp"
+            android:paddingRight="12dp"
+            android:text="@string/select_all"
+            android:textColor="@color/text_secondary"
+            android:textSize="13sp" />
+
+        <ImageView
+            android:id="@+id/selExport"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:contentDescription="@string/action_export"
+            android:padding="11dp"
+            android:src="@drawable/ic_download" />
+
+        <ImageView
+            android:id="@+id/selDelete"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:contentDescription="@string/action_delete"
+            android:padding="11dp"
+            android:src="@drawable/ic_trash" />
     </LinearLayout>
 
     <!-- Search -->
@@ -84,55 +146,147 @@
             android:layout_marginStart="8dp"
             android:layout_weight="1"
             android:background="@null"
-            android:hint="Search takes"
+            android:hint="@string/search_hint"
             android:imeOptions="actionSearch"
             android:inputType="text"
             android:maxLines="1"
             android:textColor="@color/text_primary"
             android:textColorHint="@color/text_hint"
             android:textSize="14sp" />
+
+        <ImageView
+            android:id="@+id/searchClear"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:contentDescription="@string/clear_search"
+            android:padding="9dp"
+            android:src="@drawable/ic_close"
+            android:visibility="gone" />
     </LinearLayout>
 
     <!-- Filter chips -->
-    <LinearLayout
+    <HorizontalScrollView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:paddingLeft="16dp"
-        android:paddingTop="12dp"
-        android:paddingRight="16dp"
-        android:paddingBottom="4dp">
+        android:clipToPadding="false"
+        android:horizontalScrollBarEnabled="false"
+        android:paddingBottom="4dp"
+        android:paddingTop="12dp">
 
-        <TextView
-            android:id="@+id/chipAll"
+        <LinearLayout
+            android:id="@+id/chipRow"
             android:layout_width="wrap_content"
-            android:layout_height="36dp"
-            android:background="@drawable/bg_badge"
-            android:clickable="true"
-            android:focusable="true"
-            android:fontFamily="sans-serif-medium"
-            android:gravity="center"
-            android:paddingLeft="18dp"
-            android:paddingRight="18dp"
-            android:text="All"
-            android:textColor="@color/text_primary"
-            android:textSize="13sp" />
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:paddingLeft="16dp"
+            android:paddingRight="16dp">
 
-        <TextView
-            android:id="@+id/chipFav"
-            android:layout_width="wrap_content"
-            android:layout_height="36dp"
-            android:layout_marginStart="8dp"
-            android:background="@drawable/bg_badge"
-            android:clickable="true"
-            android:focusable="true"
-            android:gravity="center"
-            android:paddingLeft="18dp"
-            android:paddingRight="18dp"
-            android:text="Favorites"
-            android:textColor="@color/text_secondary"
-            android:textSize="13sp" />
-    </LinearLayout>
+            <TextView
+                android:id="@+id/chipAll"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:background="@drawable/bg_badge"
+                android:clickable="true"
+                android:focusable="true"
+                android:fontFamily="sans-serif-medium"
+                android:gravity="center"
+                android:paddingLeft="18dp"
+                android:paddingRight="18dp"
+                android:text="@string/filter_all"
+                android:textColor="@color/text_primary"
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/chipFav"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:layout_marginStart="8dp"
+                android:background="@drawable/bg_badge"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:paddingLeft="18dp"
+                android:paddingRight="18dp"
+                android:text="@string/filter_fav"
+                android:textColor="@color/text_secondary"
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/chipDay"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:layout_marginStart="8dp"
+                android:background="@drawable/bg_badge"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:paddingLeft="18dp"
+                android:paddingRight="18dp"
+                android:text="@string/filter_day"
+                android:textColor="@color/text_secondary"
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/chipWeek"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:layout_marginStart="8dp"
+                android:background="@drawable/bg_badge"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:paddingLeft="18dp"
+                android:paddingRight="18dp"
+                android:text="@string/filter_week"
+                android:textColor="@color/text_secondary"
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/chipShort"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:layout_marginStart="8dp"
+                android:background="@drawable/bg_badge"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:paddingLeft="18dp"
+                android:paddingRight="18dp"
+                android:text="@string/filter_short"
+                android:textColor="@color/text_secondary"
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/chipWav"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:layout_marginStart="8dp"
+                android:background="@drawable/bg_badge"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:paddingLeft="18dp"
+                android:paddingRight="18dp"
+                android:text="@string/filter_wav"
+                android:textColor="@color/text_secondary"
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/chipM4a"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:layout_marginStart="8dp"
+                android:background="@drawable/bg_badge"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:paddingLeft="18dp"
+                android:paddingRight="18dp"
+                android:text="@string/filter_m4a"
+                android:textColor="@color/text_secondary"
+                android:textSize="13sp" />
+        </LinearLayout>
+    </HorizontalScrollView>
 
     <!-- List -->
     <androidx.recyclerview.widget.RecyclerView
@@ -162,6 +316,7 @@
             android:src="@drawable/ic_wave" />
 
         <TextView
+            android:id="@+id/emptyTitle"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
@@ -171,6 +326,7 @@
             android:textSize="17sp" />
 
         <TextView
+            android:id="@+id/emptySub"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"

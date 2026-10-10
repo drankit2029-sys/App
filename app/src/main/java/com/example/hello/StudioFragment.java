@@ -210,8 +210,7 @@ public class StudioFragment extends Fragment {
         long duration = currentDuration();
         stopRecorderOk();
         if (outFile != null && outFile.exists()) {
-            TakesRepository.addRecording(outFile,
-                    Math.max(duration, 1000), new Date().toString());
+            TakesRepository.addRecording(outFile, Math.max(duration, 1000));
             Toast.makeText(requireContext(), R.string.msg_saved, Toast.LENGTH_SHORT).show();
         }
         resetUi();

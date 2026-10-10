@@ -58,8 +58,13 @@ public class MainActivity extends AppCompatActivity {
                         exitStudio();
                     }
                 } else {
-                    setEnabled(false);
-                    getOnBackPressedDispatcher().onBackPressed();
+                    Fragment f = getSupportFragmentManager().findFragmentByTag("LIB");
+                    boolean consumed = f instanceof LibraryFragment
+                            && ((LibraryFragment) f).onBackPressed();
+                    if (!consumed) {
+                        setEnabled(false);
+                        getOnBackPressedDispatcher().onBackPressed();
+                    }
                 }
             }
         });
