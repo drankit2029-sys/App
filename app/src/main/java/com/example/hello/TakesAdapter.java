@@ -43,7 +43,7 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
     private final Map<Long, Long> progressMap = new HashMap<>();
 
     /** Selected cards shrink so multi-select reads at a glance. */
-    private static final float SEL_SCALE = 0.94f;
+    private static final float SEL_SCALE = 0.92f;
     /** SeekBar resolution — high enough that progress looks continuous. */
     private static final int SCRUB_MAX = 10000;
 
@@ -273,7 +273,7 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
         }
         card.animate()
                 .scaleX(target).scaleY(target)
-                .setDuration(isSel ? 200 : 220)
+                .setDuration(240)
                 .setInterpolator(new DecelerateInterpolator(1.4f))
                 .start();
     }
