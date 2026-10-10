@@ -1,14 +1,50 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:gravity="center"
-    android:orientation="vertical">
+    android:background="@color/bg"
+    android:fitsSystemWindows="true">
 
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="@string/hello_world"
-        android:textSize="28sp" />
+    <!-- Screens -->
+    <FrameLayout
+        android:id="@+id/container"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
 
-</LinearLayout>
+    <!-- Shared floating mic: red core + larger halo overlay, fixed position -->
+    <FrameLayout
+        android:id="@+id/fabWrap"
+        android:layout_width="88dp"
+        android:layout_height="88dp"
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_marginBottom="36dp"
+        android:clickable="true"
+        android:contentDescription="@string/cd_mic"
+        android:focusable="true">
+
+        <View
+            android:id="@+id/fabHalo"
+            android:layout_width="88dp"
+            android:layout_height="88dp"
+            android:layout_gravity="center"
+            android:background="@drawable/fab_halo" />
+
+        <FrameLayout
+            android:id="@+id/fabCore"
+            android:layout_width="64dp"
+            android:layout_height="64dp"
+            android:layout_gravity="center"
+            android:background="@drawable/fab_core"
+            android:elevation="6dp">
+
+            <ImageView
+                android:id="@+id/fabIcon"
+                android:layout_width="28dp"
+                android:layout_height="28dp"
+                android:layout_gravity="center"
+                android:src="@drawable/ic_mic" />
+        </FrameLayout>
+    </FrameLayout>
+
+</FrameLayout>

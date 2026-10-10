@@ -1,5 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Hello World</string>
-    <string name="hello_world">Hello World!</string>
+    <string name="app_name">TakeOne</string>
+    <string name="library_title">Library</string>
+    <string name="library_subtitle">%1$d takes • %2$s</string>
+    <string name="library_empty_title">No takes yet</string>
+    <string name="library_empty_sub">Tap the mic button to record your first take in the studio.</string>
+    <string name="studio_title">Studio</string>
+    <string name="studio_ready">Ready to record</string>
+    <string name="studio_recording">Recording</string>
+    <string name="studio_paused">Paused</string>
+    <string name="studio_hint">Tap the mic to start recording</string>
+    <string name="studio_format">48 kHz • AAC • Stereo</string>
+    <string name="action_pause">Pause</string>
+    <string name="action_resume">Resume</string>
+    <string name="action_discard">Discard</string>
+    <string name="action_keep">Keep take</string>
+    <string name="msg_saved">Take saved to Library</string>
+    <string name="msg_discarded">Take discarded</string>
+    <string name="msg_need_mic">Microphone permission is needed to record</string>
+    <string name="cd_mic">Record</string>
+    <string name="cd_back">Back to Library</string>
+    <string name="cd_play">Play take</string>
+    <string name="cd_fav">Favorite</string>
+    <string name="cd_more">More options</string>
+    <string name="cd_search">Search takes</string>
 </resources>

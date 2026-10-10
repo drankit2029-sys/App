@@ -1,5 +1,26 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- Brand / surfaces -->
+    <color name="bg">#FF0E1013</color>
+    <color name="surface">#FF171B21</color>
+    <color name="surface_hi">#FF20262E</color>
+    <color name="divider">#FF262C35</color>
+
+    <!-- Text -->
+    <color name="text_primary">#FFF2F4F7</color>
+    <color name="text_secondary">#FF9AA3AF</color>
+    <color name="text_hint">#FF5D6672</color>
+
+    <!-- Accent -->
+    <color name="record">#FFFF3B30</color>
+    <color name="record_halo">#2EFF3B30</color>
+    <color name="record_dark">#FFB3271E</color>
+    <color name="ok">#FF34C759</color>
+    <color name="star">#FFFF9F0A</color>
+    <color name="wave_idle">#FF3A414B</color>
+    <color name="wave_live">#FFFF3B30</color>
+
+    <!-- Legacy -->
     <color name="purple_200">#FFBB86FC</color>
     <color name="purple_500">#FF6200EE</color>
     <color name="purple_700">#FF3700B3</color>
