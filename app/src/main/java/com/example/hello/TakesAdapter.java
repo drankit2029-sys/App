@@ -263,19 +263,14 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
     private void applySelectionScale(Vh h, boolean isSel) {
         float target = isSel ? SEL_SCALE : 1f;
         View card = h.cardRoot;
+        // Applied instantly with no animator. The animated glide was being
+        // swallowed before it ever rendered, so the size change never became
+        // visible even though the same bind switched the border. A direct
+        // state set cannot be eaten: selected cards sit at SEL_SCALE,
+        // deselected cards sit at 1.0, guaranteed.
         card.animate().cancel();
-        boolean alreadyThere = Math.abs(card.getScaleX() - target) < 0.005f
-                && Math.abs(card.getScaleY() - target) < 0.005f;
-        if (alreadyThere) {
-            card.setScaleX(target);
-            card.setScaleY(target);
-            return;
-        }
-        card.animate()
-                .scaleX(target).scaleY(target)
-                .setDuration(240)
-                .setInterpolator(new DecelerateInterpolator(1.4f))
-                .start();
+        card.setScaleX(target);
+        card.setScaleY(target);
     }
 
     private void notifyForId(long id) {
