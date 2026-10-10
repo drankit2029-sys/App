@@ -77,9 +77,9 @@
     <string name="sort_longest">Longest first</string>
     <string name="sort_shortest">Shortest first</string>
     <string name="export_share">Share</string>
-    <string name="export_save">Save to device</string>
+    <string name="export_save">Export to another folder</string>
     <string name="export_share_multi">Share %1$d files</string>
-    <string name="export_save_multi">Save %1$d to Music/TakeOne</string>
+    <string name="export_save_multi">Export %1$d to another folder</string>
     <string name="saved_music_one">Saved to Music/TakeOne</string>
     <string name="saved_music_many">Saved %1$d takes to Music/TakeOne</string>
     <string name="saved_to_location">Saved to %1$s</string>
@@ -89,6 +89,11 @@
     <string name="couldnt_save">Couldn\'t save take</string>
     <string name="couldnt_export">Couldn\'t export</string>
     <string name="need_storage">Storage permission is needed to save files</string>
+    <string name="export_current_location">Currently stored in: %1$s</string>
+    <string name="export_complete_title">Export complete</string>
+    <string name="export_partial_title">Partially exported</string>
+    <string name="export_partial_msg">Saved %1$d of %2$d files to %3$s</string>
+    <string name="export_failed_msg">Couldn\'t save %1$d file(s) to %2$s. Please try again.</string>
     <string name="share_take">Share take</string>
     <string name="end_take_title">End this take?</string>
     <string name="discard_take_title">Discard this take?</string>
