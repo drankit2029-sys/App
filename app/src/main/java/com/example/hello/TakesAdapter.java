@@ -246,34 +246,17 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
     }
 
     public void setSelection(Set<Long> selected, boolean mode) {
-        this.selected = new HashSet<>(selected);
+        Set<Long> copy = new HashSet<>(selected);
         boolean modeChanged = this.selectionMode != mode;
+        boolean contentChanged = !this.selected.equals(copy);
+        this.selected = copy;
         this.selectionMode = mode;
-        if (modeChanged) {
+        // Any change — mode flip, single toggle, or select-all — rebinds every
+        // visible row, so badges, backgrounds and the shrink always converge
+        // on the tapped state in one pass. No walk-then-rebind double driver,
+        // so effects can never land a tap late or on the wrong card.
+        if (modeChanged || contentChanged) {
             notifyDataSetChanged();
-        }
-        // Selection toggles handled by caller via notifySelection(id).
-    }
-
-    /**
-     * Push the current selection state onto every visible card.
-     *
-     * onBind is the source of truth, but it only runs for rows RecyclerView
-     * decides to rebind. Walking the visible holders guarantees the shrink is
-     * applied the moment a card is tapped — including the card that started
-     * multi-select — and guarantees a full restore when it is deselected.
-     */
-    public void applySelectionScales(RecyclerView rv) {
-        if (rv == null) return;
-        for (int i = 0; i < rv.getChildCount(); i++) {
-            RecyclerView.ViewHolder vh = rv.getChildViewHolder(rv.getChildAt(i));
-            if (vh instanceof Vh) {
-                Vh h = (Vh) vh;
-                int pos = h.getBindingAdapterPosition();
-                if (pos == RecyclerView.NO_POSITION || pos >= takes.size()) continue;
-                boolean isSel = selectionMode && selected.contains(takes.get(pos).id);
-                applySelectionScale(h, isSel);
-            }
         }
     }
 
@@ -293,10 +276,6 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
                 .setDuration(isSel ? 200 : 220)
                 .setInterpolator(new DecelerateInterpolator(1.4f))
                 .start();
-    }
-
-    public void notifySelection(long id) {
-        notifyForId(id);
     }
 
     private void notifyForId(long id) {

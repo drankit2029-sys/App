@@ -458,9 +458,6 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         selection.add(take.id);
         adapter.collapseAll();
         adapter.setSelection(selection, true);
-        // Apply the shrink straight away so the card that started the
-        // multi-select shrinks along with every following tap.
-        adapter.applySelectionScales(list);
         paintSelectionBar();
     }
 
@@ -468,7 +465,6 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         selectionMode = false;
         selection.clear();
         adapter.setSelection(selection, false);
-        adapter.applySelectionScales(list);
         paintSelectionBar();
     }
 
@@ -479,11 +475,9 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             exitSelection();
             return;
         }
+        // setSelection rebinds on content change, so the tapped card (and only
+        // the tapped card) animates — badges, border and shrink together.
         adapter.setSelection(selection, true);
-        adapter.notifySelection(take.id);
-        // Restore unselected cards and shrink the newly selected one without
-        // waiting on a rebind.
-        adapter.applySelectionScales(list);
         paintSelectionBar();
     }
 
@@ -498,7 +492,6 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             return;
         }
         adapter.setSelection(selection, true);
-        adapter.applySelectionScales(list);
         paintSelectionBar();
     }
 
