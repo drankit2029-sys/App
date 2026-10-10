@@ -269,7 +269,9 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
             RecyclerView.ViewHolder vh = rv.getChildViewHolder(rv.getChildAt(i));
             if (vh instanceof Vh) {
                 Vh h = (Vh) vh;
-                boolean isSel = selectionMode && selected.contains(h.itemId);
+                int pos = h.getBindingAdapterPosition();
+                if (pos == RecyclerView.NO_POSITION || pos >= takes.size()) continue;
+                boolean isSel = selectionMode && selected.contains(takes.get(pos).id);
                 applySelectionScale(h, isSel);
             }
         }

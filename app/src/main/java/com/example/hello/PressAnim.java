@@ -1,9 +1,9 @@
 package com.example.hello;
 
-import android.animation.PathInterpolator;
 import android.annotation.SuppressLint;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.animation.PathInterpolator;
 
 /**
  * Restrained press feedback for every tappable view.
