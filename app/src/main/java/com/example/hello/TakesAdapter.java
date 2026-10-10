@@ -29,7 +29,6 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
         void onFavorite(Take take);
         void onRename(Take take);
         void onExport(Take take);
-        void onSave(Take take);
         void onDelete(Take take);
         void onSeek(Take take, long posMs);
     }
@@ -42,6 +41,11 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
     private boolean selectionMode = false;
     private Set<Long> selected = new HashSet<>();
     private final Map<Long, Long> progressMap = new HashMap<>();
+
+    /** Selected cards shrink slightly so multi-select reads at a glance. */
+    private static final float SEL_SCALE = 0.96f;
+    /** SeekBar resolution — high enough that progress looks continuous. */
+    private static final int SCRUB_MAX = 10000;
 
     public TakesAdapter(Listener listener) {
         this.listener = listener;
@@ -281,11 +285,10 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
         View v = LayoutInflater.from(parent.getContext())
                 .inflate(R.layout.item_take, parent, false);
         Vh holder = new Vh(v);
-        // Press feedback on everything tappable (scrubber excluded — it drags).
-        PressAnim.apply(holder.cardRoot);
+        // Press feedback on everything tappable (scrubber excluded — it drags;
+        // cardRoot uses a ripple foreground so it never fights selection scale).
         PressAnim.apply(holder.playBtn);
         PressAnim.apply(holder.fav);
-        PressAnim.apply(holder.share);
         PressAnim.apply(holder.chevron);
         PressAnim.apply(holder.btnRename);
         PressAnim.apply(holder.btnExport);
@@ -305,6 +308,25 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
         h.selectBadge.setImageResource(isSel ? R.drawable.ic_checked : R.drawable.bg_select_ring);
         h.selectBadge.setAlpha(isSel ? 1f : 0.5f);
 
+        // Deterministic selection shrink: the single source of truth for card
+        // scale. Rebinds (enter/exit selection, toggle, scroll recycling) always
+        // converge here, so the first-selected card shrinks too and deselected
+        // cards always restore — no stuck scale from recycled holders.
+        h.cardRoot.animate().cancel();
+        h.cardRoot.setAlpha(1f);
+        float targetScale = isSel ? SEL_SCALE : 1f;
+        if (Math.abs(h.cardRoot.getScaleX() - targetScale) > 0.005f
+                || Math.abs(h.cardRoot.getScaleY() - targetScale) > 0.005f) {
+            h.cardRoot.animate()
+                    .scaleX(targetScale).scaleY(targetScale)
+                    .setDuration(180)
+                    .setInterpolator(new DecelerateInterpolator(1.4f))
+                    .start();
+        } else {
+            h.cardRoot.setScaleX(targetScale);
+            h.cardRoot.setScaleY(targetScale);
+        }
+
         h.title.setText(t.title);
         h.meta.setText(Take.formatDuration(t.durationMs) + "  •  " + t.dateLabel + "  •  " + t.sizeLabel);
         h.formatBadge.setText(t.format);
@@ -315,9 +337,6 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
         h.fav.setImageResource(t.favorite ? R.drawable.ic_heart_filled : R.drawable.ic_heart);
         h.fav.setAlpha(t.favorite ? 1f : 0.55f);
         h.fav.setColorFilter(null);
-
-        // One-tap share lives on the card so sharing is discoverable.
-        h.share.setVisibility(!selectionMode && t.hasFile() ? View.VISIBLE : View.GONE);
 
         h.chevron.setRotation(expanded ? 180f : 0f);
         // Reset any mid-animation height leftovers from recycled holders.
@@ -333,7 +352,7 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
             if (!h.tracking) {
                 h.curTime.setText(Take.formatDuration(shown));
                 h.scrubber.setProgress(t.durationMs <= 0 ? 0
-                        : (int) (shown * 1000L / t.durationMs));
+                        : (int) (shown * SCRUB_MAX / t.durationMs));
             }
             h.btnExport.setVisibility(t.hasFile() ? View.VISIBLE : View.GONE);
         }
@@ -360,20 +379,13 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
             listener.onFavorite(t);
         });
         h.chevron.setOnClickListener(v -> listener.onCardClick(t));
-        h.share.setOnClickListener(v -> {
-            v.animate().cancel();
-            v.setScaleX(0.8f);
-            v.setScaleY(0.8f);
-            v.animate().scaleX(1f).scaleY(1f).setDuration(200).start();
-            listener.onExport(t);
-        });
         h.btnRename.setOnClickListener(v -> {
             pressBounce(v);
             listener.onRename(t);
         });
         h.btnExport.setOnClickListener(v -> {
             pressBounce(v);
-            listener.onSave(t);
+            listener.onExport(t);
         });
         h.btnDelete.setOnClickListener(v -> {
             pressBounce(v);
@@ -385,7 +397,7 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
             @Override
             public void onProgressChanged(SeekBar s, int progress, boolean fromUser) {
                 if (fromUser && h.tracking) {
-                    long pos = t.durationMs * progress / 1000L;
+                    long pos = t.durationMs * progress / SCRUB_MAX;
                     h.curTime.setText(Take.formatDuration(pos));
                 }
             }
@@ -396,7 +408,7 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
 
             @Override public void onStopTrackingTouch(SeekBar s) {
                 h.tracking = false;
-                long pos = t.durationMs * s.getProgress() / 1000L;
+                long pos = t.durationMs * s.getProgress() / SCRUB_MAX;
                 listener.onSeek(t, pos);
             }
         });
@@ -407,10 +419,24 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
         return takes.size();
     }
 
-    /** Direct progress paint without rebind (called ~4x/sec while playing). */
+    /** Direct progress paint without rebind (called ~10x/sec while playing). */
     public void paintProgress(RecyclerView list, long id, long posMs) {
         RecyclerView.ViewHolder vh = list.findViewHolderForItemId(id);
         if (vh instanceof Vh) {
+            ((Vh) vh).applyProgress(posMs);
+        }
+    }
+
+    /**
+     * Set the stored position for a take (e.g. 0 when (re)starting playback)
+     * so a rebind never snaps to a stale near-end value. Also paints it live
+     * when the holder is visible and the user isn't dragging.
+     */
+    public void setProgress(RecyclerView list, long id, long posMs) {
+        progressMap.put(id, posMs);
+        if (list == null) return;
+        RecyclerView.ViewHolder vh = list.findViewHolderForItemId(id);
+        if (vh instanceof Vh && !((Vh) vh).tracking) {
             ((Vh) vh).applyProgress(posMs);
         }
     }
@@ -424,7 +450,6 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
         final TextView meta;
         final TextView formatBadge;
         final ImageView fav;
-        final ImageView share;
         final ImageView chevron;
         final LinearLayout expanded;
         final TextView curTime;
@@ -445,7 +470,6 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
             meta = itemView.findViewById(R.id.takeMeta);
             formatBadge = itemView.findViewById(R.id.formatBadge);
             fav = itemView.findViewById(R.id.favIcon);
-            share = itemView.findViewById(R.id.shareIcon);
             chevron = itemView.findViewById(R.id.chevron);
             expanded = itemView.findViewById(R.id.expanded);
             curTime = itemView.findViewById(R.id.curTime);
@@ -463,7 +487,9 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
             progressMap.put(t.id, posMs);
             if (tracking) return;
             if (t.durationMs > 0) {
-                scrubber.setProgress((int) (posMs * 1000L / t.durationMs));
+                // Clamp so completion always lands exactly on the end.
+                int p = (int) (posMs * SCRUB_MAX / t.durationMs);
+                scrubber.setProgress(Math.min(p, SCRUB_MAX));
             }
             curTime.setText(Take.formatDuration(posMs));
         }

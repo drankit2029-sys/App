@@ -85,6 +85,8 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
     private boolean selectionMode = false;
 
     // Playback: real file via MediaPlayer, demo takes via simulated clock. No popups.
+    /** Progress repaint cadence — 100ms + fine SeekBar steps = smooth motion. */
+    private static final long PROGRESS_MS = 100;
     private MediaPlayer player;
     private long playingId = -1;
     private boolean playPaused = false;
@@ -591,6 +593,9 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         }
         playingId = take.id;
         playPaused = false;
+        // Drop any stale near-end position so replay starts exactly at startPos
+        // instead of snapping to where the last playthrough left off.
+        adapter.setProgress(list, take.id, startPos);
         adapter.setExpandedId(take.id);
         adapter.setPlayingId(playingId);
         adapter.setPaused(false);
@@ -631,6 +636,10 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
 
     private void completePlayback(long id) {
         if (playingId != id) return;
+        // Land the scrubber exactly on the end first so progress visibly
+        // reaches 100% instead of stopping one tick short.
+        Take t = TakesRepository.find(id);
+        if (t != null) adapter.paintProgress(list, id, t.durationMs);
         stopPlayback(); // single UI update; rebind already restores scrubber + icon
     }
 
@@ -674,7 +683,7 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                         simBase = 0;
                         simStartedAt = SystemClock.elapsedRealtime();
                         adapter.paintProgress(list, playingId, 0);
-                        handler.postDelayed(this, 250);
+                        handler.postDelayed(this, PROGRESS_MS);
                         return;
                     }
                     completePlayback(playingId);
@@ -690,7 +699,7 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                 return;
             }
             adapter.paintProgress(list, playingId, pos);
-            handler.postDelayed(this, 250);
+            handler.postDelayed(this, PROGRESS_MS);
         }
     };
 
@@ -778,15 +787,21 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             return;
         }
         if (!take.hasFile()) return;
-        shareFiles(singleton(take));
+        showSingleExportOptions(take);
     }
 
-    @Override
-    public void onSave(Take take) {
-        if (selectionMode) {
-            toggleSelection(take);
-            return;
-        }
+    /** Singular export: one menu offering Share or Save to device. */
+    private void showSingleExportOptions(Take take) {
+        List<OptionsSheet.Item> items = new ArrayList<>();
+        items.add(OptionsSheet.Item.of(R.drawable.ic_share,
+                getString(R.string.export_share), () -> shareFiles(singleton(take))));
+        items.add(OptionsSheet.Item.of(R.drawable.ic_download,
+                getString(R.string.export_save), () -> saveSingleTake(take)));
+        OptionsSheet.showOptions(requireContext(), getString(R.string.action_export),
+                take.title, items);
+    }
+
+    private void saveSingleTake(Take take) {
         if (!take.hasFile()) return;
         pendingSaveTake = take;
         createDocLauncher.launch(safeName(new File(take.filePath).getName()));
