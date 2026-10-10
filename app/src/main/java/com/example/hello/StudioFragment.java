@@ -20,7 +20,6 @@ import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
-import androidx.appcompat.app.AlertDialog;
 import androidx.core.content.ContextCompat;
 import androidx.fragment.app.Fragment;
 
@@ -120,24 +119,23 @@ public class StudioFragment extends Fragment {
         }
     }
 
-    /** @return true if the press was consumed (dialog shown / handled). */
+    /** @return true if the press was consumed (sheet shown / handled). */
     public boolean onBackPressed() {
         if (state == State.IDLE) {
             activity().exitStudio();
             return true;
         }
-        new AlertDialog.Builder(requireContext())
-                .setTitle("End this take?")
-                .setMessage("Keep the recording in your Library, or discard it?")
-                .setPositiveButton(R.string.action_keep, (d, w) -> keepAndExit())
-                .setNegativeButton(R.string.action_discard, (d, w) -> {
+        java.util.List<OptionsSheet.Item> items = new java.util.ArrayList<>();
+        items.add(OptionsSheet.Item.of(R.drawable.ic_check,
+                getString(R.string.action_keep), this::keepAndExit));
+        items.add(OptionsSheet.Item.danger(R.drawable.ic_trash,
+                getString(R.string.action_discard), () -> {
                     abortRecording();
                     Toast.makeText(requireContext(), R.string.msg_discarded,
                             Toast.LENGTH_SHORT).show();
                     activity().exitStudio();
-                })
-                .setNeutralButton("Cancel", null)
-                .show();
+                }));
+        OptionsSheet.show(requireContext(), getString(R.string.end_take_title), items);
         return true;
     }
 
@@ -219,17 +217,15 @@ public class StudioFragment extends Fragment {
 
     private void confirmDiscard() {
         if (state == State.IDLE) return;
-        new AlertDialog.Builder(requireContext())
-                .setTitle("Discard take?")
-                .setMessage("This recording will be deleted.")
-                .setPositiveButton(R.string.action_discard, (d, w) -> {
+        java.util.List<OptionsSheet.Item> items = new java.util.ArrayList<>();
+        items.add(OptionsSheet.Item.danger(R.drawable.ic_trash,
+                getString(R.string.action_discard), () -> {
                     abortRecording();
                     resetUi();
                     Toast.makeText(requireContext(), R.string.msg_discarded,
                             Toast.LENGTH_SHORT).show();
-                })
-                .setNegativeButton("Cancel", null)
-                .show();
+                }));
+        OptionsSheet.show(requireContext(), getString(R.string.discard_take_title), items);
     }
 
     private void abortRecording() {

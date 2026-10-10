@@ -10,5 +10,14 @@
         <item name="android:navigationBarColor">@color/bg</item>
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:navigationBarDividerColor">@color/bg</item>
+        <item name="bottomSheetDialogTheme">@style/TakeOneBottomSheetDialog</item>
+    </style>
+
+    <style name="TakeOneBottomSheetDialog" parent="Theme.MaterialComponents.DayNight.BottomSheetDialog">
+        <item name="bottomSheetStyle">@style/TakeOneBottomSheet</item>
+    </style>
+
+    <style name="TakeOneBottomSheet" parent="Widget.MaterialComponents.BottomSheet.Modal">
+        <item name="android:background">@drawable/bg_bottom_sheet</item>
     </style>
 </resources>

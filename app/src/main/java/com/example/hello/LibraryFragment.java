@@ -17,7 +17,6 @@ import android.os.Looper;
 import android.os.SystemClock;
 import android.provider.MediaStore;
 import android.text.Editable;
-import android.text.InputType;
 import android.text.TextWatcher;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -25,17 +24,14 @@ import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
-import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
-import android.widget.PopupMenu;
 import android.widget.TextView;
 
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
-import androidx.appcompat.app.AlertDialog;
 import androidx.core.content.ContextCompat;
 import androidx.core.content.FileProvider;
 import androidx.fragment.app.Fragment;
@@ -277,22 +273,28 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
     }
 
     private void showSortMenu(View anchor) {
-        PopupMenu menu = new PopupMenu(requireContext(), anchor);
         Sort[] values = Sort.values();
-        String[] labels = {
-                getString(R.string.sort_newest), getString(R.string.sort_oldest),
-                getString(R.string.sort_name), getString(R.string.sort_longest),
-                getString(R.string.sort_shortest)};
-        for (int i = 0; i < values.length; i++) {
-            menu.getMenu().add(0, i, i, (values[i] == sort ? "✓  " : "      ") + labels[i]);
+        List<OptionsSheet.Item> items = new ArrayList<>();
+        for (Sort s : values) {
+            final Sort option = s;
+            items.add(new OptionsSheet.Item(0, sortLabel(option), false, option == sort,
+                    () -> {
+                        sort = option;
+                        saveSort();
+                        refresh();
+                    }));
         }
-        menu.setOnMenuItemClickListener(item -> {
-            sort = values[item.getItemId()];
-            saveSort();
-            refresh();
-            return true;
-        });
-        menu.show();
+        OptionsSheet.show(requireContext(), getString(R.string.sort_by), items);
+    }
+
+    private String sortLabel(Sort s) {
+        switch (s) {
+            case OLDEST: return getString(R.string.sort_oldest);
+            case NAME: return getString(R.string.sort_name);
+            case LONGEST: return getString(R.string.sort_longest);
+            case SHORTEST: return getString(R.string.sort_shortest);
+            default: return getString(R.string.sort_newest);
+        }
     }
 
     private Sort loadSort() {
@@ -352,8 +354,9 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
 
         int total = TakesRepository.all().size();
         boolean scoped = !query.isEmpty() || filter != Filter.ALL;
-        subtitle.setText(scoped ? getString(R.string.search_count, out.size(), total)
-                : getString(R.string.take_count, total));
+        String base = scoped ? getString(R.string.search_count, out.size(), total)
+                : getString(R.string.take_count, total);
+        subtitle.setText(base + "  •  " + sortLabel(sort));
 
         boolean empty = out.isEmpty();
         list.setVisibility(empty ? View.GONE : View.VISIBLE);
@@ -650,49 +653,32 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
 
     @Override
     public void onRename(Take take) {
-        FrameLayout pad = new FrameLayout(requireContext());
-        int m = (int) (20 * getResources().getDisplayMetrics().density);
-        pad.setPadding(m, m / 2, m, 0);
-        EditText input = new EditText(requireContext());
-        input.setInputType(InputType.TYPE_CLASS_TEXT);
-        input.setText(take.title);
-        input.setSelection(input.getText().length());
-        input.setTextColor(0xFFF2F4F7);
-        pad.addView(input);
-        new AlertDialog.Builder(requireContext())
-                .setTitle(R.string.rename_title)
-                .setView(pad)
-                .setPositiveButton(R.string.rename_save, (d, w) -> {
-                    TakesRepository.rename(take.id, input.getText().toString());
+        OptionsSheet.showInput(requireContext(), getString(R.string.rename_title),
+                take.title, getString(R.string.rename_save), text -> {
+                    TakesRepository.rename(take.id, text);
                     refresh();
-                })
-                .setNegativeButton(R.string.cancel, null)
-                .show();
-        input.post(() -> {
-            input.requestFocus();
-            InputMethodManager imm = (InputMethodManager)
-                    requireContext().getSystemService(Context.INPUT_METHOD_SERVICE);
-            if (imm != null) imm.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT);
-        });
+                });
     }
 
     @Override
     public void onExport(Take take) {
+        if (selectionMode) {
+            toggleSelection(take);
+            return;
+        }
         if (!take.hasFile()) return;
-        new AlertDialog.Builder(requireContext())
-                .setTitle(R.string.action_export)
-                .setItems(new CharSequence[]{
-                        getString(R.string.export_share),
-                        getString(R.string.export_save_device)}, (d, which) -> {
-                    if (which == 0) {
-                        shareFiles(singleton(take));
-                    } else {
-                        pendingSaveTake = take;
-                        createDocLauncher.launch(safeName(new File(take.filePath).getName()));
-                    }
-                })
-                .setNegativeButton(R.string.cancel, null)
-                .show();
+        shareFiles(singleton(take));
+    }
+
+    @Override
+    public void onSave(Take take) {
+        if (selectionMode) {
+            toggleSelection(take);
+            return;
+        }
+        if (!take.hasFile()) return;
+        pendingSaveTake = take;
+        createDocLauncher.launch(safeName(new File(take.filePath).getName()));
     }
 
     @Override
@@ -749,19 +735,13 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         }
         if (files.isEmpty()) return;
         final int n = files.size();
-        new AlertDialog.Builder(requireContext())
-                .setTitle(R.string.action_export)
-                .setItems(new CharSequence[]{
-                        getString(R.string.export_share_multi, n),
-                        getString(R.string.export_save_multi, n)}, (d, which) -> {
-                    if (which == 0) {
-                        shareFiles(files);
-                    } else {
-                        saveToMusicFolderWithPerm(files);
-                    }
-                })
-                .setNegativeButton(R.string.cancel, null)
-                .show();
+        List<OptionsSheet.Item> items = new ArrayList<>();
+        items.add(OptionsSheet.Item.of(R.drawable.ic_share,
+                getString(R.string.export_share_multi, n), () -> shareFiles(files)));
+        items.add(OptionsSheet.Item.of(R.drawable.ic_download,
+                getString(R.string.export_save_multi, n),
+                () -> saveToMusicFolderWithPerm(files)));
+        OptionsSheet.show(requireContext(), getString(R.string.action_export), items);
     }
 
     private void shareFiles(List<Take> takes) {

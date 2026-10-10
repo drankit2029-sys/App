@@ -92,6 +92,16 @@
             android:src="@drawable/ic_heart" />
 
         <ImageView
+            android:id="@+id/shareIcon"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:clickable="true"
+            android:contentDescription="@string/share_take"
+            android:focusable="true"
+            android:padding="9dp"
+            android:src="@drawable/ic_share" />
+
+        <ImageView
             android:id="@+id/chevron"
             android:layout_width="30dp"
             android:layout_height="30dp"
@@ -135,11 +145,14 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
+                android:background="@null"
+                android:focusable="false"
                 android:max="1000"
                 android:progress="0"
                 android:progressTint="@color/record"
                 android:progressBackgroundTint="@color/wave_idle"
-                android:thumbTint="@color/text_primary" />
+                android:splitTrack="false"
+                android:thumb="@drawable/bg_thumb" />
 
             <TextView
                 android:id="@+id/totalTime"
@@ -204,7 +217,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginStart="7dp"
-                    android:text="Export"
+                    android:text="Save"
                     android:textColor="@color/text_secondary"
                     android:textSize="13sp" />
             </LinearLayout>

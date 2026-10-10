@@ -56,8 +56,6 @@
     <string name="sort_name">Name A–Z</string>
     <string name="sort_longest">Longest first</string>
     <string name="sort_shortest">Shortest first</string>
-    <string name="export_share">Share…</string>
-    <string name="export_save_device">Save to device…</string>
     <string name="export_share_multi">Share %1$d files</string>
     <string name="export_save_multi">Save %1$d to Music/TakeOne</string>
     <string name="saved_music_one">Saved to Music/TakeOne</string>
@@ -66,4 +64,7 @@
     <string name="couldnt_save">Couldn\'t save take</string>
     <string name="couldnt_export">Couldn\'t export</string>
     <string name="need_storage">Storage permission is needed to save files</string>
+    <string name="share_take">Share take</string>
+    <string name="end_take_title">End this take?</string>
+    <string name="discard_take_title">Discard this take?</string>
 </resources>

@@ -27,6 +27,7 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
         void onFavorite(Take take);
         void onRename(Take take);
         void onExport(Take take);
+        void onSave(Take take);
         void onDelete(Take take);
         void onSeek(Take take, long posMs);
     }
@@ -121,6 +122,10 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
             Vh h = (Vh) vh;
             h.expanded.setVisibility(expand ? View.VISIBLE : View.GONE);
             h.chevron.animate().rotation(expand ? 180f : 0f).setDuration(180).start();
+            // Drop any stuck pressed/focus glow on the scrubber when it (re)appears.
+            h.scrubber.setPressed(false);
+            h.scrubber.clearFocus();
+            h.scrubber.jumpDrawablesToCurrentState();
             if (expand) {
                 Take t = findTake(id);
                 if (t != null) {
@@ -204,6 +209,9 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
         h.fav.setAlpha(t.favorite ? 1f : 0.55f);
         h.fav.setColorFilter(null);
 
+        // One-tap share lives on the card so sharing is discoverable.
+        h.share.setVisibility(!selectionMode && t.hasFile() ? View.VISIBLE : View.GONE);
+
         h.chevron.setRotation(expanded ? 180f : 0f);
         h.expanded.setVisibility(expanded ? View.VISIBLE : View.GONE);
         if (expanded) {
@@ -231,8 +239,9 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
             listener.onFavorite(t);
         });
         h.chevron.setOnClickListener(v -> listener.onCardClick(t));
+        h.share.setOnClickListener(v -> listener.onExport(t));
         h.btnRename.setOnClickListener(v -> listener.onRename(t));
-        h.btnExport.setOnClickListener(v -> listener.onExport(t));
+        h.btnExport.setOnClickListener(v -> listener.onSave(t));
         h.btnDelete.setOnClickListener(v -> listener.onDelete(t));
 
         h.scrubber.setOnSeekBarChangeListener(null);
@@ -279,6 +288,7 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
         final TextView meta;
         final TextView formatBadge;
         final ImageView fav;
+        final ImageView share;
         final ImageView chevron;
         final LinearLayout expanded;
         final TextView curTime;
@@ -299,6 +309,7 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
             meta = itemView.findViewById(R.id.takeMeta);
             formatBadge = itemView.findViewById(R.id.formatBadge);
             fav = itemView.findViewById(R.id.favIcon);
+            share = itemView.findViewById(R.id.shareIcon);
             chevron = itemView.findViewById(R.id.chevron);
             expanded = itemView.findViewById(R.id.expanded);
             curTime = itemView.findViewById(R.id.curTime);
