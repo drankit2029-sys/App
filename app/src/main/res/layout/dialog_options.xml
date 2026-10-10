@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@drawable/bg_modal"
+    android:elevation="16dp"
+    android:orientation="vertical"
+    android:padding="20dp">
+
+    <TextView
+        android:id="@+id/dialogTitle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:fontFamily="sans-serif-medium"
+        android:gravity="center"
+        android:textColor="@color/text_primary"
+        android:textSize="18sp" />
+
+    <TextView
+        android:id="@+id/dialogSubtitle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:gravity="center"
+        android:textColor="@color/text_secondary"
+        android:textSize="13sp"
+        android:visibility="gone" />
+
+    <LinearLayout
+        android:id="@+id/dialogOptions"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:orientation="vertical" />
+
+    <TextView
+        android:id="@+id/dialogCancel"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:layout_marginTop="12dp"
+        android:background="@drawable/bg_btn_ghost"
+        android:clickable="true"
+        android:focusable="true"
+        android:fontFamily="sans-serif-medium"
+        android:gravity="center"
+        android:textColor="@color/text_secondary"
+        android:textSize="14sp" />
+
+</LinearLayout>

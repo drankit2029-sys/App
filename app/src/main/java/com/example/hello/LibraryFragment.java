@@ -166,8 +166,13 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         for (int i = 0; i < chips.length; i++) {
             final Filter f = chipFilters[i];
             chips[i].setOnClickListener(view -> {
+                if (filter == f) return;
                 filter = f;
-                paintChips();
+                paintChipsAnimated();
+                view.animate().cancel();
+                view.setScaleX(0.9f);
+                view.setScaleY(0.9f);
+                view.animate().scaleX(1f).scaleY(1f).setDuration(180).start();
                 refresh();
             });
         }
@@ -182,6 +187,16 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
 
         v.findViewById(R.id.searchToggle).setOnClickListener(view -> toggleSearch());
         v.findViewById(R.id.sortBtn).setOnClickListener(this::showSortMenu);
+
+        // Press feedback on every tappable header / selection control.
+        PressAnim.apply(v.findViewById(R.id.searchToggle));
+        PressAnim.apply(v.findViewById(R.id.sortBtn));
+        PressAnim.apply(v.findViewById(R.id.selClose));
+        PressAnim.apply(selAll);
+        PressAnim.apply(selExport);
+        PressAnim.apply(selDelete);
+        PressAnim.apply(searchClear);
+        for (TextView chip : chips) PressAnim.apply(chip);
 
         searchInput.addTextChangedListener(new TextWatcher() {
             @Override public void beforeTextChanged(CharSequence s, int st, int c, int a) {}
@@ -236,6 +251,14 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             closeSearch();
         } else {
             searchBar.setVisibility(View.VISIBLE);
+            searchBar.setAlpha(0f);
+            searchBar.setTranslationY(-18f);
+            searchBar.animate().cancel();
+            searchBar.animate()
+                    .alpha(1f).translationY(0f)
+                    .setDuration(260)
+                    .setInterpolator(new android.view.animation.DecelerateInterpolator(1.4f))
+                    .start();
             searchInput.requestFocus();
             InputMethodManager imm = (InputMethodManager)
                     requireContext().getSystemService(Context.INPUT_METHOD_SERVICE);
@@ -244,9 +267,22 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
     }
 
     private void closeSearch() {
-        searchBar.setVisibility(View.GONE);
         hideKeyboard();
-        searchInput.clearFocus();
+        try {
+            searchInput.clearFocus();
+        } catch (Exception ignored) {}
+        if (searchBar.getVisibility() != View.VISIBLE) return;
+        searchBar.animate().cancel();
+        searchBar.animate()
+                .alpha(0f).translationY(-14f)
+                .setDuration(190)
+                .setInterpolator(new android.view.animation.AccelerateInterpolator())
+                .withEndAction(() -> {
+                    searchBar.setVisibility(View.GONE);
+                    searchBar.setAlpha(1f);
+                    searchBar.setTranslationY(0f);
+                })
+                .start();
         if (!query.isEmpty()) searchInput.setText("");
     }
 
@@ -267,12 +303,40 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
     private void paintChips() {
         for (int i = 0; i < chips.length; i++) {
             boolean active = chipFilters[i] == filter;
-            chips[i].setTextColor(active ? 0xFFF2F4F7 : 0xFF9AA3AF);
-            chips[i].setAlpha(active ? 1f : 0.6f);
+            chips[i].setBackgroundResource(active
+                    ? R.drawable.bg_chip_selected : R.drawable.bg_chip);
+            chips[i].setTextColor(active ? 0xFFFFFFFF : 0xFF9AA3AF);
+            chips[i].setAlpha(1f);
+        }
+    }
+
+    private void paintChipsAnimated() {
+        for (int i = 0; i < chips.length; i++) {
+            boolean active = chipFilters[i] == filter;
+            chips[i].setBackgroundResource(active
+                    ? R.drawable.bg_chip_selected : R.drawable.bg_chip);
+            chips[i].setTextColor(active ? 0xFFFFFFFF : 0xFF9AA3AF);
+            if (active) {
+                chips[i].animate().cancel();
+                chips[i].setScaleX(0.92f);
+                chips[i].setScaleY(0.92f);
+                chips[i].animate()
+                        .scaleX(1f).scaleY(1f)
+                        .setDuration(220)
+                        .setInterpolator(
+                                new android.view.animation.OvershootInterpolator(2.2f))
+                        .start();
+            }
         }
     }
 
     private void showSortMenu(View anchor) {
+        // Press bounce on the anchor for tactile feedback.
+        anchor.animate().cancel();
+        anchor.setScaleX(0.85f);
+        anchor.setScaleY(0.85f);
+        anchor.animate().scaleX(1f).scaleY(1f).setDuration(180).start();
+
         Sort[] values = Sort.values();
         List<OptionsSheet.Item> items = new ArrayList<>();
         for (Sort s : values) {
@@ -282,9 +346,16 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                         sort = option;
                         saveSort();
                         refresh();
+                        OptionsSheet.showResult(requireContext(), true,
+                                getString(R.string.sort_by),
+                                sortLabel(option));
                     }));
         }
-        OptionsSheet.show(requireContext(), getString(R.string.sort_by), items);
+        int total = TakesRepository.all().size();
+        OptionsSheet.showOptions(requireContext(),
+                getString(R.string.sort_by),
+                getString(R.string.sort_subtitle, total),
+                items);
     }
 
     private String sortLabel(Sort s) {
@@ -420,10 +491,39 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
     }
 
     private void paintSelectionBar() {
-        normalHeader.setVisibility(selectionMode ? View.GONE : View.VISIBLE);
-        selectionBar.setVisibility(selectionMode ? View.VISIBLE : View.GONE);
+        boolean showSel = selectionMode;
+        if (showSel && selectionBar.getVisibility() != View.VISIBLE) {
+            normalHeader.setVisibility(View.GONE);
+            selectionBar.setVisibility(View.VISIBLE);
+            selectionBar.setAlpha(0f);
+            selectionBar.setTranslationY(-12f);
+            selectionBar.animate().cancel();
+            selectionBar.animate().alpha(1f).translationY(0f)
+                    .setDuration(240)
+                    .setInterpolator(
+                            new android.view.animation.DecelerateInterpolator(1.4f))
+                    .start();
+        } else if (!showSel && normalHeader.getVisibility() != View.VISIBLE) {
+            selectionBar.setVisibility(View.GONE);
+            normalHeader.setVisibility(View.VISIBLE);
+            normalHeader.setAlpha(0f);
+            normalHeader.setTranslationY(-12f);
+            normalHeader.animate().cancel();
+            normalHeader.animate().alpha(1f).translationY(0f)
+                    .setDuration(240)
+                    .setInterpolator(
+                            new android.view.animation.DecelerateInterpolator(1.4f))
+                    .start();
+        } else {
+            normalHeader.setVisibility(selectionMode ? View.GONE : View.VISIBLE);
+            selectionBar.setVisibility(selectionMode ? View.VISIBLE : View.GONE);
+        }
         if (!selectionMode) return;
         selCount.setText(getString(R.string.selected_count, selection.size()));
+        // Pop the count on every change so selection feels alive.
+        selCount.setScaleX(0.85f);
+        selCount.setScaleY(0.85f);
+        selCount.animate().scaleX(1f).scaleY(1f).setDuration(180).start();
         boolean hasFile = false;
         for (Take t : TakesRepository.all()) {
             if (selection.contains(t.id) && t.hasFile()) {
@@ -655,8 +755,19 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
     public void onRename(Take take) {
         OptionsSheet.showInput(requireContext(), getString(R.string.rename_title),
                 take.title, getString(R.string.rename_save), text -> {
-                    TakesRepository.rename(take.id, text);
-                    refresh();
+                    try {
+                        TakesRepository.rename(take.id, text);
+                        refresh();
+                        Take updated = TakesRepository.find(take.id);
+                        String name = updated != null ? updated.title : text;
+                        OptionsSheet.showResult(requireContext(), true,
+                                getString(R.string.rename_success_title),
+                                getString(R.string.rename_success_msg, name));
+                    } catch (Exception e) {
+                        OptionsSheet.showResult(requireContext(), false,
+                                getString(R.string.rename_failed_title),
+                                getString(R.string.rename_failed_msg));
+                    }
                 });
     }
 
@@ -683,41 +794,104 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
 
     @Override
     public void onDelete(Take take) {
-        if (playingId == take.id) stopPlayback();
-        Set<Long> ids = new HashSet<>();
-        ids.add(take.id);
-        TakesRepository.RestoreOp op = TakesRepository.deleteMany(ids);
-        selection.remove(take.id);
-        if (selectionMode && selection.isEmpty()) selectionMode = false;
-        refresh();
-        snackUndo(getString(R.string.take_deleted), op);
+        OptionsSheet.showConfirm(requireContext(),
+                getString(R.string.delete_one_title),
+                getString(R.string.delete_one_msg, take.title),
+                getString(R.string.delete_confirm),
+                R.drawable.ic_trash, true,
+                () -> performDeleteSingle(take));
+    }
+
+    private void performDeleteSingle(Take take) {
+        try {
+            if (playingId == take.id) stopPlayback();
+            Set<Long> ids = new HashSet<>();
+            ids.add(take.id);
+            String name = take.title;
+            TakesRepository.RestoreOp op = TakesRepository.deleteMany(ids);
+            selection.remove(take.id);
+            if (selectionMode && selection.isEmpty()) selectionMode = false;
+            refresh();
+            snackUndo(getString(R.string.take_deleted), op);
+            OptionsSheet.showResult(requireContext(), true,
+                    getString(R.string.delete_success_title),
+                    getString(R.string.delete_success_one, name));
+        } catch (Exception e) {
+            OptionsSheet.showResult(requireContext(), false,
+                    getString(R.string.delete_failed_title),
+                    getString(R.string.delete_failed_msg));
+        }
     }
 
     private void deleteSelected() {
         if (selection.isEmpty()) return;
-        if (selection.contains(playingId)) stopPlayback();
-        TakesRepository.RestoreOp op = TakesRepository.deleteMany(selection);
-        int n = selection.size();
-        selection.clear();
-        selectionMode = false;
-        refresh();
-        snackUndo(getString(R.string.takes_deleted, n), op);
+        final int n = selection.size();
+        OptionsSheet.showConfirm(requireContext(),
+                getString(R.string.delete_many_title, n),
+                getString(R.string.delete_many_msg),
+                getString(R.string.delete_confirm),
+                R.drawable.ic_trash, true,
+                () -> {
+                    try {
+                        if (selection.contains(playingId)) stopPlayback();
+                        TakesRepository.RestoreOp op =
+                                TakesRepository.deleteMany(selection);
+                        selection.clear();
+                        selectionMode = false;
+                        refresh();
+                        snackUndo(getString(R.string.takes_deleted, n), op);
+                        OptionsSheet.showResult(requireContext(), true,
+                                getString(R.string.delete_success_title),
+                                getString(R.string.delete_success_many, n));
+                    } catch (Exception e) {
+                        OptionsSheet.showResult(requireContext(), false,
+                                getString(R.string.delete_failed_title),
+                                getString(R.string.delete_failed_msg));
+                    }
+                });
     }
 
     private void snackUndo(String text, TakesRepository.RestoreOp op) {
         View root = getView();
         if (root == null) return;
-        Snackbar.make(root, text, Snackbar.LENGTH_LONG)
+        Snackbar sb = Snackbar.make(root, text, Snackbar.LENGTH_LONG)
                 .setAction(R.string.undo, v -> {
                     TakesRepository.restore(op);
                     refresh();
-                })
-                .show();
+                });
+        styleSnack(sb);
+        sb.show();
     }
 
     private void snack(int resId) {
         View root = getView();
-        if (root != null) Snackbar.make(root, resId, Snackbar.LENGTH_SHORT).show();
+        if (root == null) return;
+        Snackbar sb = Snackbar.make(root, resId, Snackbar.LENGTH_SHORT);
+        styleSnack(sb);
+        sb.show();
+    }
+
+    private void snackText(String text) {
+        View root = getView();
+        if (root == null) return;
+        Snackbar sb = Snackbar.make(root, text, Snackbar.LENGTH_SHORT);
+        styleSnack(sb);
+        sb.show();
+    }
+
+    private void styleSnack(Snackbar sb) {
+        try {
+            View sbView = sb.getView();
+            sbView.setBackgroundResource(R.drawable.bg_btn_ghost);
+            sbView.setAlpha(0f);
+            sbView.setTranslationY(24f);
+            sbView.animate().alpha(1f).translationY(0f)
+                    .setDuration(260)
+                    .setInterpolator(
+                            new android.view.animation.DecelerateInterpolator(1.4f))
+                    .start();
+            sb.setActionTextColor(0xFFFF3B30);
+        } catch (Exception ignored) {}
     }
 
     // ---- export: share + save to device ----
@@ -741,7 +915,8 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         items.add(OptionsSheet.Item.of(R.drawable.ic_download,
                 getString(R.string.export_save_multi, n),
                 () -> saveToMusicFolderWithPerm(files)));
-        OptionsSheet.show(requireContext(), getString(R.string.action_export), items);
+        OptionsSheet.showOptions(requireContext(), getString(R.string.action_export),
+                getString(R.string.export_subtitle, n), items);
     }
 
     private void shareFiles(List<Take> takes) {
@@ -764,7 +939,9 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
             startActivity(Intent.createChooser(intent, getString(R.string.action_export)));
         } catch (Exception e) {
-            snack(R.string.couldnt_export);
+            OptionsSheet.showResult(requireContext(), false,
+                    getString(R.string.action_export),
+                    getString(R.string.couldnt_export));
         }
     }
 
@@ -790,12 +967,23 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                 if (saveOneToMusic(app, t)) saved++;
             }
             final int n = saved;
+            final int total = copy.size();
             handler.post(() -> {
-                View root = getView();
-                if (root == null) return;
-                Snackbar.make(root, n == 1 ? getString(R.string.saved_music_one)
-                        : getString(R.string.saved_music_many, n),
-                        Snackbar.LENGTH_LONG).show();
+                if (getView() == null || !isAdded()) return;
+                if (n == total) {
+                    OptionsSheet.showResult(requireContext(), true,
+                            getString(R.string.take_saved),
+                            n == 1 ? getString(R.string.saved_music_one)
+                                    : getString(R.string.saved_music_many, n));
+                } else if (n > 0) {
+                    OptionsSheet.showResult(requireContext(), true,
+                            getString(R.string.take_saved),
+                            getString(R.string.saved_music_many, n));
+                } else {
+                    OptionsSheet.showResult(requireContext(), false,
+                            getString(R.string.rename_failed_title),
+                            getString(R.string.couldnt_save));
+                }
             });
         }).start();
     }
@@ -872,7 +1060,18 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                 ok = false;
             }
             final boolean done = ok;
-            handler.post(() -> snack(done ? R.string.take_saved : R.string.couldnt_save));
+            handler.post(() -> {
+                if (getView() == null || !isAdded()) return;
+                if (done) {
+                    OptionsSheet.showResult(requireContext(), true,
+                            getString(R.string.take_saved),
+                            getString(R.string.saved_music_one));
+                } else {
+                    OptionsSheet.showResult(requireContext(), false,
+                            getString(R.string.rename_failed_title),
+                            getString(R.string.couldnt_save));
+                }
+            });
         }).start();
     }
 

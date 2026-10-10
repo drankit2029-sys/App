@@ -1,20 +1,32 @@
 package com.example.hello;
 
+import android.app.Dialog;
 import android.content.Context;
+import android.graphics.Color;
+import android.graphics.drawable.ColorDrawable;
+import android.os.Handler;
+import android.os.Looper;
+import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.View;
+import android.view.Window;
 import android.view.WindowManager;
+import android.view.animation.DecelerateInterpolator;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-import com.google.android.material.bottomsheet.BottomSheetDialog;
-
 import java.util.List;
 
-/** Dark, on-brand bottom sheets replacing the stock Android dialogs. */
+/**
+ * Centered modal dialogs (overlaying the current screen) replacing the old
+ * bottom sheets. Sort options appear as distinct pills, rename is a centered
+ * input modal, deletes ask for confirmation, and every success/failure gets
+ * its own styled popup. All dialogs pop/scale in and out.
+ */
 public final class OptionsSheet {
 
     private OptionsSheet() {}
@@ -44,57 +56,144 @@ public final class OptionsSheet {
         }
     }
 
-    public static void show(Context ctx, String title, List<Item> items) {
-        BottomSheetDialog dialog = new BottomSheetDialog(ctx);
-        View root = LayoutInflater.from(ctx).inflate(R.layout.sheet_options, null);
-        ((TextView) root.findViewById(R.id.sheetTitle)).setText(title);
-        LinearLayout rows = root.findViewById(R.id.sheetRows);
-        LayoutInflater inflater = LayoutInflater.from(ctx);
-        for (Item item : items) {
-            View row = inflater.inflate(R.layout.sheet_row, rows, false);
-            ImageView icon = row.findViewById(R.id.rowIcon);
-            TextView label = row.findViewById(R.id.rowLabel);
-            ImageView check = row.findViewById(R.id.rowCheck);
-            if (item.icon == 0) {
-                icon.setVisibility(View.GONE);
-            } else {
-                icon.setImageResource(item.icon);
-            }
-            label.setText(item.label);
-            if (item.destructive) label.setTextColor(0xFFFF3B30);
-            check.setVisibility(item.checked ? View.VISIBLE : View.GONE);
-            row.setOnClickListener(v -> {
-                dialog.dismiss();
-                if (item.action != null) item.action.run();
-            });
-            rows.addView(row);
-        }
-        dialog.setContentView(root);
-        dialog.show();
-    }
-
     public interface SaveCallback {
         void onSave(String text);
     }
 
+    // ---- centered pill options (sort, export, …) ----
+
+    public static void show(Context ctx, String title, List<Item> items) {
+        showOptions(ctx, title, null, items);
+    }
+
+    public static void showOptions(Context ctx, String title, String subtitle,
+                                   List<Item> items) {
+        Dialog dialog = new Dialog(ctx, R.style.TakeOneCenterDialog);
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        View root = LayoutInflater.from(ctx).inflate(R.layout.dialog_options, null);
+        dialog.setContentView(root);
+
+        TextView titleView = root.findViewById(R.id.dialogTitle);
+        titleView.setText(title);
+        TextView subView = root.findViewById(R.id.dialogSubtitle);
+        if (subtitle != null && !subtitle.isEmpty()) {
+            subView.setText(subtitle);
+            subView.setVisibility(View.VISIBLE);
+        }
+
+        LinearLayout container = root.findViewById(R.id.dialogOptions);
+        LayoutInflater inflater = LayoutInflater.from(ctx);
+        for (int i = 0; i < items.size(); i++) {
+            final Item item = items.get(i);
+            View pillWrap = new FrameLayout(ctx);
+            LinearLayout.LayoutParams wrapLp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT);
+            if (i > 0) wrapLp.topMargin = dp(ctx, 8);
+            pillWrap.setLayoutParams(wrapLp);
+
+            View row = inflater.inflate(R.layout.dialog_pill_row, (FrameLayout) pillWrap, false);
+            row.setBackgroundResource(item.checked
+                    ? R.drawable.bg_pill_option_selected
+                    : R.drawable.bg_pill_option);
+            TextView label = row.findViewById(R.id.pillLabel);
+            label.setText(item.label);
+            if (item.destructive) {
+                label.setTextColor(0xFFFF3B30);
+            } else if (item.checked) {
+                label.setTextColor(0xFFF2F4F7);
+            }
+            ImageView dot = row.findViewById(R.id.pillDot);
+            if (item.icon != 0) {
+                // keep dot as accent; selected pills glow red
+                dot.setAlpha(item.checked ? 1f : 0.45f);
+            } else {
+                dot.setVisibility(item.checked ? View.VISIBLE : View.INVISIBLE);
+            }
+            ImageView check = row.findViewById(R.id.pillCheck);
+            check.setVisibility(item.checked ? View.VISIBLE : View.GONE);
+
+            PressAnim.apply(row);
+            row.setOnClickListener(v -> {
+                v.animate().scaleX(0.96f).scaleY(0.96f).setDuration(70).withEndAction(() -> {
+                    dialog.dismiss();
+                    if (item.action != null) item.action.run();
+                }).start();
+            });
+            ((FrameLayout) pillWrap).addView(row);
+            container.addView(pillWrap);
+
+            // Staggered entrance: each pill slides up + fades in.
+            row.setAlpha(0f);
+            row.setTranslationY(dp(ctx, 14));
+            row.animate()
+                    .alpha(1f).translationY(0f)
+                    .setStartDelay(60 + i * 55L)
+                    .setDuration(260)
+                    .setInterpolator(new DecelerateInterpolator(1.4f))
+                    .start();
+        }
+
+        TextView cancel = root.findViewById(R.id.dialogCancel);
+        cancel.setText(ctx.getString(R.string.cancel));
+        PressAnim.apply(cancel);
+        cancel.setOnClickListener(v -> dialog.dismiss());
+
+        styleAsCentered(dialog);
+        dialog.show();
+    }
+
+    // ---- centered rename / input modal ----
+
     public static void showInput(Context ctx, String title, String initial,
                                  String saveLabel, SaveCallback callback) {
-        BottomSheetDialog dialog = new BottomSheetDialog(ctx);
-        View root = LayoutInflater.from(ctx).inflate(R.layout.sheet_input, null);
-        ((TextView) root.findViewById(R.id.sheetTitle)).setText(title);
-        EditText input = root.findViewById(R.id.sheetInput);
-        input.setText(initial);
-        input.setSelection(input.getText().length());
-        TextView cancel = root.findViewById(R.id.sheetCancel);
-        TextView save = root.findViewById(R.id.sheetSave);
+        Dialog dialog = new Dialog(ctx, R.style.TakeOneCenterDialog);
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        View root = LayoutInflater.from(ctx).inflate(R.layout.dialog_input, null);
+        dialog.setContentView(root);
+
+        ((TextView) root.findViewById(R.id.dialogTitle)).setText(title);
+        EditText input = root.findViewById(R.id.dialogInput);
+        TextView error = root.findViewById(R.id.dialogError);
+        input.setText(initial == null ? "" : initial);
+        input.setHint(ctx.getString(R.string.rename_hint));
+        try {
+            input.setSelection(input.getText().length());
+        } catch (Exception ignored) {}
+
+        TextView cancel = root.findViewById(R.id.dialogCancel);
+        TextView save = root.findViewById(R.id.dialogSave);
         cancel.setText(ctx.getString(R.string.cancel));
         save.setText(saveLabel);
-        cancel.setOnClickListener(v -> dialog.dismiss());
-        save.setOnClickListener(v -> {
+        PressAnim.apply(cancel);
+        PressAnim.apply(save);
+
+        cancel.setOnClickListener(v -> {
+            hideKeyboard(ctx, input);
             dialog.dismiss();
-            if (callback != null) callback.onSave(input.getText().toString());
         });
-        dialog.setContentView(root);
+        save.setOnClickListener(v -> {
+            String text = input.getText().toString().trim();
+            if (text.isEmpty()) {
+                error.setText(ctx.getString(R.string.rename_empty_error));
+                error.setVisibility(View.VISIBLE);
+                shake(input);
+                return;
+            }
+            if (text.equals(initial != null ? initial.trim() : "")) {
+                error.setText(ctx.getString(R.string.rename_same_error));
+                error.setVisibility(View.VISIBLE);
+                shake(input);
+                return;
+            }
+            hideKeyboard(ctx, input);
+            dialog.dismiss();
+            if (callback != null) callback.onSave(text);
+        });
+
+        // Entrance pop for the whole card is handled by window anim;
+        // focus + keyboard slide in after.
+        styleAsCentered(dialog);
         if (dialog.getWindow() != null) {
             dialog.getWindow().setSoftInputMode(
                     WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE
@@ -107,5 +206,158 @@ public final class OptionsSheet {
                     ctx.getSystemService(Context.INPUT_METHOD_SERVICE);
             if (imm != null) imm.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT);
         });
+    }
+
+    // ---- confirm delete modal ----
+
+    public static void showConfirm(Context ctx, String title, String message,
+                                   String confirmLabel, boolean danger,
+                                   Runnable onConfirm) {
+        showConfirm(ctx, title, message, confirmLabel,
+                danger ? R.drawable.ic_trash : R.drawable.ic_check, danger, onConfirm);
+    }
+
+    public static void showConfirm(Context ctx, String title, String message,
+                                   String confirmLabel, int iconRes,
+                                   boolean danger, Runnable onConfirm) {
+        Dialog dialog = new Dialog(ctx, R.style.TakeOneCenterDialog);
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        View root = LayoutInflater.from(ctx).inflate(R.layout.dialog_confirm, null);
+        dialog.setContentView(root);
+
+        ((TextView) root.findViewById(R.id.dialogTitle)).setText(title);
+        ((TextView) root.findViewById(R.id.dialogMessage)).setText(message);
+        ImageView icon = root.findViewById(R.id.dialogIcon);
+        icon.setImageResource(iconRes);
+        View iconBg = root.findViewById(R.id.dialogIcon).getParent() instanceof View
+                ? (View) root.findViewById(R.id.dialogIcon).getParent() : null;
+
+        TextView cancel = root.findViewById(R.id.dialogCancel);
+        TextView confirm = root.findViewById(R.id.dialogConfirm);
+        cancel.setText(ctx.getString(R.string.cancel));
+        confirm.setText(confirmLabel);
+        if (danger) {
+            confirm.setBackgroundResource(R.drawable.bg_btn_primary);
+            confirm.setTextColor(0xFFFFFFFF);
+        } else {
+            confirm.setBackgroundResource(R.drawable.bg_btn_primary);
+        }
+        PressAnim.apply(cancel);
+        PressAnim.apply(confirm);
+
+        cancel.setOnClickListener(v -> dialog.dismiss());
+        confirm.setOnClickListener(v -> {
+            v.animate().scaleX(0.94f).scaleY(0.94f).setDuration(70).withEndAction(() -> {
+                dialog.dismiss();
+                if (onConfirm != null) onConfirm.run();
+            }).start();
+        });
+
+        styleAsCentered(dialog);
+        dialog.show();
+        if (iconBg != null) PressAnim.pop(iconBg);
+    }
+
+    // ---- success / failure result popup ----
+
+    public static void showResult(Context ctx, boolean success,
+                                  String title, String message) {
+        showResult(ctx, success, title, message, null);
+    }
+
+    public static void showResult(Context ctx, boolean success,
+                                  String title, String message,
+                                  Runnable onOk) {
+        Dialog dialog = new Dialog(ctx, R.style.TakeOneCenterDialog);
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        View root = LayoutInflater.from(ctx).inflate(R.layout.dialog_result, null);
+        dialog.setContentView(root);
+
+        FrameLayout iconBg = root.findViewById(R.id.resultIconBg);
+        ImageView icon = root.findViewById(R.id.resultIcon);
+        iconBg.setBackgroundResource(success
+                ? R.drawable.bg_icon_success : R.drawable.bg_icon_danger);
+        icon.setImageResource(success ? R.drawable.ic_check : R.drawable.ic_close);
+        // Failure icon tints red for clarity.
+        icon.setColorFilter(success ? 0xFF34C759 : 0xFFFF3B30);
+
+        ((TextView) root.findViewById(R.id.resultTitle)).setText(title);
+        TextView msg = root.findViewById(R.id.resultMessage);
+        if (message != null && !message.isEmpty()) {
+            msg.setText(message);
+            msg.setVisibility(View.VISIBLE);
+        }
+        TextView ok = root.findViewById(R.id.resultOk);
+        boolean needsButton = onOk != null;
+        ok.setVisibility(needsButton ? View.VISIBLE : View.GONE);
+        if (needsButton) {
+            ok.setText(ctx.getString(R.string.ok_got_it));
+            PressAnim.apply(ok);
+            ok.setOnClickListener(v -> {
+                dialog.dismiss();
+                onOk.run();
+            });
+        }
+
+        dialog.setCancelable(true);
+        styleAsCentered(dialog);
+        dialog.show();
+        PressAnim.pop(iconBg);
+
+        // Auto-dismiss success toasts so they feel like confirmations, not chores.
+        // Failures stay until tapped (or also auto-dismiss after a beat longer).
+        long delay = success ? 1600 : 2400;
+        if (onOk == null) {
+            new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                try {
+                    if (dialog.isShowing()) dialog.dismiss();
+                } catch (Exception ignored) {}
+            }, delay);
+        }
+    }
+
+    // ---- helpers ----
+
+    private static void styleAsCentered(Dialog dialog) {
+        Window w = dialog.getWindow();
+        if (w == null) return;
+        w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+        w.setDimAmount(0.62f);
+        WindowManager.LayoutParams lp = w.getAttributes();
+        lp.width = WindowManager.LayoutParams.MATCH_PARENT;
+        lp.height = WindowManager.LayoutParams.WRAP_CONTENT;
+        lp.gravity = Gravity.CENTER;
+        // Side margin so the modal floats as a card over the current screen.
+        lp.horizontalMargin = 0f;
+        w.setAttributes(lp);
+        // Pad the decor view so MATCH_PARENT still leaves breathing room.
+        View decor = w.getDecorView();
+        if (decor != null) {
+            int m = dp(dialog.getContext(), 28);
+            decor.setPadding(m, 0, m, 0);
+        }
+    }
+
+    private static void hideKeyboard(Context ctx, View v) {
+        try {
+            InputMethodManager imm = (InputMethodManager)
+                    ctx.getSystemService(Context.INPUT_METHOD_SERVICE);
+            if (imm != null) imm.hideSoftInputFromWindow(v.getWindowToken(), 0);
+        } catch (Exception ignored) {}
+    }
+
+    private static void shake(View v) {
+        v.animate().cancel();
+        v.animate()
+                .translationX(14f).setDuration(55)
+                .withEndAction(() -> v.animate().translationX(-12f).setDuration(55)
+                        .withEndAction(() -> v.animate().translationX(8f).setDuration(55)
+                                .withEndAction(() -> v.animate().translationX(0f)
+                                        .setDuration(80).start()).start()).start())
+                .start();
+    }
+
+    private static int dp(Context ctx, int dp) {
+        return Math.round(dp * ctx.getResources().getDisplayMetrics().density);
     }
 }

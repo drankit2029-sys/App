@@ -20,4 +20,17 @@
     <style name="TakeOneBottomSheet" parent="Widget.MaterialComponents.BottomSheet.Modal">
         <item name="android:background">@drawable/bg_bottom_sheet</item>
     </style>
+
+    <style name="TakeOneCenterDialog" parent="Theme.AppCompat.DayNight.Dialog">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowIsFloating">true</item>
+        <item name="android:backgroundDimEnabled">true</item>
+        <item name="android:windowAnimationStyle">@style/ModalAnim</item>
+    </style>
+
+    <style name="ModalAnim">
+        <item name="android:windowEnterAnimation">@anim/modal_in</item>
+        <item name="android:windowExitAnimation">@anim/modal_out</item>
+    </style>
 </resources>

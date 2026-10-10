@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:gravity="center_vertical"
+    android:minHeight="56dp"
+    android:orientation="horizontal"
+    android:paddingLeft="16dp"
+    android:paddingTop="6dp"
+    android:paddingRight="12dp"
+    android:paddingBottom="6dp">
+
+    <ImageView
+        android:id="@+id/pillDot"
+        android:layout_width="10dp"
+        android:layout_height="10dp"
+        android:src="@drawable/bg_thumb" />
+
+    <TextView
+        android:id="@+id/pillLabel"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="12dp"
+        android:layout_weight="1"
+        android:fontFamily="sans-serif-medium"
+        android:textColor="@color/text_primary"
+        android:textSize="14sp" />
+
+    <ImageView
+        android:id="@+id/pillCheck"
+        android:layout_width="24dp"
+        android:layout_height="24dp"
+        android:src="@drawable/ic_check"
+        android:visibility="gone" />
+
+</LinearLayout>

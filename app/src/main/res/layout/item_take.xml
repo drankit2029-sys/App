@@ -75,7 +75,7 @@
             android:layout_width="wrap_content"
             android:layout_height="26dp"
             android:layout_marginStart="6dp"
-            android:background="@drawable/bg_badge"
+            android:background="@drawable/bg_chip"
             android:gravity="center"
             android:paddingLeft="9dp"
             android:paddingRight="9dp"
@@ -86,6 +86,7 @@
             android:id="@+id/favIcon"
             android:layout_width="40dp"
             android:layout_height="40dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
             android:clickable="true"
             android:focusable="true"
             android:padding="9dp"
@@ -95,6 +96,7 @@
             android:id="@+id/shareIcon"
             android:layout_width="40dp"
             android:layout_height="40dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
             android:clickable="true"
             android:contentDescription="@string/share_take"
             android:focusable="true"
@@ -106,6 +108,9 @@
             android:layout_width="30dp"
             android:layout_height="30dp"
             android:alpha="0.5"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:clickable="true"
+            android:focusable="true"
             android:padding="6dp"
             android:src="@drawable/ic_chevron" />
     </LinearLayout>
@@ -167,14 +172,16 @@
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="2dp"
+            android:layout_marginTop="8dp"
             android:orientation="horizontal">
 
             <LinearLayout
                 android:id="@+id/btnRename"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
+                android:layout_marginEnd="4dp"
                 android:layout_weight="1"
+                android:background="@drawable/bg_action_btn"
                 android:clickable="true"
                 android:focusable="true"
                 android:gravity="center"
@@ -191,8 +198,9 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginStart="7dp"
+                    android:fontFamily="sans-serif-medium"
                     android:text="Rename"
-                    android:textColor="@color/text_secondary"
+                    android:textColor="@color/text_primary"
                     android:textSize="13sp" />
             </LinearLayout>
 
@@ -200,7 +208,10 @@
                 android:id="@+id/btnExport"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
+                android:layout_marginStart="4dp"
+                android:layout_marginEnd="4dp"
                 android:layout_weight="1"
+                android:background="@drawable/bg_action_btn"
                 android:clickable="true"
                 android:focusable="true"
                 android:gravity="center"
@@ -217,8 +228,9 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginStart="7dp"
+                    android:fontFamily="sans-serif-medium"
                     android:text="Save"
-                    android:textColor="@color/text_secondary"
+                    android:textColor="@color/text_primary"
                     android:textSize="13sp" />
             </LinearLayout>
 
@@ -226,7 +238,9 @@
                 android:id="@+id/btnDelete"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
+                android:layout_marginStart="4dp"
                 android:layout_weight="1"
+                android:background="@drawable/bg_action_btn_danger"
                 android:clickable="true"
                 android:focusable="true"
                 android:gravity="center"
@@ -236,15 +250,15 @@
                 <ImageView
                     android:layout_width="17dp"
                     android:layout_height="17dp"
-                    android:alpha="0.75"
                     android:src="@drawable/ic_trash" />
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginStart="7dp"
+                    android:fontFamily="sans-serif-medium"
                     android:text="Delete"
-                    android:textColor="@color/text_secondary"
+                    android:textColor="@color/record"
                     android:textSize="13sp" />
             </LinearLayout>
         </LinearLayout>

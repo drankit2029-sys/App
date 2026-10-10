@@ -1,8 +1,10 @@
 package com.example.hello;
 
+import android.animation.ValueAnimator;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.animation.DecelerateInterpolator;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.SeekBar;
@@ -113,15 +115,21 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
         }
     }
 
-    /** Toggle the expanded section in place, no rebind (no flicker on expand). */
+    /** Toggle the expanded section with a smooth height + fade animation. */
     public void toggleExpandedDirect(RecyclerView rv, long id) {
         boolean expand = expandedId != id;
+        // Smoothly collapse any previously open card.
+        if (expandedId != -1 && expandedId != id) {
+            RecyclerView.ViewHolder oldVh = rv.findViewHolderForItemId(expandedId);
+            if (oldVh instanceof Vh) {
+                Vh old = (Vh) oldVh;
+                animateCollapse(old.expanded, old.chevron);
+            }
+        }
         expandedId = expand ? id : -1;
         RecyclerView.ViewHolder vh = rv.findViewHolderForItemId(id);
         if (vh instanceof Vh) {
             Vh h = (Vh) vh;
-            h.expanded.setVisibility(expand ? View.VISIBLE : View.GONE);
-            h.chevron.animate().rotation(expand ? 180f : 0f).setDuration(180).start();
             // Drop any stuck pressed/focus glow on the scrubber when it (re)appears.
             h.scrubber.setPressed(false);
             h.scrubber.clearFocus();
@@ -136,8 +144,88 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
                     }
                     h.btnExport.setVisibility(t.hasFile() ? View.VISIBLE : View.GONE);
                 }
+                animateExpand(h.expanded, h.chevron);
+            } else {
+                animateCollapse(h.expanded, h.chevron);
             }
         }
+    }
+
+    private void animateExpand(final View expanded, final View chevron) {
+        chevron.animate().cancel();
+        chevron.animate().rotation(180f).setDuration(250)
+                .setInterpolator(new DecelerateInterpolator(1.4f)).start();
+        // Cancel any in-flight height animation.
+        Object tag = expanded.getTag();
+        if (tag instanceof ValueAnimator) ((ValueAnimator) tag).cancel();
+        expanded.setVisibility(View.VISIBLE);
+        expanded.measure(
+                View.MeasureSpec.makeMeasureSpec(
+                        ((View) expanded.getParent()).getWidth(),
+                        View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+        final int targetH = expanded.getMeasuredHeight();
+        expanded.getLayoutParams().height = 0;
+        expanded.setAlpha(0f);
+        expanded.requestLayout();
+        ValueAnimator anim = ValueAnimator.ofInt(0, targetH);
+        anim.setDuration(300);
+        anim.setInterpolator(new DecelerateInterpolator(1.3f));
+        anim.addUpdateListener(a -> {
+            int val = (int) a.getAnimatedValue();
+            expanded.getLayoutParams().height = val;
+            expanded.setAlpha(Math.min(1f, val / (float) Math.max(1, targetH)));
+            expanded.requestLayout();
+        });
+        anim.addListener(new android.animation.AnimatorListenerAdapter() {
+            @Override
+            public void onAnimationEnd(android.animation.Animator animation) {
+                expanded.getLayoutParams().height =
+                        ViewGroup.LayoutParams.WRAP_CONTENT;
+                expanded.setAlpha(1f);
+                expanded.requestLayout();
+                expanded.setTag(null);
+            }
+        });
+        expanded.setTag(anim);
+        anim.start();
+    }
+
+    private void animateCollapse(final View expanded, final View chevron) {
+        chevron.animate().cancel();
+        chevron.animate().rotation(0f).setDuration(220)
+                .setInterpolator(new DecelerateInterpolator(1.4f)).start();
+        if (expanded.getVisibility() != View.VISIBLE) return;
+        Object tag = expanded.getTag();
+        if (tag instanceof ValueAnimator) ((ValueAnimator) tag).cancel();
+        final int startH = expanded.getHeight() > 0
+                ? expanded.getHeight() : expanded.getMeasuredHeight();
+        if (startH <= 0) {
+            expanded.setVisibility(View.GONE);
+            return;
+        }
+        ValueAnimator anim = ValueAnimator.ofInt(startH, 0);
+        anim.setDuration(240);
+        anim.setInterpolator(new DecelerateInterpolator(1.4f));
+        anim.addUpdateListener(a -> {
+            int val = (int) a.getAnimatedValue();
+            expanded.getLayoutParams().height = val;
+            expanded.setAlpha(val / (float) Math.max(1, startH));
+            expanded.requestLayout();
+        });
+        anim.addListener(new android.animation.AnimatorListenerAdapter() {
+            @Override
+            public void onAnimationEnd(android.animation.Animator animation) {
+                expanded.setVisibility(View.GONE);
+                expanded.getLayoutParams().height =
+                        ViewGroup.LayoutParams.WRAP_CONTENT;
+                expanded.setAlpha(1f);
+                expanded.requestLayout();
+                expanded.setTag(null);
+            }
+        });
+        expanded.setTag(anim);
+        anim.start();
     }
 
     /** True while the user is actively dragging this take's scrubber. */
@@ -178,12 +266,31 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
         }
     }
 
+    private void pressBounce(View v) {
+        v.animate().cancel();
+        v.setScaleX(0.94f);
+        v.setScaleY(0.94f);
+        v.animate().scaleX(1f).scaleY(1f).setDuration(180)
+                .setInterpolator(new android.view.animation.OvershootInterpolator(2f))
+                .start();
+    }
+
     @NonNull
     @Override
     public Vh onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
         View v = LayoutInflater.from(parent.getContext())
                 .inflate(R.layout.item_take, parent, false);
-        return new Vh(v);
+        Vh holder = new Vh(v);
+        // Press feedback on everything tappable (scrubber excluded — it drags).
+        PressAnim.apply(holder.cardRoot);
+        PressAnim.apply(holder.playBtn);
+        PressAnim.apply(holder.fav);
+        PressAnim.apply(holder.share);
+        PressAnim.apply(holder.chevron);
+        PressAnim.apply(holder.btnRename);
+        PressAnim.apply(holder.btnExport);
+        PressAnim.apply(holder.btnDelete);
+        return holder;
     }
 
     @Override
@@ -213,6 +320,12 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
         h.share.setVisibility(!selectionMode && t.hasFile() ? View.VISIBLE : View.GONE);
 
         h.chevron.setRotation(expanded ? 180f : 0f);
+        // Reset any mid-animation height leftovers from recycled holders.
+        Object pending = h.expanded.getTag();
+        if (pending instanceof ValueAnimator) ((ValueAnimator) pending).cancel();
+        h.expanded.setTag(null);
+        h.expanded.getLayoutParams().height = ViewGroup.LayoutParams.WRAP_CONTENT;
+        h.expanded.setAlpha(1f);
         h.expanded.setVisibility(expanded ? View.VISIBLE : View.GONE);
         if (expanded) {
             h.totalTime.setText(Take.formatDuration(t.durationMs));
@@ -230,7 +343,15 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
             listener.onCardLongPress(t);
             return true;
         });
-        h.playBtn.setOnClickListener(v -> listener.onPlay(t));
+        h.playBtn.setOnClickListener(v -> {
+            v.animate().cancel();
+            v.setScaleX(0.85f);
+            v.setScaleY(0.85f);
+            v.animate().scaleX(1f).scaleY(1f).setDuration(200)
+                    .setInterpolator(new android.view.animation.OvershootInterpolator(2f))
+                    .start();
+            listener.onPlay(t);
+        });
         h.fav.setOnClickListener(v -> {
             v.animate().scaleX(1.4f).scaleY(1.4f).setDuration(110)
                     .withEndAction(() -> v.animate().scaleX(1f).scaleY(1f)
@@ -239,10 +360,25 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
             listener.onFavorite(t);
         });
         h.chevron.setOnClickListener(v -> listener.onCardClick(t));
-        h.share.setOnClickListener(v -> listener.onExport(t));
-        h.btnRename.setOnClickListener(v -> listener.onRename(t));
-        h.btnExport.setOnClickListener(v -> listener.onSave(t));
-        h.btnDelete.setOnClickListener(v -> listener.onDelete(t));
+        h.share.setOnClickListener(v -> {
+            v.animate().cancel();
+            v.setScaleX(0.8f);
+            v.setScaleY(0.8f);
+            v.animate().scaleX(1f).scaleY(1f).setDuration(200).start();
+            listener.onExport(t);
+        });
+        h.btnRename.setOnClickListener(v -> {
+            pressBounce(v);
+            listener.onRename(t);
+        });
+        h.btnExport.setOnClickListener(v -> {
+            pressBounce(v);
+            listener.onSave(t);
+        });
+        h.btnDelete.setOnClickListener(v -> {
+            pressBounce(v);
+            listener.onDelete(t);
+        });
 
         h.scrubber.setOnSeekBarChangeListener(null);
         h.scrubber.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
