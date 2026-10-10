@@ -43,19 +43,22 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
+                android:clickable="true"
+                android:focusable="true"
                 android:text="@string/studio_ready"
                 android:textColor="@color/text_secondary"
                 android:textSize="13sp" />
         </LinearLayout>
 
         <TextView
+            android:id="@+id/formatBadge"
             android:layout_width="wrap_content"
             android:layout_height="32dp"
             android:background="@drawable/bg_badge"
             android:gravity="center"
             android:paddingLeft="12dp"
             android:paddingRight="12dp"
-            android:text="@string/studio_format"
+            android:text="@string/fmt_m4a"
             android:textColor="@color/text_secondary"
             android:textSize="11sp" />
     </LinearLayout>
@@ -101,9 +104,27 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="2dp"
+        android:clickable="true"
+        android:focusable="true"
         android:gravity="center"
         android:textColor="@color/text_hint"
         android:textSize="13sp" />
+
+    <TextView
+        android:id="@+id/draftBadge"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center_horizontal"
+        android:layout_marginTop="6dp"
+        android:background="@drawable/bg_badge"
+        android:paddingLeft="10dp"
+        android:paddingRight="10dp"
+        android:paddingTop="4dp"
+        android:paddingBottom="4dp"
+        android:text="@string/studio_streaming"
+        android:textColor="@color/record"
+        android:textSize="11sp"
+        android:visibility="gone" />
 
     <!-- Waveform -->
     <com.example.hello.WaveformView
@@ -111,7 +132,7 @@
         android:layout_width="match_parent"
         android:layout_height="150dp"
         android:layout_marginLeft="20dp"
-        android:layout_marginTop="20dp"
+        android:layout_marginTop="16dp"
         android:layout_marginRight="20dp" />
 
     <TextView
@@ -124,86 +145,82 @@
         android:textColor="@color/text_hint"
         android:textSize="13sp" />
 
+    <!-- Format options: pick before recording starts -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="18dp"
+        android:gravity="center"
+        android:letterSpacing="0.1"
+        android:text="@string/format_pick_label"
+        android:textColor="@color/text_hint"
+        android:textSize="11sp" />
+
+    <HorizontalScrollView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:clipToPadding="false"
+        android:scrollbars="none">
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:gravity="center"
+            android:orientation="horizontal"
+            android:paddingLeft="16dp"
+            android:paddingRight="16dp">
+
+            <TextView
+                android:id="@+id/fmtRaw32"
+                android:layout_width="wrap_content"
+                android:layout_height="40dp"
+                android:background="@drawable/bg_chip"
+                android:clickable="true"
+                android:focusable="true"
+                android:fontFamily="sans-serif-medium"
+                android:gravity="center"
+                android:paddingLeft="18dp"
+                android:paddingRight="18dp"
+                android:text="@string/fmt_raw32"
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/fmtM4a"
+                android:layout_width="wrap_content"
+                android:layout_height="40dp"
+                android:layout_marginStart="8dp"
+                android:background="@drawable/bg_chip"
+                android:clickable="true"
+                android:focusable="true"
+                android:fontFamily="sans-serif-medium"
+                android:gravity="center"
+                android:paddingLeft="18dp"
+                android:paddingRight="18dp"
+                android:text="@string/fmt_m4a"
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/fmtWav16"
+                android:layout_width="wrap_content"
+                android:layout_height="40dp"
+                android:layout_marginStart="8dp"
+                android:background="@drawable/bg_chip"
+                android:clickable="true"
+                android:focusable="true"
+                android:fontFamily="sans-serif-medium"
+                android:gravity="center"
+                android:paddingLeft="18dp"
+                android:paddingRight="18dp"
+                android:text="@string/fmt_wav16"
+                android:textSize="13sp" />
+        </LinearLayout>
+    </HorizontalScrollView>
+
     <View
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1" />
-
-    <!-- Secondary controls above the mic button -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginBottom="132dp"
-        android:gravity="center"
-        android:orientation="horizontal">
-
-        <LinearLayout
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:gravity="center"
-            android:orientation="vertical">
-
-            <FrameLayout
-                android:id="@+id/pauseBtn"
-                android:layout_width="56dp"
-                android:layout_height="56dp"
-                android:layout_gravity="center"
-                android:alpha="0.4"
-                android:background="@drawable/bg_round_btn">
-
-                <ImageView
-                    android:id="@+id/pauseIcon"
-                    android:layout_width="24dp"
-                    android:layout_height="24dp"
-                    android:layout_gravity="center"
-                    android:src="@drawable/ic_pause" />
-            </FrameLayout>
-
-            <TextView
-                android:id="@+id/pauseLabel"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_gravity="center"
-                android:layout_marginTop="6dp"
-                android:text="@string/action_pause"
-                android:textColor="@color/text_secondary"
-                android:textSize="11sp" />
-        </LinearLayout>
-
-        <View
-            android:layout_width="110dp"
-            android:layout_height="1dp" />
-
-        <LinearLayout
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:gravity="center"
-            android:orientation="vertical">
-
-            <FrameLayout
-                android:id="@+id/discardBtn"
-                android:layout_width="56dp"
-                android:layout_height="56dp"
-                android:layout_gravity="center"
-                android:alpha="0.4"
-                android:background="@drawable/bg_round_btn">
-
-                <ImageView
-                    android:layout_width="22dp"
-                    android:layout_height="22dp"
-                    android:layout_gravity="center"
-                    android:src="@drawable/ic_close" />
-            </FrameLayout>
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_gravity="center"
-                android:layout_marginTop="6dp"
-                android:text="@string/action_discard"
-                android:textColor="@color/text_secondary"
-                android:textSize="11sp" />
-        </LinearLayout>
-    </LinearLayout>
 
 </LinearLayout>

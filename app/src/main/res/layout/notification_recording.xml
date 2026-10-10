@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="#FF171B21"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:padding="12dp">
+
+    <ImageView
+        android:layout_width="36dp"
+        android:layout_height="36dp"
+        android:src="@drawable/ic_mic" />
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="10dp"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/notifName"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:fontFamily="sans-serif-medium"
+            android:maxLines="1"
+            android:textColor="#FFF2F4F7"
+            android:textSize="14sp" />
+
+        <TextView
+            android:id="@+id/notifSub"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:maxLines="1"
+            android:textColor="#FF9AA3AF"
+            android:textSize="12sp" />
+    </LinearLayout>
+
+    <ImageButton
+        android:id="@+id/notifToggle"
+        android:layout_width="44dp"
+        android:layout_height="44dp"
+        android:background="@drawable/bg_round_btn"
+        android:contentDescription="@string/notif_pause"
+        android:src="@drawable/ic_pause" />
+
+    <ImageButton
+        android:id="@+id/notifSave"
+        android:layout_width="44dp"
+        android:layout_height="44dp"
+        android:layout_marginStart="8dp"
+        android:background="@drawable/bg_round_btn"
+        android:contentDescription="@string/notif_save"
+        android:src="@drawable/ic_check" />
+
+    <ImageButton
+        android:id="@+id/notifCancel"
+        android:layout_width="44dp"
+        android:layout_height="44dp"
+        android:layout_marginStart="8dp"
+        android:background="@drawable/bg_round_btn"
+        android:contentDescription="@string/notif_cancel"
+        android:src="@drawable/ic_close" />
+
+</LinearLayout>

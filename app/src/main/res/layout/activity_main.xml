@@ -12,39 +12,66 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
-    <!-- Shared floating mic: red core + larger halo overlay, fixed position -->
-    <FrameLayout
-        android:id="@+id/fabWrap"
-        android:layout_width="88dp"
-        android:layout_height="88dp"
+    <!-- Shared record controls: main mic/pause mic + split stop button -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
         android:layout_gravity="bottom|center_horizontal"
         android:layout_marginBottom="36dp"
-        android:clickable="true"
-        android:contentDescription="@string/cd_mic"
-        android:focusable="true">
-
-        <View
-            android:id="@+id/fabHalo"
-            android:layout_width="88dp"
-            android:layout_height="88dp"
-            android:layout_gravity="center"
-            android:background="@drawable/fab_halo" />
+        android:gravity="center"
+        android:orientation="horizontal">
 
         <FrameLayout
-            android:id="@+id/fabCore"
+            android:id="@+id/fabWrap"
+            android:layout_width="88dp"
+            android:layout_height="88dp"
+            android:clickable="true"
+            android:contentDescription="@string/cd_mic"
+            android:focusable="true">
+
+            <View
+                android:id="@+id/fabHalo"
+                android:layout_width="88dp"
+                android:layout_height="88dp"
+                android:layout_gravity="center"
+                android:background="@drawable/fab_halo" />
+
+            <FrameLayout
+                android:id="@+id/fabCore"
+                android:layout_width="64dp"
+                android:layout_height="64dp"
+                android:layout_gravity="center"
+                android:background="@drawable/fab_core"
+                android:elevation="6dp">
+
+                <ImageView
+                    android:id="@+id/fabIcon"
+                    android:layout_width="28dp"
+                    android:layout_height="28dp"
+                    android:layout_gravity="center"
+                    android:src="@drawable/ic_mic" />
+            </FrameLayout>
+        </FrameLayout>
+
+        <FrameLayout
+            android:id="@+id/fabStopWrap"
             android:layout_width="64dp"
             android:layout_height="64dp"
-            android:layout_gravity="center"
-            android:background="@drawable/fab_core"
-            android:elevation="6dp">
+            android:layout_gravity="center_vertical"
+            android:layout_marginStart="14dp"
+            android:background="@drawable/bg_round_btn"
+            android:clickable="true"
+            android:contentDescription="@string/action_stop"
+            android:focusable="true"
+            android:visibility="gone">
 
             <ImageView
-                android:id="@+id/fabIcon"
-                android:layout_width="28dp"
-                android:layout_height="28dp"
+                android:id="@+id/fabStopIcon"
+                android:layout_width="26dp"
+                android:layout_height="26dp"
                 android:layout_gravity="center"
-                android:src="@drawable/ic_mic" />
+                android:src="@drawable/ic_circle_stop" />
         </FrameLayout>
-    </FrameLayout>
+    </LinearLayout>
 
 </FrameLayout>

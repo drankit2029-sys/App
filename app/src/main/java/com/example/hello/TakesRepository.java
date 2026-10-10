@@ -63,6 +63,28 @@ public final class TakesRepository {
         return t;
     }
 
+    public static synchronized Take addRecording(File file, long durationMs,
+                                                 String title, String format) {
+        long mbTenths = Math.max(1, file.length() / 102400);
+        String size = String.format(Locale.US, "%.1f MB", mbTenths / 10f);
+        String t = title != null ? title.trim() : "";
+        if (t.isEmpty()) {
+            String name = file.getName();
+            int dot = name.lastIndexOf('.');
+            t = (dot > 0 ? name.substring(0, dot) : name).replace('_', ' ');
+        }
+        String f = format != null ? format.trim().toUpperCase(Locale.US) : "";
+        if (f.isEmpty()) {
+            String name = file.getName();
+            int dot = name.lastIndexOf('.');
+            f = dot > 0 ? name.substring(dot + 1).toUpperCase(Locale.US) : "WAV";
+        }
+        Take take = new Take(IDS.getAndIncrement(), t, durationMs,
+                System.currentTimeMillis(), size, f, false, file.getAbsolutePath());
+        TAKES.add(0, take);
+        return take;
+    }
+
     public static synchronized void toggleFavorite(long id) {
         Take t = find(id);
         if (t != null) t.favorite = !t.favorite;

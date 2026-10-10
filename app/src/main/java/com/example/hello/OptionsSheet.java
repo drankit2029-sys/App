@@ -60,6 +60,23 @@ public final class OptionsSheet {
         void onSave(String text);
     }
 
+    /** Input modal that also reports when the user backs out / cancels. */
+    public static void showInputWithCancel(Context ctx, String title, String initial,
+                                           String saveLabel, SaveCallback callback,
+                                           Runnable onCancel) {
+        showInputInternal(ctx, title, initial, saveLabel, callback, onCancel, false);
+    }
+
+    /**
+     * Same, but {@code allowSame} skips the "already the current name" error so
+     * accepting the suggested default is one tap.
+     */
+    public static void showInputWithCancel(Context ctx, String title, String initial,
+                                           String saveLabel, SaveCallback callback,
+                                           Runnable onCancel, boolean allowSame) {
+        showInputInternal(ctx, title, initial, saveLabel, callback, onCancel, allowSame);
+    }
+
     // ---- centered pill options (sort, export, …) ----
 
     public static void show(Context ctx, String title, List<Item> items) {
@@ -156,6 +173,12 @@ public final class OptionsSheet {
 
     public static void showInput(Context ctx, String title, String initial,
                                  String saveLabel, SaveCallback callback) {
+        showInputInternal(ctx, title, initial, saveLabel, callback, null, false);
+    }
+
+    private static void showInputInternal(Context ctx, String title, String initial,
+                                          String saveLabel, SaveCallback callback,
+                                          Runnable onCancel, boolean allowSame) {
         Dialog dialog = new Dialog(ctx, R.style.TakeOneCenterDialog);
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
         View root = LayoutInflater.from(ctx).inflate(R.layout.dialog_input, null);
@@ -177,10 +200,18 @@ public final class OptionsSheet {
         PressAnim.apply(cancel);
         PressAnim.apply(save);
 
+        final boolean[] settled = {false};
         cancel.setOnClickListener(v -> {
             hideKeyboard(ctx, input);
+            settled[0] = true;
             dialog.dismiss();
+            if (onCancel != null) onCancel.run();
         });
+        try {
+            dialog.setOnCancelListener(d -> {
+                if (!settled[0] && onCancel != null) onCancel.run();
+            });
+        } catch (Exception ignored) {}
         save.setOnClickListener(v -> {
             String text = input.getText().toString().trim();
             if (text.isEmpty()) {
@@ -189,13 +220,14 @@ public final class OptionsSheet {
                 shake(input);
                 return;
             }
-            if (text.equals(initial != null ? initial.trim() : "")) {
+            if (!allowSame && text.equals(initial != null ? initial.trim() : "")) {
                 error.setText(ctx.getString(R.string.rename_same_error));
                 error.setVisibility(View.VISIBLE);
                 shake(input);
                 return;
             }
             hideKeyboard(ctx, input);
+            settled[0] = true;
             dialog.dismiss();
             if (callback != null) callback.onSave(text);
         });
