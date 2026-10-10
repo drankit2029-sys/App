@@ -103,12 +103,21 @@ public final class OptionsSheet {
             } else if (item.checked) {
                 label.setTextColor(0xFFF2F4F7);
             }
-            ImageView dot = row.findViewById(R.id.pillDot);
+            ImageView iconView = row.findViewById(R.id.pillDot);
             if (item.icon != 0) {
-                // keep dot as accent; selected pills glow red
-                dot.setAlpha(item.checked ? 1f : 0.45f);
+                // Real action icon (share / folder / …) tinted to the row.
+                iconView.setImageResource(item.icon);
+                iconView.setAlpha(item.checked ? 1f : 0.8f);
+                iconView.setColorFilter(item.destructive
+                        ? 0xFFFF3B30 : 0xFFF2F4F7);
+                iconView.setVisibility(View.VISIBLE);
             } else {
-                dot.setVisibility(item.checked ? View.VISIBLE : View.INVISIBLE);
+                // Sort-style rows keep a small leading dot as the selection cue.
+                iconView.setImageResource(R.drawable.bg_thumb);
+                iconView.setColorFilter(item.checked ? 0xFFFF3B30 : 0xFF5D6672);
+                int inset = dp(ctx, 5);
+                iconView.setPadding(inset, inset, inset, inset);
+                iconView.setVisibility(View.VISIBLE);
             }
             ImageView check = row.findViewById(R.id.pillCheck);
             check.setVisibility(item.checked ? View.VISIBLE : View.GONE);

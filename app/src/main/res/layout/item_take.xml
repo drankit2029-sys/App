@@ -8,7 +8,7 @@
     android:layout_marginRight="16dp"
     android:layout_marginBottom="6dp"
     android:background="@drawable/bg_card"
-    android:foreground="?attr/selectableItemBackground"
+    android:foreground="@drawable/ripple_card"
     android:orientation="vertical"
     android:padding="12dp">
 
@@ -213,7 +213,7 @@
                     android:layout_width="17dp"
                     android:layout_height="17dp"
                     android:alpha="0.75"
-                    android:src="@drawable/ic_download" />
+                    android:src="@drawable/ic_upload" />
 
                 <TextView
                     android:layout_width="wrap_content"

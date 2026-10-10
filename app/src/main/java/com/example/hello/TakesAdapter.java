@@ -42,8 +42,8 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
     private Set<Long> selected = new HashSet<>();
     private final Map<Long, Long> progressMap = new HashMap<>();
 
-    /** Selected cards shrink slightly so multi-select reads at a glance. */
-    private static final float SEL_SCALE = 0.96f;
+    /** Selected cards shrink so multi-select reads at a glance. */
+    private static final float SEL_SCALE = 0.94f;
     /** SeekBar resolution — high enough that progress looks continuous. */
     private static final int SCRUB_MAX = 10000;
 
@@ -251,9 +251,46 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
         this.selectionMode = mode;
         if (modeChanged) {
             notifyDataSetChanged();
-        } else {
-            // Selection toggles handled by caller via notifySelection(id).
         }
+        // Selection toggles handled by caller via notifySelection(id).
+    }
+
+    /**
+     * Push the current selection state onto every visible card.
+     *
+     * onBind is the source of truth, but it only runs for rows RecyclerView
+     * decides to rebind. Walking the visible holders guarantees the shrink is
+     * applied the moment a card is tapped — including the card that started
+     * multi-select — and guarantees a full restore when it is deselected.
+     */
+    public void applySelectionScales(RecyclerView rv) {
+        if (rv == null) return;
+        for (int i = 0; i < rv.getChildCount(); i++) {
+            RecyclerView.ViewHolder vh = rv.getChildViewHolder(rv.getChildAt(i));
+            if (vh instanceof Vh) {
+                Vh h = (Vh) vh;
+                boolean isSel = selectionMode && selected.contains(h.itemId);
+                applySelectionScale(h, isSel);
+            }
+        }
+    }
+
+    private void applySelectionScale(Vh h, boolean isSel) {
+        float target = isSel ? SEL_SCALE : 1f;
+        View card = h.cardRoot;
+        card.animate().cancel();
+        boolean alreadyThere = Math.abs(card.getScaleX() - target) < 0.005f
+                && Math.abs(card.getScaleY() - target) < 0.005f;
+        if (alreadyThere) {
+            card.setScaleX(target);
+            card.setScaleY(target);
+            return;
+        }
+        card.animate()
+                .scaleX(target).scaleY(target)
+                .setDuration(isSel ? 200 : 220)
+                .setInterpolator(new DecelerateInterpolator(1.4f))
+                .start();
     }
 
     public void notifySelection(long id) {
@@ -285,11 +322,12 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
         View v = LayoutInflater.from(parent.getContext())
                 .inflate(R.layout.item_take, parent, false);
         Vh holder = new Vh(v);
-        // Press feedback on everything tappable (scrubber excluded — it drags;
-        // cardRoot uses a ripple foreground so it never fights selection scale).
-        PressAnim.apply(holder.playBtn);
-        PressAnim.apply(holder.fav);
-        PressAnim.apply(holder.chevron);
+        // Press feedback on everything tappable (scrubber excluded — it drags).
+        // Icons get the softer variant so they give without flashing; the card
+        // uses a ripple foreground so it never fights the selection scale.
+        PressAnim.applySoft(holder.fav, 0.9f);
+        PressAnim.applySoft(holder.chevron, 0.88f);
+        PressAnim.applySoft(holder.playBtn, 0.92f);
         PressAnim.apply(holder.btnRename);
         PressAnim.apply(holder.btnExport);
         PressAnim.apply(holder.btnDelete);
@@ -308,24 +346,10 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
         h.selectBadge.setImageResource(isSel ? R.drawable.ic_checked : R.drawable.bg_select_ring);
         h.selectBadge.setAlpha(isSel ? 1f : 0.5f);
 
-        // Deterministic selection shrink: the single source of truth for card
-        // scale. Rebinds (enter/exit selection, toggle, scroll recycling) always
-        // converge here, so the first-selected card shrinks too and deselected
-        // cards always restore — no stuck scale from recycled holders.
-        h.cardRoot.animate().cancel();
-        h.cardRoot.setAlpha(1f);
-        float targetScale = isSel ? SEL_SCALE : 1f;
-        if (Math.abs(h.cardRoot.getScaleX() - targetScale) > 0.005f
-                || Math.abs(h.cardRoot.getScaleY() - targetScale) > 0.005f) {
-            h.cardRoot.animate()
-                    .scaleX(targetScale).scaleY(targetScale)
-                    .setDuration(180)
-                    .setInterpolator(new DecelerateInterpolator(1.4f))
-                    .start();
-        } else {
-            h.cardRoot.setScaleX(targetScale);
-            h.cardRoot.setScaleY(targetScale);
-        }
+        // Deterministic selection shrink. Every bind converges the card to the
+        // exact scale its selection state demands, so recycled holders can
+        // never carry a stale size.
+        applySelectionScale(h, isSel);
 
         h.title.setText(t.title);
         h.meta.setText(Take.formatDuration(t.durationMs) + "  •  " + t.dateLabel + "  •  " + t.sizeLabel);
@@ -364,18 +388,16 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
         });
         h.playBtn.setOnClickListener(v -> {
             v.animate().cancel();
-            v.setScaleX(0.85f);
-            v.setScaleY(0.85f);
+            v.setScaleX(0.9f);
+            v.setScaleY(0.9f);
             v.animate().scaleX(1f).scaleY(1f).setDuration(200)
                     .setInterpolator(new android.view.animation.OvershootInterpolator(2f))
                     .start();
             listener.onPlay(t);
         });
         h.fav.setOnClickListener(v -> {
-            v.animate().scaleX(1.4f).scaleY(1.4f).setDuration(110)
-                    .withEndAction(() -> v.animate().scaleX(1f).scaleY(1f)
-                            .setDuration(140).start())
-                    .start();
+            // Soft nudge on a falloff curve — no hard overshoot, no flash.
+            PressAnim.nudge(v, 1.14f);
             listener.onFavorite(t);
         });
         h.chevron.setOnClickListener(v -> listener.onCardClick(t));

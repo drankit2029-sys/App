@@ -82,6 +82,9 @@
     <string name="export_save_multi">Save %1$d to Music/TakeOne</string>
     <string name="saved_music_one">Saved to Music/TakeOne</string>
     <string name="saved_music_many">Saved %1$d takes to Music/TakeOne</string>
+    <string name="saved_to_location">Saved to %1$s</string>
+    <string name="saved_n_to_location">Saved %1$d files to %2$s</string>
+    <string name="couldnt_save_title">Couldn\'t save</string>
     <string name="take_saved">Take saved</string>
     <string name="couldnt_save">Couldn\'t save take</string>
     <string name="couldnt_export">Couldn\'t export</string>

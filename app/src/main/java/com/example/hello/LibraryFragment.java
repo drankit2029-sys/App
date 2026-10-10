@@ -1,11 +1,13 @@
 package com.example.hello;
 
 import android.Manifest;
+import android.content.ContentResolver;
 import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.database.Cursor;
 import android.media.MediaPlayer;
 import android.media.MediaScannerConnection;
 import android.net.Uri;
@@ -16,6 +18,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.provider.MediaStore;
+import android.provider.OpenableColumns;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.view.LayoutInflater;
@@ -455,6 +458,9 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         selection.add(take.id);
         adapter.collapseAll();
         adapter.setSelection(selection, true);
+        // Apply the shrink straight away so the card that started the
+        // multi-select shrinks along with every following tap.
+        adapter.applySelectionScales(list);
         paintSelectionBar();
     }
 
@@ -462,6 +468,7 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         selectionMode = false;
         selection.clear();
         adapter.setSelection(selection, false);
+        adapter.applySelectionScales(list);
         paintSelectionBar();
     }
 
@@ -474,6 +481,9 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         }
         adapter.setSelection(selection, true);
         adapter.notifySelection(take.id);
+        // Restore unselected cards and shrink the newly selected one without
+        // waiting on a rebind.
+        adapter.applySelectionScales(list);
         paintSelectionBar();
     }
 
@@ -488,7 +498,7 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             return;
         }
         adapter.setSelection(selection, true);
-        adapter.notifyDataSetChanged();
+        adapter.applySelectionScales(list);
         paintSelectionBar();
     }
 
@@ -795,7 +805,7 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         List<OptionsSheet.Item> items = new ArrayList<>();
         items.add(OptionsSheet.Item.of(R.drawable.ic_share,
                 getString(R.string.export_share), () -> shareFiles(singleton(take))));
-        items.add(OptionsSheet.Item.of(R.drawable.ic_download,
+        items.add(OptionsSheet.Item.of(R.drawable.ic_folder,
                 getString(R.string.export_save), () -> saveSingleTake(take)));
         OptionsSheet.showOptions(requireContext(), getString(R.string.action_export),
                 take.title, items);
@@ -927,7 +937,7 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         List<OptionsSheet.Item> items = new ArrayList<>();
         items.add(OptionsSheet.Item.of(R.drawable.ic_share,
                 getString(R.string.export_share_multi, n), () -> shareFiles(files)));
-        items.add(OptionsSheet.Item.of(R.drawable.ic_download,
+        items.add(OptionsSheet.Item.of(R.drawable.ic_folder,
                 getString(R.string.export_save_multi, n),
                 () -> saveToMusicFolderWithPerm(files)));
         OptionsSheet.showOptions(requireContext(), getString(R.string.action_export),
@@ -977,35 +987,40 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         final Context app = requireContext().getApplicationContext();
         final List<Take> copy = new ArrayList<>(takes);
         new Thread(() -> {
-            int saved = 0;
+            final List<String> locations = new ArrayList<>();
             for (Take t : copy) {
-                if (saveOneToMusic(app, t)) saved++;
+                String where = saveOneToMusic(app, t);
+                if (where != null) locations.add(where);
             }
-            final int n = saved;
+            final int n = locations.size();
             final int total = copy.size();
             handler.post(() -> {
                 if (getView() == null || !isAdded()) return;
-                if (n == total) {
-                    OptionsSheet.showResult(requireContext(), true,
-                            getString(R.string.take_saved),
-                            n == 1 ? getString(R.string.saved_music_one)
-                                    : getString(R.string.saved_music_many, n));
-                } else if (n > 0) {
-                    OptionsSheet.showResult(requireContext(), true,
-                            getString(R.string.take_saved),
-                            getString(R.string.saved_music_many, n));
-                } else {
+                if (n == 0) {
                     OptionsSheet.showResult(requireContext(), false,
-                            getString(R.string.rename_failed_title),
+                            getString(R.string.couldnt_save_title),
                             getString(R.string.couldnt_save));
+                    return;
+                }
+                // Report the real destination the file landed in, not a
+                // hardcoded folder name.
+                if (n == 1) {
+                    OptionsSheet.showResult(requireContext(), true,
+                            getString(R.string.take_saved),
+                            getString(R.string.saved_to_location, locations.get(0)));
+                } else {
+                    OptionsSheet.showResult(requireContext(), true,
+                            getString(R.string.take_saved),
+                            getString(R.string.saved_n_to_location, n, locations.get(0)));
                 }
             });
         }).start();
     }
 
-    private boolean saveOneToMusic(Context ctx, Take t) {
+    /** @return the actual on-device location saved to, or null on failure. */
+    private String saveOneToMusic(Context ctx, Take t) {
         File src = new File(t.filePath);
-        if (!src.exists()) return false;
+        if (!src.exists()) return null;
         try {
             if (Build.VERSION.SDK_INT >= 29) {
                 ContentValues cv = new ContentValues();
@@ -1015,20 +1030,20 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                 cv.put(MediaStore.Audio.Media.IS_PENDING, 1);
                 Uri uri = ctx.getContentResolver().insert(
                         MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, cv);
-                if (uri == null) return false;
+                if (uri == null) return null;
                 try (InputStream in = new FileInputStream(src);
                      OutputStream out = ctx.getContentResolver().openOutputStream(uri)) {
-                    if (out == null) return false;
+                    if (out == null) return null;
                     copyStream(in, out);
                 }
                 ContentValues done = new ContentValues();
                 done.put(MediaStore.Audio.Media.IS_PENDING, 0);
                 ctx.getContentResolver().update(uri, done, null, null);
-                return true;
+                return "Music/TakeOne/" + src.getName();
             } else {
                 File dir = new File(Environment.getExternalStoragePublicDirectory(
                         Environment.DIRECTORY_MUSIC), "TakeOne");
-                if (!dir.exists() && !dir.mkdirs()) return false;
+                if (!dir.exists() && !dir.mkdirs()) return null;
                 File dst = unique(new File(dir, src.getName()));
                 try (InputStream in = new FileInputStream(src);
                      OutputStream out = new FileOutputStream(dst)) {
@@ -1036,10 +1051,10 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                 }
                 MediaScannerConnection.scanFile(ctx,
                         new String[]{dst.getAbsolutePath()}, null, null);
-                return true;
+                return "Music/TakeOne/" + dst.getName();
             }
         } catch (Exception e) {
-            return false;
+            return null;
         }
     }
 
@@ -1078,16 +1093,46 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             handler.post(() -> {
                 if (getView() == null || !isAdded()) return;
                 if (done) {
+                    // Show where the user actually chose to put it.
                     OptionsSheet.showResult(requireContext(), true,
                             getString(R.string.take_saved),
-                            getString(R.string.saved_music_one));
+                            getString(R.string.saved_to_location,
+                                    resolveSavedLocation(dst)));
                 } else {
                     OptionsSheet.showResult(requireContext(), false,
-                            getString(R.string.rename_failed_title),
+                            getString(R.string.couldnt_save_title),
                             getString(R.string.couldnt_save));
                 }
             });
         }).start();
+    }
+
+    /** Best-effort human-readable location for a saved document URI. */
+    private String resolveSavedLocation(Uri uri) {
+        if (uri == null) return "";
+        String name = null;
+        try {
+            if (ContentResolver.SCHEME_CONTENT.equals(uri.getScheme())) {
+                try (Cursor c = requireContext().getContentResolver().query(
+                        uri, new String[]{OpenableColumns.DISPLAY_NAME},
+                        null, null, null)) {
+                    if (c != null && c.moveToFirst()) {
+                        int col = c.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+                        if (col >= 0) name = c.getString(col);
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+        if (name == null || name.isEmpty()) {
+            try {
+                name = uri.getLastPathSegment();
+            } catch (Exception ignored) {}
+        }
+        if (name == null) name = "";
+        // Strip the primary:/document/ prefix some providers hand back.
+        int slash = name.lastIndexOf('/');
+        if (slash >= 0 && slash < name.length() - 1) name = name.substring(slash + 1);
+        return name;
     }
 
     private void copyStream(InputStream in, OutputStream out) throws Exception {

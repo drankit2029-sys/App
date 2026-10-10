@@ -12,9 +12,9 @@
 
     <ImageView
         android:id="@+id/pillDot"
-        android:layout_width="10dp"
-        android:layout_height="10dp"
-        android:src="@drawable/bg_thumb" />
+        android:layout_width="20dp"
+        android:layout_height="20dp"
+        android:contentDescription="@null" />
 
     <TextView
         android:id="@+id/pillLabel"
