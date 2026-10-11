@@ -75,10 +75,9 @@ public final class CrashLog {
                             } catch (Exception ignored) {}
                         }
                     }
+                    // Flushed to the OS: process death doesn't lose it
+                    // (only power loss would, and nothing can help that).
                     w.flush();
-                    try {
-                        w.getFD().sync();
-                    } catch (Exception ignored) {}
                 } finally {
                     try {
                         w.close();
