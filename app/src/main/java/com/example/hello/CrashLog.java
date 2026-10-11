@@ -164,10 +164,15 @@ public final class CrashLog {
                     pending = null;
                     continue;
                 }
-                if (pending != null
-                        && line.contains("auto-switch " + pending)) {
-                    pending = null;
-                    continue;
+                if (pending != null && pending.startsWith("convert ")) {
+                    // Switch lines carry the bare format id ("auto-switch
+                    // flac->m4a") while pending holds the stage ("convert
+                    // flac").
+                    String fmt = pending.substring("convert ".length());
+                    if (!fmt.isEmpty() && line.contains("auto-switch " + fmt)) {
+                        pending = null;
+                        continue;
+                    }
                 }
                 if (line.contains("finalize start")) {
                     pending = "finalize";
