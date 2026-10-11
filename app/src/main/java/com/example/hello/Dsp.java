@@ -109,8 +109,7 @@ public final class Dsp {
      *
      * @return ms, or -1 when the file is not a readable WAV (callers fall
      * back to MediaMetadataRetriever for compressed containers).
-     */
-    public static long wavDurationMs(File f) {
+     */    public static long wavDurationMs(File f) {
         RandomAccessFile r = null;
         try {
             r = new RandomAccessFile(f, "r");
@@ -141,5 +140,112 @@ public final class Dsp {
                 } catch (Exception ignored) {}
             }
         }
+    }
+
+    // ---- trash dir (delete-undo safety net) ----
+
+    /** Subdirectory of the takes dir holding soft-deleted audio. */
+    public static File trashDir(File takesDir) {
+        File t = new File(takesDir, ".trash");
+        // noinspection ResultOfMethodCallIgnored
+        t.mkdirs();
+        return t;
+    }
+
+    /**
+     * Moves a backing file into the trash instead of deleting it, so
+     * delete-undo can bring the audio back too — not just the entry.
+     *
+     * @return the trash location, or null when the move failed (caller then
+     * falls back to a straight delete).
+     */
+    public static File moveToTrash(File takesDir, File target) {
+        if (target == null || !target.exists()) return null;
+        try {
+            File trash = trashDir(takesDir);
+            File dest = uniqueIn(trash, target.getName());
+            if (target.renameTo(dest)) return dest;
+            // Cross-volume fallback: copy + delete.
+            java.io.FileInputStream in = new java.io.FileInputStream(target);
+            java.io.FileOutputStream out = new java.io.FileOutputStream(dest);
+            try {
+                byte[] buf = new byte[65536];
+                int n;
+                while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
+                out.getFD().sync();
+            } finally {
+                try {
+                    in.close();
+                } catch (Exception ignored) {}
+                try {
+                    out.close();
+                } catch (Exception ignored) {}
+            }
+            if (dest.exists() && dest.length() == target.length()
+                    && target.delete()) {
+                return dest;
+            }
+            // noinspection ResultOfMethodCallIgnored
+            dest.delete();
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    /** Moves a trashed file back to its recorded location. */
+    public static boolean restoreFromTrash(File trashFile, File dest) {
+        if (trashFile == null || dest == null || !trashFile.exists()) return false;
+        try {
+            if (dest.exists()) dest = uniqueIn(dest.getParentFile(), dest.getName());
+            return trashFile.renameTo(dest);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private static File uniqueIn(File dir, String name) {
+        File c = new File(dir, name);
+        if (!c.exists()) return c;
+        String base = name;
+        String ext = "";
+        int dot = name.lastIndexOf('.');
+        if (dot > 0) {
+            base = name.substring(0, dot);
+            ext = name.substring(dot);
+        }
+        int i = 2;
+        while (true) {
+            File n = new File(dir, base + " (" + i + ")" + ext);
+            if (!n.exists()) return n;
+            i++;
+        }
+    }
+
+    /**
+     * Deletes trash files older than maxAgeMs (storage hygiene for
+     * long-forgotten deletes).
+     *
+     * @return bytes reclaimed.
+     */
+    public static long pruneTrash(File trashDir, long maxAgeMs) {
+        long freed = 0;
+        if (trashDir == null) return 0;
+        File[] files;
+        try {
+            files = trashDir.listFiles();
+        } catch (Exception e) {
+            return 0;
+        }
+        if (files == null) return 0;
+        long now = System.currentTimeMillis();
+        for (File f : files) {
+            try {
+                if (f.isFile() && now - f.lastModified() > maxAgeMs) {
+                    freed += f.length();
+                    // noinspection ResultOfMethodCallIgnored
+                    f.delete();
+                }
+            } catch (Exception ignored) {}
+        }
+        return freed;
     }
 }

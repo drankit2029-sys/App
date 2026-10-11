@@ -137,4 +137,58 @@ public class DspTest {
         assertEquals(-1, Dsp.wavDurationMs(f));
         assertEquals(-1, Dsp.wavDurationMs(new File(tmp.getRoot(), "nope.wav")));
     }
+
+    // ---- trash ----
+
+    private File writeBytes(File f, int len) throws Exception {
+        RandomAccessFile w = new RandomAccessFile(f, "rw");
+        w.write(new byte[len]);
+        w.close();
+        return f;
+    }
+
+    @Test
+    public void trashRoundTrip() throws Exception {
+        File takes = tmp.newFolder("takes");
+        File src = writeBytes(new File(takes, "song.wav"), 100);
+        File trashed = Dsp.moveToTrash(takes, src);
+        assertTrue(trashed != null && trashed.exists());
+        assertTrue(!src.exists());
+        assertEquals(100, trashed.length());
+        File back = new File(takes, "song.wav");
+        assertTrue(Dsp.restoreFromTrash(trashed, back));
+        assertTrue(back.exists() && !trashed.exists());
+    }
+
+    @Test
+    public void trashUniquifies() throws Exception {
+        File takes = tmp.newFolder("takes2");
+        File a = writeBytes(new File(takes, "same.wav"), 10);
+        File t1 = Dsp.moveToTrash(takes, a);
+        File b = writeBytes(new File(takes, "same.wav"), 10);
+        File t2 = Dsp.moveToTrash(takes, b);
+        assertTrue(t1 != null && t2 != null && !t1.equals(t2));
+    }
+
+    @Test
+    public void trashMoveMissingIsNull() throws Exception {
+        File takes = tmp.newFolder("takes3");
+        assertTrue(Dsp.moveToTrash(takes, new File(takes, "ghost.wav")) == null);
+        assertTrue(Dsp.moveToTrash(takes, null) == null);
+        assertTrue(!Dsp.restoreFromTrash(new File(takes, "ghost.wav"),
+                new File(takes, "x.wav")));
+    }
+
+    @Test
+    public void pruneTrashKeepsFreshKillsOld() throws Exception {
+        File trash = tmp.newFolder("trash");
+        File fresh = writeBytes(new File(trash, "fresh.wav"), 1000);
+        File old = writeBytes(new File(trash, "old.wav"), 2000);
+        assertTrue(old.setLastModified(System.currentTimeMillis() - 8L * 24 * 3600_000L));
+        long freed = Dsp.pruneTrash(trash, 7L * 24 * 3600_000L);
+        assertEquals(2000, freed);
+        assertTrue(fresh.exists());
+        assertTrue(!old.exists());
+        assertEquals(0, Dsp.pruneTrash(null, 1));
+    }
 }

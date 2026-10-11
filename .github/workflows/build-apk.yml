@@ -23,7 +23,7 @@ jobs:
         run: |
           echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
           echo "ANDROID_HOME=$ANDROID_HOME"
-          sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0" || true
+          sdkmanager --install "platform-tools" "platforms;android-35" "build-tools;35.0.0" || true
           yes | sdkmanager --licenses || true
 
       - name: Make gradlew executable

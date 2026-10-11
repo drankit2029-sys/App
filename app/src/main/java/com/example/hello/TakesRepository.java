@@ -29,6 +29,8 @@ public final class TakesRepository {
     public static final class RestoreOp {
         public final List<Take> takes = new ArrayList<>();
         public final List<Integer> positions = new ArrayList<>();
+        /** Parallel to takes: trash location, or null if hard-deleted. */
+        public final List<String> trashPaths = new ArrayList<>();
     }
 
     /** Startup reconcile outcome, for the one summary popup. */
@@ -36,7 +38,11 @@ public final class TakesRepository {
         public int adopted;
         public int pruned;
         public int rawsCleaned;
+        public long trashFreedBytes;
     }
+
+    /** Trash retention: week-old soft deletes are reaped on startup. */
+    private static final long TRASH_MAX_AGE_MS = 7L * 24 * 3600_000L;
 
     private static final List<Take> TAKES = new ArrayList<>();
     private static final AtomicLong IDS = new AtomicLong(100);
@@ -206,10 +212,12 @@ public final class TakesRepository {
         for (int i = 0; i < TAKES.size(); i++) {
             if (TAKES.get(i).id == id) {
                 Take t = TAKES.remove(i);
-                deleteBackingFile(t);
+                trashBackingFile(t);
                 deleteAsync(id);
                 return;
             }
+        }
+    }
         }
     }
 
@@ -220,7 +228,7 @@ public final class TakesRepository {
             if (ids.contains(TAKES.get(i).id)) {
                 op.takes.add(0, TAKES.get(i));
                 op.positions.add(0, i);
-                deleteBackingFile(TAKES.get(i));
+                op.trashPaths.add(0, trashBackingFile(TAKES.get(i)));
                 gone.add(TAKES.get(i).id);
                 TAKES.remove(i);
             }
@@ -241,8 +249,15 @@ public final class TakesRepository {
         List<TakeEntity> rows = new ArrayList<>();
         for (int i = 0; i < op.takes.size(); i++) {
             int pos = Math.min(op.positions.get(i), TAKES.size());
-            TAKES.add(pos, op.takes.get(i));
-            rows.add(TakeEntity.fromTake(op.takes.get(i)));
+            Take t = op.takes.get(i);
+            // Bring the audio back too when it went through the trash.
+            if (i < op.trashPaths.size() && op.trashPaths.get(i) != null
+                    && t.filePath != null) {
+                Dsp.restoreFromTrash(new File(op.trashPaths.get(i)),
+                        new File(t.filePath));
+            }
+            TAKES.add(pos, t);
+            rows.add(TakeEntity.fromTake(t));
         }
         if (!rows.isEmpty()) {
             final List<TakeEntity> copy = new ArrayList<>(rows);
@@ -269,6 +284,26 @@ public final class TakesRepository {
                 if (db != null) db.takes().deleteById(id);
             } catch (Exception ignored) {}
         });
+    }
+
+    /**
+     * Soft-delete: the file moves to .trash so undo restores audio, not
+     * just the entry. Falls back to a straight delete when the move fails.
+     *
+     * @return trash location, or null when hard-deleted / no file.
+     */
+    private static String trashBackingFile(Take t) {
+        if (t.filePath == null) return null;
+        File src = new File(t.filePath);
+        if (!src.exists()) return null;
+        try {
+            File takesDir = app != null
+                    ? RecordingEngine.takesDir(app) : src.getParentFile();
+            File trashed = Dsp.moveToTrash(takesDir, src);
+            if (trashed != null) return trashed.getAbsolutePath();
+        } catch (Exception ignored) {}
+        deleteBackingFile(t);
+        return null;
     }
 
     private static void deleteBackingFile(Take t) {
@@ -370,6 +405,12 @@ public final class TakesRepository {
         }
         File[] files = dir.listFiles();
         if (files == null) files = new File[0];
+
+        // Week-old soft deletes are reaped so the trash can't grow forever.
+        // Runs before adoption so a resurrected file is never swept same-boot.
+        try {
+            rr.trashFreedBytes = Dsp.pruneTrash(Dsp.trashDir(dir), TRASH_MAX_AGE_MS);
+        } catch (Exception ignored) {}
 
         Map<String, File> byPath = new HashMap<>();
         synchronized (TakesRepository.class) {
