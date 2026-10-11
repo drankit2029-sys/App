@@ -571,10 +571,11 @@ public class StudioFragment extends Fragment {
                 if (raw == null || !raw.exists()) throw new IllegalStateException("empty");
                 // Duration comes from the raw capture (M4A output has no WAV header).
                 long dur = Math.max(durationOf(raw), 1000);
+                final String convLabel = p.savesWav ? "WAV" : "M4A";
                 if (p.savesWav) {
                     fin = uniqueFinal(raw, "wav");
                     label = "WAV";
-                    FormatConverter.toWav16(raw, fin, pct -> postProgress(pct, label));
+                    FormatConverter.toWav16(raw, fin, pct -> postProgress(pct, convLabel));
                     if (fin.exists()) {
                         // noinspection ResultOfMethodCallIgnored
                         raw.delete();
@@ -583,7 +584,7 @@ public class StudioFragment extends Fragment {
                     fin = uniqueFinal(raw, "m4a");
                     label = "M4A";
                     FormatConverter.toM4a(raw, fin, p.aacBitrate,
-                            pct -> postProgress(pct, label));
+                            pct -> postProgress(pct, convLabel));
                     if (fin.exists()) {
                         // noinspection ResultOfMethodCallIgnored
                         raw.delete();
