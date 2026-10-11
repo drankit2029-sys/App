@@ -218,8 +218,6 @@ public final class TakesRepository {
             }
         }
     }
-        }
-    }
 
     public static synchronized RestoreOp deleteMany(Set<Long> ids) {
         RestoreOp op = new RestoreOp();
