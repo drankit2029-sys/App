@@ -27,18 +27,17 @@ public class SaveFormatTest {
     @Test
     public void effectiveFollowsPreset() {
         assertEquals(SaveFormat.M4A,
-                SaveFormat.AUTO.effective(RecordPreset.STANDARD));
+                SaveFormat.AUTO.effective(RecordPreset.MEMO));
+        assertEquals(SaveFormat.M4A,
+                SaveFormat.AUTO.effective(RecordPreset.MUSIC));
         assertEquals(SaveFormat.WAV16,
-                SaveFormat.AUTO.effective(RecordPreset.RAW_STUDIO));
-        assertEquals(SaveFormat.WAV32,
-                SaveFormat.WAV32.effective(RecordPreset.MUSIC));
+                SaveFormat.WAV16.effective(RecordPreset.MUSIC));
     }
 
     @Test
     public void extensions() {
         assertEquals("m4a", SaveFormat.M4A.extension());
         assertEquals("wav", SaveFormat.WAV16.extension());
-        assertEquals("wav", SaveFormat.WAV32.extension());
         assertEquals("3gp", SaveFormat.AMR_NB.extension());
         assertEquals("flac", SaveFormat.FLAC.extension());
         assertEquals("webm", SaveFormat.OPUS.extension());
@@ -50,7 +49,6 @@ public class SaveFormatTest {
         assertTrue(SaveFormat.AUTO.available(ctx));
         assertTrue(SaveFormat.M4A.available(ctx));
         assertTrue(SaveFormat.WAV16.available(ctx));
-        assertTrue(SaveFormat.WAV32.available(ctx));
     }
 
     @Test
@@ -74,41 +72,98 @@ public class SaveFormatTest {
 
     @Test
     public void takeSaverLabels() {
-        assertEquals("M4A", TakeSaver.labelFor(RecordPreset.STANDARD, SaveFormat.AUTO));
+        assertEquals("M4A", TakeSaver.labelFor(RecordPreset.MEMO, SaveFormat.AUTO));
+        assertEquals("M4A", TakeSaver.labelFor(RecordPreset.MUSIC, SaveFormat.AUTO));
         assertEquals("WAV",
-                TakeSaver.labelFor(RecordPreset.RAW_STUDIO, SaveFormat.AUTO));
-        assertEquals("WAV32",
-                TakeSaver.labelFor(RecordPreset.MUSIC, SaveFormat.WAV32));
+                TakeSaver.labelFor(RecordPreset.PODCAST, SaveFormat.WAV16));
         assertEquals("AMR",
-                TakeSaver.labelFor(RecordPreset.VOICE_MEMO, SaveFormat.AMR_NB));
+                TakeSaver.labelFor(RecordPreset.MEMO, SaveFormat.AMR_NB));
     }
 
     @Test
-    public void rawPresetKeepsLosslessOnly() {
-        // A 32-bit float master through a voice codec is nonsense: only
-        // lossless containers (or Auto, which resolves to one) are offered.
-        assertTrue(SaveFormat.AUTO.supportsPreset(RecordPreset.RAW_STUDIO));
-        assertTrue(SaveFormat.WAV16.supportsPreset(RecordPreset.RAW_STUDIO));
-        assertTrue(SaveFormat.WAV32.supportsPreset(RecordPreset.RAW_STUDIO));
-        assertTrue(SaveFormat.FLAC.supportsPreset(RecordPreset.RAW_STUDIO));
-        assertFalse(SaveFormat.M4A.supportsPreset(RecordPreset.RAW_STUDIO));
-        assertFalse(SaveFormat.OPUS.supportsPreset(RecordPreset.RAW_STUDIO));
-        assertFalse(SaveFormat.VORBIS.supportsPreset(RecordPreset.RAW_STUDIO));
-        assertFalse(SaveFormat.AMR_NB.supportsPreset(RecordPreset.RAW_STUDIO));
-        assertFalse(SaveFormat.AMR_WB.supportsPreset(RecordPreset.RAW_STUDIO));
+    public void validateFinalAcceptsHealthyContainers() throws Exception {
+        // WAV: real header + payload.
+        java.io.File wav = java.io.File.createTempFile("v", ".wav");
+        try {
+            byte[] hdr = Dsp.wav16Header(1, 48000, 200);
+            byte[] all = new byte[hdr.length + 200];
+            System.arraycopy(hdr, 0, all, 0, hdr.length);
+            java.io.FileOutputStream w = new java.io.FileOutputStream(wav);
+            try {
+                w.write(all);
+            } finally {
+                w.close();
+            }
+            FormatConverter.validateFinal(wav, SaveFormat.WAV16);
+        } finally {
+            // noinspection ResultOfMethodCallIgnored
+            wav.delete();
+        }
+        // MP4: ftyp up front, moov somewhere inside.
+        java.io.File mp4 = java.io.File.createTempFile("v", ".m4a");
+        try {
+            byte[] body = new byte[200];
+            body[4] = 'f';
+            body[5] = 't';
+            body[6] = 'y';
+            body[7] = 'p';
+            body[100] = 'm';
+            body[101] = 'o';
+            body[102] = 'o';
+            body[103] = 'v';
+            java.io.FileOutputStream w = new java.io.FileOutputStream(mp4);
+            try {
+                w.write(body);
+            } finally {
+                w.close();
+            }
+            FormatConverter.validateFinal(mp4, SaveFormat.M4A);
+        } finally {
+            // noinspection ResultOfMethodCallIgnored
+            mp4.delete();
+        }
     }
 
     @Test
-    public void lossyPresetsAllowAllButRawFloat() {
-        for (RecordPreset p : new RecordPreset[]{
-                RecordPreset.VOICE_MEMO, RecordPreset.STANDARD,
-                RecordPreset.PODCAST, RecordPreset.MUSIC}) {
-            assertTrue(SaveFormat.AUTO.supportsPreset(p));
-            assertTrue(SaveFormat.M4A.supportsPreset(p));
-            assertTrue(SaveFormat.OPUS.supportsPreset(p));
-            assertTrue(SaveFormat.WAV16.supportsPreset(p));
-            assertTrue(SaveFormat.FLAC.supportsPreset(p));
-            assertFalse(SaveFormat.WAV32.supportsPreset(p));
+    public void validateFinalRejectsTornContainers() throws Exception {
+        // Too small.
+        java.io.File tiny = java.io.File.createTempFile("v", ".m4a");
+        try {
+            boolean thrown = false;
+            try {
+                FormatConverter.validateFinal(tiny, SaveFormat.M4A);
+            } catch (IllegalStateException e) {
+                thrown = true;
+            }
+            assertTrue(thrown);
+        } finally {
+            // noinspection ResultOfMethodCallIgnored
+            tiny.delete();
+        }
+        // ftyp present but no moov: teardown never finished.
+        java.io.File torn = java.io.File.createTempFile("v", ".m4a");
+        try {
+            byte[] body = new byte[200];
+            body[4] = 'f';
+            body[5] = 't';
+            body[6] = 'y';
+            body[7] = 'p';
+            java.io.FileOutputStream w = new java.io.FileOutputStream(torn);
+            try {
+                w.write(body);
+            } finally {
+                w.close();
+            }
+            boolean thrown = false;
+            try {
+                FormatConverter.validateFinal(torn, SaveFormat.M4A);
+            } catch (IllegalStateException e) {
+                thrown = true;
+            }
+            assertTrue(thrown);
+        } finally {
+            // noinspection ResultOfMethodCallIgnored
+            torn.delete();
         }
     }
 }

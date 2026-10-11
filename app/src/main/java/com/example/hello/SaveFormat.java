@@ -7,9 +7,9 @@ import android.media.MediaCodecList;
 import android.media.MediaFormat;
 
 /**
- * Every container this app can write. WAV32/WAV16 are produced by our own
- * writer (always available); M4A/AAC is mandatory per the CDD. Everything
- * else is offered only when {@link MediaCodecList} actually finds a platform
+ * Every container this app can write. WAV16 is produced by our own writer
+ * (always available); M4A/AAC is mandatory per the CDD. Everything else is
+ * offered only when {@link MediaCodecList} actually finds a platform
  * encoder, so the list gracefully matches what the device supports
  * (encode side — decode-only codecs like MP3/Vorbis-in-some-cases never
  * appear as save targets).
@@ -18,7 +18,6 @@ public enum SaveFormat {
     AUTO("auto", R.string.save_auto, R.string.save_auto_sub, "M4A"),
     M4A("m4a", R.string.save_m4a, R.string.save_m4a_sub, "M4A"),
     WAV16("wav16", R.string.save_wav16, R.string.save_wav16_sub, "WAV"),
-    WAV32("wav32", R.string.save_wav32, R.string.save_wav32_sub, "WAV32"),
     AMR_NB("amr_nb", R.string.save_amr_nb, R.string.save_amr_nb_sub, "AMR"),
     AMR_WB("amr_wb", R.string.save_amr_wb, R.string.save_amr_wb_sub, "AMR-WB"),
     FLAC("flac", R.string.save_flac, R.string.save_flac_sub, "FLAC"),
@@ -80,7 +79,6 @@ public enum SaveFormat {
             case AUTO:
             case M4A:
             case WAV16:
-            case WAV32:
                 return true;
             case AMR_NB:
                 if (amrNbOk == null) amrNbOk = hasEncoder("audio/3gpp");
@@ -132,8 +130,7 @@ public enum SaveFormat {
     public String extension() {
         switch (this) {
             case M4A: return "m4a";
-            case WAV16:
-            case WAV32: return "wav";
+            case WAV16: return "wav";
             case AMR_NB:
             case AMR_WB: return "3gp";
             case FLAC: return "flac";
@@ -143,31 +140,9 @@ public enum SaveFormat {
         }
     }
 
-    /** Resolve AUTO to the preset's native container. */
+    /** Resolve AUTO to the default container (M4A). */
     public SaveFormat effective(RecordPreset preset) {
         if (this != AUTO) return this;
-        return preset.savesWav ? WAV16 : M4A;
-    }
-
-    /**
-     * Whether this container can store a preset's capture. Raw Studio is a
-     * lossless master: only lossless containers (or Auto, which resolves to
-     * one) make sense for it — a 32-bit float master degrades to nothing by
-     * squeezing it through a voice codec. Lossy presets can use anything
-     * except the raw-float passthrough.
-     */
-    public boolean supportsPreset(RecordPreset preset) {
-        if (preset != null && preset.savesWav) {
-            switch (this) {
-                case AUTO:
-                case WAV16:
-                case WAV32:
-                case FLAC:
-                    return true;
-                default:
-                    return false;
-            }
-        }
-        return this != WAV32;
+        return M4A;
     }
 }

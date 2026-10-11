@@ -284,45 +284,87 @@ public final class FormatConverter {
     }
 
     /**
-     * Keep the raw capture as-is: validates the 32-bit float header and
-     * stream-copies to the destination (clean final name, no conversion).
+     * Pure-Java sanity check on a finished conversion, run before the library
+     * ever sees the file. Catches containers torn by a dying encoder or a
+     * process kill (header written, trailer missing) without touching the
+     * platform parser. Throws on anything invalid.
      */
-    public static void toWav32(File src, File dst, Progress cb) throws Exception {
-        WavInfo info = readFloatWav(src);
-        RandomAccessFile r = new RandomAccessFile(src, "r");
-        RandomAccessFile w = new RandomAccessFile(dst, "rw");
+    public static void validateFinal(File dst, SaveFormat fmt) throws Exception {
+        if (dst == null || !dst.exists() || dst.length() < 64) {
+            throw new IllegalStateException("output too small");
+        }
+        RandomAccessFile r = new RandomAccessFile(dst, "r");
         try {
-            w.setLength(0);
-            byte[] buf = new byte[65536];
-            long left = r.length();
-            long total = Math.max(1, left);
-            long done = 0;
-            int lastPct = -1;
-            r.seek(0);
-            while (left > 0) {
-                int n = (int) Math.min(buf.length, left);
-                r.readFully(buf, 0, n);
-                w.write(buf, 0, n);
-                left -= n;
-                done += n;
-                if (cb != null) {
-                    int pct = (int) (done * 100 / total);
-                    if (pct != lastPct) {
-                        lastPct = pct;
-                        cb.onProgress(pct);
+            byte[] head = new byte[12];
+            r.readFully(head);
+            switch (fmt) {
+                case M4A:
+                case AMR_NB:
+                case AMR_WB:
+                case AUTO:
+                default:
+                    // ISO base media: 'ftyp' at offset 4, and a 'moov' box
+                    // somewhere (written last — its absence means teardown
+                    // never finished).
+                    if (head[4] != 'f' || head[5] != 't'
+                            || head[6] != 'y' || head[7] != 'p') {
+                        throw new IllegalStateException("not an mp4 container");
                     }
-                }
+                    if (!containsBox(r, new byte[]{'m', 'o', 'o', 'v'})) {
+                        throw new IllegalStateException("mp4 truncated (no moov)");
+                    }
+                    break;
+                case OPUS:
+                case VORBIS:
+                    // EBML header.
+                    if ((head[0] & 0xFF) != 0x1A || (head[1] & 0xFF) != 0x45
+                            || (head[2] & 0xFF) != 0xDF
+                            || (head[3] & 0xFF) != 0xA3) {
+                        throw new IllegalStateException("not a webm container");
+                    }
+                    break;
+                case FLAC:
+                    if (head[0] != 'f' || head[1] != 'L'
+                            || head[2] != 'a' || head[3] != 'C') {
+                        throw new IllegalStateException("not a flac container");
+                    }
+                    break;
+                case WAV16:
+                    if (head[0] != 'R' || head[1] != 'I'
+                            || head[2] != 'F' || head[3] != 'F'
+                            || head[8] != 'W' || head[9] != 'A'
+                            || head[10] != 'V' || head[11] != 'E') {
+                        throw new IllegalStateException("not a wav container");
+                    }
+                    break;
             }
-            if (info.dataBytes <= 0) throw new IllegalStateException("empty wav");
         } finally {
             try {
                 r.close();
             } catch (Exception ignored) {}
-            try {
-                w.close();
-            } catch (Exception ignored) {}
         }
-        if (cb != null) cb.onProgress(100);
+    }
+
+    /** True when the 4-byte token occurs anywhere in the file. */
+    private static boolean containsBox(RandomAccessFile r, byte[] token)
+            throws Exception {
+        byte[] buf = new byte[65536];
+        int carry = 0;
+        long left = r.length();
+        r.seek(0);
+        while (left > 0) {
+            int n = (int) Math.min(buf.length, left);
+            r.readFully(buf, 0, n);
+            left -= n;
+            for (int i = 0; i < n; i++) {
+                if (buf[i] == token[carry]) {
+                    if (++carry == token.length) return true;
+                } else {
+                    carry = buf[i] == token[0] ? 1 : 0;
+                }
+            }
+        }
+        return false;
     }
 
     /**

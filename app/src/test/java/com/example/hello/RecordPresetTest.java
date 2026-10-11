@@ -18,29 +18,36 @@ import org.robolectric.annotation.Config;
 public class RecordPresetTest {
 
     @Test
-    public void ofDefaultsToStandard() {
-        assertEquals(RecordPreset.STANDARD, RecordPreset.of(null));
-        assertEquals(RecordPreset.STANDARD, RecordPreset.of("nope"));
+    public void ofDefaultsToMemo() {
+        assertEquals(RecordPreset.MEMO, RecordPreset.of(null));
+        assertEquals(RecordPreset.MEMO, RecordPreset.of("nope"));
         assertEquals(RecordPreset.MUSIC, RecordPreset.of("music"));
-        assertEquals(RecordPreset.RAW_STUDIO, RecordPreset.of("raw"));
+        assertEquals(RecordPreset.PODCAST, RecordPreset.of("podcast"));
+    }
+
+    @Test
+    public void legacyIdsMigrate() {
+        assertEquals(RecordPreset.MEMO, RecordPreset.of("voice"));
+        assertEquals(RecordPreset.MEMO, RecordPreset.of("standard"));
+        assertEquals(RecordPreset.MUSIC, RecordPreset.of("raw"));
     }
 
     @Test
     public void captureGeometry() {
-        assertEquals(1, RecordPreset.VOICE_MEMO.channels);
+        assertEquals(1, RecordPreset.MEMO.channels);
         assertEquals(2, RecordPreset.PODCAST.channels);
         assertEquals(2, RecordPreset.MUSIC.channels);
-        assertFalse(RecordPreset.VOICE_MEMO.wantsStereo());
+        assertFalse(RecordPreset.MEMO.wantsStereo());
+        assertTrue(RecordPreset.PODCAST.wantsStereo());
         assertTrue(RecordPreset.MUSIC.wantsStereo());
+        assertFalse(RecordPreset.MEMO.wantsUnprocessed());
+        assertFalse(RecordPreset.PODCAST.wantsUnprocessed());
         assertTrue(RecordPreset.MUSIC.wantsUnprocessed());
-        assertTrue(RecordPreset.RAW_STUDIO.savesWav);
-        assertFalse(RecordPreset.STANDARD.savesWav);
     }
 
     @Test
     public void bitrates() {
-        assertEquals(64000, RecordPreset.VOICE_MEMO.aacBitrate);
-        assertEquals(128000, RecordPreset.STANDARD.aacBitrate);
+        assertEquals(96000, RecordPreset.MEMO.aacBitrate);
         assertEquals(256000, RecordPreset.PODCAST.aacBitrate);
         assertEquals(320000, RecordPreset.MUSIC.aacBitrate);
     }
@@ -50,7 +57,7 @@ public class RecordPresetTest {
         Context ctx = ApplicationProvider.getApplicationContext();
         RecordPreset.MUSIC.save(ctx);
         assertEquals(RecordPreset.MUSIC, RecordPreset.load(ctx));
-        RecordPreset.RAW_STUDIO.save(ctx);
-        assertEquals(RecordPreset.RAW_STUDIO, RecordPreset.load(ctx));
+        RecordPreset.PODCAST.save(ctx);
+        assertEquals(RecordPreset.PODCAST, RecordPreset.load(ctx));
     }
 }

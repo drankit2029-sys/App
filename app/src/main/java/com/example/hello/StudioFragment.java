@@ -79,7 +79,7 @@ public class StudioFragment extends Fragment {
     private TextView zoomLabel;
 
     private String pendingName;
-    private RecordPreset preset = RecordPreset.STANDARD;
+    private RecordPreset preset = RecordPreset.MEMO;
     private SaveFormat saveFormat = SaveFormat.AUTO;
     private boolean nameAsked;
     private boolean saving; // save/discard sequence running
@@ -398,14 +398,6 @@ public class StudioFragment extends Fragment {
                                 }
                                 preset = pick;
                                 preset.save(requireContext());
-                                // The new preset may not support the current
-                                // container (Raw + Opus, Voice + WAV32, …):
-                                // fall back to Auto rather than holding an
-                                // impossible pair.
-                                if (!saveFormat.supportsPreset(preset)) {
-                                    saveFormat = SaveFormat.AUTO;
-                                    saveFormat.save(requireContext());
-                                }
                                 paint();
                             }));
                 }
@@ -422,7 +414,6 @@ public class StudioFragment extends Fragment {
                             ? getString(R.string.save_auto)
                             : chipLabel(f);
                     chips.add(OptionsSheet.Chip.of(label, f == saveFormat,
-                            f.supportsPreset(preset),
                             () -> {
                                 if (saving) {
                                     try {
@@ -445,12 +436,6 @@ public class StudioFragment extends Fragment {
                 return getString(R.string.save_auto_sub) + " • "
                         + TakeSaver.labelFor(preset, SaveFormat.AUTO);
             }
-
-            @Override
-            public String disabledMsg() {
-                return getString(R.string.settings_incompatible,
-                        getString(preset.titleRes));
-            }
         };
         OptionsSheet.showRecordingSettings(requireContext(),
                 getString(R.string.settings_title),
@@ -459,12 +444,11 @@ public class StudioFragment extends Fragment {
                 getString(R.string.settings_done));
     }
 
-    /** Short chip text: "M4A", "WAV 16", "WAV 32", "AMR", "FLAC", … */
+    /** Short chip text: "M4A", "WAV", "AMR", "FLAC", … */
     private String chipLabel(SaveFormat f) {
         switch (f) {
             case M4A: return "M4A";
-            case WAV16: return "WAV 16";
-            case WAV32: return "WAV 32";
+            case WAV16: return "WAV";
             case AMR_NB: return "AMR";
             case AMR_WB: return "AMR-WB";
             default: return TakeSaver.labelFor(preset, f);

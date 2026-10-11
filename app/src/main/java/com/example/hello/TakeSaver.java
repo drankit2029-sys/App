@@ -48,22 +48,9 @@ public final class TakeSaver {
         long dur = Math.max(durationOf(raw), 1000);
         String title = e.takeName != null ? e.takeName : "";
         SaveFormat eff = save.effective(preset);
-        // Stale prefs (or a notif-save racing a preset switch) can hold an
-        // impossible pair — Raw through a voice codec, Voice as raw float.
-        // Coerce to the preset's native container instead of writing garbage.
-        if (!eff.supportsPreset(preset)) {
-            eff = preset.savesWav ? SaveFormat.WAV16 : SaveFormat.M4A;
-        }
         File fin = null;
         try {
             switch (eff) {
-                case WAV32:
-                    // Raw capture kept as-is: just validate the float header.
-                    // No conversion, so this save is instant.
-                    FormatConverter.readFloatWav(raw);
-                    fin = raw;
-                    post(cb, 100);
-                    break;
                 case WAV16:
                     fin = uniqueFinal(raw, "wav");
                     FormatConverter.toWav16(raw, fin, pct -> post(cb, pct));
@@ -102,16 +89,25 @@ public final class TakeSaver {
             // A failed conversion must not leave a truncated file behind:
             // half-written containers are exactly the kind of poison that
             // haunts the next startup sweep.
-            if (fin != null && !fin.equals(raw)) {
+            if (fin != null) {
                 // noinspection ResultOfMethodCallIgnored
                 fin.delete();
             }
             throw ex;
         }
-        if (fin.exists()) {
+        // Last line of defense before the library ever sees the file: a
+        // container that fails its own sanity check (truncated by a dying
+        // encoder, torn by a kill) is deleted here, not adopted later.
+        // Throws on invalid, in which case the partial is removed too.
+        try {
+            FormatConverter.validateFinal(fin, eff);
+        } catch (Exception ex) {
             // noinspection ResultOfMethodCallIgnored
-            if (!fin.equals(raw)) raw.delete();
+            fin.delete();
+            throw ex;
         }
+        // noinspection ResultOfMethodCallIgnored
+        raw.delete();
         post(cb, 100);
         return new Result(fin, eff.badge, dur, title);
     }
