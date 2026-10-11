@@ -371,7 +371,13 @@ public final class RecordingEngine {
      * back to plain MIC when the device refuses it. Channel layouts are
      * tried wanted-first, so a stereo request on single-mic hardware lands
      * on mono and reports {@link #fellBackToMono} instead of failing.
+     *
+     * <p>RECORD_AUDIO is verified at every entry point (StudioFragment's
+     * permission gate, including the recovery autostart path), and a revoked
+     * permission surfaces as SecurityException, which is caught per-config
+     * below and degrades to a startup toast instead of a crash.
      */
+    @android.annotation.SuppressLint("MissingPermission")
     private void openRecorderLocked(int requestedSource, int wantedOutCh) throws Exception {
         int[] channelPref = wantedOutCh == 1
                 ? new int[]{AudioFormat.CHANNEL_IN_MONO, AudioFormat.CHANNEL_IN_STEREO}
