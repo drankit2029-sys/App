@@ -21,9 +21,14 @@ public class WaveformView extends View {
     private final Paint barPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint linePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint gridPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint playPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final float[] history = new float[COLS];
     private int count;
     private boolean live;
+    /** Horizontal zoom: time shown per unit length (1 = default). */
+    private float zoom = 1f;
+
+    public static final float[] ZOOM_STEPS = {0.5f, 1f, 2f, 4f};
 
     public WaveformView(Context context) {
         super(context);
@@ -41,7 +46,22 @@ public class WaveformView extends View {
         linePaint.setStrokeWidth(2f);
         gridPaint.setColor(0xFF20262E);
         gridPaint.setStrokeWidth(1f);
+        playPaint.setColor(0xFFFF3B30);
+        playPaint.setStrokeWidth(3f);
         Arrays.fill(history, 0f);
+    }
+
+    /** Zoom step index into {@link #ZOOM_STEPS}; clamps + invalidates. */
+    public void setZoom(float z) {
+        float nz = Math.max(0.5f, Math.min(4f, z));
+        if (Math.abs(nz - zoom) > 0.001f) {
+            zoom = nz;
+            invalidate();
+        }
+    }
+
+    public float getZoom() {
+        return zoom;
     }
 
     public void setLive(boolean live) {
@@ -78,12 +98,13 @@ public class WaveformView extends View {
         if (w <= 0 || h <= 0) return;
 
         float centerY = h / 2f;
+        float centerX = w / 2f;
         // Faint quarter grid + the pro center line everything hangs off.
         canvas.drawLine(0, h * 0.25f, w, h * 0.25f, gridPaint);
         canvas.drawLine(0, h * 0.75f, w, h * 0.75f, gridPaint);
         canvas.drawLine(0, centerY, w, centerY, linePaint);
 
-        float gap = w / (float) COLS;
+        float gap = w / (float) COLS * zoom;
         float barW = Math.max(2f, gap * 0.62f);
         barPaint.setStrokeWidth(barW);
         float maxH = h * 0.46f;
@@ -99,16 +120,23 @@ public class WaveformView extends View {
             synchronized (this) {
                 v = history[i];
             }
-            // Newest at the right edge.
-            float x = w - (n - i) * gap + gap / 2f;
+            // Newest sample sits on the center playhead; history trails left
+            // like a DAW, so the trace grows out of the middle, not the edge.
+            float x = centerX - (n - 1 - i) * gap + gap / 2f;
+            if (x < -barW || x > w + barW) continue;
             float bh = Math.max(3f, v * maxH * 2f);
             // Older bars fade out to the left like a DAW history.
-            float age = n <= 1 ? 1f : 0.35f + 0.65f * (i / (float) (n - 1));
+            float vis = Math.min(1f, Math.max(0f, x / Math.max(1f, centerX)));
+            float age = 0.35f + 0.65f * vis;
             int base = live ? colorLive : colorIdle;
             barPaint.setColor(base);
             barPaint.setAlpha(Math.round(255 * age));
             canvas.drawLine(x, centerY - bh / 2f, x, centerY + bh / 2f, barPaint);
         }
         barPaint.setAlpha(255);
+        // Center playhead tick.
+        playPaint.setAlpha(live ? 255 : 110);
+        canvas.drawLine(centerX, centerY - maxH - 6f,
+                centerX, centerY + maxH + 6f, playPaint);
     }
 }

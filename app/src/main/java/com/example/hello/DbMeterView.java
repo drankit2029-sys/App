@@ -2,7 +2,9 @@ package com.example.hello;
 
 import android.content.Context;
 import android.graphics.Canvas;
+import android.graphics.LinearGradient;
 import android.graphics.Paint;
+import android.graphics.Shader;
 import android.util.AttributeSet;
 import android.view.View;
 
@@ -70,7 +72,9 @@ public class DbMeterView extends View {
 
         float pad = 6f;
         float barLeft = pad;
-        float barRight = w - pad - 34f; // room for dB labels
+        // Thin meter: numeric labels only when there is room for them.
+        boolean roomForLabels = w > 64;
+        float barRight = roomForLabels ? w - pad - 34f : w - pad;
         if (barRight <= barLeft + 4) barRight = barLeft + 8;
         float top = pad;
         float bottom = h - pad;
@@ -81,20 +85,23 @@ public class DbMeterView extends View {
         for (int db = 0; db >= -60; db -= 12) {
             float y = top + (0 - db) / 60f * (bottom - top);
             canvas.drawLine(barRight + 3, y, barRight + 9, y, tickPaint);
-            canvas.drawText(String.valueOf(db), barRight + 11, y + 5, tickPaint);
+            if (roomForLabels) {
+                canvas.drawText(String.valueOf(db), barRight + 11, y + 5, tickPaint);
+            }
         }
 
         float db = toDb(level);
         float frac = (db - FLOOR_DB) / (0 - FLOOR_DB);
         float fillTop = bottom - frac * (bottom - top);
 
-        // Segment colors: green < -12, amber < -3, red above.
-        int c;
-        if (db >= -3f) c = 0xFFFF3B30;
-        else if (db >= -12f) c = 0xFFFF9F0A;
-        else c = 0xFF34C759;
-        fillPaint.setColor(c);
+        // One vertical gradient (green -> amber -> red) mapped over the whole
+        // bar, so color follows height smoothly instead of hard thresholds.
+        fillPaint.setShader(new LinearGradient(0, top, 0, bottom,
+                new int[]{0xFFFF3B30, 0xFFFF9F0A, 0xFF34C759},
+                new float[]{0f, 0.25f, 0.55f},
+                Shader.TileMode.CLAMP));
         canvas.drawRect(barLeft, fillTop, barRight, bottom, fillPaint);
+        fillPaint.setShader(null);
 
         float pdb = toDb(peak);
         float pfrac = (pdb - FLOOR_DB) / (0 - FLOOR_DB);

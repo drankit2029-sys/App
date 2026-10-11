@@ -34,14 +34,21 @@ public final class OptionsSheet {
     public static final class Item {
         public final int icon;
         public final String label;
+        public final String sub;
         public final boolean destructive;
         public final boolean checked;
         public final Runnable action;
 
         public Item(int icon, String label, boolean destructive, boolean checked,
                     Runnable action) {
+            this(icon, label, null, destructive, checked, action);
+        }
+
+        public Item(int icon, String label, String sub, boolean destructive,
+                    boolean checked, Runnable action) {
             this.icon = icon;
             this.label = label;
+            this.sub = sub;
             this.destructive = destructive;
             this.checked = checked;
             this.action = action;
@@ -53,6 +60,12 @@ public final class OptionsSheet {
 
         public static Item danger(int icon, String label, Runnable action) {
             return new Item(icon, label, true, false, action);
+        }
+
+        /** Two-line row: title + smaller spec line (presets, save formats). */
+        public static Item detail(String label, String sub, boolean checked,
+                                  Runnable action) {
+            return new Item(0, label, sub, false, checked, action);
         }
     }
 
@@ -119,6 +132,15 @@ public final class OptionsSheet {
                 label.setTextColor(0xFFFF3B30);
             } else if (item.checked) {
                 label.setTextColor(0xFFF2F4F7);
+            }
+            TextView sub = row.findViewById(R.id.pillSub);
+            if (sub != null) {
+                if (item.sub != null && !item.sub.isEmpty()) {
+                    sub.setText(item.sub);
+                    sub.setVisibility(View.VISIBLE);
+                } else {
+                    sub.setVisibility(View.GONE);
+                }
             }
             ImageView iconView = row.findViewById(R.id.pillDot);
             if (item.icon != 0) {

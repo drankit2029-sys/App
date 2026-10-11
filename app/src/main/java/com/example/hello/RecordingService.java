@@ -223,37 +223,15 @@ public class RecordingService extends Service {
             String msg;
             String title = e.takeName != null ? e.takeName : "";
             try {
-                File raw = e.finalizeRaw();
-                if (raw == null || !raw.exists()) {
-                    throw new IllegalStateException("no audio");
-                }
                 RecordPreset preset = RecordPreset.load(this);
-                // Duration comes from the raw capture (M4A output has no WAV header).
-                long dur = Math.max(durationOf(raw), 1000);
-                File fin;
-                String label;
-                if (preset.savesWav) {
-                    fin = uniqueFinal(raw, "wav");
-                    label = "WAV";
-                    FormatConverter.toWav16(raw, fin, this::setPct);
-                    if (fin.exists()) {
-                        // noinspection ResultOfMethodCallIgnored
-                        raw.delete();
-                    }
-                } else {
-                    fin = uniqueFinal(raw, "m4a");
-                    label = "M4A";
-                    FormatConverter.toM4a(raw, fin, preset.aacBitrate, this::setPct);
-                    if (fin.exists()) {
-                        // noinspection ResultOfMethodCallIgnored
-                        raw.delete();
-                    }
-                }
+                SaveFormat save = SaveFormat.load(this);
+                TakeSaver.Result r = TakeSaver.finalizeAndConvert(
+                        getApplicationContext(), preset, save, this::setPct);
                 TakesRepository.addRecording(
-                        fin, Math.max(dur, 1000), title, label);
+                        r.file, r.durationMs, r.title, r.label);
                 e.clearSession();
                 ok = true;
-                msg = getString(R.string.convert_done_msg, title, label);
+                msg = getString(R.string.convert_done_msg, r.title, r.label);
             } catch (Exception ex) {
                 ok = false;
                 msg = getString(R.string.convert_failed_msg, title);
@@ -445,7 +423,7 @@ public class RecordingService extends Service {
         public void run() {
             if (!ticking) return;
             refreshNotif();
-            handler.postDelayed(this, 1000);
+            handler.postDelayed(this, 250);
         }
     };
 
@@ -475,29 +453,5 @@ public class RecordingService extends Service {
         long s = (ms / 1000) % 60;
         long m = (ms / 60000);
         return String.format(Locale.US, "%02d:%02d.%02d", m, s, cs);
-    }
-
-    private static long durationOf(File f) {
-        try {
-            FormatConverter.WavInfo info = FormatConverter.readFloatWav(f);
-            long samples = info.dataBytes / 4 / Math.max(1, info.channels);
-            return samples * 1000L / Math.max(1, info.sampleRate);
-        } catch (Exception e) {
-            return 1000;
-        }
-    }
-
-    private static File uniqueFinal(File raw, String ext) {
-        File dir = raw.getParentFile();
-        String base = raw.getName().replaceFirst("\\.[^.]+$", "");
-        // Raw names carry a timestamp suffix already; keep it for uniqueness.
-        File c = new File(dir, base + "." + ext);
-        if (!c.exists()) return c;
-        int i = 2;
-        while (true) {
-            File n = new File(dir, base + " (" + i + ")." + ext);
-            if (!n.exists()) return n;
-            i++;
-        }
     }
 }

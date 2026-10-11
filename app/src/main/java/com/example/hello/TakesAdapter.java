@@ -258,21 +258,20 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
     private void applySelectionScale(Vh h, boolean isSel) {
         float target = isSel ? SEL_SCALE : 1f;
         View card = h.cardRoot;
-        // Smooth shrink/grow so selection visibly animates. Any in-flight
-        // animation is cancelled first, then we glide to the target on a
-        // decelerate curve. Rebinds converge on the same target, so recycled
-        // holders can never carry a stale size.
-        Float current = (Float) card.getTag(R.id.cardRoot);
-        if (current != null && Math.abs(current - target) < 0.001f) {
+        // Stateless: always converge from the ACTUAL current scale to the
+        // target. No remembered per-view state, so rapid taps, recycling and
+        // mode exits can never desync — every bind ends exactly at target,
+        // gliding when there is distance to cover, snapping when already home.
+        card.animate().cancel();
+        if (Math.abs(card.getScaleX() - target) < 0.002f
+                && Math.abs(card.getScaleY() - target) < 0.002f) {
             card.setScaleX(target);
             card.setScaleY(target);
             return;
         }
-        card.setTag(R.id.cardRoot, target);
-        card.animate().cancel();
         card.animate()
                 .scaleX(target).scaleY(target)
-                .setDuration(190)
+                .setDuration(160)
                 .setInterpolator(new DecelerateInterpolator(1.6f))
                 .start();
     }

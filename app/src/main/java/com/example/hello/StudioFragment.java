@@ -69,9 +69,21 @@ public class StudioFragment extends Fragment {
     private View presetRow;
     private TextView presetName;
     private TextView presetSub;
+    private View saveRow;
+    private TextView saveName;
+    private TextView saveSub;
+    private View telePanel;
+    private android.widget.ScrollView teleScroll;
+    private android.widget.EditText teleScript;
+    private View teleToggle;
+    private android.widget.ImageView teleToggleIcon;
+    private View btnZoomIn;
+    private View btnZoomOut;
+    private TextView zoomLabel;
 
     private String pendingName;
     private RecordPreset preset = RecordPreset.STANDARD;
+    private SaveFormat saveFormat = SaveFormat.AUTO;
     private boolean nameAsked;
     private boolean saving; // save/discard sequence running
     private RecordingEngine.State lastPaintedState;
@@ -135,8 +147,20 @@ public class StudioFragment extends Fragment {
         presetRow = v.findViewById(R.id.presetRow);
         presetName = v.findViewById(R.id.presetName);
         presetSub = v.findViewById(R.id.presetSub);
+        saveRow = v.findViewById(R.id.saveRow);
+        saveName = v.findViewById(R.id.saveName);
+        saveSub = v.findViewById(R.id.saveSub);
+        telePanel = v.findViewById(R.id.telePanel);
+        teleScroll = v.findViewById(R.id.teleScroll);
+        teleScript = v.findViewById(R.id.teleScript);
+        teleToggle = v.findViewById(R.id.teleToggle);
+        teleToggleIcon = v.findViewById(R.id.teleToggleIcon);
+        btnZoomIn = v.findViewById(R.id.btnZoomIn);
+        btnZoomOut = v.findViewById(R.id.btnZoomOut);
+        zoomLabel = v.findViewById(R.id.zoomLabel);
 
         preset = RecordPreset.load(requireContext());
+        saveFormat = SaveFormat.load(requireContext());
         audioManager = (AudioManager) requireContext()
                 .getSystemService(Context.AUDIO_SERVICE);
 
@@ -147,7 +171,19 @@ public class StudioFragment extends Fragment {
         attachRenameGestures(statusText);
 
         presetRow.setOnClickListener(view -> showPresetPicker());
-        PressAnim.apply(presetRow);
+        // Soft variant: plain apply() resets alpha to 1 on release, which
+        // would wipe the recording-locked dim. applySoft only touches scale.
+        PressAnim.applySoft(presetRow, 0.97f);
+        saveRow.setOnClickListener(view -> showSavePicker());
+        PressAnim.applySoft(saveRow, 0.97f);
+        teleToggle.setOnClickListener(view -> toggleTeleprompter());
+        PressAnim.applySoft(teleToggle, 0.9f);
+        btnZoomIn.setOnClickListener(view -> stepZoom(1));
+        btnZoomOut.setOnClickListener(view -> stepZoom(-1));
+        PressAnim.applySoft(btnZoomIn, 0.9f);
+        PressAnim.applySoft(btnZoomOut, 0.9f);
+        teleScript.setText(loadTeleScript());
+        zoomLabel.setText(zoomText(waveform.getZoom()));
 
         // Recovery (crash prompt / notification tap) or an edit punch-in:
         // a session is already attached — never show the name modal.
@@ -237,6 +273,7 @@ public class StudioFragment extends Fragment {
     public void onPause() {
         super.onPause();
         handler.removeCallbacks(tick);
+        persistTeleScript();
     }
 
     @Override
@@ -244,6 +281,7 @@ public class StudioFragment extends Fragment {
         handler.removeCallbacksAndMessages(null);
         stopDotPulse();
         dismissProgress();
+        persistTeleScript();
         // Never abort here: the take keeps recording in the background via
         // the foreground service when the user leaves the studio.
         try {
@@ -329,7 +367,7 @@ public class StudioFragment extends Fragment {
         target.setOnTouchListener((view, event) -> gd.onTouchEvent(event));
     }
 
-    // ---- preset dropdown ----
+    // ---- preset + save-format dropdowns ----
 
     private void showPresetPicker() {
         if (!isAdded()) return;
@@ -344,8 +382,8 @@ public class StudioFragment extends Fragment {
         List<OptionsSheet.Item> items = new ArrayList<>();
         for (RecordPreset p : RecordPreset.all()) {
             final RecordPreset pick = p;
-            items.add(new OptionsSheet.Item(0, getString(p.titleRes)
-                    + "  •  " + getString(p.subRes), false, p == preset,
+            items.add(OptionsSheet.Item.detail(
+                    getString(p.titleRes), getString(p.subRes), p == preset,
                     () -> {
                         preset = pick;
                         preset.save(requireContext());
@@ -356,11 +394,110 @@ public class StudioFragment extends Fragment {
                 getString(R.string.preset_title), micCapabilityLine(), items);
     }
 
+    private void showSavePicker() {
+        if (!isAdded()) return;
+        if (saving) {
+            try {
+                Toast.makeText(requireContext(), R.string.save_locked,
+                        Toast.LENGTH_SHORT).show();
+            } catch (Exception ignored) {}
+            return;
+        }
+        List<OptionsSheet.Item> items = new ArrayList<>();
+        for (SaveFormat f : SaveFormat.values()) {
+            if (!f.available(requireContext())) continue;
+            final SaveFormat pick = f;
+            String sub = getString(f.subRes);
+            if (f == SaveFormat.AUTO) {
+                sub = getString(f.subRes) + " • "
+                        + TakeSaver.labelFor(preset, SaveFormat.AUTO);
+            }
+            items.add(OptionsSheet.Item.detail(
+                    getString(f.titleRes), sub, f == saveFormat,
+                    () -> {
+                        saveFormat = pick;
+                        saveFormat.save(requireContext());
+                        paint();
+                    }));
+        }
+        OptionsSheet.showOptions(requireContext(),
+                getString(R.string.save_title),
+                getString(R.string.save_auto_sub) + " • "
+                        + TakeSaver.labelFor(preset, SaveFormat.AUTO),
+                items);
+    }
+
     private String micCapabilityLine() {
         int n = MicSupport.physicalMicCount(audioManager);
         if (n >= 2) return getString(R.string.mic_stereo_ok, n);
         if (n == 1) return getString(R.string.mic_mono_only);
         return getString(R.string.mic_unknown);
+    }
+
+    // ---- teleprompter ----
+
+    private void toggleTeleprompter() {
+        if (telePanel.getVisibility() == View.VISIBLE) {
+            persistTeleScript();
+            try {
+                android.view.inputmethod.InputMethodManager imm =
+                        (android.view.inputmethod.InputMethodManager) requireContext()
+                                .getSystemService(Context.INPUT_METHOD_SERVICE);
+                if (imm != null) {
+                    imm.hideSoftInputFromWindow(teleScript.getWindowToken(), 0);
+                }
+            } catch (Exception ignored) {}
+            teleScript.clearFocus();
+            telePanel.setVisibility(View.GONE);
+            setTeleActive(false);
+        } else {
+            telePanel.setVisibility(View.VISIBLE);
+            setTeleActive(true);
+            teleScript.requestFocus();
+        }
+    }
+
+    private void setTeleActive(boolean active) {
+        teleToggle.setBackgroundResource(active
+                ? R.drawable.bg_chip_selected : R.drawable.bg_round_btn);
+        teleToggleIcon.setAlpha(active ? 1f : 0.6f);
+    }
+
+    private String loadTeleScript() {
+        try {
+            return requireContext().getSharedPreferences("takeone", Context.MODE_PRIVATE)
+                    .getString("tele_script", "");
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    private void persistTeleScript() {
+        try {
+            String text = teleScript != null ? teleScript.getText().toString() : "";
+            requireContext().getSharedPreferences("takeone", Context.MODE_PRIVATE)
+                    .edit().putString("tele_script", text).apply();
+        } catch (Exception ignored) {}
+    }
+
+    // ---- waveform zoom (time shown per unit length) ----
+
+    private void stepZoom(int dir) {
+        float[] steps = WaveformView.ZOOM_STEPS;
+        float cur = waveform.getZoom();
+        int idx = 0;
+        for (int i = 0; i < steps.length; i++) {
+            if (Math.abs(steps[i] - cur) < 0.01f) idx = i;
+        }
+        int next = Math.max(0, Math.min(steps.length - 1, idx + dir));
+        waveform.setZoom(steps[next]);
+        zoomLabel.setText(zoomText(steps[next]));
+        PressAnim.nudge(dir > 0 ? btnZoomIn : btnZoomOut, 1.12f);
+    }
+
+    private static String zoomText(float z) {
+        if (Math.abs(z - Math.round(z)) < 0.01f) return Math.round(z) + "x";
+        return String.valueOf(z) + "x";
     }
 
     // ---- called by MainActivity's shared buttons ----
@@ -558,41 +695,27 @@ public class StudioFragment extends Fragment {
         saving = true;
         showProgress(preset);
         final RecordPreset p = preset;
-        final String title = engine.takeName != null ? engine.takeName : "";
+        final SaveFormat s = saveFormat;
+        final String convLabel = TakeSaver.labelFor(p, s);
         final long editId = editSourceId;
         final String editTitle = editSourceTitle;
         new Thread(() -> {
             boolean ok;
             String msg;
-            String label;
+            String label = convLabel;
             File fin = null;
+            long dur = 1000;
+            String title = engine.takeName != null ? engine.takeName : "";
             try {
-                File raw = engine.finalizeRaw();
-                if (raw == null || !raw.exists()) throw new IllegalStateException("empty");
-                // Duration comes from the raw capture (M4A output has no WAV header).
-                long dur = Math.max(durationOf(raw), 1000);
-                final String convLabel = p.savesWav ? "WAV" : "M4A";
-                if (p.savesWav) {
-                    fin = uniqueFinal(raw, "wav");
-                    label = "WAV";
-                    FormatConverter.toWav16(raw, fin, pct -> postProgress(pct, convLabel));
-                    if (fin.exists()) {
-                        // noinspection ResultOfMethodCallIgnored
-                        raw.delete();
-                    }
-                } else {
-                    fin = uniqueFinal(raw, "m4a");
-                    label = "M4A";
-                    FormatConverter.toM4a(raw, fin, p.aacBitrate,
-                            pct -> postProgress(pct, convLabel));
-                    if (fin.exists()) {
-                        // noinspection ResultOfMethodCallIgnored
-                        raw.delete();
-                    }
-                }
+                TakeSaver.Result r = TakeSaver.finalizeAndConvert(
+                        requireContext().getApplicationContext(), p, s,
+                        pct -> postProgress(pct, convLabel));
+                fin = r.file;
+                label = r.label;
+                dur = r.durationMs;
+                title = r.title;
                 if (editId == -1) {
-                    TakesRepository.addRecording(
-                            fin, Math.max(dur, 1000), title, label);
+                    TakesRepository.addRecording(fin, dur, title, label);
                 }
                 // Edit punch-ins resolve replace-vs-new on the UI thread below,
                 // where the new file + duration are in hand.
@@ -830,6 +953,12 @@ public class StudioFragment extends Fragment {
                 float lvl = live ? engine.level : 0f;
                 if (live) waveform.setMicLevel(lvl);
                 dbMeter.setLevel(lvl);
+                // Teleprompter drifts upward hands-free while recording.
+                if (live && telePanel.getVisibility() == View.VISIBLE) {
+                    try {
+                        teleScroll.smoothScrollBy(0, 2);
+                    } catch (Exception ignored) {}
+                }
             } catch (Exception ignored) {}
             // Repaint on state/name/preset transitions (FAB morph lives in paint).
             if (engine.state != lastPaintedState
@@ -887,10 +1016,20 @@ public class StudioFragment extends Fragment {
         boolean unfin = hasSession && isUnfinalised();
         draftBadge.setVisibility(unfin ? View.VISIBLE : View.GONE);
 
-        formatBadge.setText(preset.shortLabel);
+        formatBadge.setText(preset.shortLabel + " → "
+                + TakeSaver.labelFor(preset, saveFormat));
         presetName.setText(preset.titleRes);
         presetSub.setText(preset.subRes);
         presetRow.setAlpha(rec ? 0.45f : 1f);
+        saveName.setText(saveFormat == SaveFormat.AUTO
+                ? getString(R.string.save_auto)
+                : getString(saveFormat.titleRes));
+        saveSub.setText(saveFormat == SaveFormat.AUTO
+                ? getString(R.string.save_auto_sub) + " • "
+                        + TakeSaver.labelFor(preset, SaveFormat.AUTO)
+                : getString(saveFormat.subRes));
+        saveRow.setAlpha(saving ? 0.45f : 1f);
+        setTeleActive(telePanel.getVisibility() == View.VISIBLE);
 
         statusDot.setBackgroundResource(rec ? R.drawable.dot_live : R.drawable.bg_round_btn);
         if (rec) startDotPulse(); else stopDotPulse();
@@ -937,29 +1076,6 @@ public class StudioFragment extends Fragment {
 
     private static String prettyBase(File f) {
         return f.getName().replaceFirst("\\.[^.]+$", "").replace('_', ' ');
-    }
-
-    private static File uniqueFinal(File raw, String ext) {
-        File dir = raw.getParentFile();
-        String base = raw.getName().replaceFirst("\\.[^.]+$", "");
-        File c = new File(dir, base + "." + ext);
-        if (!c.exists()) return c;
-        int i = 2;
-        while (true) {
-            File n = new File(dir, base + " (" + i + ")." + ext);
-            if (!n.exists()) return n;
-            i++;
-        }
-    }
-
-    private static long durationOf(File f) {
-        try {
-            FormatConverter.WavInfo info = FormatConverter.readFloatWav(f);
-            long samples = info.dataBytes / 4 / Math.max(1, info.channels);
-            return samples * 1000L / Math.max(1, info.sampleRate);
-        } catch (Exception e) {
-            return 1000;
-        }
     }
 
     /** Centisecond timer (one more decimal place than before). */
