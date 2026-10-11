@@ -761,13 +761,20 @@ public class StudioFragment extends Fragment {
                     final String savedLabel = label;
                     final String savedTitle = title;
                     handler.post(() -> {
-                        saving = false;
-                        dismissProgress();
-                        if (!isAdded()) return;
-                        RecordingService.stopService(requireContext());
-                        activity().syncFabWithEngine();
-                        askEditReplaceOrNew(editId, editTitle, savedTitle,
-                                saved, savedDur, savedLabel);
+                        try {
+                            saving = false;
+                            dismissProgress();
+                            if (!isAdded()) return;
+                            RecordingService.stopService(requireContext());
+                            activity().syncFabWithEngine();
+                            askEditReplaceOrNew(editId, editTitle, savedTitle,
+                                    saved, savedDur, savedLabel);
+                        } catch (Exception ex) {
+                            try {
+                                CrashLog.breadcrumb(getContext(),
+                                        "completion-block FAILED: " + ex);
+                            } catch (Exception ignored) {}
+                        }
                     });
                     return;
                 }
@@ -779,22 +786,29 @@ public class StudioFragment extends Fragment {
             final boolean done = ok;
             final String text = msg;
             handler.post(() -> {
-                saving = false;
-                dismissProgress();
-                if (!isAdded()) return;
-                RecordingService.stopService(requireContext());
-                activity().syncFabWithEngine();
-                if (done) {
-                    OptionsSheet.showResult(requireContext(), true,
-                            getString(R.string.convert_done_title), text,
-                            () -> {
-                                if (isAdded()) activity().exitStudio();
-                            });
-                } else {
-                    // Raw is kept so the user can retry or discard.
-                    paint();
-                    OptionsSheet.showResult(requireContext(), false,
-                            getString(R.string.convert_failed_title), text);
+                try {
+                    saving = false;
+                    dismissProgress();
+                    if (!isAdded()) return;
+                    RecordingService.stopService(requireContext());
+                    activity().syncFabWithEngine();
+                    if (done) {
+                        OptionsSheet.showResult(requireContext(), true,
+                                getString(R.string.convert_done_title), text,
+                                () -> {
+                                    if (isAdded()) activity().exitStudio();
+                                });
+                    } else {
+                        // Raw is kept so the user can retry or discard.
+                        paint();
+                        OptionsSheet.showResult(requireContext(), false,
+                                getString(R.string.convert_failed_title), text);
+                    }
+                } catch (Exception ex) {
+                    try {
+                        CrashLog.breadcrumb(getContext(),
+                                "completion-block FAILED: " + ex);
+                    } catch (Exception ignored) {}
                 }
             });
         }).start();

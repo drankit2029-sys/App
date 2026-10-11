@@ -118,9 +118,60 @@ public class MainActivity extends AppCompatActivity {
                 fabWrap.post(this::refreshLibraryIfShown);
             }
             maybeAnnounceRecovered();
+            maybeHealCrashedEncoder();
             maybeShowCrashReport();
         });
         syncFabWithEngine();
+    }
+
+    /**
+     * Self-healing after an encoder kills a save: the breadcrumbs name the
+     * exact format that never finished. Step one rung down the reliability
+     * ladder (exotic -> AAC -> pure-Java WAV) so the next recording can
+     * actually save on this device.
+     */
+    private void maybeHealCrashedEncoder() {
+        String stage;
+        try {
+            stage = CrashLog.unterminatedStage(this);
+        } catch (Exception e) {
+            return;
+        }
+        if (stage == null || !stage.startsWith("convert ") || inStudio) return;
+        String crashedId = stage.substring("convert ".length()).trim();
+        SaveFormat crashed = SaveFormat.of(crashedId);
+        SaveFormat current = SaveFormat.load(this);
+        SaveFormat currentEff = current.effective(RecordPreset.load(this));
+        // Only act while the user still has the killer selected: a manual
+        // switch since the crash is respected, not overridden.
+        if (currentEff != crashed) return;
+        SaveFormat fallback = crashed.fallbackAfterCrash();
+        if (fallback == null) return;
+        try {
+            fallback.save(this);
+            CrashLog.breadcrumb(this,
+                    "auto-switch " + crashed.id + "->" + fallback.id);
+        } catch (Exception ignored) {}
+        // A Java crash file already tells the story (breadcrumbs included):
+        // don't stack a second dialog on top of its share prompt.
+        boolean crashFile;
+        try {
+            crashFile = CrashLog.recentCrash(this) != null;
+        } catch (Exception e) {
+            crashFile = false;
+        }
+        if (crashFile) return;
+        final String from = crashed.badge;
+        final String to = fallback.badge;
+        fabWrap.post(() -> {
+            if (inStudio) return;
+            try {
+                OptionsSheet.showResult(this, false,
+                        getString(R.string.convert_crash_title),
+                        getString(R.string.convert_crash_msg, from, to),
+                        () -> { });
+            } catch (Exception ignored) {}
+        });
     }
 
     /** One surfacing of the previous run's crash log, with share + dismiss. */

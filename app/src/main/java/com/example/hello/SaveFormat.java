@@ -145,4 +145,26 @@ public enum SaveFormat {
         if (this != AUTO) return this;
         return M4A;
     }
+
+    /**
+     * One rung down the reliability ladder after this encoder kills a save
+     * on the device. Exotic/voice codecs fall back to platform AAC; AAC
+     * itself falls back to WAV16, which is our own pure-Java writer and
+     * cannot die natively. Null when already at the bottom.
+     */
+    public SaveFormat fallbackAfterCrash() {
+        switch (this) {
+            case OPUS:
+            case VORBIS:
+            case FLAC:
+            case AMR_NB:
+            case AMR_WB:
+                return M4A;
+            case M4A:
+            case AUTO:
+                return WAV16;
+            default:
+                return null;
+        }
+    }
 }

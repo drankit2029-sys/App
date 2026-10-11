@@ -81,6 +81,18 @@ public class SaveFormatTest {
     }
 
     @Test
+    public void fallbackLadder() {
+        assertEquals(SaveFormat.M4A, SaveFormat.OPUS.fallbackAfterCrash());
+        assertEquals(SaveFormat.M4A, SaveFormat.VORBIS.fallbackAfterCrash());
+        assertEquals(SaveFormat.M4A, SaveFormat.FLAC.fallbackAfterCrash());
+        assertEquals(SaveFormat.M4A, SaveFormat.AMR_NB.fallbackAfterCrash());
+        assertEquals(SaveFormat.M4A, SaveFormat.AMR_WB.fallbackAfterCrash());
+        assertEquals(SaveFormat.WAV16, SaveFormat.M4A.fallbackAfterCrash());
+        assertEquals(SaveFormat.WAV16, SaveFormat.AUTO.fallbackAfterCrash());
+        assertEquals(null, SaveFormat.WAV16.fallbackAfterCrash());
+    }
+
+    @Test
     public void validateFinalAcceptsHealthyContainers() throws Exception {
         // WAV: real header + payload.
         java.io.File wav = java.io.File.createTempFile("vfy", ".wav");

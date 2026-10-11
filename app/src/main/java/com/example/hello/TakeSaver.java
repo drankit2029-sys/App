@@ -41,13 +41,16 @@ public final class TakeSaver {
                                             SaveFormat save, Progress cb)
             throws Exception {
         RecordingEngine e = RecordingEngine.get();
+        CrashLog.breadcrumb(ctx, "finalize start");
         File raw = e.finalizeRaw();
+        CrashLog.breadcrumb(ctx, "finalize end");
         if (raw == null || !raw.exists()) throw new IllegalStateException("empty");
         // Duration comes from the raw capture (compressed outputs carry no
         // PCM length of their own).
         long dur = Math.max(durationOf(raw), 1000);
         String title = e.takeName != null ? e.takeName : "";
         SaveFormat eff = save.effective(preset);
+        CrashLog.breadcrumb(ctx, "convert start " + eff.id);
         File fin = null;
         try {
             switch (eff) {
@@ -108,6 +111,7 @@ public final class TakeSaver {
         }
         // noinspection ResultOfMethodCallIgnored
         raw.delete();
+        CrashLog.breadcrumb(ctx, "convert end " + eff.id);
         post(cb, 100);
         return new Result(fin, eff.badge, dur, title);
     }

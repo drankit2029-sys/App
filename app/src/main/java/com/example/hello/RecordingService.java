@@ -241,8 +241,9 @@ public class RecordingService extends Service {
             final String text = msg;
             final String t = title;
             handler.post(() -> {
-                toast(text);
-                Intent b = new Intent(BROADCAST_DONE);
+                try {
+                    toast(text);
+                    Intent b = new Intent(BROADCAST_DONE);
                 b.putExtra(EXTRA_OK, done);
                 b.putExtra(EXTRA_KIND, "save");
                 b.putExtra(EXTRA_MESSAGE, text);
@@ -260,6 +261,13 @@ public class RecordingService extends Service {
                     stopForeground(true);
                 } catch (Exception ignored) {}
                 stopSelf();
+                } catch (Exception ex) {
+                    CrashLog.breadcrumb(getApplicationContext(),
+                            "service completion FAILED: " + ex);
+                    try {
+                        stopSelf();
+                    } catch (Exception ignored) {}
+                }
             });
         }).start();
     }

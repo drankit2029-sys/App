@@ -126,6 +126,63 @@ public final class CrashLog {
         }
     }
 
+    /**
+     * Last convert/finalize stage that started but never reported back.
+     * A native encoder death leaves "convert start opus" as the tail with no
+     * matching end — the one trace a segfault cannot erase.
+     *
+     * @return e.g. "convert opus", "finalize", or null when everything closed.
+     */
+    public static String unterminatedStage(Context ctx) {
+        try {
+            File f = new File(ctx.getApplicationContext().getFilesDir(), CRUMB_FILE);
+            if (!f.exists()) return null;
+            java.io.FileInputStream in = new java.io.FileInputStream(f);
+            String tail;
+            try {
+                long len = f.length();
+                long skip = Math.max(0, len - 8192);
+                // noinspection ResultOfMethodCallIgnored
+                in.skip(skip);
+                byte[] buf = new byte[(int) Math.min(len, 8192) + 1];
+                int n = in.read(buf);
+                tail = n > 0 ? new String(buf, 0, n, "UTF-8") : "";
+            } finally {
+                try {
+                    in.close();
+                } catch (Exception ignored) {}
+            }
+            String pending = null;
+            for (String line : tail.split("\n")) {
+                int s = line.indexOf("convert start ");
+                if (s >= 0) {
+                    pending = "convert "
+                            + line.substring(s + "convert start ".length()).trim();
+                    continue;
+                }
+                if (line.contains("convert end")) {
+                    pending = null;
+                    continue;
+                }
+                if (pending != null
+                        && line.contains("auto-switch " + pending)) {
+                    pending = null;
+                    continue;
+                }
+                if (line.contains("finalize start")) {
+                    pending = "finalize";
+                    continue;
+                }
+                if (line.contains("finalize end")) {
+                    pending = null;
+                }
+            }
+            return pending;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     public static void clearCrash(Context ctx) {
         try {
             // noinspection ResultOfMethodCallIgnored

@@ -89,6 +89,8 @@
     <string name="crash_title">The app crashed last time</string>
     <string name="crash_msg">A crash report was saved. Sharing it helps fix the exact cause.</string>
     <string name="crash_share">Share report</string>
+    <string name="convert_crash_title">Saving crashed last time</string>
+    <string name="convert_crash_msg">The %1$s encoder crashed on this device, so saves were switched to %2$s. Please record again.</string>
     <string name="take_saved">Take saved</string>
     <string name="couldnt_save">Couldn\'t save take</string>
     <string name="couldnt_export">Couldn\'t export</string>
