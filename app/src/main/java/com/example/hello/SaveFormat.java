@@ -148,4 +148,26 @@ public enum SaveFormat {
         if (this != AUTO) return this;
         return preset.savesWav ? WAV16 : M4A;
     }
+
+    /**
+     * Whether this container can store a preset's capture. Raw Studio is a
+     * lossless master: only lossless containers (or Auto, which resolves to
+     * one) make sense for it — a 32-bit float master degrades to nothing by
+     * squeezing it through a voice codec. Lossy presets can use anything
+     * except the raw-float passthrough.
+     */
+    public boolean supportsPreset(RecordPreset preset) {
+        if (preset != null && preset.savesWav) {
+            switch (this) {
+                case AUTO:
+                case WAV16:
+                case WAV32:
+                case FLAC:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+        return this != WAV32;
+    }
 }

@@ -48,6 +48,12 @@ public final class TakesRepository {
     private static final AtomicLong IDS = new AtomicLong(100);
     private static final String PREFS = "takeone";
     private static final String KEY_SEEDED = "library_seeded_once";
+    /**
+     * Probe attempts that never reported back. A native parser death
+     * mid-probe leaves the mark behind (nothing after it runs), so the next
+     * launch skips that file instead of dying on it again.
+     */
+    private static final String KEY_PROBE_TRIED = "probe_tried_paths";
 
     private static volatile boolean ready;
     private static final List<Runnable> READY_QUEUE = new ArrayList<>();
@@ -105,14 +111,19 @@ public final class TakesRepository {
             IDS.set(max + 1);
             sortByTimestampDesc();
         }
+        CrashLog.breadcrumb(app, "repo rows=" + TAKES.size());
         ReconcileResult rr = new ReconcileResult();
         try {
+            CrashLog.breadcrumb(app, "reconcile start");
             rr = reconcile(app);
+            CrashLog.breadcrumb(app, "reconcile end adopted=" + rr.adopted
+                    + " pruned=" + rr.pruned + " raws=" + rr.rawsCleaned);
         } catch (Exception e) {
             // A poisoned disk state (truncated files, I/O errors) must never
             // take the app down on every launch: degrade to whatever loaded
             // from the database and still signal ready so the UI can open.
             android.util.Log.w("TakesRepository", "reconcile failed", e);
+            CrashLog.breadcrumb(app, "reconcile FAILED: " + e);
         }
         lastReconcile = rr;
         synchronized (TakesRepository.class) {
@@ -572,8 +583,11 @@ public final class TakesRepository {
                 // Truncated conversion remnants (< 2 KB) are adopted with a
                 // fallback duration instead of being fed to the platform
                 // parser: never let a half-written file near stagefright.
-                if (f.length() < 2048) dur = 1000;
-                else dur = probeDuration(f);
+                // Files whose probe never reported back (native death
+                // mid-probe) are skipped the same way, once and for all.
+                String abs = f.getAbsolutePath();
+                if (f.length() < 2048 || probeTried(ctx, abs)) dur = 1000;
+                else dur = probeDuration(ctx, f);
             }
             if (dur < 0) dur = 1000;
             String badge;
@@ -599,19 +613,56 @@ public final class TakesRepository {
         }
     }
 
-    private static long probeDuration(File f) {
+    private static long probeDuration(Context ctx, File f) {
+        String abs = f.getAbsolutePath();
+        // Marked BEFORE the probe with a synchronous write: if the parser
+        // dies natively, nothing after this runs and the mark survives.
+        markProbeTried(ctx, abs, true);
         MediaMetadataRetriever r = new MediaMetadataRetriever();
         try {
-            r.setDataSource(f.getAbsolutePath());
+            CrashLog.breadcrumb(ctx, "probe " + abs);
+            r.setDataSource(abs);
             String d = r.extractMetadata(
                     MediaMetadataRetriever.METADATA_KEY_DURATION);
-            return (long) Math.max(0, Double.parseDouble(d));
+            long ms = (long) Math.max(0, Double.parseDouble(d));
+            markProbeTried(ctx, abs, false);
+            return ms;
         } catch (Exception e) {
+            // Catchable failure (unsupported file, no metadata): allow a
+            // retry next launch, it throws the same way every time.
+            markProbeTried(ctx, abs, false);
             return -1;
         } finally {
             try {
                 r.release();
             } catch (Exception ignored) {}
         }
+    }
+
+    private static boolean probeTried(Context ctx, String abs) {
+        try {
+            Set<String> s = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                    .getStringSet(KEY_PROBE_TRIED, null);
+            return s != null && s.contains(abs);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private static void markProbeTried(Context ctx, String abs, boolean tried) {
+        try {
+            SharedPreferences p =
+                    ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+            Set<String> cur = p.getStringSet(KEY_PROBE_TRIED, null);
+            Set<String> next = cur != null
+                    ? new HashSet<>(cur) : new HashSet<String>();
+            if (tried) next.add(abs);
+            else next.remove(abs);
+            SharedPreferences.Editor ed = p.edit();
+            ed.putStringSet(KEY_PROBE_TRIED, next);
+            // Synchronous: the mark must be on disk before the probe runs.
+            // noinspection ApplySharedPref
+            ed.commit();
+        } catch (Exception ignored) {}
     }
 }

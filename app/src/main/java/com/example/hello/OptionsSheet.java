@@ -73,16 +73,25 @@ public final class OptionsSheet {
     public static final class Chip {
         public final String label;
         public final boolean checked;
+        /** False when the container can't store the current preset. */
+        public final boolean enabled;
         public final Runnable action;
 
-        public Chip(String label, boolean checked, Runnable action) {
+        public Chip(String label, boolean checked, boolean enabled,
+                    Runnable action) {
             this.label = label;
             this.checked = checked;
+            this.enabled = enabled;
             this.action = action;
         }
 
         public static Chip of(String label, boolean checked, Runnable action) {
-            return new Chip(label, checked, action);
+            return new Chip(label, checked, true, action);
+        }
+
+        public static Chip of(String label, boolean checked, boolean enabled,
+                              Runnable action) {
+            return new Chip(label, checked, enabled, action);
         }
     }
 
@@ -95,6 +104,8 @@ public final class OptionsSheet {
         java.util.List<Item> presets();
         java.util.List<Chip> formats();
         String formatHint();
+        /** Toast when tapping a format the current preset can't use. */
+        String disabledMsg();
     }
 
     public interface SaveCallback {
@@ -237,6 +248,10 @@ public final class OptionsSheet {
         android.widget.ScrollView scroll = new android.widget.ScrollView(ctx);
         LinearLayout root = new LinearLayout(ctx);
         root.setOrientation(LinearLayout.VERTICAL);
+        // Solid card like every other dialog: without a background the gaps
+        // between rows show the dimmed activity straight through.
+        root.setBackgroundResource(R.drawable.bg_modal);
+        if (android.os.Build.VERSION.SDK_INT >= 21) root.setElevation(dp(ctx, 16));
         int pad = dp(ctx, 20);
         root.setPadding(pad, pad, pad, pad);
         scroll.addView(root,
@@ -246,8 +261,10 @@ public final class OptionsSheet {
 
         TextView titleView = new TextView(ctx);
         titleView.setText(title);
-        titleView.setTextSize(17);
-        titleView.setTypeface(null, android.graphics.Typeface.BOLD);
+        titleView.setTextSize(18);
+        titleView.setTypeface(android.graphics.Typeface.create(
+                "sans-serif-medium", android.graphics.Typeface.NORMAL));
+        titleView.setGravity(Gravity.CENTER);
         titleView.setTextColor(0xFFF2F4F7);
         root.addView(titleView);
 
@@ -346,6 +363,7 @@ public final class OptionsSheet {
             tv.setEllipsize(android.text.TextUtils.TruncateAt.END);
             int hPad = dp(ctx, 6);
             tv.setPadding(hPad, dp(ctx, 9), hPad, dp(ctx, 9));
+            tv.setMinHeight(dp(ctx, 44));
             android.widget.GridLayout.LayoutParams glp =
                     new android.widget.GridLayout.LayoutParams();
             glp.width = 0;
@@ -359,6 +377,14 @@ public final class OptionsSheet {
             chipDefaultColors.add(0xFF9AA3AF);
             PressAnim.apply(tv);
             tv.setOnClickListener(v -> {
+                if (!c.enabled) {
+                    try {
+                        android.widget.Toast.makeText(ctx,
+                                state.disabledMsg(),
+                                android.widget.Toast.LENGTH_SHORT).show();
+                    } catch (Exception ignored) {}
+                    return;
+                }
                 if (c.action != null) c.action.run();
                 rebindSettings(state, pillRows, pillLabels, pillChecks,
                         pillDefaultColors, chipViews, chipDefaultColors,
@@ -373,6 +399,9 @@ public final class OptionsSheet {
         done.setTextColor(0xFFFFFFFF);
         done.setGravity(Gravity.CENTER);
         done.setBackgroundResource(R.drawable.bg_btn_primary);
+        done.setMinHeight(dp(ctx, 48));
+        int vPad = dp(ctx, 13);
+        done.setPadding(dp(ctx, 16), vPad, dp(ctx, 16), vPad);
         LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT);
@@ -438,6 +467,7 @@ public final class OptionsSheet {
                     : R.drawable.bg_chip);
             chipViews.get(i).setTextColor(c.checked
                     ? 0xFFFFFFFF : chipColors.get(i));
+            chipViews.get(i).setAlpha(c.enabled ? 1f : 0.35f);
         }
         try {
             hintView.setText(state.formatHint());

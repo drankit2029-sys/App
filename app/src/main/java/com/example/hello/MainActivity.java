@@ -32,6 +32,7 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        CrashLog.install(this);
         AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES);
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
@@ -117,8 +118,37 @@ public class MainActivity extends AppCompatActivity {
                 fabWrap.post(this::refreshLibraryIfShown);
             }
             maybeAnnounceRecovered();
+            maybeShowCrashReport();
         });
         syncFabWithEngine();
+    }
+
+    /** One surfacing of the previous run's crash log, with share + dismiss. */
+    private void maybeShowCrashReport() {
+        File crash = CrashLog.recentCrash(this);
+        if (crash == null || inStudio) return;
+        // Stale reports auto-expire: only a fresh crash nags, and sharing
+        // clears it. Cancelling keeps it for the next launch (bounded by
+        // the same freshness window).
+        if (System.currentTimeMillis() - crash.lastModified()
+                > 7L * 24 * 3600_000L) {
+            CrashLog.clearCrash(this);
+            return;
+        }
+        fabWrap.post(() -> {
+            if (inStudio) return;
+            try {
+                OptionsSheet.showConfirm(this,
+                        getString(R.string.crash_title),
+                        getString(R.string.crash_msg),
+                        getString(R.string.crash_share),
+                        R.drawable.ic_close, false,
+                        () -> {
+                            CrashLog.share(this, crash);
+                            CrashLog.clearCrash(this);
+                        });
+            } catch (Exception ignored) {}
+        });
     }
 
     /** One summary popup when the startup sweep adopted orphaned files. */

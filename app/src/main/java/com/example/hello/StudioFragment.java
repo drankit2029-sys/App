@@ -398,6 +398,14 @@ public class StudioFragment extends Fragment {
                                 }
                                 preset = pick;
                                 preset.save(requireContext());
+                                // The new preset may not support the current
+                                // container (Raw + Opus, Voice + WAV32, …):
+                                // fall back to Auto rather than holding an
+                                // impossible pair.
+                                if (!saveFormat.supportsPreset(preset)) {
+                                    saveFormat = SaveFormat.AUTO;
+                                    saveFormat.save(requireContext());
+                                }
                                 paint();
                             }));
                 }
@@ -414,6 +422,7 @@ public class StudioFragment extends Fragment {
                             ? getString(R.string.save_auto)
                             : chipLabel(f);
                     chips.add(OptionsSheet.Chip.of(label, f == saveFormat,
+                            f.supportsPreset(preset),
                             () -> {
                                 if (saving) {
                                     try {
@@ -435,6 +444,12 @@ public class StudioFragment extends Fragment {
             public String formatHint() {
                 return getString(R.string.save_auto_sub) + " • "
                         + TakeSaver.labelFor(preset, SaveFormat.AUTO);
+            }
+
+            @Override
+            public String disabledMsg() {
+                return getString(R.string.settings_incompatible,
+                        getString(preset.titleRes));
             }
         };
         OptionsSheet.showRecordingSettings(requireContext(),

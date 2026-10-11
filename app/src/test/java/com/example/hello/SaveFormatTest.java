@@ -82,4 +82,33 @@ public class SaveFormatTest {
         assertEquals("AMR",
                 TakeSaver.labelFor(RecordPreset.VOICE_MEMO, SaveFormat.AMR_NB));
     }
+
+    @Test
+    public void rawPresetKeepsLosslessOnly() {
+        // A 32-bit float master through a voice codec is nonsense: only
+        // lossless containers (or Auto, which resolves to one) are offered.
+        assertTrue(SaveFormat.AUTO.supportsPreset(RecordPreset.RAW_STUDIO));
+        assertTrue(SaveFormat.WAV16.supportsPreset(RecordPreset.RAW_STUDIO));
+        assertTrue(SaveFormat.WAV32.supportsPreset(RecordPreset.RAW_STUDIO));
+        assertTrue(SaveFormat.FLAC.supportsPreset(RecordPreset.RAW_STUDIO));
+        assertFalse(SaveFormat.M4A.supportsPreset(RecordPreset.RAW_STUDIO));
+        assertFalse(SaveFormat.OPUS.supportsPreset(RecordPreset.RAW_STUDIO));
+        assertFalse(SaveFormat.VORBIS.supportsPreset(RecordPreset.RAW_STUDIO));
+        assertFalse(SaveFormat.AMR_NB.supportsPreset(RecordPreset.RAW_STUDIO));
+        assertFalse(SaveFormat.AMR_WB.supportsPreset(RecordPreset.RAW_STUDIO));
+    }
+
+    @Test
+    public void lossyPresetsAllowAllButRawFloat() {
+        for (RecordPreset p : new RecordPreset[]{
+                RecordPreset.VOICE_MEMO, RecordPreset.STANDARD,
+                RecordPreset.PODCAST, RecordPreset.MUSIC}) {
+            assertTrue(SaveFormat.AUTO.supportsPreset(p));
+            assertTrue(SaveFormat.M4A.supportsPreset(p));
+            assertTrue(SaveFormat.OPUS.supportsPreset(p));
+            assertTrue(SaveFormat.WAV16.supportsPreset(p));
+            assertTrue(SaveFormat.FLAC.supportsPreset(p));
+            assertFalse(SaveFormat.WAV32.supportsPreset(p));
+        }
+    }
 }

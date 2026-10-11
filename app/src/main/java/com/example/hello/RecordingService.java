@@ -96,6 +96,7 @@ public class RecordingService extends Service {
 
     @Override
     public void onCreate() {
+        CrashLog.install(this);
         super.onCreate();
         ensureChannel();
         audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);

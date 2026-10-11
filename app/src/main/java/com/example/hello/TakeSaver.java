@@ -48,6 +48,12 @@ public final class TakeSaver {
         long dur = Math.max(durationOf(raw), 1000);
         String title = e.takeName != null ? e.takeName : "";
         SaveFormat eff = save.effective(preset);
+        // Stale prefs (or a notif-save racing a preset switch) can hold an
+        // impossible pair — Raw through a voice codec, Voice as raw float.
+        // Coerce to the preset's native container instead of writing garbage.
+        if (!eff.supportsPreset(preset)) {
+            eff = preset.savesWav ? SaveFormat.WAV16 : SaveFormat.M4A;
+        }
         File fin = null;
         try {
             switch (eff) {

@@ -86,6 +86,10 @@
     <string name="saved_to_location">Saved to %1$s</string>
     <string name="saved_n_to_location">Saved %1$d files to %2$s</string>
     <string name="couldnt_save_title">Couldn\'t save</string>
+    <string name="crash_title">The app crashed last time</string>
+    <string name="crash_msg">A crash report was saved. Sharing it helps fix the exact cause.</string>
+    <string name="crash_share">Share report</string>
+    <string name="settings_incompatible">Not available with the %1$s preset</string>
     <string name="take_saved">Take saved</string>
     <string name="couldnt_save">Couldn\'t save take</string>
     <string name="couldnt_export">Couldn\'t export</string>
