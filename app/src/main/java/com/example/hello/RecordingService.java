@@ -110,15 +110,14 @@ public class RecordingService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent == null) {
-            // Restarted by the system: re-attach foreground if still active.
-            if (RecordingEngine.get().hasSession()) {
-                registerFocus();
-                startFg();
-                startTick();
-            } else {
-                stopSelf();
-            }
-            return START_STICKY;
+            // System-restarted. START_NOT_STICKY means this should not happen,
+            // but never re-enter startForeground() from here: a restart
+            // racing the save could hit the Android 14+ rule that a
+            // microphone FGS may not start from the background, and a
+            // startForegroundService() that never promotes itself is fatal
+            // to the process.
+            stopSelf();
+            return START_NOT_STICKY;
         }
         String a = intent.getAction();
         if (ACTION_START.equals(a)) {
@@ -135,7 +134,7 @@ public class RecordingService extends Service {
         } else if (ACTION_CANCEL.equals(a)) {
             doCancel();
         }
-        return START_STICKY;
+        return START_NOT_STICKY;
     }
 
     @Override
@@ -328,9 +327,19 @@ public class RecordingService extends Service {
             } else {
                 startForeground(NOTIF_ID, n);
             }
+            return;
+        } catch (Exception typed) {
+            CrashLog.breadcrumb(this, "typed startForeground failed: " + typed);
+        }
+        // Untyped retry: a service launched with startForegroundService()
+        // must reach the foreground within ~5s or the system kills the app,
+        // so it is always worth attempting the permissive call.
+        try {
+            startForeground(NOTIF_ID, n);
         } catch (Exception e) {
+            CrashLog.breadcrumb(this, "startForeground failed: " + e);
             try {
-                startForeground(NOTIF_ID, n);
+                stopSelf();
             } catch (Exception ignored) {}
         }
     }
