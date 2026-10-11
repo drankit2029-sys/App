@@ -849,12 +849,13 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                 }
             }
             final File done = session;
+            final String failure = fail;
             handler.post(() -> {
                 try {
                     progress.dismiss();
                 } catch (Exception ignored) {}
                 if (!isAdded()) return;
-                if (done != null && fail == null) {
+                if (done != null && failure == null) {
                     try {
                         ((MainActivity) requireActivity())
                                 .openStudioWithEdit(done, sourceId, sourceTitle);
