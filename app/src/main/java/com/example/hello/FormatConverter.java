@@ -179,6 +179,7 @@ public final class FormatConverter {
         enc.start();
         MediaMuxer muxer = new MediaMuxer(dst.getAbsolutePath(), muxerFormat);
         boolean muxStarted = false;
+        int samplesWritten = 0;
         int track = -1;
         MediaCodec.BufferInfo bi = new MediaCodec.BufferInfo();
 
@@ -192,7 +193,6 @@ public final class FormatConverter {
             boolean outEos = false;
             int lastPct = -1;
             long lastCbAt = 0;
-            int samplesWritten = 0;
             long drainDeadline = 0;
 
             while (!outEos) {
@@ -474,6 +474,7 @@ public final class FormatConverter {
         MediaMuxer muxer = new MediaMuxer(
                 dst.getAbsolutePath(), MediaMuxer.OutputFormat.MUXER_OUTPUT_3GPP);
         boolean muxStarted = false;
+        int samplesWritten = 0;
         int track = -1;
         MediaCodec.BufferInfo bi = new MediaCodec.BufferInfo();
         try {
@@ -481,7 +482,6 @@ public final class FormatConverter {
             boolean outEos = false;
             int lastPct = 55;
             long drainDeadline = 0;
-            int samplesWritten = 0;
             long fed = 0;
             while (!outEos) {
                 if (!inEos) {
