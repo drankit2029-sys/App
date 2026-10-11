@@ -245,12 +245,12 @@ public class StudioFragment extends Fragment {
         };
         try {
             IntentFilter f = new IntentFilter(RecordingService.BROADCAST_DONE);
-            if (Build.VERSION.SDK_INT >= 33) {
-                requireContext().registerReceiver(
-                        doneReceiver, f, Context.RECEIVER_NOT_EXPORTED);
-            } else {
-                requireContext().registerReceiver(doneReceiver, f);
-            }
+            // Compat registration handles the API 33+ exported-flag
+            // requirement on every version, killing the lint error and the
+            // hand-rolled version branch.
+            androidx.core.content.ContextCompat.registerReceiver(
+                    requireContext(), doneReceiver, f,
+                    androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED);
         } catch (Exception ignored) {
             doneReceiver = null;
         }

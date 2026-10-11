@@ -247,6 +247,9 @@ public class RecordingService extends Service {
                 b.putExtra(EXTRA_MESSAGE, text);
                 b.putExtra(EXTRA_TITLE, t);
                 try {
+                    // Explicit package: stays inside the app, satisfies
+                    // UnsafeImplicitIntentLaunch, same delivery as before.
+                    b.setPackage(getPackageName());
                     sendBroadcast(b);
                 } catch (Exception ignored) {}
                 busy = false;
@@ -278,6 +281,7 @@ public class RecordingService extends Service {
                 b.putExtra(EXTRA_MESSAGE, text);
                 b.putExtra(EXTRA_TITLE, title);
                 try {
+                    b.setPackage(getPackageName());
                     sendBroadcast(b);
                 } catch (Exception ignored) {}
                 busy = false;
@@ -293,6 +297,7 @@ public class RecordingService extends Service {
     // ---- notification: one clean standard layout ----
 
     private void ensureChannel() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
         try {
             NotificationManager nm =
                     (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
@@ -331,8 +336,9 @@ public class RecordingService extends Service {
 
     /**
      * A single standard notification: small mic icon, "Recording — name"
-     * title, "preset • live timer" text and exactly three actions. No custom
-     * RemoteViews, so the system cannot duplicate buttons or cramp the timer.
+     * title, "preset • live timer" text and exactly three actions. Built
+     * with NotificationCompat so it renders identically (and lint-clean)
+     * from API 24 up, with no custom RemoteViews for the system to duplicate.
      */
     private Notification buildNotif() {
         RecordingEngine e = RecordingEngine.get();
@@ -367,7 +373,8 @@ public class RecordingService extends Service {
             content = null;
         }
 
-        Notification.Builder b = new Notification.Builder(this, CHANNEL);
+        androidx.core.app.NotificationCompat.Builder b =
+                new androidx.core.app.NotificationCompat.Builder(this, CHANNEL);
         b.setSmallIcon(R.drawable.ic_mic);
         b.setContentTitle(title);
         b.setContentText(text);
@@ -375,22 +382,19 @@ public class RecordingService extends Service {
         b.setOnlyAlertOnce(true);
         if (content != null) b.setContentIntent(content);
         if (convertingPct < 0) {
-            b.addAction(new Notification.Action.Builder(
-                    null,
+            b.addAction(0,
                     paused ? getString(R.string.notif_resume)
                             : getString(R.string.notif_pause),
-                    action(ACTION_TOGGLE, 21)).build());
-            b.addAction(new Notification.Action.Builder(
-                    null, getString(R.string.notif_save),
-                    action(ACTION_SAVE, 22)).build());
-            b.addAction(new Notification.Action.Builder(
-                    null, getString(R.string.notif_cancel),
-                    action(ACTION_CANCEL, 23)).build());
+                    action(ACTION_TOGGLE, 21));
+            b.addAction(0, getString(R.string.notif_save),
+                    action(ACTION_SAVE, 22));
+            b.addAction(0, getString(R.string.notif_cancel),
+                    action(ACTION_CANCEL, 23));
         }
         try {
             return b.build();
         } catch (Exception ex) {
-            return new Notification.Builder(this).build();
+            return new Notification();
         }
     }
 

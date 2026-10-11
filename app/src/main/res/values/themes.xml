@@ -9,7 +9,6 @@
         <item name="android:statusBarColor">@color/bg</item>
         <item name="android:navigationBarColor">@color/bg</item>
         <item name="android:windowLightStatusBar">false</item>
-        <item name="android:navigationBarDividerColor">@color/bg</item>
         <item name="bottomSheetDialogTheme">@style/TakeOneBottomSheetDialog</item>
     </style>
 
