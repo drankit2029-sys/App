@@ -24,7 +24,8 @@ public class DspTest {
     public void sanitizeBasics() {
         assertEquals("Take", Dsp.sanitize(null));
         assertEquals("Take", Dsp.sanitize("   "));
-        assertEquals("a_b_c", Dsp.sanitize("a/b\\c:*?\"<>|"));
+        // Every illegal char becomes its own underscore (no collapsing).
+        assertEquals("a_b_c_______", Dsp.sanitize("a/b\\c:*?\"<>|"));
         assertEquals("Hello World", Dsp.sanitize("  Hello   World  "));
     }
 

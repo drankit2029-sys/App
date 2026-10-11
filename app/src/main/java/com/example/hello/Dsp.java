@@ -88,7 +88,9 @@ public final class Dsp {
     /** Hamming-windowed sinc lowpass; cutoff in cycles/sample (0..0.5). */
     public static float[] firLowpass(double cutoffNorm, int taps) {
         float[] h = new float[taps];
-        int m = (taps - 1) / 2;
+        // Center as a double: integer (taps-1)/2 truncates for even tap
+        // counts and silently breaks symmetry (caught by unit test).
+        double m = (taps - 1) / 2.0;
         double sum = 0;
         for (int n = 0; n < taps; n++) {
             double x = n - m;
