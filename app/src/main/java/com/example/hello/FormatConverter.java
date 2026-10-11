@@ -16,6 +16,13 @@ import java.nio.ByteOrder;
  */
 public final class FormatConverter {
 
+    /**
+     * How long an encoder may take to flush after all input is queued. Some
+     * OEM codecs never deliver END_OF_STREAM; without a deadline the convert
+     * thread spins until the ANR killer takes the process.
+     */
+    private static final long DRAIN_TIMEOUT_MS = 10_000L;
+
     public interface Progress {
         void onProgress(int percent);
     }
@@ -185,6 +192,8 @@ public final class FormatConverter {
             boolean outEos = false;
             int lastPct = -1;
             long lastCbAt = 0;
+            int samplesWritten = 0;
+            long drainDeadline = 0;
 
             while (!outEos) {
                 if (!inputEos) {
@@ -204,6 +213,14 @@ public final class FormatConverter {
                             enc.queueInputBuffer(idx, 0, 0, 0,
                                     MediaCodec.BUFFER_FLAG_END_OF_STREAM);
                             inputEos = true;
+                            // All audio is queued, so the progress bar is
+                            // already at 100% from here on. What remains is
+                            // draining the encoder, which some OEM codecs
+                            // never finish: bound it, or the worker thread
+                            // spins forever and the app is ANR-killed right
+                            // after the bar completes.
+                            drainDeadline = SystemClock.elapsedRealtime()
+                                    + DRAIN_TIMEOUT_MS;
                         } else {
                             int wantBytes = wantFrames * ch * 4;
                             r.readFully(in, 0, wantBytes);
@@ -236,8 +253,10 @@ public final class FormatConverter {
                 }
                 int oidx = enc.dequeueOutputBuffer(bi, 2000);
                 if (oidx == MediaCodec.INFO_TRY_AGAIN_LATER) {
-                    if (inputEos && !muxStarted) {
-                        // fall through; keep draining
+                    if (inputEos && SystemClock.elapsedRealtime()
+                            > drainDeadline) {
+                        throw new IllegalStateException(
+                                "encoder never finished");
                     }
                 } else if (oidx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                     MediaFormat of = enc.getOutputFormat();
@@ -251,6 +270,7 @@ public final class FormatConverter {
                         ob.position(bi.offset);
                         ob.limit(bi.offset + bi.size);
                         muxer.writeSampleData(track, ob, bi);
+                        samplesWritten++;
                     }
                     enc.releaseOutputBuffer(oidx, false);
                     if ((bi.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
@@ -270,7 +290,9 @@ public final class FormatConverter {
                 enc.release();
             } catch (Exception ignored) {}
             try {
-                if (muxStarted) muxer.stop();
+                // stop() with an empty track is undefined in the native
+                // muxer; only finalize it when samples actually landed.
+                if (muxStarted && samplesWritten > 0) muxer.stop();
             } catch (Exception ignored) {}
             try {
                 muxer.release();
@@ -455,10 +477,12 @@ public final class FormatConverter {
         int track = -1;
         MediaCodec.BufferInfo bi = new MediaCodec.BufferInfo();
         try {
-            long fed = 0;
             boolean inEos = false;
             boolean outEos = false;
             int lastPct = 55;
+            long drainDeadline = 0;
+            int samplesWritten = 0;
+            long fed = 0;
             while (!outEos) {
                 if (!inEos) {
                     int idx = enc.dequeueInputBuffer(5000);
@@ -472,6 +496,9 @@ public final class FormatConverter {
                             enc.queueInputBuffer(idx, 0, 0, 0,
                                     MediaCodec.BUFFER_FLAG_END_OF_STREAM);
                             inEos = true;
+                            // Progress is already 100%; bound the drain.
+                            drainDeadline = SystemClock.elapsedRealtime()
+                                    + DRAIN_TIMEOUT_MS;
                         } else {
                             for (int i = 0; i < want; i++) {
                                 dstBuf.putShort(pcm[(int) fed + i]);
@@ -491,7 +518,13 @@ public final class FormatConverter {
                     }
                 }
                 int oidx = enc.dequeueOutputBuffer(bi, 5000);
-                if (oidx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                if (oidx == MediaCodec.INFO_TRY_AGAIN_LATER) {
+                    if (inEos && SystemClock.elapsedRealtime()
+                            > drainDeadline) {
+                        throw new IllegalStateException(
+                                "encoder never finished");
+                    }
+                } else if (oidx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                     track = muxer.addTrack(enc.getOutputFormat());
                     muxer.start();
                     muxStarted = true;
@@ -502,6 +535,7 @@ public final class FormatConverter {
                         ob.position(bi.offset);
                         ob.limit(bi.offset + bi.size);
                         muxer.writeSampleData(track, ob, bi);
+                        samplesWritten++;
                     }
                     enc.releaseOutputBuffer(oidx, false);
                     if ((bi.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
@@ -518,7 +552,7 @@ public final class FormatConverter {
                 enc.release();
             } catch (Exception ignored) {}
             try {
-                if (muxStarted) muxer.stop();
+                if (muxStarted && samplesWritten > 0) muxer.stop();
             } catch (Exception ignored) {}
             try {
                 muxer.release();
@@ -569,6 +603,7 @@ public final class FormatConverter {
             boolean outEos = false;
             int lastPct = -1;
             long lastCbAt = 0;
+            long drainDeadline = 0;
             try {
                 r.seek(info.dataStart);
                 while (!outEos) {
@@ -587,6 +622,9 @@ public final class FormatConverter {
                                 enc.queueInputBuffer(idx, 0, 0, 0,
                                         MediaCodec.BUFFER_FLAG_END_OF_STREAM);
                                 inEos = true;
+                                // Progress is already 100%; bound the drain.
+                                drainDeadline = SystemClock.elapsedRealtime()
+                                        + DRAIN_TIMEOUT_MS;
                             } else {
                                 int wantBytes = wantFrames * ch * 4;
                                 r.readFully(in, 0, wantBytes);
@@ -606,7 +644,13 @@ public final class FormatConverter {
                         }
                     }
                     int oidx = enc.dequeueOutputBuffer(bi, 5000);
-                    if (oidx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                    if (oidx == MediaCodec.INFO_TRY_AGAIN_LATER) {
+                        if (inEos && SystemClock.elapsedRealtime()
+                                > drainDeadline) {
+                            throw new IllegalStateException(
+                                    "encoder never finished");
+                        }
+                    } else if (oidx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                         try {
                             MediaFormat of = enc.getOutputFormat();
                             ByteBuffer csd = of.getByteBuffer("csd-0");

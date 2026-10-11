@@ -228,20 +228,8 @@ public final class RecordingEngine {
             capThread = null;
         }
         try {
-            if (rec != null) {
-                try {
-                    rec.stop();
-                } catch (Exception ignored) {}
-                try {
-                    rec.release();
-                } catch (Exception ignored) {}
-            }
+            stopThenJoinThenRelease(rec, th);
         } finally {
-            if (th != null) {
-                try {
-                    th.join(1500);
-                } catch (InterruptedException ignored) {}
-            }
             synchronized (lock) {
                 closeRafLocked();
                 patchHeaderLocked();
@@ -285,22 +273,7 @@ public final class RecordingEngine {
             recorder = null;
             capThread = null;
         }
-        try {
-            if (rec != null) {
-                try {
-                    rec.stop();
-                } catch (Exception ignored) {}
-                try {
-                    rec.release();
-                } catch (Exception ignored) {}
-            }
-        } finally {
-            if (th != null) {
-                try {
-                    th.join(1500);
-                } catch (InterruptedException ignored) {}
-            }
-        }
+        stopThenJoinThenRelease(rec, th);
         synchronized (lock) {
             closeRafLocked();
             patchHeaderLocked();
@@ -312,6 +285,30 @@ public final class RecordingEngine {
                 pendingFor(out).delete();
             }
             return out;
+        }
+    }
+
+    /**
+     * Shuts the capture path down in the only safe order: stop (so the
+     * blocked read() returns), join the writer, THEN release. Releasing the
+     * AudioRecord while the capture thread is still inside read() is a
+     * use-after-free in native code and takes the whole process down.
+     */
+    private static void stopThenJoinThenRelease(AudioRecord rec, Thread th) {
+        if (rec != null) {
+            try {
+                rec.stop();
+            } catch (Exception ignored) {}
+        }
+        if (th != null) {
+            try {
+                th.join(1500);
+            } catch (InterruptedException ignored) {}
+        }
+        if (rec != null) {
+            try {
+                rec.release();
+            } catch (Exception ignored) {}
         }
     }
 
@@ -330,22 +327,7 @@ public final class RecordingEngine {
             capThread = null;
             raw = rawFile;
         }
-        try {
-            if (rec != null) {
-                try {
-                    rec.stop();
-                } catch (Exception ignored) {}
-                try {
-                    rec.release();
-                } catch (Exception ignored) {}
-            }
-        } finally {
-            if (th != null) {
-                try {
-                    th.join(1500);
-                } catch (InterruptedException ignored) {}
-            }
-        }
+        stopThenJoinThenRelease(rec, th);
         synchronized (lock) {
             closeRafLocked();
             state = State.IDLE;
