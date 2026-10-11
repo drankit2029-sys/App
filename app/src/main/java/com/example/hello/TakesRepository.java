@@ -1,13 +1,28 @@
 package com.example.hello;
 
+import android.content.Context;
+import android.content.SharedPreferences;
+import android.media.MediaMetadataRetriever;
+
 import java.io.File;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
 
-/** In-memory store for takes, seeded with demo content. */
+/**
+ * Library store. The in-memory list stays the synchronous UI model, but
+ * every row is mirrored into Room, so the library (titles, favorites,
+ * positions, lineage) survives process death. All database work runs on a
+ * single background thread, in order, so callers never block and writes
+ * can never overtake the initial load.
+ */
 public final class TakesRepository {
 
     /** Removed takes + their positions, so a delete can be undone. */
@@ -16,25 +31,91 @@ public final class TakesRepository {
         public final List<Integer> positions = new ArrayList<>();
     }
 
+    /** Startup reconcile outcome, for the one summary popup. */
+    public static final class ReconcileResult {
+        public int adopted;
+        public int pruned;
+        public int rawsCleaned;
+    }
+
     private static final List<Take> TAKES = new ArrayList<>();
     private static final AtomicLong IDS = new AtomicLong(100);
-    private static boolean seeded = false;
+    private static final String PREFS = "takeone";
+    private static final String KEY_SEEDED = "library_seeded_once";
+
+    private static volatile boolean ready;
+    private static final List<Runnable> READY_QUEUE = new ArrayList<>();
+    private static TakeDatabase db;
+    private static Context app;
+    private static final ExecutorService IO = Executors.newSingleThreadExecutor();
+    private static volatile ReconcileResult lastReconcile;
 
     private TakesRepository() {}
 
-    public static synchronized void seedIfNeeded() {
-        if (seeded) return;
-        seeded = true;
-        long now = System.currentTimeMillis();
-        long h = 3600_000L;
-        long d = 24 * h;
-        TAKES.add(new Take(1, "Midnight Vocals — Take 7", 252000, now - 2 * h, "4.1 MB", "WAV", true, null));
-        TAKES.add(new Take(2, "Quick Humming Idea", 44000, now - 40 * 60_000L, "0.8 MB", "M4A", false, null));
-        TAKES.add(new Take(3, "Podcast Intro Draft", 107000, now - 20 * h, "1.8 MB", "M4A", false, null));
-        TAKES.add(new Take(4, "Guitar Riff Idea", 38000, now - 3 * d, "0.7 MB", "WAV", true, null));
-        TAKES.add(new Take(5, "Voice Memo — Meeting", 725000, now - 9 * d, "11.9 MB", "M4A", false, null));
-        TAKES.add(new Take(6, "Drum Loop Test", 56000, now - 15 * d, "1.0 MB", "WAV", false, null));
+    // ---- lifecycle ----
+
+    /** Idempotent. Loads rows, seeds once, reconciles disk, then fires ready. */
+    public static synchronized void init(Context ctx) {
+        if (app != null) return;
+        app = ctx.getApplicationContext();
+        db = TakeDatabase.get(app);
+        IO.execute(TakesRepository::loadReconcileSeed);
     }
+
+    public static boolean isReady() {
+        return ready;
+    }
+
+    /** Runs now (main thread) if ready, else right after load finishes. */
+    public static void onReady(Runnable r) {
+        boolean run;
+        synchronized (TakesRepository.class) {
+            run = ready;
+            if (!run) READY_QUEUE.add(r);
+        }
+        if (run) r.run();
+    }
+
+    public static ReconcileResult lastReconcile() {
+        return lastReconcile;
+    }
+
+    private static void loadReconcileSeed() {
+        List<TakeEntity> rows = new ArrayList<>();
+        try {
+            rows = db.takes().allOrdered();
+        } catch (Exception ignored) {}
+        List<Runnable> queued;
+        synchronized (TakesRepository.class) {
+            TAKES.clear();
+            long max = 99;
+            for (TakeEntity e : rows) {
+                try {
+                    Take t = e.toTake();
+                    TAKES.add(t);
+                    if (t.id > max) max = t.id;
+                } catch (Exception ignored) {}
+            }
+            IDS.set(max + 1);
+            sortByTimestampDesc();
+        }
+        ReconcileResult rr = reconcile(app);
+        lastReconcile = rr;
+        synchronized (TakesRepository.class) {
+            ready = true;
+            queued = new ArrayList<>(READY_QUEUE);
+            READY_QUEUE.clear();
+        }
+        android.os.Handler main = new android.os.Handler(
+                android.os.Looper.getMainLooper());
+        for (Runnable r : queued) main.post(r);
+    }
+
+    private static void sortByTimestampDesc() {
+        TAKES.sort((a, b) -> Long.compare(b.timestamp, a.timestamp));
+    }
+
+    // ---- reads (synchronous, in-memory) ----
 
     public static synchronized List<Take> all() {
         return new ArrayList<>(TAKES);
@@ -47,54 +128,78 @@ public final class TakesRepository {
         return null;
     }
 
+    // ---- mutations (synchronous cache + ordered async write-through) ----
+
     public static synchronized Take addRecording(File file, long durationMs) {
-        long mbTenths = Math.max(1, file.length() / 102400);
-        String size = String.format(Locale.US, "%.1f MB", mbTenths / 10f);
+        Take t = buildTake(file, durationMs, null, null);
+        TAKES.add(0, t);
+        persistAsync(t);
+        return t;
+    }
+
+    public static synchronized Take addRecording(File file, long durationMs,
+                                                 String title, String format) {
+        Take t = buildTake(file, durationMs, title, format);
+        TAKES.add(0, t);
+        persistAsync(t);
+        return t;
+    }
+
+    /** Used by reconcile + tests to insert a fully-formed take. */
+    public static synchronized Take addTake(Take t) {
+        TAKES.add(t);
+        sortByTimestampDesc();
+        persistAsync(t);
+        return t;
+    }
+
+    private static Take buildTake(File file, long durationMs,
+                                  String title, String format) {
+        String size = Dsp.sizeLabel(file.length());
         String name = file.getName();
         String ext = "M4A";
         int dot = name.lastIndexOf('.');
         if (dot > 0 && dot < name.length() - 1) {
             ext = name.substring(dot + 1).toUpperCase(Locale.US);
         }
-        String base = (dot > 0 ? name.substring(0, dot) : name).replace('_', ' ');
-        Take t = new Take(IDS.getAndIncrement(), base, durationMs, System.currentTimeMillis(),
-                size, ext, false, file.getAbsolutePath());
-        TAKES.add(0, t);
-        return t;
-    }
-
-    public static synchronized Take addRecording(File file, long durationMs,
-                                                 String title, String format) {
-        long mbTenths = Math.max(1, file.length() / 102400);
-        String size = String.format(Locale.US, "%.1f MB", mbTenths / 10f);
+        String base = Dsp.prettyFileTitle(name);
         String t = title != null ? title.trim() : "";
-        if (t.isEmpty()) {
-            String name = file.getName();
-            int dot = name.lastIndexOf('.');
-            t = (dot > 0 ? name.substring(0, dot) : name).replace('_', ' ');
-        }
+        if (t.isEmpty()) t = base;
         String f = format != null ? format.trim().toUpperCase(Locale.US) : "";
-        if (f.isEmpty()) {
-            String name = file.getName();
-            int dot = name.lastIndexOf('.');
-            f = dot > 0 ? name.substring(dot + 1).toUpperCase(Locale.US) : "WAV";
-        }
+        if (f.isEmpty()) f = ext;
         Take take = new Take(IDS.getAndIncrement(), t, durationMs,
                 System.currentTimeMillis(), size, f, false, file.getAbsolutePath());
-        TAKES.add(0, take);
+        take.origin = "recorded";
         return take;
     }
 
     public static synchronized void toggleFavorite(long id) {
         Take t = find(id);
-        if (t != null) t.favorite = !t.favorite;
+        if (t != null) {
+            t.favorite = !t.favorite;
+            persistAsync(t);
+        }
     }
 
     public static synchronized void rename(long id, String newTitle) {
         Take t = find(id);
         if (t != null && newTitle != null && !newTitle.trim().isEmpty()) {
             t.title = newTitle.trim();
+            persistAsync(t);
         }
+    }
+
+    public static synchronized void updatePosition(long id, long posMs) {
+        Take t = find(id);
+        if (t == null) return;
+        t.lastPositionMs = Math.max(0, posMs);
+        final long pid = id;
+        final long ppos = t.lastPositionMs;
+        IO.execute(() -> {
+            try {
+                if (db != null) db.takes().updatePosition(pid, ppos);
+            } catch (Exception ignored) {}
+        });
     }
 
     public static synchronized void delete(long id) {
@@ -102,6 +207,7 @@ public final class TakesRepository {
             if (TAKES.get(i).id == id) {
                 Take t = TAKES.remove(i);
                 deleteBackingFile(t);
+                deleteAsync(id);
                 return;
             }
         }
@@ -109,29 +215,350 @@ public final class TakesRepository {
 
     public static synchronized RestoreOp deleteMany(Set<Long> ids) {
         RestoreOp op = new RestoreOp();
+        List<Long> gone = new ArrayList<>();
         for (int i = TAKES.size() - 1; i >= 0; i--) {
             if (ids.contains(TAKES.get(i).id)) {
                 op.takes.add(0, TAKES.get(i));
                 op.positions.add(0, i);
                 deleteBackingFile(TAKES.get(i));
+                gone.add(TAKES.get(i).id);
                 TAKES.remove(i);
             }
+        }
+        if (!gone.isEmpty()) {
+            final List<Long> idsCopy = new ArrayList<>(gone);
+            IO.execute(() -> {
+                try {
+                    if (db != null) db.takes().deleteByIds(idsCopy);
+                } catch (Exception ignored) {}
+            });
         }
         return op;
     }
 
     public static synchronized void restore(RestoreOp op) {
         if (op == null) return;
+        List<TakeEntity> rows = new ArrayList<>();
         for (int i = 0; i < op.takes.size(); i++) {
             int pos = Math.min(op.positions.get(i), TAKES.size());
             TAKES.add(pos, op.takes.get(i));
+            rows.add(TakeEntity.fromTake(op.takes.get(i)));
         }
+        if (!rows.isEmpty()) {
+            final List<TakeEntity> copy = new ArrayList<>(rows);
+            IO.execute(() -> {
+                try {
+                    if (db != null) db.takes().upsertAll(copy);
+                } catch (Exception ignored) {}
+            });
+        }
+    }
+
+    private static void persistAsync(Take t) {
+        final TakeEntity e = TakeEntity.fromTake(t);
+        IO.execute(() -> {
+            try {
+                if (db != null) db.takes().upsert(e);
+            } catch (Exception ignored) {}
+        });
+    }
+
+    private static void deleteAsync(long id) {
+        IO.execute(() -> {
+            try {
+                if (db != null) db.takes().deleteById(id);
+            } catch (Exception ignored) {}
+        });
     }
 
     private static void deleteBackingFile(Take t) {
         if (t.filePath != null) {
             // noinspection ResultOfMethodCallIgnored
             new File(t.filePath).delete();
+        }
+    }
+
+    // ---- first-run demo seeding (once ever) ----
+
+    private static boolean seededOnce(Context ctx) {
+        try {
+            SharedPreferences p = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+            return p.getBoolean(KEY_SEEDED, false);
+        } catch (Exception e) {
+            return true; // fail closed: never reseed blindly
+        }
+    }
+
+    private static void markSeeded(Context ctx) {
+        try {
+            ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                    .edit().putBoolean(KEY_SEEDED, true).apply();
+        } catch (Exception ignored) {}
+    }
+
+    private static void seedDemos(Context ctx) {
+        long now = System.currentTimeMillis();
+        long h = 3600_000L;
+        long d = 24 * h;
+        List<TakeEntity> rows = new ArrayList<>();
+        Take[] demos = {
+                demo(1, "Midnight Vocals — Take 7", 252000, now - 2 * h, "4.1 MB", "WAV", true),
+                demo(2, "Quick Humming Idea", 44000, now - 40 * 60_000L, "0.8 MB", "M4A", false),
+                demo(3, "Podcast Intro Draft", 107000, now - 20 * h, "1.8 MB", "M4A", false),
+                demo(4, "Guitar Riff Idea", 38000, now - 3 * d, "0.7 MB", "WAV", true),
+                demo(5, "Voice Memo — Meeting", 725000, now - 9 * d, "11.9 MB", "M4A", false),
+                demo(6, "Drum Loop Test", 56000, now - 15 * d, "1.0 MB", "WAV", false),
+        };
+        synchronized (TakesRepository.class) {
+            for (Take t : demos) {
+                TAKES.add(t);
+                rows.add(TakeEntity.fromTake(t));
+            }
+            IDS.set(100);
+            sortByTimestampDesc();
+        }
+        try {
+            db.takes().upsertAll(rows);
+        } catch (Exception ignored) {}
+        markSeeded(ctx);
+    }
+
+    private static Take demo(long id, String title, long dur, long ts,
+                             String size, String fmt, boolean fav) {
+        Take t = new Take(id, title, dur, ts, size, fmt, fav, null);
+        t.origin = "demo";
+        return t;
+    }
+
+    // ---- startup reconcile ----
+
+    private static final String[] AUDIO_EXTS = {
+            "wav", "m4a", "3gp", "flac", "webm", "mp3", "ogg", "aac",
+    };
+
+    private static boolean isAudioFile(String name) {
+        String lower = name.toLowerCase(Locale.US);
+        if (lower.endsWith(".pending")) return false;
+        int dot = lower.lastIndexOf('.');
+        if (dot < 0) return false;
+        String ext = lower.substring(dot + 1);
+        for (String a : AUDIO_EXTS) {
+            if (a.equals(ext)) return true;
+        }
+        return false;
+    }
+
+    private static String stemOf(String name) {
+        int dot = name.lastIndexOf('.');
+        return dot > 0 ? name.substring(0, dot) : name;
+    }
+
+    /**
+     * Makes disk and database agree: seeds demos once on a truly fresh
+     * install, drops rows whose files vanished, deletes finalized raw
+     * leftovers shadowed by a finished conversion, and adopts orphaned
+     * recordings back into the library. Files with a .pending marker are
+     * left alone — the unfinished-take flow owns them.
+     */
+    static ReconcileResult reconcile(Context ctx) {
+        ReconcileResult rr = new ReconcileResult();
+        File dir;
+        try {
+            dir = RecordingEngine.takesDir(ctx);
+        } catch (Exception e) {
+            return rr;
+        }
+        File[] files = dir.listFiles();
+        if (files == null) files = new File[0];
+
+        Map<String, File> byPath = new HashMap<>();
+        synchronized (TakesRepository.class) {
+            for (Take t : TAKES) {
+                if (t.filePath != null) byPath.put(t.filePath, new File(t.filePath));
+            }
+        }
+
+        Set<String> pendingStems = new HashSet<>();
+        for (File f : files) {
+            if (f.getName().endsWith(".pending")) {
+                pendingStems.add(stemOf(f.getName().replaceFirst("\\.pending$", "")));
+            }
+        }
+
+        // 1) Prune rows whose backing files are gone.
+        List<Long> prune = new ArrayList<>();
+        synchronized (TakesRepository.class) {
+            for (Take t : TAKES) {
+                if (t.filePath != null && !(new File(t.filePath).exists())) {
+                    prune.add(t.id);
+                }
+            }
+            for (long id : prune) {
+                for (int i = TAKES.size() - 1; i >= 0; i--) {
+                    if (TAKES.get(i).id == id) TAKES.remove(i);
+                }
+            }
+        }
+        if (!prune.isEmpty()) {
+            try {
+                db.takes().deleteByIds(prune);
+            } catch (Exception ignored) {}
+            rr.pruned = prune.size();
+        }
+
+        // Refresh the referenced set after pruning.
+        Set<String> referenced = new HashSet<>();
+        synchronized (TakesRepository.class) {
+            for (Take t : TAKES) {
+                if (t.filePath != null) referenced.add(t.filePath);
+            }
+        }
+
+        // 2) Finalized raw leftovers: a float32 .wav sharing a stem with a
+        // finished conversion (and no .pending) is a crashed-save remnant.
+        Map<String, List<File>> byStem = new HashMap<>();
+        for (File f : files) {
+            if (!f.isFile() || !isAudioFile(f.getName())) continue;
+            String stem = stemOf(f.getName());
+            List<File> g = byStem.get(stem);
+            if (g == null) {
+                g = new ArrayList<>();
+                byStem.put(stem, g);
+            }
+            g.add(f);
+        }
+        for (Map.Entry<String, List<File>> e : byStem.entrySet()) {
+            List<File> g = e.getValue();
+            if (g.size() < 2 || pendingStems.contains(e.getKey())) continue;
+            boolean hasFinal = false;
+            File floatWav = null;
+            for (File f : g) {
+                String n = f.getName().toLowerCase(Locale.US);
+                if (n.endsWith(".wav") && isFloat32Wav(f)) {
+                    floatWav = f;
+                } else {
+                    hasFinal = true;
+                }
+            }
+            if (hasFinal && floatWav != null && !referenced.contains(
+                    floatWav.getAbsolutePath())) {
+                // noinspection ResultOfMethodCallIgnored
+                if (floatWav.delete()) rr.rawsCleaned++;
+            }
+        }
+
+        // 3) Adopt orphans back into the library.
+        List<TakeEntity> adopted = new ArrayList<>();
+        for (File f : files) {
+            if (!f.isFile() || !isAudioFile(f.getName())) continue;
+            String abs = f.getAbsolutePath();
+            if (referenced.contains(abs)) continue;
+            if (pendingStems.contains(stemOf(f.getName()))) continue;
+            if (!f.exists()) continue;
+            Take t = adoptFile(ctx, f);
+            if (t == null) continue;
+            synchronized (TakesRepository.class) {
+                TAKES.add(t);
+                referenced.add(abs);
+            }
+            adopted.add(TakeEntity.fromTake(t));
+            rr.adopted++;
+        }
+        if (!adopted.isEmpty()) {
+            try {
+                db.takes().upsertAll(adopted);
+            } catch (Exception ignored) {}
+            synchronized (TakesRepository.class) {
+                sortByTimestampDesc();
+            }
+        }
+
+        // 4) Demo seeding, once ever, only on a truly fresh install.
+        boolean empty;
+        synchronized (TakesRepository.class) {
+            empty = TAKES.isEmpty();
+        }
+        if (empty && !seededOnce(ctx) && !hasAnyAudio(files)) {
+            seedDemos(ctx);
+        } else if (empty) {
+            markSeeded(ctx);
+        }
+        return rr;
+    }
+
+    private static boolean hasAnyAudio(File[] files) {
+        for (File f : files) {
+            if (f.isFile() && isAudioFile(f.getName())) return true;
+        }
+        return false;
+    }
+
+    private static boolean isFloat32Wav(File f) {
+        try {
+            java.io.RandomAccessFile r = new java.io.RandomAccessFile(f, "r");
+            try {
+                if (r.length() < 44) return false;
+                byte[] h = new byte[44];
+                r.readFully(h);
+                java.nio.ByteBuffer b = java.nio.ByteBuffer.wrap(h)
+                        .order(java.nio.ByteOrder.LITTLE_ENDIAN);
+                return (b.getShort(20) & 0xFFFF) == 3
+                        && (b.getShort(34) & 0xFFFF) == 32;
+            } finally {
+                try {
+                    r.close();
+                } catch (Exception ignored) {}
+            }
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private static Take adoptFile(Context ctx, File f) {
+        try {
+            String ext = "";
+            String n = f.getName();
+            int dot = n.lastIndexOf('.');
+            if (dot > 0) ext = n.substring(dot + 1).toLowerCase(Locale.US);
+            long dur = Dsp.wavDurationMs(f);
+            if (dur < 0) dur = probeDuration(f);
+            if (dur < 0) dur = 1000;
+            String badge;
+            switch (ext) {
+                case "wav": badge = "WAV"; break;
+                case "m4a": badge = "M4A"; break;
+                case "3gp": badge = "AMR"; break;
+                case "flac": badge = "FLAC"; break;
+                case "webm": badge = "WEBM"; break;
+                case "mp3": badge = "MP3"; break;
+                default: badge = ext.toUpperCase(Locale.US); break;
+            }
+            Take t;
+            synchronized (TakesRepository.class) {
+                t = new Take(IDS.getAndIncrement(), Dsp.prettyFileTitle(n), dur,
+                        Math.max(1, f.lastModified()), Dsp.sizeLabel(f.length()),
+                        badge, false, f.getAbsolutePath());
+                t.origin = "recovered";
+            }
+            return t;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static long probeDuration(File f) {
+        MediaMetadataRetriever r = new MediaMetadataRetriever();
+        try {
+            r.setDataSource(f.getAbsolutePath());
+            String d = r.extractMetadata(
+                    MediaMetadataRetriever.METADATA_KEY_DURATION);
+            return (long) Math.max(0, Double.parseDouble(d));
+        } catch (Exception e) {
+            return -1;
+        } finally {
+            try {
+                r.release();
+            } catch (Exception ignored) {}
         }
     }
 }

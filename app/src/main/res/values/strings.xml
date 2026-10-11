@@ -168,6 +168,8 @@
     <string name="teleprompter_hint">Paste your script here…</string>
     <string name="zoom_in">Zoom waveform in</string>
     <string name="zoom_out">Zoom waveform out</string>
+    <string name="recovered_title">Recordings recovered</string>
+    <string name="recovered_msg">%1$d file(s) found on storage were added back to your library.</string>
     <string name="save_take_title">Save this take?</string>
     <string name="save_take_msg">“%1$s” will be converted to %2$s and added to your library.</string>
     <string name="action_save">Save</string>

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Auto Backup (Android 6+): library metadata + prefs travel, bulky
+     device-local audio never does. Users re-add recordings via export. -->
+<full-backup-content>
+    <exclude domain="external" path="takes" />
+    <exclude domain="file" path="takes" />
+    <exclude domain="cache" path="." />
+    <exclude domain="external-cache" path="." />
+</full-backup-content>

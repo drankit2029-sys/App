@@ -106,12 +106,44 @@ public class MainActivity extends AppCompatActivity {
         }
 
         handleOpenStudioIntent(getIntent());
-        if (!recoveryChecked) {
-            recoveryChecked = true;
-            // Defer until after first frame so modals show over a live UI.
-            fabWrap.post(this::checkUnfinishedTakes);
-        }
+        // Library loads async (Room + disk reconcile). Recovery + first paint
+        // wait for it so prompts see adopted orphans and pruned rows.
+        TakesRepository.init(this);
+        TakesRepository.onReady(() -> {
+            if (!recoveryChecked) {
+                recoveryChecked = true;
+                fabWrap.post(this::checkUnfinishedTakes);
+            } else {
+                fabWrap.post(this::refreshLibraryIfShown);
+            }
+            maybeAnnounceRecovered();
+        });
         syncFabWithEngine();
+    }
+
+    /** One summary popup when the startup sweep adopted orphaned files. */
+    private void maybeAnnounceRecovered() {
+        TakesRepository.ReconcileResult rr = TakesRepository.lastReconcile();
+        if (rr == null || rr.adopted <= 0 || inStudio) return;
+        // Posted: dialogs need a resumed activity, and onReady can fire
+        // synchronously inside onCreate after a rotation.
+        fabWrap.post(() -> {
+            if (inStudio) return;
+            try {
+                OptionsSheet.showResult(this, true,
+                        getString(R.string.recovered_title),
+                        getString(R.string.recovered_msg, rr.adopted));
+            } catch (Exception ignored) {}
+        });
+    }
+
+    private void refreshLibraryIfShown() {
+        try {
+            Fragment f = getSupportFragmentManager().findFragmentByTag("LIB");
+            if (f instanceof LibraryFragment && f.isVisible()) {
+                ((LibraryFragment) f).refreshExternal();
+            }
+        } catch (Exception ignored) {}
     }
 
     @Override

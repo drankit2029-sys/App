@@ -481,22 +481,9 @@ public final class FormatConverter {
         if (dst.length() < 512) throw new IllegalStateException("amr encode failed");
     }
 
-    /** Hamming-windowed sinc lowpass; cutoff in cycles/sample (0..0.5). */
+    /** Hamming-windowed sinc lowpass; pure math lives in {@link Dsp}. */
     private static float[] firLowpass(double cutoffNorm, int taps) {
-        float[] h = new float[taps];
-        int m = (taps - 1) / 2;
-        double sum = 0;
-        for (int n = 0; n < taps; n++) {
-            double x = n - m;
-            double sinc = x == 0 ? 2 * Math.PI * cutoffNorm
-                    : Math.sin(2 * Math.PI * cutoffNorm * x) / x;
-            double win = 0.54 - 0.46 * Math.cos(2 * Math.PI * n / (taps - 1));
-            // Gain correction for the decimation stage that follows.
-            h[n] = (float) (sinc * win);
-            sum += h[n];
-        }
-        for (int n = 0; n < taps; n++) h[n] /= sum;
-        return h;
+        return Dsp.firLowpass(cutoffNorm, taps);
     }
 
     /**
@@ -643,20 +630,6 @@ public final class FormatConverter {
     }
 
     private static byte[] wav16Header(int ch, int sr, long pcmBytes) {
-        ByteBuffer b = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN);
-        b.put(new byte[]{'R', 'I', 'F', 'F'});
-        b.putInt((int) Math.min(Integer.MAX_VALUE, 36 + pcmBytes));
-        b.put(new byte[]{'W', 'A', 'V', 'E'});
-        b.put(new byte[]{'f', 'm', 't', ' '});
-        b.putInt(16);
-        b.putShort((short) 1);
-        b.putShort((short) ch);
-        b.putInt(sr);
-        b.putInt(sr * ch * 2);
-        b.putShort((short) (ch * 2));
-        b.putShort((short) 16);
-        b.put(new byte[]{'d', 'a', 't', 'a'});
-        b.putInt((int) Math.min(Integer.MAX_VALUE, pcmBytes));
-        return b.array();
+        return Dsp.wav16Header(ch, sr, pcmBytes);
     }
 }

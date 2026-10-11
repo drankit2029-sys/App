@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12+ backup + device-transfer rules: same story as
+     backup_rules.xml — metadata travels, raw audio stays on-device. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="external" path="takes" />
+        <exclude domain="file" path="takes" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="external" path="takes" />
+        <exclude domain="file" path="takes" />
+    </device-transfer>
+</data-extraction-rules>

@@ -203,6 +203,14 @@ public class StudioFragment extends Fragment {
                 autostart = args.getBoolean("autostart", false);
                 editSourceId = args.getLong("edit_source_id", -1);
                 editSourceTitle = args.getString("edit_source_title");
+                if (editSourceId == -1 && engine.rawFile != null
+                        && EditLink.matches(requireContext(),
+                        engine.rawFile.getAbsolutePath())) {
+                    // Killed mid-edit: re-adopt the stashed linkage so save
+                    // still offers replace-vs-new for the right take.
+                    editSourceId = EditLink.id(requireContext());
+                    editSourceTitle = EditLink.title(requireContext());
+                }
                 nameAsked = true;
                 attached = true;
             } catch (Exception e) {
@@ -212,6 +220,11 @@ public class StudioFragment extends Fragment {
         }
         if (!attached && engine.hasSession()) {
             pendingName = engine.takeName;
+            if (engine.rawFile != null && EditLink.matches(requireContext(),
+                    engine.rawFile.getAbsolutePath())) {
+                editSourceId = EditLink.id(requireContext());
+                editSourceTitle = EditLink.title(requireContext());
+            }
             nameAsked = true;
             attached = true;
         }
@@ -619,6 +632,11 @@ public class StudioFragment extends Fragment {
             String name = pendingName != null ? pendingName : nextTakeName();
             engine.startNewSession(requireContext(), name, outChannels);
             pendingName = engine.takeName;
+            // A fresh recording is never an edit: drop any stale linkage so
+            // a later save cannot inherit a previous take's replace choice.
+            editSourceId = -1;
+            editSourceTitle = null;
+            EditLink.clear(requireContext());
             waveform.clear();
             dbMeter.reset();
         } catch (Exception e) {
@@ -783,6 +801,7 @@ public class StudioFragment extends Fragment {
                         TakesRepository.addRecording(
                                 saved, savedDur, target, label);
                         editSourceId = -1;
+                        EditLink.clear(requireContext());
                         OptionsSheet.showResult(requireContext(), true,
                                 getString(R.string.convert_done_title),
                                 getString(R.string.edit_replaced_msg, target),
@@ -803,6 +822,7 @@ public class StudioFragment extends Fragment {
                         TakesRepository.addRecording(
                                 saved, savedDur, name, label);
                         editSourceId = -1;
+                        EditLink.clear(requireContext());
                         OptionsSheet.showResult(requireContext(), true,
                                 getString(R.string.convert_done_title),
                                 getString(R.string.convert_done_msg, name, label),
@@ -822,11 +842,13 @@ public class StudioFragment extends Fragment {
     private void doDiscardSequence() {
         if (saving) return;
         saving = true;
+        final Context appCtx = requireContext().getApplicationContext();
         new Thread(() -> {
             String title = engine.takeName != null ? engine.takeName : "";
             boolean ok = engine.abortAndDelete();
             // Discarding an edit leaves the original library take untouched.
             editSourceId = -1;
+            EditLink.clear(appCtx);
             handler.post(() -> {
                 saving = false;
                 if (!isAdded()) return;
@@ -849,6 +871,9 @@ public class StudioFragment extends Fragment {
         if (!isAdded() || getView() == null) return;
         if (!engine.hasSession()) {
             editSourceId = -1;
+            try {
+                EditLink.clear(requireContext());
+            } catch (Exception ignored) {}
             paint();
             try {
                 activity().syncFabWithEngine();
@@ -1081,10 +1106,7 @@ public class StudioFragment extends Fragment {
 
     /** Centisecond timer (one more decimal place than before). */
     static String formatTimer(long ms) {
-        long cs = (ms % 1000) / 10;
-        long s = (ms / 1000) % 60;
-        long m = (ms / 60000);
-        return String.format(Locale.US, "%02d:%02d.%02d", m, s, cs);
+        return TimeFmt.formatTimer(ms);
     }
 
     private MainActivity activity() {

@@ -449,9 +449,6 @@ public class RecordingService extends Service {
 
     /** Centisecond timer. */
     static String formatTimer(long ms) {
-        long cs = (ms % 1000) / 10;
-        long s = (ms / 1000) % 60;
-        long m = (ms / 60000);
-        return String.format(Locale.US, "%02d:%02d.%02d", m, s, cs);
+        return TimeFmt.formatTimer(ms);
     }
 }

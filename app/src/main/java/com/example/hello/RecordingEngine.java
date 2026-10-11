@@ -89,13 +89,9 @@ public final class RecordingEngine {
         return dir;
     }
 
+    /** Filename-safe take name. Pure logic lives in {@link Dsp} (unit-tested). */
     public static String sanitize(String name) {
-        if (name == null) return "Take";
-        String s = name.replaceAll("[\\\\/:*?\"<>|]", "_").trim();
-        s = s.replaceAll("\\s+", " ").trim();
-        if (s.isEmpty()) s = "Take";
-        if (s.length() > 60) s = s.substring(0, 60).trim();
-        return s;
+        return Dsp.sanitize(name);
     }
 
     private static File pendingFor(File raw) {
@@ -578,21 +574,7 @@ public final class RecordingEngine {
     }
 
     static byte[] wavHeader(int ch, long bytes) {
-        ByteBuffer b = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN);
-        b.put(new byte[]{'R', 'I', 'F', 'F'});
-        b.putInt((int) Math.min(Integer.MAX_VALUE, 36 + bytes));
-        b.put(new byte[]{'W', 'A', 'V', 'E'});
-        b.put(new byte[]{'f', 'm', 't', ' '});
-        b.putInt(16);
-        b.putShort((short) 3); // IEEE float
-        b.putShort((short) ch);
-        b.putInt(SAMPLE_RATE);
-        b.putInt(SAMPLE_RATE * ch * 4);
-        b.putShort((short) (ch * 4));
-        b.putShort((short) 32);
-        b.put(new byte[]{'d', 'a', 't', 'a'});
-        b.putInt((int) Math.min(Integer.MAX_VALUE, bytes));
-        return b.array();
+        return Dsp.wavFloatHeader(ch, SAMPLE_RATE, bytes);
     }
 
     private static void writePending(File raw, String name, int ch) {

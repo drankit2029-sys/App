@@ -15,9 +15,15 @@ public class Take {
     public String format;
     public boolean favorite;
     public String filePath;
+    /** Where the take came from: recorded | imported | edited | demo | recovered. */
+    public String origin;
+    /** Last playback position, so long takes resume where they stopped. */
+    public long lastPositionMs;
+    /** Phase-2 marker payload (JSON), reserved so the schema never migrates. */
+    public String markersJson;
 
     public Take(long id, String title, long durationMs, long timestamp,
-               String sizeLabel, String format, boolean favorite, String filePath) {
+                String sizeLabel, String format, boolean favorite, String filePath) {
         this.id = id;
         this.title = title;
         this.durationMs = durationMs;
@@ -27,6 +33,9 @@ public class Take {
         this.format = format;
         this.favorite = favorite;
         this.filePath = filePath;
+        this.origin = "recorded";
+        this.lastPositionMs = 0;
+        this.markersJson = null;
     }
 
     public boolean hasFile() {

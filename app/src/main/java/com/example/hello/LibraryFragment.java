@@ -125,7 +125,12 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
 
     @Override
     public void onViewCreated(@NonNull View v, @Nullable Bundle savedInstanceState) {
-        TakesRepository.seedIfNeeded();
+        // Library rows come from Room now; refresh immediately if loaded,
+        // otherwise the moment init finishes (first frame may be empty).
+        TakesRepository.init(requireContext());
+        TakesRepository.onReady(() -> {
+            if (isAdded() && getView() != null) refresh();
+        });
         sort = loadSort();
 
         subtitle = v.findViewById(R.id.librarySubtitle);
@@ -373,6 +378,11 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         } catch (Exception ignored) {}
     }
 
+    /** External refresh (e.g. MainActivity after library init). */
+    public void refreshExternal() {
+        if (isAdded() && getView() != null) refresh();
+    }
+
     private void refresh() {
         long now = System.currentTimeMillis();
         List<Take> out = new ArrayList<>();
@@ -536,7 +546,10 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             else pausePlayback();
             return;
         }
-        startPlayback(take, 0);
+        // Long takes resume where they stopped; short ones restart.
+        long resume = take.lastPositionMs;
+        if (resume < 10_000 || resume > take.durationMs - 10_000) resume = 0;
+        startPlayback(take, resume);
     }
 
     private void startPlayback(Take take, long startPos) {
@@ -589,6 +602,7 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
 
     private void pausePlayback() {
         if (playingId == -1 || playPaused) return;
+        persistCurrentPosition();
         if (!simMode && player != null) {
             try {
                 player.pause();
@@ -626,9 +640,12 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         Take t = TakesRepository.find(id);
         if (t != null) adapter.paintProgress(list, id, t.durationMs);
         stopPlayback(); // single UI update; rebind already restores scrubber + icon
+        // Finished: next play starts over instead of resuming the tail.
+        TakesRepository.updatePosition(id, 0);
     }
 
     private void stopPlayback() {
+        persistCurrentPosition();
         handler.removeCallbacks(progressTick);
         playingId = -1;
         playPaused = false;
@@ -648,6 +665,24 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         Take t = TakesRepository.find(playingId);
         long pos = simBase + (SystemClock.elapsedRealtime() - simStartedAt);
         return t == null ? pos : Math.min(pos, t.durationMs);
+    }
+
+    /** Persists where the current take stopped (pause / switch / exit). */
+    private void persistCurrentPosition() {
+        if (playingId == -1) return;
+        long pos;
+        if (simMode) {
+            pos = simPosition();
+        } else if (player != null) {
+            try {
+                pos = player.getCurrentPosition();
+            } catch (Exception e) {
+                return;
+            }
+        } else {
+            return;
+        }
+        TakesRepository.updatePosition(playingId, pos);
     }
 
     private final Runnable progressTick = new Runnable() {
@@ -690,6 +725,7 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
 
     @Override
     public void onSeek(Take take, long posMs) {
+        TakesRepository.updatePosition(take.id, posMs);
         if (playingId == take.id && !playPaused) {
             if (!simMode && player != null) {
                 try {
@@ -857,6 +893,8 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                 if (!isAdded()) return;
                 if (done != null && failure == null) {
                     try {
+                        EditLink.save(requireContext().getApplicationContext(),
+                                sourceId, sourceTitle, done.getAbsolutePath());
                         ((MainActivity) requireActivity())
                                 .openStudioWithEdit(done, sourceId, sourceTitle);
                     } catch (Exception e) {
