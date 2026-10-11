@@ -48,48 +48,59 @@ public final class TakeSaver {
         long dur = Math.max(durationOf(raw), 1000);
         String title = e.takeName != null ? e.takeName : "";
         SaveFormat eff = save.effective(preset);
-        File fin;
-        switch (eff) {
-            case WAV32:
-                // Raw capture kept as-is: just validate the float header.
-                // No conversion, so this save is instant.
-                FormatConverter.readFloatWav(raw);
-                fin = raw;
-                post(cb, 100);
-                break;
-            case WAV16:
-                fin = uniqueFinal(raw, "wav");
-                FormatConverter.toWav16(raw, fin, pct -> post(cb, pct));
-                break;
-            case AMR_NB:
-                fin = uniqueFinal(raw, "3gp");
-                FormatConverter.toAmr(raw, fin, false, pct -> post(cb, pct));
-                break;
-            case AMR_WB:
-                fin = uniqueFinal(raw, "3gp");
-                FormatConverter.toAmr(raw, fin, true, pct -> post(cb, pct));
-                break;
-            case FLAC:
-                fin = uniqueFinal(raw, "flac");
-                FormatConverter.toFlac(raw, fin, pct -> post(cb, pct));
-                break;
-            case OPUS:
-                fin = uniqueFinal(raw, "webm");
-                FormatConverter.toOpus(raw, fin, preset.aacBitrate,
-                        pct -> post(cb, pct));
-                break;
-            case VORBIS:
-                fin = uniqueFinal(raw, "webm");
-                FormatConverter.toVorbis(raw, fin, preset.aacBitrate,
-                        pct -> post(cb, pct));
-                break;
-            case M4A:
-            case AUTO:
-            default:
-                fin = uniqueFinal(raw, "m4a");
-                FormatConverter.toM4a(raw, fin, preset.aacBitrate,
-                        pct -> post(cb, pct));
-                break;
+        File fin = null;
+        try {
+            switch (eff) {
+                case WAV32:
+                    // Raw capture kept as-is: just validate the float header.
+                    // No conversion, so this save is instant.
+                    FormatConverter.readFloatWav(raw);
+                    fin = raw;
+                    post(cb, 100);
+                    break;
+                case WAV16:
+                    fin = uniqueFinal(raw, "wav");
+                    FormatConverter.toWav16(raw, fin, pct -> post(cb, pct));
+                    break;
+                case AMR_NB:
+                    fin = uniqueFinal(raw, "3gp");
+                    FormatConverter.toAmr(raw, fin, false, pct -> post(cb, pct));
+                    break;
+                case AMR_WB:
+                    fin = uniqueFinal(raw, "3gp");
+                    FormatConverter.toAmr(raw, fin, true, pct -> post(cb, pct));
+                    break;
+                case FLAC:
+                    fin = uniqueFinal(raw, "flac");
+                    FormatConverter.toFlac(raw, fin, pct -> post(cb, pct));
+                    break;
+                case OPUS:
+                    fin = uniqueFinal(raw, "webm");
+                    FormatConverter.toOpus(raw, fin, preset.aacBitrate,
+                            pct -> post(cb, pct));
+                    break;
+                case VORBIS:
+                    fin = uniqueFinal(raw, "webm");
+                    FormatConverter.toVorbis(raw, fin, preset.aacBitrate,
+                            pct -> post(cb, pct));
+                    break;
+                case M4A:
+                case AUTO:
+                default:
+                    fin = uniqueFinal(raw, "m4a");
+                    FormatConverter.toM4a(raw, fin, preset.aacBitrate,
+                            pct -> post(cb, pct));
+                    break;
+            }
+        } catch (Exception e) {
+            // A failed conversion must not leave a truncated file behind:
+            // half-written containers are exactly the kind of poison that
+            // haunts the next startup sweep.
+            if (fin != null && !fin.equals(raw)) {
+                // noinspection ResultOfMethodCallIgnored
+                fin.delete();
+            }
+            throw e;
         }
         if (fin.exists()) {
             // noinspection ResultOfMethodCallIgnored

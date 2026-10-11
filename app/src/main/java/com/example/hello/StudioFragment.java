@@ -66,12 +66,9 @@ public class StudioFragment extends Fragment {
     private View statusDot;
     private WaveformView waveform;
     private DbMeterView dbMeter;
-    private View presetRow;
-    private TextView presetName;
-    private TextView presetSub;
-    private View saveRow;
-    private TextView saveName;
-    private TextView saveSub;
+    private View settingsRow;
+    private TextView settingsName;
+    private TextView settingsSub;
     private View telePanel;
     private android.widget.ScrollView teleScroll;
     private android.widget.EditText teleScript;
@@ -144,12 +141,9 @@ public class StudioFragment extends Fragment {
         statusDot = v.findViewById(R.id.statusDot);
         waveform = v.findViewById(R.id.waveform);
         dbMeter = v.findViewById(R.id.dbMeter);
-        presetRow = v.findViewById(R.id.presetRow);
-        presetName = v.findViewById(R.id.presetName);
-        presetSub = v.findViewById(R.id.presetSub);
-        saveRow = v.findViewById(R.id.saveRow);
-        saveName = v.findViewById(R.id.saveName);
-        saveSub = v.findViewById(R.id.saveSub);
+        settingsRow = v.findViewById(R.id.settingsRow);
+        settingsName = v.findViewById(R.id.settingsName);
+        settingsSub = v.findViewById(R.id.settingsSub);
         telePanel = v.findViewById(R.id.telePanel);
         teleScroll = v.findViewById(R.id.teleScroll);
         teleScript = v.findViewById(R.id.teleScript);
@@ -170,12 +164,10 @@ public class StudioFragment extends Fragment {
         attachRenameGestures(takeNameView);
         attachRenameGestures(statusText);
 
-        presetRow.setOnClickListener(view -> showPresetPicker());
+        settingsRow.setOnClickListener(view -> showRecordingSettings());
         // Soft variant: plain apply() resets alpha to 1 on release, which
-        // would wipe the recording-locked dim. applySoft only touches scale.
-        PressAnim.applySoft(presetRow, 0.97f);
-        saveRow.setOnClickListener(view -> showSavePicker());
-        PressAnim.applySoft(saveRow, 0.97f);
+        // would wipe the converting dim. applySoft only touches scale.
+        PressAnim.applySoft(settingsRow, 0.97f);
         teleToggle.setOnClickListener(view -> toggleTeleprompter());
         PressAnim.applySoft(teleToggle, 0.9f);
         btnZoomIn.setOnClickListener(view -> stepZoom(1));
@@ -380,64 +372,88 @@ public class StudioFragment extends Fragment {
         target.setOnTouchListener((view, event) -> gd.onTouchEvent(event));
     }
 
-    // ---- preset + save-format dropdowns ----
+    // ---- unified recording settings: presets + format toggles ----
 
-    private void showPresetPicker() {
+    private void showRecordingSettings() {
         if (!isAdded()) return;
-        if (engine.state == RecordingEngine.State.RECORDING) {
-            try {
-                PressAnim.nudge(presetRow, 1.02f);
-                Toast.makeText(requireContext(), R.string.preset_locked,
-                        Toast.LENGTH_SHORT).show();
-            } catch (Exception ignored) {}
-            return;
-        }
-        List<OptionsSheet.Item> items = new ArrayList<>();
-        for (RecordPreset p : RecordPreset.all()) {
-            final RecordPreset pick = p;
-            items.add(OptionsSheet.Item.detail(
-                    getString(p.titleRes), getString(p.subRes), p == preset,
-                    () -> {
-                        preset = pick;
-                        preset.save(requireContext());
-                        paint();
-                    }));
-        }
-        OptionsSheet.showOptions(requireContext(),
-                getString(R.string.preset_title), micCapabilityLine(), items);
-    }
+        OptionsSheet.SettingsState state = new OptionsSheet.SettingsState() {
+            @Override
+            public List<OptionsSheet.Item> presets() {
+                List<OptionsSheet.Item> items = new ArrayList<>();
+                for (RecordPreset p : RecordPreset.all()) {
+                    final RecordPreset pick = p;
+                    items.add(OptionsSheet.Item.detail(
+                            getString(p.titleRes), getString(p.subRes),
+                            p == preset,
+                            () -> {
+                                if (engine.state
+                                        == RecordingEngine.State.RECORDING) {
+                                    try {
+                                        PressAnim.nudge(settingsRow, 1.02f);
+                                        Toast.makeText(requireContext(),
+                                                R.string.preset_locked,
+                                                Toast.LENGTH_SHORT).show();
+                                    } catch (Exception ignored) {}
+                                    return;
+                                }
+                                preset = pick;
+                                preset.save(requireContext());
+                                paint();
+                            }));
+                }
+                return items;
+            }
 
-    private void showSavePicker() {
-        if (!isAdded()) return;
-        if (saving) {
-            try {
-                Toast.makeText(requireContext(), R.string.save_locked,
-                        Toast.LENGTH_SHORT).show();
-            } catch (Exception ignored) {}
-            return;
-        }
-        List<OptionsSheet.Item> items = new ArrayList<>();
-        for (SaveFormat f : SaveFormat.values()) {
-            if (!f.available(requireContext())) continue;
-            final SaveFormat pick = f;
-            String sub = getString(f.subRes);
-            if (f == SaveFormat.AUTO) {
-                sub = getString(f.subRes) + " • "
+            @Override
+            public List<OptionsSheet.Chip> formats() {
+                List<OptionsSheet.Chip> chips = new ArrayList<>();
+                for (SaveFormat f : SaveFormat.values()) {
+                    if (!f.available(requireContext())) continue;
+                    final SaveFormat pick = f;
+                    String label = f == SaveFormat.AUTO
+                            ? getString(R.string.save_auto)
+                            : chipLabel(f);
+                    chips.add(OptionsSheet.Chip.of(label, f == saveFormat,
+                            () -> {
+                                if (saving) {
+                                    try {
+                                        Toast.makeText(requireContext(),
+                                                R.string.save_locked,
+                                                Toast.LENGTH_SHORT).show();
+                                    } catch (Exception ignored) {}
+                                    return;
+                                }
+                                saveFormat = pick;
+                                saveFormat.save(requireContext());
+                                paint();
+                            }));
+                }
+                return chips;
+            }
+
+            @Override
+            public String formatHint() {
+                return getString(R.string.save_auto_sub) + " • "
                         + TakeSaver.labelFor(preset, SaveFormat.AUTO);
             }
-            items.add(OptionsSheet.Item.detail(
-                    getString(f.titleRes), sub, f == saveFormat,
-                    () -> {
-                        saveFormat = pick;
-                        saveFormat.save(requireContext());
-                        paint();
-                    }));
+        };
+        OptionsSheet.showRecordingSettings(requireContext(),
+                getString(R.string.settings_title),
+                getString(R.string.preset_title), micCapabilityLine(),
+                getString(R.string.settings_format), state,
+                getString(R.string.settings_done));
+    }
+
+    /** Short chip text: "M4A", "WAV 16", "WAV 32", "AMR", "FLAC", … */
+    private String chipLabel(SaveFormat f) {
+        switch (f) {
+            case M4A: return "M4A";
+            case WAV16: return "WAV 16";
+            case WAV32: return "WAV 32";
+            case AMR_NB: return "AMR";
+            case AMR_WB: return "AMR-WB";
+            default: return TakeSaver.labelFor(preset, f);
         }
-        OptionsSheet.showOptions(requireContext(),
-                getString(R.string.save_title),
-                getString(R.string.save_auto_sub) + " • "
-                        + TakeSaver.labelFor(preset, SaveFormat.AUTO),
-                items);
     }
 
     private String micCapabilityLine() {
@@ -1044,17 +1060,13 @@ public class StudioFragment extends Fragment {
 
         formatBadge.setText(preset.shortLabel + " → "
                 + TakeSaver.labelFor(preset, saveFormat));
-        presetName.setText(preset.titleRes);
-        presetSub.setText(preset.subRes);
-        presetRow.setAlpha(rec ? 0.45f : 1f);
-        saveName.setText(saveFormat == SaveFormat.AUTO
-                ? getString(R.string.save_auto)
-                : getString(saveFormat.titleRes));
-        saveSub.setText(saveFormat == SaveFormat.AUTO
-                ? getString(R.string.save_auto_sub) + " • "
-                        + TakeSaver.labelFor(preset, SaveFormat.AUTO)
-                : getString(saveFormat.subRes));
-        saveRow.setAlpha(saving ? 0.45f : 1f);
+        settingsName.setText(preset.titleRes);
+        String saveName = saveFormat == SaveFormat.AUTO
+                ? getString(R.string.save_auto) + " ("
+                        + TakeSaver.labelFor(preset, SaveFormat.AUTO) + ")"
+                : getString(saveFormat.titleRes);
+        settingsSub.setText(getString(preset.subRes) + " • " + saveName);
+        settingsRow.setAlpha(saving ? 0.45f : 1f);
         setTeleActive(telePanel.getVisibility() == View.VISIBLE);
 
         statusDot.setBackgroundResource(rec ? R.drawable.dot_live : R.drawable.bg_round_btn);

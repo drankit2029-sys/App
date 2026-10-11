@@ -28,4 +28,20 @@ public class TakeTest {
         assertEquals(0, t.lastPositionMs);
         assertTrue(t.markersJson == null);
     }
+
+    @Test
+    public void entityNullsNormalize() {
+        // Legacy rows can hold null columns; the library dereferences
+        // title/format on the main thread, so toTake must never pass nulls.
+        TakeEntity e = new TakeEntity();
+        e.id = 99;
+        e.title = null;
+        e.format = null;
+        Take t = e.toTake();
+        assertTrue(t.title != null && !t.title.isEmpty());
+        assertTrue(t.format != null && !t.format.isEmpty());
+        // Lower-casing (filter) and comparison (sort) must not throw.
+        assertTrue(t.title.toLowerCase().length() >= 0);
+        assertTrue(t.title.compareToIgnoreCase("zzz") != 0);
+    }
 }

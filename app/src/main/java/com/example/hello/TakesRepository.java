@@ -105,7 +105,15 @@ public final class TakesRepository {
             IDS.set(max + 1);
             sortByTimestampDesc();
         }
-        ReconcileResult rr = reconcile(app);
+        ReconcileResult rr = new ReconcileResult();
+        try {
+            rr = reconcile(app);
+        } catch (Exception e) {
+            // A poisoned disk state (truncated files, I/O errors) must never
+            // take the app down on every launch: degrade to whatever loaded
+            // from the database and still signal ready so the UI can open.
+            android.util.Log.w("TakesRepository", "reconcile failed", e);
+        }
         lastReconcile = rr;
         synchronized (TakesRepository.class) {
             ready = true;
@@ -560,7 +568,13 @@ public final class TakesRepository {
             int dot = n.lastIndexOf('.');
             if (dot > 0) ext = n.substring(dot + 1).toLowerCase(Locale.US);
             long dur = Dsp.wavDurationMs(f);
-            if (dur < 0) dur = probeDuration(f);
+            if (dur < 0) {
+                // Truncated conversion remnants (< 2 KB) are adopted with a
+                // fallback duration instead of being fed to the platform
+                // parser: never let a half-written file near stagefright.
+                if (f.length() < 2048) dur = 1000;
+                else dur = probeDuration(f);
+            }
             if (dur < 0) dur = 1000;
             String badge;
             switch (ext) {

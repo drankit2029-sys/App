@@ -125,6 +125,10 @@
     <string name="preset_raw_sub">16-bit PCM WAV • 48 kHz • unprocessed</string>
     <string name="preset_title">Recording preset</string>
     <string name="preset_locked">Preset is locked while recording</string>
+    <string name="settings_title">Recording settings</string>
+    <string name="settings_label">Recording</string>
+    <string name="settings_format">Save as</string>
+    <string name="settings_done">Done</string>
     <string name="mic_stereo_ok">%1$d mics • stereo available</string>
     <string name="mic_mono_only">1 mic • stereo presets fall back to mono</string>
     <string name="mic_unknown">Mic check unavailable • stereo will be tried</string>

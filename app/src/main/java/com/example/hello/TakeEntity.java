@@ -49,8 +49,11 @@ public class TakeEntity {
     }
 
     public Take toTake() {
-        Take t = new Take(id, title, durationMs, timestamp,
-                sizeLabel, format, favorite, filePath);
+        // Old installs can hold null columns; the library dereferences
+        // title/format on the main thread (filter, sort), so normalize here
+        // instead of trusting history.
+        Take t = new Take(id, title != null ? title : "Take", durationMs, timestamp,
+                sizeLabel, format != null ? format : "M4A", favorite, filePath);
         t.origin = origin != null ? origin : "recorded";
         t.lastPositionMs = lastPositionMs;
         t.markersJson = markersJson;

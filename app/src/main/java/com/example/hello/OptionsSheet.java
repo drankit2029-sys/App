@@ -69,6 +69,34 @@ public final class OptionsSheet {
         }
     }
 
+    /** One save-format toggle chip inside the unified recording dialog. */
+    public static final class Chip {
+        public final String label;
+        public final boolean checked;
+        public final Runnable action;
+
+        public Chip(String label, boolean checked, Runnable action) {
+            this.label = label;
+            this.checked = checked;
+            this.action = action;
+        }
+
+        public static Chip of(String label, boolean checked, Runnable action) {
+            return new Chip(label, checked, action);
+        }
+    }
+
+    /**
+     * Live state behind the unified recording dialog. Lists are re-queried
+     * after every tap so checkmarks follow the actual selection; order must
+     * be stable across calls.
+     */
+    public interface SettingsState {
+        java.util.List<Item> presets();
+        java.util.List<Chip> formats();
+        String formatHint();
+    }
+
     public interface SaveCallback {
         void onSave(String text);
     }
@@ -189,6 +217,231 @@ public final class OptionsSheet {
 
         styleAsCentered(dialog);
         dialog.show();
+    }
+
+    // ---- unified recording settings: presets + format toggles ----
+
+    /**
+     * One dialog for everything that shapes the next take: the preset pills
+     * on top, the save-format toggles below. Taps mutate the caller's state
+     * through the item actions and the dialog rebinds in place (no
+     * dismiss-rebuild flicker); Done closes.
+     */
+    public static void showRecordingSettings(Context ctx, String title,
+                                             String presetLabel, String presetHint,
+                                             String formatLabel, SettingsState state,
+                                             String doneLabel) {
+        Dialog dialog = new Dialog(ctx, R.style.TakeOneCenterDialog);
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+
+        android.widget.ScrollView scroll = new android.widget.ScrollView(ctx);
+        LinearLayout root = new LinearLayout(ctx);
+        root.setOrientation(LinearLayout.VERTICAL);
+        int pad = dp(ctx, 20);
+        root.setPadding(pad, pad, pad, pad);
+        scroll.addView(root,
+                new android.widget.ScrollView.LayoutParams(
+                        android.widget.ScrollView.LayoutParams.MATCH_PARENT,
+                        android.widget.ScrollView.LayoutParams.WRAP_CONTENT));
+
+        TextView titleView = new TextView(ctx);
+        titleView.setText(title);
+        titleView.setTextSize(17);
+        titleView.setTypeface(null, android.graphics.Typeface.BOLD);
+        titleView.setTextColor(0xFFF2F4F7);
+        root.addView(titleView);
+
+        root.addView(sectionLabel(ctx, presetLabel));
+        if (presetHint != null && !presetHint.isEmpty()) {
+            TextView hint = new TextView(ctx);
+            hint.setText(presetHint);
+            hint.setTextSize(11);
+            hint.setTextColor(0xFF9AA3AF);
+            LinearLayout.LayoutParams hlp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT);
+            hlp.bottomMargin = dp(ctx, 4);
+            root.addView(hint, hlp);
+        }
+
+        LayoutInflater inflater = LayoutInflater.from(ctx);
+        java.util.List<View> pillRows = new java.util.ArrayList<>();
+        java.util.List<TextView> pillLabels = new java.util.ArrayList<>();
+        java.util.List<ImageView> pillChecks = new java.util.ArrayList<>();
+        java.util.List<Integer> pillDefaultColors = new java.util.ArrayList<>();
+        // Built after the pills but referenced by their tap handler, so the
+        // chip state travels in boxes created up front.
+        final java.util.List<TextView> chipViews = new java.util.ArrayList<>();
+        final java.util.List<Integer> chipDefaultColors = new java.util.ArrayList<>();
+        final TextView formatHintView = new TextView(ctx);
+        formatHintView.setTextSize(11);
+        formatHintView.setTextColor(0xFF9AA3AF);
+        for (Item item : state.presets()) {
+            final Item it = item;
+            View row = inflater.inflate(R.layout.dialog_pill_row, root, false);
+            LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT);
+            rlp.topMargin = dp(ctx, 8);
+            root.addView(row, rlp);
+            TextView label = row.findViewById(R.id.pillLabel);
+            label.setText(it.label);
+            TextView sub = row.findViewById(R.id.pillSub);
+            if (sub != null) {
+                if (it.sub != null && !it.sub.isEmpty()) {
+                    sub.setText(it.sub);
+                    sub.setVisibility(View.VISIBLE);
+                } else {
+                    sub.setVisibility(View.GONE);
+                }
+            }
+            ImageView dot = row.findViewById(R.id.pillDot);
+            dot.setImageResource(R.drawable.bg_thumb);
+            int inset = dp(ctx, 5);
+            dot.setPadding(inset, inset, inset, inset);
+            dot.setVisibility(View.VISIBLE);
+            ImageView check = row.findViewById(R.id.pillCheck);
+            pillRows.add(row);
+            pillLabels.add(label);
+            pillChecks.add(check);
+            pillDefaultColors.add(label.getTextColors().getDefaultColor());
+            PressAnim.apply(row);
+            row.setOnClickListener(v -> {
+                if (it.action != null) it.action.run();
+                rebindSettings(state, pillRows, pillLabels, pillChecks,
+                        pillDefaultColors, chipViews, chipDefaultColors,
+                        formatHintView);
+            });
+        }
+
+        View divider = new View(ctx);
+        divider.setBackgroundColor(0x22FFFFFF);
+        LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(ctx, 1));
+        dlp.topMargin = dp(ctx, 14);
+        dlp.bottomMargin = dp(ctx, 2);
+        root.addView(divider, dlp);
+
+        root.addView(sectionLabel(ctx, formatLabel));
+        LinearLayout.LayoutParams flp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        flp.bottomMargin = dp(ctx, 4);
+        root.addView(formatHintView, flp);
+
+        android.widget.GridLayout grid = new android.widget.GridLayout(ctx);
+        grid.setColumnCount(3);
+        grid.setUseDefaultMargins(false);
+        root.addView(grid, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+        for (Chip chip : state.formats()) {
+            final Chip c = chip;
+            TextView tv = new TextView(ctx);
+            tv.setText(c.label);
+            tv.setTextSize(12);
+            tv.setTypeface(null, android.graphics.Typeface.BOLD);
+            tv.setGravity(Gravity.CENTER);
+            tv.setSingleLine(true);
+            tv.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            int hPad = dp(ctx, 6);
+            tv.setPadding(hPad, dp(ctx, 9), hPad, dp(ctx, 9));
+            android.widget.GridLayout.LayoutParams glp =
+                    new android.widget.GridLayout.LayoutParams();
+            glp.width = 0;
+            glp.columnSpec = android.widget.GridLayout.spec(
+                    android.widget.GridLayout.UNDEFINED, 1f);
+            int m = dp(ctx, 4);
+            glp.setMargins(m, m, m, m);
+            tv.setLayoutParams(glp);
+            grid.addView(tv);
+            chipViews.add(tv);
+            chipDefaultColors.add(0xFF9AA3AF);
+            PressAnim.apply(tv);
+            tv.setOnClickListener(v -> {
+                if (c.action != null) c.action.run();
+                rebindSettings(state, pillRows, pillLabels, pillChecks,
+                        pillDefaultColors, chipViews, chipDefaultColors,
+                        formatHintView);
+            });
+        }
+
+        TextView done = new TextView(ctx);
+        done.setText(doneLabel);
+        done.setTextSize(15);
+        done.setTypeface(null, android.graphics.Typeface.BOLD);
+        done.setTextColor(0xFFFFFFFF);
+        done.setGravity(Gravity.CENTER);
+        done.setBackgroundResource(R.drawable.bg_btn_primary);
+        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        blp.topMargin = dp(ctx, 16);
+        root.addView(done, blp);
+        PressAnim.apply(done);
+        done.setOnClickListener(v -> dialog.dismiss());
+
+        dialog.setContentView(scroll);
+        rebindSettings(state, pillRows, pillLabels, pillChecks,
+                pillDefaultColors, chipViews, chipDefaultColors, formatHintView);
+        styleAsCentered(dialog);
+        dialog.show();
+    }
+
+    private static TextView sectionLabel(Context ctx, String text) {
+        TextView tv = new TextView(ctx);
+        tv.setText(text);
+        tv.setTextSize(10);
+        tv.setLetterSpacing(0.1f);
+        tv.setTextColor(0xFF9AA3AF);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(ctx, 12);
+        tv.setLayoutParams(lp);
+        return tv;
+    }
+
+    private static void rebindSettings(SettingsState state,
+                                       java.util.List<View> pillRows,
+                                       java.util.List<TextView> pillLabels,
+                                       java.util.List<ImageView> pillChecks,
+                                       java.util.List<Integer> pillColors,
+                                       java.util.List<TextView> chipViews,
+                                       java.util.List<Integer> chipColors,
+                                       TextView hintView) {
+        java.util.List<Item> presets;
+        java.util.List<Chip> formats;
+        try {
+            presets = state.presets();
+            formats = state.formats();
+        } catch (Exception ignored) {
+            return;
+        }
+        for (int i = 0; i < pillRows.size() && i < presets.size(); i++) {
+            Item it = presets.get(i);
+            pillRows.get(i).setBackgroundResource(it.checked
+                    ? R.drawable.bg_pill_option_selected
+                    : R.drawable.bg_pill_option);
+            pillLabels.get(i).setTextColor(it.checked
+                    ? 0xFFF2F4F7 : pillColors.get(i));
+            pillChecks.get(i).setVisibility(
+                    it.checked ? View.VISIBLE : View.GONE);
+            ImageView dot = pillRows.get(i).findViewById(R.id.pillDot);
+            if (dot != null) dot.setColorFilter(
+                    it.checked ? 0xFFFF3B30 : 0xFF5D6672);
+        }
+        for (int i = 0; i < chipViews.size() && i < formats.size(); i++) {
+            Chip c = formats.get(i);
+            chipViews.get(i).setBackgroundResource(c.checked
+                    ? R.drawable.bg_chip_selected
+                    : R.drawable.bg_chip);
+            chipViews.get(i).setTextColor(c.checked
+                    ? 0xFFFFFFFF : chipColors.get(i));
+        }
+        try {
+            hintView.setText(state.formatHint());
+        } catch (Exception ignored) {}
     }
 
     // ---- centered rename / input modal ----

@@ -276,7 +276,11 @@ public final class FormatConverter {
                 muxer.release();
             } catch (Exception ignored) {}
         }
-        if (dst.length() < 1024) throw new IllegalStateException("encode failed");
+        if (dst.length() < 1024) {
+            // noinspection ResultOfMethodCallIgnored
+            dst.delete();
+            throw new IllegalStateException("encode failed");
+        }
     }
 
     /**
@@ -478,7 +482,11 @@ public final class FormatConverter {
                 muxer.release();
             } catch (Exception ignored) {}
         }
-        if (dst.length() < 512) throw new IllegalStateException("amr encode failed");
+        if (dst.length() < 512) {
+            // noinspection ResultOfMethodCallIgnored
+            dst.delete();
+            throw new IllegalStateException("amr encode failed");
+        }
     }
 
     /** Hamming-windowed sinc lowpass; pure math lives in {@link Dsp}. */
