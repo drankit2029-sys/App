@@ -2,8 +2,7 @@ package com.example.hello;
 
 import android.content.Context;
 import android.content.SharedPreferences;
-import android.media.MediaCodecInfo;
-import android.media.MediaCodecList;
+import android.media.MediaCodec;
 import android.media.MediaFormat;
 
 /**
@@ -100,17 +99,31 @@ public enum SaveFormat {
         }
     }
 
+    /**
+     * True only if an encoder for this MIME can actually be <em>created</em>.
+     *
+     * <p>Listing is not proof: {@link MediaCodecList} advertises codecs the
+     * framework then refuses to instantiate — observed for {@code audio/vorbis}
+     * on API 33, where the list says yes and {@code createEncoderByType}
+     * throws NAME_NOT_FOUND. Offering a format that cannot be encoded turns
+     * into a failed save at the worst possible moment, so the probe now does
+     * the same work the converter will do.
+     */
     private static boolean hasEncoder(String mime) {
+        MediaCodec c = null;
         try {
-            MediaCodecList list = new MediaCodecList(MediaCodecList.REGULAR_CODECS);
-            for (MediaCodecInfo info : list.getCodecInfos()) {
-                if (!info.isEncoder()) continue;
-                for (String t : info.getSupportedTypes()) {
-                    if (t.equalsIgnoreCase(mime)) return true;
-                }
+            c = MediaCodec.createEncoderByType(mime);
+            return true;
+        } catch (Exception | Error e) {
+            // NAME_NOT_FOUND / unsupported: the codec is not really usable.
+            return false;
+        } finally {
+            if (c != null) {
+                try {
+                    c.release();
+                } catch (Exception ignored) {}
             }
-        } catch (Exception ignored) {}
-        return false;
+        }
     }
 
     /** Encoder MIME, or null for formats written without MediaCodec. */
