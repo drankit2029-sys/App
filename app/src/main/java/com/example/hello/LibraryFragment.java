@@ -125,12 +125,6 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
 
     @Override
     public void onViewCreated(@NonNull View v, @Nullable Bundle savedInstanceState) {
-        // Library rows come from Room now; refresh immediately if loaded,
-        // otherwise the moment init finishes (first frame may be empty).
-        TakesRepository.init(requireContext());
-        TakesRepository.onReady(() -> {
-            if (isAdded() && getView() != null) refresh();
-        });
         sort = loadSort();
 
         subtitle = v.findViewById(R.id.librarySubtitle);
@@ -216,6 +210,17 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
 
         paintChips();
         refresh();
+
+        // Registered LAST, on purpose. TakesRepository.onReady runs its
+        // callback SYNCHRONOUSLY when the library is already loaded, and this
+        // is reached on every return from the studio (repo is loaded) and on
+        // any cold start where the load finished first. Registering before
+        // the adapter exists meant refresh() ran with a null adapter and
+        // NPE'd the whole process on the main thread.
+        TakesRepository.init(requireContext());
+        TakesRepository.onReady(() -> {
+            if (isAdded() && getView() != null) refresh();
+        });
     }
 
     @Override
@@ -384,6 +389,11 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
     }
 
     private void refresh() {
+        // Defensive: refresh() is reachable from lifecycle callbacks that can
+        // fire before onViewCreated has built the adapter (and from a queued
+        // repository callback racing a destroyed view). Never let a render
+        // helper take the process down.
+        if (adapter == null || getView() == null) return;
         long now = System.currentTimeMillis();
         List<Take> out = new ArrayList<>();
         for (Take t : TakesRepository.all()) {
