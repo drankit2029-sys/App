@@ -726,13 +726,14 @@ public class StudioFragment extends Fragment {
                     final File saved = fin;
                     final long savedDur = Math.max(dur, 1000);
                     final String savedLabel = label;
+                    final String savedTitle = title;
                     handler.post(() -> {
                         saving = false;
                         dismissProgress();
                         if (!isAdded()) return;
                         RecordingService.stopService(requireContext());
                         activity().syncFabWithEngine();
-                        askEditReplaceOrNew(editId, editTitle, title,
+                        askEditReplaceOrNew(editId, editTitle, savedTitle,
                                 saved, savedDur, savedLabel);
                     });
                     return;
