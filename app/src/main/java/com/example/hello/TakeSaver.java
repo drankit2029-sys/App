@@ -92,7 +92,7 @@ public final class TakeSaver {
                             pct -> post(cb, pct));
                     break;
             }
-        } catch (Exception e) {
+        } catch (Exception ex) {
             // A failed conversion must not leave a truncated file behind:
             // half-written containers are exactly the kind of poison that
             // haunts the next startup sweep.
@@ -100,7 +100,7 @@ public final class TakeSaver {
                 // noinspection ResultOfMethodCallIgnored
                 fin.delete();
             }
-            throw e;
+            throw ex;
         }
         if (fin.exists()) {
             // noinspection ResultOfMethodCallIgnored
