@@ -4,6 +4,4 @@
 <full-backup-content>
     <exclude domain="external" path="takes" />
     <exclude domain="file" path="takes" />
-    <exclude domain="cache" path="." />
-    <exclude domain="external-cache" path="." />
 </full-backup-content>
