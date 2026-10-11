@@ -83,7 +83,7 @@ public class SaveFormatTest {
     @Test
     public void validateFinalAcceptsHealthyContainers() throws Exception {
         // WAV: real header + payload.
-        java.io.File wav = java.io.File.createTempFile("v", ".wav");
+        java.io.File wav = java.io.File.createTempFile("vfy", ".wav");
         try {
             byte[] hdr = Dsp.wav16Header(1, 48000, 200);
             byte[] all = new byte[hdr.length + 200];
@@ -100,7 +100,7 @@ public class SaveFormatTest {
             wav.delete();
         }
         // MP4: ftyp up front, moov somewhere inside.
-        java.io.File mp4 = java.io.File.createTempFile("v", ".m4a");
+        java.io.File mp4 = java.io.File.createTempFile("vfy", ".m4a");
         try {
             byte[] body = new byte[200];
             body[4] = 'f';
@@ -127,7 +127,7 @@ public class SaveFormatTest {
     @Test
     public void validateFinalRejectsTornContainers() throws Exception {
         // Too small.
-        java.io.File tiny = java.io.File.createTempFile("v", ".m4a");
+        java.io.File tiny = java.io.File.createTempFile("vfy", ".m4a");
         try {
             boolean thrown = false;
             try {
@@ -141,7 +141,7 @@ public class SaveFormatTest {
             tiny.delete();
         }
         // ftyp present but no moov: teardown never finished.
-        java.io.File torn = java.io.File.createTempFile("v", ".m4a");
+        java.io.File torn = java.io.File.createTempFile("vfy", ".m4a");
         try {
             byte[] body = new byte[200];
             body[4] = 'f';
