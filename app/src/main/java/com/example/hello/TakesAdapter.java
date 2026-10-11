@@ -29,6 +29,7 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
         void onFavorite(Take take);
         void onRename(Take take);
         void onExport(Take take);
+        void onEdit(Take take);
         void onDelete(Take take);
         void onSeek(Take take, long posMs);
     }
@@ -155,10 +156,7 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
         }
     }
 
-    private void animateExpand(final View expanded, final View chevron) {
-        chevron.animate().cancel();
-        chevron.animate().rotation(180f).setDuration(250)
-                .setInterpolator(new DecelerateInterpolator(1.4f)).start();
+    private void animateExpand(final View expanded, final View ignored) {
         // Cancel any in-flight height animation.
         Object tag = expanded.getTag();
         if (tag instanceof ValueAnimator) ((ValueAnimator) tag).cancel();
@@ -195,10 +193,7 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
         anim.start();
     }
 
-    private void animateCollapse(final View expanded, final View chevron) {
-        chevron.animate().cancel();
-        chevron.animate().rotation(0f).setDuration(220)
-                .setInterpolator(new DecelerateInterpolator(1.4f)).start();
+    private void animateCollapse(final View expanded, final View ignored) {
         if (expanded.getVisibility() != View.VISIBLE) return;
         Object tag = expanded.getTag();
         if (tag instanceof ValueAnimator) ((ValueAnimator) tag).cancel();
@@ -347,7 +342,13 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
         h.fav.setAlpha(t.favorite ? 1f : 0.55f);
         h.fav.setColorFilter(null);
 
-        h.chevron.setRotation(expanded ? 180f : 0f);
+        // Header edit shortcut (replaces the old expand chevron; tapping the
+        // card itself still expands/collapses, so nothing is lost).
+        h.chevron.setImageResource(R.drawable.ic_pencil);
+        h.chevron.setRotation(0f);
+        h.chevron.setAlpha(t.hasFile() ? 0.85f : 0.35f);
+        h.chevron.setContentDescription(
+                h.itemView.getContext().getString(R.string.cd_edit));
         // Reset any mid-animation height leftovers from recycled holders.
         Object pending = h.expanded.getTag();
         if (pending instanceof ValueAnimator) ((ValueAnimator) pending).cancel();
@@ -385,7 +386,10 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
             PressAnim.nudge(v, 1.14f);
             listener.onFavorite(t);
         });
-        h.chevron.setOnClickListener(v -> listener.onCardClick(t));
+        h.chevron.setOnClickListener(v -> {
+            pressBounce(v);
+            listener.onEdit(t);
+        });
         h.btnRename.setOnClickListener(v -> {
             pressBounce(v);
             listener.onRename(t);

@@ -7,13 +7,13 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
-import android.content.SharedPreferences;
 import android.content.pm.ServiceInfo;
+import android.media.AudioManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
-import android.widget.RemoteViews;
+import android.os.SystemClock;
 import android.widget.Toast;
 
 import java.io.File;
@@ -21,8 +21,10 @@ import java.util.Locale;
 
 /**
  * Foreground host for an ongoing take: keeps capture alive when the app is
- * backgrounded and exposes a persistent notification with pause/resume plus
- * Save / Cancel actions that work without opening the app.
+ * backgrounded, owns audio-focus interruption handling (pause, never
+ * auto-resume) and exposes one clean persistent notification — name, preset,
+ * live timer plus pause/resume, Save and Cancel actions that work without
+ * opening the app.
  */
 public class RecordingService extends Service {
 
@@ -47,16 +49,24 @@ public class RecordingService extends Service {
 
     private static final String CHANNEL = "takeone_recording";
     private static final int NOTIF_ID = 41;
+    /** Focus losses inside this window after a (re)start are spurious. */
+    private static final long FOCUS_GRACE_MS = 1200;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private boolean ticking;
     private boolean busy; // a save/cancel is running
     private int convertingPct = -1;
+    private long lastToggleAt;
+    private long lastPctPush;
+    private long captureStartedAt;
 
-    public static void start(Context ctx, String formatId) {
+    private AudioManager audioManager;
+    private AudioManager.OnAudioFocusChangeListener focusListener;
+
+    public static void start(Context ctx, String presetId) {
         Intent i = new Intent(ctx, RecordingService.class);
         i.setAction(ACTION_START);
-        i.putExtra(EXTRA_FORMAT, formatId);
+        i.putExtra(EXTRA_FORMAT, presetId);
         try {
             if (Build.VERSION.SDK_INT >= 26) {
                 ctx.startForegroundService(i);
@@ -88,6 +98,7 @@ public class RecordingService extends Service {
     public void onCreate() {
         super.onCreate();
         ensureChannel();
+        audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
     }
 
     @Override
@@ -100,6 +111,7 @@ public class RecordingService extends Service {
         if (intent == null) {
             // Restarted by the system: re-attach foreground if still active.
             if (RecordingEngine.get().hasSession()) {
+                registerFocus();
                 startFg();
                 startTick();
             } else {
@@ -109,8 +121,10 @@ public class RecordingService extends Service {
         }
         String a = intent.getAction();
         if (ACTION_START.equals(a)) {
-            String fmt = intent.getStringExtra(EXTRA_FORMAT);
-            if (fmt != null) saveFormat(fmt);
+            String preset = intent.getStringExtra(EXTRA_FORMAT);
+            if (preset != null) RecordPreset.of(preset).save(this);
+            captureStartedAt = SystemClock.elapsedRealtime();
+            registerFocus();
             startFg();
             startTick();
         } else if (ACTION_TOGGLE.equals(a)) {
@@ -126,19 +140,63 @@ public class RecordingService extends Service {
     @Override
     public void onDestroy() {
         stopTick();
+        abandonFocus();
         super.onDestroy();
     }
 
-    // ---- actions ----
+    // ---- audio focus: interruptions pause, never auto-resume ----
+
+    private void registerFocus() {
+        try {
+            if (focusListener != null || audioManager == null) return;
+            focusListener = focus -> {
+                if (focus == AudioManager.AUDIOFOCUS_LOSS
+                        || focus == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) {
+                    // Spurious callbacks fire right after our own request on
+                    // some devices; only honor losses outside the grace window.
+                    if (SystemClock.elapsedRealtime() - captureStartedAt
+                            < FOCUS_GRACE_MS) {
+                        return;
+                    }
+                    handler.post(() -> {
+                        RecordingEngine e = RecordingEngine.get();
+                        if (e.state == RecordingEngine.State.RECORDING) {
+                            e.pauseCapture();
+                            toast(getString(R.string.msg_paused_call));
+                            refreshNotif();
+                        }
+                    });
+                }
+            };
+            audioManager.requestAudioFocus(focusListener,
+                    AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN);
+        } catch (Exception ignored) {}
+    }
+
+    private void abandonFocus() {
+        try {
+            if (audioManager != null && focusListener != null) {
+                audioManager.abandonAudioFocus(focusListener);
+            }
+        } catch (Exception ignored) {}
+        focusListener = null;
+    }
+
+    // ---- actions (debounced: one tap, one transition) ----
 
     private void doToggle() {
         if (busy) return;
+        long now = SystemClock.elapsedRealtime();
+        if (now - lastToggleAt < 400) return;
+        lastToggleAt = now;
         RecordingEngine e = RecordingEngine.get();
         try {
             if (e.state == RecordingEngine.State.RECORDING) {
                 e.pauseCapture();
             } else if (e.state == RecordingEngine.State.PAUSED) {
-                e.resumeCapture(getApplicationContext());
+                captureStartedAt = now;
+                e.resumeCapture(getApplicationContext(),
+                        RecordPreset.load(this).audioSource);
             } else {
                 return;
             }
@@ -158,6 +216,7 @@ public class RecordingService extends Service {
         }
         busy = true;
         convertingPct = 0;
+        lastPctPush = 0;
         refreshNotif();
         new Thread(() -> {
             boolean ok;
@@ -168,15 +227,12 @@ public class RecordingService extends Service {
                 if (raw == null || !raw.exists()) {
                     throw new IllegalStateException("no audio");
                 }
-                String fmt = loadFormat();
+                RecordPreset preset = RecordPreset.load(this);
                 // Duration comes from the raw capture (M4A output has no WAV header).
                 long dur = Math.max(durationOf(raw), 1000);
                 File fin;
                 String label;
-                if ("raw32".equals(fmt)) {
-                    fin = raw;
-                    label = "WAV";
-                } else if ("wav16".equals(fmt)) {
+                if (preset.savesWav) {
                     fin = uniqueFinal(raw, "wav");
                     label = "WAV";
                     FormatConverter.toWav16(raw, fin, this::setPct);
@@ -187,7 +243,7 @@ public class RecordingService extends Service {
                 } else {
                     fin = uniqueFinal(raw, "m4a");
                     label = "M4A";
-                    FormatConverter.toM4a(raw, fin, this::setPct);
+                    FormatConverter.toM4a(raw, fin, preset.aacBitrate, this::setPct);
                     if (fin.exists()) {
                         // noinspection ResultOfMethodCallIgnored
                         raw.delete();
@@ -217,6 +273,7 @@ public class RecordingService extends Service {
                 } catch (Exception ignored) {}
                 busy = false;
                 convertingPct = -1;
+                abandonFocus();
                 try {
                     stopForeground(true);
                 } catch (Exception ignored) {}
@@ -246,6 +303,7 @@ public class RecordingService extends Service {
                     sendBroadcast(b);
                 } catch (Exception ignored) {}
                 busy = false;
+                abandonFocus();
                 try {
                     stopForeground(true);
                 } catch (Exception ignored) {}
@@ -254,7 +312,7 @@ public class RecordingService extends Service {
         }).start();
     }
 
-    // ---- notification ----
+    // ---- notification: one clean standard layout ----
 
     private void ensureChannel() {
         try {
@@ -293,40 +351,31 @@ public class RecordingService extends Service {
         } catch (Exception ignored) {}
     }
 
+    /**
+     * A single standard notification: small mic icon, "Recording — name"
+     * title, "preset • live timer" text and exactly three actions. No custom
+     * RemoteViews, so the system cannot duplicate buttons or cramp the timer.
+     */
     private Notification buildNotif() {
         RecordingEngine e = RecordingEngine.get();
         String name = e.takeName != null ? e.takeName : getString(R.string.app_name);
         boolean paused = e.state == RecordingEngine.State.PAUSED;
-        String fmtLabel = formatLabel(loadFormat());
+        RecordPreset preset = RecordPreset.load(this);
+        String presetTitle = getString(preset.titleRes);
         String timer = formatTimer(e.durationMs());
 
         String title;
+        String text;
         if (convertingPct >= 0) {
             title = getString(R.string.notif_converting, convertingPct);
+            text = getString(R.string.converting_msg, presetTitle, convertingPct);
         } else if (paused) {
             title = getString(R.string.notif_paused, name);
+            text = presetTitle + " • " + timer;
         } else {
             title = getString(R.string.notif_recording, name);
+            text = presetTitle + " • " + timer;
         }
-        String sub = convertingPct >= 0
-                ? getString(R.string.converting_msg, fmtLabel, convertingPct)
-                : fmtLabel + " • " + timer
-                + (e.hasSession() ? " • " + getString(R.string.studio_streaming) : "");
-
-        RemoteViews rv = new RemoteViews(getPackageName(),
-                R.layout.notification_recording);
-        try {
-            rv.setTextViewText(R.id.notifName, title);
-            rv.setTextViewText(R.id.notifSub, sub);
-            rv.setImageViewResource(R.id.notifToggle,
-                    paused ? R.drawable.ic_play : R.drawable.ic_pause);
-            rv.setOnClickPendingIntent(R.id.notifToggle,
-                    action(ACTION_TOGGLE, 11));
-            rv.setOnClickPendingIntent(R.id.notifSave,
-                    action(ACTION_SAVE, 12));
-            rv.setOnClickPendingIntent(R.id.notifCancel,
-                    action(ACTION_CANCEL, 13));
-        } catch (Exception ignored) {}
 
         Intent open = new Intent(this, MainActivity.class);
         open.putExtra("open_studio", true);
@@ -340,20 +389,14 @@ public class RecordingService extends Service {
             content = null;
         }
 
-        Notification.Builder b;
-        b = new Notification.Builder(this, CHANNEL);
+        Notification.Builder b = new Notification.Builder(this, CHANNEL);
         b.setSmallIcon(R.drawable.ic_mic);
         b.setContentTitle(title);
-        b.setContentText(sub);
+        b.setContentText(text);
         b.setOngoing(true);
         b.setOnlyAlertOnce(true);
-        try {
-            b.setCustomContentView(rv);
-            b.setStyle(new Notification.DecoratedCustomViewStyle());
-        } catch (Exception ignored) {}
         if (content != null) b.setContentIntent(content);
-        // Direct actions for system surfaces that ignore the custom view.
-        try {
+        if (convertingPct < 0) {
             b.addAction(new Notification.Action.Builder(
                     null,
                     paused ? getString(R.string.notif_resume)
@@ -365,7 +408,7 @@ public class RecordingService extends Service {
             b.addAction(new Notification.Action.Builder(
                     null, getString(R.string.notif_cancel),
                     action(ACTION_CANCEL, 23)).build());
-        } catch (Exception ignored) {}
+        }
         try {
             return b.build();
         } catch (Exception ex) {
@@ -407,7 +450,14 @@ public class RecordingService extends Service {
     };
 
     private void setPct(int pct) {
+        long now = SystemClock.elapsedRealtime();
+        if (pct == convertingPct) return;
+        if (pct < 100 && now - lastPctPush < 500) {
+            convertingPct = pct;
+            return;
+        }
         convertingPct = pct;
+        lastPctPush = now;
         handler.post(this::refreshNotif);
     }
 
@@ -419,34 +469,12 @@ public class RecordingService extends Service {
         } catch (Exception ignored) {}
     }
 
-    private String loadFormat() {
-        try {
-            SharedPreferences p = getSharedPreferences(
-                    "takeone", Context.MODE_PRIVATE);
-            String f = p.getString("rec_format", "m4a");
-            if ("raw32".equals(f) || "wav16".equals(f) || "m4a".equals(f)) return f;
-        } catch (Exception ignored) {}
-        return "m4a";
-    }
-
-    private void saveFormat(String fmt) {
-        try {
-            getSharedPreferences("takeone", Context.MODE_PRIVATE)
-                    .edit().putString("rec_format", fmt).apply();
-        } catch (Exception ignored) {}
-    }
-
-    private String formatLabel(String fmt) {
-        if ("raw32".equals(fmt)) return getString(R.string.fmt_raw32);
-        if ("wav16".equals(fmt)) return getString(R.string.fmt_wav16);
-        return getString(R.string.fmt_m4a);
-    }
-
-    private static String formatTimer(long ms) {
-        long tenths = (ms / 100) % 10;
+    /** Centisecond timer. */
+    static String formatTimer(long ms) {
+        long cs = (ms % 1000) / 10;
         long s = (ms / 1000) % 60;
         long m = (ms / 60000);
-        return String.format(Locale.US, "%02d:%02d.%d", m, s, tenths);
+        return String.format(Locale.US, "%02d:%02d.%02d", m, s, cs);
     }
 
     private static long durationOf(File f) {
@@ -462,7 +490,6 @@ public class RecordingService extends Service {
     private static File uniqueFinal(File raw, String ext) {
         File dir = raw.getParentFile();
         String base = raw.getName().replaceFirst("\\.[^.]+$", "");
-        if (base.endsWith("_RAW")) base = base.substring(0, base.length() - 4);
         // Raw names carry a timestamp suffix already; keep it for uniqueness.
         File c = new File(dir, base + "." + ext);
         if (!c.exists()) return c;

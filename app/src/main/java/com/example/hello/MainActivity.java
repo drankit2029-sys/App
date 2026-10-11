@@ -2,6 +2,7 @@ package com.example.hello;
 
 import android.content.Intent;
 import android.os.Bundle;
+import android.os.SystemClock;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.animation.DecelerateInterpolator;
@@ -26,6 +27,8 @@ public class MainActivity extends AppCompatActivity {
     private boolean inStudio = false;
     private int fabIconRes = R.drawable.ic_mic;
     private boolean recoveryChecked;
+    private long lastFabPress;
+    private long lastStopPress;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -49,6 +52,11 @@ public class MainActivity extends AppCompatActivity {
             return false;
         });
         fabWrap.setOnClickListener(v -> {
+            // Debounced: one tap, one transition. Guards against double
+            // delivery that used to start-then-instantly-pause takes.
+            long now = SystemClock.elapsedRealtime();
+            if (now - lastFabPress < 400) return;
+            lastFabPress = now;
             if (!inStudio) {
                 pulseHalo();
                 openStudio();
@@ -59,6 +67,9 @@ public class MainActivity extends AppCompatActivity {
         });
         PressAnim.apply(fabStopWrap);
         fabStopWrap.setOnClickListener(v -> {
+            long now = SystemClock.elapsedRealtime();
+            if (now - lastStopPress < 400) return;
+            lastStopPress = now;
             StudioFragment st = studio();
             if (st != null) st.onStopPressed();
         });
@@ -147,11 +158,27 @@ public class MainActivity extends AppCompatActivity {
     }
 
     public void openStudioWithRecovery(File rawFile) {
+        // Crash recovery reopens directly in the recording state.
+        openStudioWithSession(rawFile.getAbsolutePath(), true, -1, null);
+    }
+
+    /** Edit punch-in: session pre-loaded, timer correct, waits for mic tap. */
+    public void openStudioWithEdit(File rawFile, long sourceId, String sourceTitle) {
+        openStudioWithSession(rawFile.getAbsolutePath(), false, sourceId, sourceTitle);
+    }
+
+    private void openStudioWithSession(String rawPath, boolean autostart,
+                                       long editSourceId, String editSourceTitle) {
         inStudio = true;
         syncFabWithEngine();
         StudioFragment f = new StudioFragment();
         Bundle b = new Bundle();
-        b.putString("recover_raw", rawFile.getAbsolutePath());
+        b.putString("recover_raw", rawPath);
+        b.putBoolean("autostart", autostart);
+        if (editSourceId != -1) {
+            b.putLong("edit_source_id", editSourceId);
+            b.putString("edit_source_title", editSourceTitle);
+        }
         f.setArguments(b);
         getSupportFragmentManager().beginTransaction()
                 .setCustomAnimations(R.anim.slide_in_right, R.anim.fade_out,
@@ -174,21 +201,25 @@ public class MainActivity extends AppCompatActivity {
 
     /**
      * Main FAB artwork morph (mic / pause / play) with a smooth shrink-swap-pop.
-     * The split stop button is shown separately while a take is active.
+     * Scale-only: the old rotation accumulated 70° on every tap, visibly
+     * twisting the icon over time. The split stop button is shown separately
+     * while a take is active.
      */
     public void morphFabIcon(int resId) {
         if (fabIconRes == resId) return;
         fabIconRes = resId;
         fabIcon.animate().cancel();
+        // Snap rotation back first so repeated morphs can never accumulate.
+        fabIcon.setRotation(0f);
         fabIcon.animate()
                 .scaleX(0.35f).scaleY(0.35f)
-                .rotationBy(70f)
                 .setDuration(110)
                 .setInterpolator(new DecelerateInterpolator(1.4f))
                 .withEndAction(() -> {
                     try {
                         fabIcon.setImageResource(resId);
                     } catch (Exception ignored) {}
+                    fabIcon.setRotation(0f);
                     fabIcon.animate()
                             .scaleX(1f).scaleY(1f)
                             .setDuration(230)

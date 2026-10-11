@@ -7,7 +7,6 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
-import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.drawable.ColorDrawable;
@@ -35,28 +34,23 @@ import androidx.fragment.app.Fragment;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 /**
  * Name-first studio on top of the crash-safe 32-bit float engine.
  *
  * Flow: open -> name modal (no recording yet) -> tap mic to start (FAB morphs
  * into pause/play + split stop) -> stop asks save/discard -> convert to the
- * chosen format with a live progress bar -> back to the library.
+ * chosen preset with a live progress bar -> back to the library.
+ *
+ * Recovery and edit punch-ins arrive with an attached session: the timer
+ * shows the loaded duration immediately and (for crash recovery) capture
+ * resumes straight away.
  */
 public class StudioFragment extends Fragment {
-
-    private enum Fmt {
-        RAW32("raw32"), M4A("m4a"), WAV16("wav16");
-        final String id;
-        Fmt(String id) { this.id = id; }
-        static Fmt of(String id) {
-            if ("raw32".equals(id)) return RAW32;
-            if ("wav16".equals(id)) return WAV16;
-            return M4A;
-        }
-    }
 
     private final RecordingEngine engine = RecordingEngine.get();
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -71,25 +65,28 @@ public class StudioFragment extends Fragment {
     private TextView formatBadge;
     private View statusDot;
     private WaveformView waveform;
-    private TextView fmtRaw32;
-    private TextView fmtM4a;
-    private TextView fmtWav16;
+    private DbMeterView dbMeter;
+    private View presetRow;
+    private TextView presetName;
+    private TextView presetSub;
 
     private String pendingName;
-    private Fmt format = Fmt.M4A;
+    private RecordPreset preset = RecordPreset.STANDARD;
     private boolean nameAsked;
     private boolean saving; // save/discard sequence running
     private RecordingEngine.State lastPaintedState;
     private String lastPaintedName = "\0";
     private boolean lastWaveLive;
 
+    /** Library take being punched into (-1 when this is a fresh take). */
+    private long editSourceId = -1;
+    private String editSourceTitle;
+
     private Dialog progressDialog;
     private ProgressBar progressBar;
     private TextView progressMessage;
 
     private AudioManager audioManager;
-    private AudioManager.OnAudioFocusChangeListener focusListener;
-    private boolean focusHeld;
 
     private ActivityResultLauncher<String> micPermission;
     private ActivityResultLauncher<String> notifPermission;
@@ -134,11 +131,12 @@ public class StudioFragment extends Fragment {
         formatBadge = v.findViewById(R.id.formatBadge);
         statusDot = v.findViewById(R.id.statusDot);
         waveform = v.findViewById(R.id.waveform);
-        fmtRaw32 = v.findViewById(R.id.fmtRaw32);
-        fmtM4a = v.findViewById(R.id.fmtM4a);
-        fmtWav16 = v.findViewById(R.id.fmtWav16);
+        dbMeter = v.findViewById(R.id.dbMeter);
+        presetRow = v.findViewById(R.id.presetRow);
+        presetName = v.findViewById(R.id.presetName);
+        presetSub = v.findViewById(R.id.presetSub);
 
-        format = Fmt.of(loadFormatId());
+        preset = RecordPreset.load(requireContext());
         audioManager = (AudioManager) requireContext()
                 .getSystemService(Context.AUDIO_SERVICE);
 
@@ -148,17 +146,14 @@ public class StudioFragment extends Fragment {
         attachRenameGestures(takeNameView);
         attachRenameGestures(statusText);
 
-        fmtRaw32.setOnClickListener(view -> selectFormat(Fmt.RAW32));
-        fmtM4a.setOnClickListener(view -> selectFormat(Fmt.M4A));
-        fmtWav16.setOnClickListener(view -> selectFormat(Fmt.WAV16));
-        PressAnim.apply(fmtRaw32);
-        PressAnim.apply(fmtM4a);
-        PressAnim.apply(fmtWav16);
+        presetRow.setOnClickListener(view -> showPresetPicker());
+        PressAnim.apply(presetRow);
 
-        // Recovery (from MainActivity prompt) or a background session being
-        // re-opened: attach, never show the name modal.
+        // Recovery (crash prompt / notification tap) or an edit punch-in:
+        // a session is already attached — never show the name modal.
         Bundle args = getArguments();
         boolean attached = false;
+        boolean autostart = false;
         if (args != null && args.containsKey("recover_raw")) {
             try {
                 File raw = new File(args.getString("recover_raw"));
@@ -169,6 +164,9 @@ public class StudioFragment extends Fragment {
                             2, RecordingEngine.payloadBytesOf(raw));
                 }
                 pendingName = engine.takeName;
+                autostart = args.getBoolean("autostart", false);
+                editSourceId = args.getLong("edit_source_id", -1);
+                editSourceTitle = args.getString("edit_source_title");
                 nameAsked = true;
                 attached = true;
             } catch (Exception e) {
@@ -192,9 +190,8 @@ public class StudioFragment extends Fragment {
                 if (!RecordingService.BROADCAST_DONE.equals(intent.getAction())) return;
                 boolean ok = intent.getBooleanExtra(RecordingService.EXTRA_OK, false);
                 String msg = intent.getStringExtra(RecordingService.EXTRA_MESSAGE);
-                String title = intent.getStringExtra(RecordingService.EXTRA_TITLE);
                 String kind = intent.getStringExtra(RecordingService.EXTRA_KIND);
-                onBackgroundActionDone(ok, "cancel".equals(kind), title, msg);
+                onBackgroundActionDone(ok, "cancel".equals(kind), msg);
             }
         };
         try {
@@ -212,6 +209,19 @@ public class StudioFragment extends Fragment {
         if (!attached && !nameAsked) {
             nameAsked = true;
             v.post(this::askForName);
+        } else if (attached && autostart
+                && engine.state != RecordingEngine.State.RECORDING) {
+            // Crash recovery: reopen directly in the recording state.
+            v.post(() -> {
+                if (!isAdded()) return;
+                if (ContextCompat.checkSelfPermission(requireContext(),
+                        Manifest.permission.RECORD_AUDIO)
+                        == PackageManager.PERMISSION_GRANTED) {
+                    ensureNotifThenStart();
+                } else {
+                    micPermission.launch(Manifest.permission.RECORD_AUDIO);
+                }
+            });
         }
     }
 
@@ -319,9 +329,43 @@ public class StudioFragment extends Fragment {
         target.setOnTouchListener((view, event) -> gd.onTouchEvent(event));
     }
 
+    // ---- preset dropdown ----
+
+    private void showPresetPicker() {
+        if (!isAdded()) return;
+        if (engine.state == RecordingEngine.State.RECORDING) {
+            try {
+                PressAnim.nudge(presetRow, 1.02f);
+                Toast.makeText(requireContext(), R.string.preset_locked,
+                        Toast.LENGTH_SHORT).show();
+            } catch (Exception ignored) {}
+            return;
+        }
+        List<OptionsSheet.Item> items = new ArrayList<>();
+        for (RecordPreset p : RecordPreset.all()) {
+            final RecordPreset pick = p;
+            items.add(new OptionsSheet.Item(0, getString(p.titleRes)
+                    + "  •  " + getString(p.subRes), false, p == preset,
+                    () -> {
+                        preset = pick;
+                        preset.save(requireContext());
+                        paint();
+                    }));
+        }
+        OptionsSheet.showOptions(requireContext(),
+                getString(R.string.preset_title), micCapabilityLine(), items);
+    }
+
+    private String micCapabilityLine() {
+        int n = MicSupport.physicalMicCount(audioManager);
+        if (n >= 2) return getString(R.string.mic_stereo_ok, n);
+        if (n == 1) return getString(R.string.mic_mono_only);
+        return getString(R.string.mic_unknown);
+    }
+
     // ---- called by MainActivity's shared buttons ----
 
-    /** Main FAB: name -> start -> pause/resume. */
+    /** Main FAB: name -> start -> pause/resume. Debounced in MainActivity. */
     public void onFabPressed() {
         if (saving) return;
         if (!engine.hasSession() && pendingName == null) {
@@ -329,7 +373,7 @@ public class StudioFragment extends Fragment {
             return;
         }
         if (engine.state == RecordingEngine.State.RECORDING) {
-            pauseTake(false);
+            pauseTake();
         } else if (engine.state == RecordingEngine.State.PAUSED) {
             resumeTake();
         } else {
@@ -354,7 +398,7 @@ public class StudioFragment extends Fragment {
                 getString(R.string.action_discard), this::doDiscardSequence));
         OptionsSheet.showOptions(requireContext(),
                 getString(R.string.save_take_title),
-                getString(R.string.save_take_msg, name, formatLabel(format)),
+                getString(R.string.save_take_msg, name, getString(preset.titleRes)),
                 items);
     }
 
@@ -415,21 +459,55 @@ public class StudioFragment extends Fragment {
 
     private void beginCapture() {
         if (!isAdded() || saving) return;
+        if (engine.hasSession()) {
+            startOrResumeCapture();
+            return;
+        }
+        // New session: dual-mic check first so a stereo preset on single-mic
+        // hardware warns, then records mono instead of failing.
+        if (preset.wantsStereo() && MicSupport.dualAbsent(audioManager)) {
+            OptionsSheet.showConfirm(requireContext(),
+                    getString(R.string.mono_warn_title),
+                    getString(R.string.mono_warn_msg, getString(preset.titleRes)),
+                    getString(R.string.ok_got_it), R.drawable.ic_mic, false,
+                    () -> createSessionAndStart(1));
+            return;
+        }
+        createSessionAndStart(preset.channels);
+    }
+
+    private void createSessionAndStart(int outChannels) {
+        if (!isAdded() || saving) return;
         try {
-            if (!engine.hasSession()) {
-                String name = pendingName != null ? pendingName : nextTakeName();
-                engine.startNewSession(requireContext(), name);
-                pendingName = engine.takeName;
-            }
-            requestFocus();
-            if (engine.state == RecordingEngine.State.PAUSED) {
-                engine.resumeCapture(requireContext());
-            } else {
-                engine.startCapture(requireContext());
-            }
-            RecordingService.start(requireContext(), format.id);
+            String name = pendingName != null ? pendingName : nextTakeName();
+            engine.startNewSession(requireContext(), name, outChannels);
+            pendingName = engine.takeName;
+            waveform.clear();
+            dbMeter.reset();
         } catch (Exception e) {
-            abandonFocus();
+            Toast.makeText(requireContext(), "Could not start recording",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        startOrResumeCapture();
+    }
+
+    private void startOrResumeCapture() {
+        if (!isAdded() || saving) return;
+        try {
+            if (engine.state == RecordingEngine.State.PAUSED) {
+                engine.resumeCapture(requireContext(), preset.audioSource);
+            } else if (engine.state != RecordingEngine.State.RECORDING) {
+                engine.startCapture(requireContext(), preset.audioSource);
+            } else {
+                return;
+            }
+            if (engine.fellBackToMono) {
+                Toast.makeText(requireContext(), R.string.mono_fallback_toast,
+                        Toast.LENGTH_LONG).show();
+            }
+            RecordingService.start(requireContext(), preset.id);
+        } catch (Exception e) {
             Toast.makeText(requireContext(), "Could not start recording",
                     Toast.LENGTH_SHORT).show();
             return;
@@ -437,6 +515,10 @@ public class StudioFragment extends Fragment {
         handler.post(tick);
         paint();
         activity().syncFabWithEngine();
+    }
+
+    private void pauseTake() {
+        pauseTake(false);
     }
 
     private void pauseTake(boolean fromInterruption) {
@@ -461,17 +543,12 @@ public class StudioFragment extends Fragment {
 
     private void resumeTake() {
         if (engine.state != RecordingEngine.State.PAUSED || saving) return;
-        try {
-            requestFocus();
-            engine.resumeCapture(requireContext());
-        } catch (Exception e) {
-            Toast.makeText(requireContext(), "Could not resume",
-                    Toast.LENGTH_SHORT).show();
-            return;
-        }
-        handler.post(tick);
-        paint();
-        activity().syncFabWithEngine();
+        startOrResumeCapture();
+    }
+
+    /** Service-owned focus loss funnels here (interruption: pause, no resume). */
+    public void onInterruptionPause() {
+        handler.post(() -> pauseTake(true));
     }
 
     // ---- stop: save (convert) or discard ----
@@ -479,24 +556,22 @@ public class StudioFragment extends Fragment {
     private void doSaveSequence() {
         if (saving || !engine.hasSession()) return;
         saving = true;
-        showProgress(format);
-        final Fmt fmt = format;
+        showProgress(preset);
+        final RecordPreset p = preset;
         final String title = engine.takeName != null ? engine.takeName : "";
+        final long editId = editSourceId;
+        final String editTitle = editSourceTitle;
         new Thread(() -> {
             boolean ok;
             String msg;
+            String label;
+            File fin = null;
             try {
                 File raw = engine.finalizeRaw();
                 if (raw == null || !raw.exists()) throw new IllegalStateException("empty");
                 // Duration comes from the raw capture (M4A output has no WAV header).
                 long dur = Math.max(durationOf(raw), 1000);
-                File fin;
-                String label;
-                if (fmt == Fmt.RAW32) {
-                    fin = raw;
-                    label = "WAV";
-                    postProgress(100, label);
-                } else if (fmt == Fmt.WAV16) {
+                if (p.savesWav) {
                     fin = uniqueFinal(raw, "wav");
                     label = "WAV";
                     FormatConverter.toWav16(raw, fin, pct -> postProgress(pct, label));
@@ -507,20 +582,40 @@ public class StudioFragment extends Fragment {
                 } else {
                     fin = uniqueFinal(raw, "m4a");
                     label = "M4A";
-                    FormatConverter.toM4a(raw, fin, pct -> postProgress(pct, label));
+                    FormatConverter.toM4a(raw, fin, p.aacBitrate,
+                            pct -> postProgress(pct, label));
                     if (fin.exists()) {
                         // noinspection ResultOfMethodCallIgnored
                         raw.delete();
                     }
                 }
-                TakesRepository.addRecording(
-                        fin, Math.max(dur, 1000), title, label);
+                if (editId == -1) {
+                    TakesRepository.addRecording(
+                            fin, Math.max(dur, 1000), title, label);
+                }
+                // Edit punch-ins resolve replace-vs-new on the UI thread below,
+                // where the new file + duration are in hand.
                 engine.clearSession();
-                abandonFocus();
                 ok = true;
                 msg = getString(R.string.convert_done_msg, title, label);
+                if (editId != -1) {
+                    final File saved = fin;
+                    final long savedDur = Math.max(dur, 1000);
+                    final String savedLabel = label;
+                    handler.post(() -> {
+                        saving = false;
+                        dismissProgress();
+                        if (!isAdded()) return;
+                        RecordingService.stopService(requireContext());
+                        activity().syncFabWithEngine();
+                        askEditReplaceOrNew(editId, editTitle, title,
+                                saved, savedDur, savedLabel);
+                    });
+                    return;
+                }
             } catch (Exception e) {
                 ok = false;
+                label = "";
                 msg = getString(R.string.convert_failed_msg, title);
             }
             final boolean done = ok;
@@ -547,13 +642,66 @@ public class StudioFragment extends Fragment {
         }).start();
     }
 
+    /** Edit punch-in done: replace the original or keep both. */
+    private void askEditReplaceOrNew(long originalId, String originalTitle,
+                                     String sessionTitle, File saved,
+                                     long savedDur, String label) {
+        String target = originalTitle != null && !originalTitle.isEmpty()
+                ? originalTitle : sessionTitle;
+        List<OptionsSheet.Item> items = new ArrayList<>();
+        items.add(OptionsSheet.Item.of(R.drawable.ic_check,
+                getString(R.string.edit_replace, target), () -> {
+                    try {
+                        Set<Long> ids = new HashSet<>();
+                        ids.add(originalId);
+                        TakesRepository.deleteMany(ids);
+                        TakesRepository.addRecording(
+                                saved, savedDur, target, label);
+                        editSourceId = -1;
+                        OptionsSheet.showResult(requireContext(), true,
+                                getString(R.string.convert_done_title),
+                                getString(R.string.edit_replaced_msg, target),
+                                () -> {
+                                    if (isAdded()) activity().exitStudio();
+                                });
+                    } catch (Exception e) {
+                        OptionsSheet.showResult(requireContext(), false,
+                                getString(R.string.convert_failed_title),
+                                getString(R.string.couldnt_save));
+                    }
+                }));
+        items.add(OptionsSheet.Item.of(R.drawable.ic_upload,
+                getString(R.string.edit_save_new), () -> {
+                    try {
+                        String name = sessionTitle;
+                        if (name.equals(target)) name = name + " (edit)";
+                        TakesRepository.addRecording(
+                                saved, savedDur, name, label);
+                        editSourceId = -1;
+                        OptionsSheet.showResult(requireContext(), true,
+                                getString(R.string.convert_done_title),
+                                getString(R.string.convert_done_msg, name, label),
+                                () -> {
+                                    if (isAdded()) activity().exitStudio();
+                                });
+                    } catch (Exception e) {
+                        OptionsSheet.showResult(requireContext(), false,
+                                getString(R.string.convert_failed_title),
+                                getString(R.string.couldnt_save));
+                    }
+                }));
+        OptionsSheet.showOptions(requireContext(),
+                getString(R.string.edit_save_title), target, items);
+    }
+
     private void doDiscardSequence() {
         if (saving) return;
         saving = true;
         new Thread(() -> {
             String title = engine.takeName != null ? engine.takeName : "";
             boolean ok = engine.abortAndDelete();
-            abandonFocus();
+            // Discarding an edit leaves the original library take untouched.
+            editSourceId = -1;
             handler.post(() -> {
                 saving = false;
                 if (!isAdded()) return;
@@ -572,11 +720,10 @@ public class StudioFragment extends Fragment {
     }
 
     /** Notification save/cancel finished while the studio is open. */
-    private void onBackgroundActionDone(boolean ok, boolean wasCancel,
-                                        String title, String msg) {
+    private void onBackgroundActionDone(boolean ok, boolean wasCancel, String msg) {
         if (!isAdded() || getView() == null) return;
         if (!engine.hasSession()) {
-            abandonFocus();
+            editSourceId = -1;
             paint();
             try {
                 activity().syncFabWithEngine();
@@ -610,96 +757,13 @@ public class StudioFragment extends Fragment {
         }
     }
 
-    // ---- audio focus / interruptions: pause, never auto-resume ----
-
-    private void requestFocus() {
-        try {
-            if (focusHeld || audioManager == null) return;
-            focusListener = focus -> {
-                if (focus == AudioManager.AUDIOFOCUS_LOSS
-                        || focus == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT
-                        || focus == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK) {
-                    handler.post(() -> pauseTake(true));
-                }
-            };
-            int r = audioManager.requestAudioFocus(focusListener,
-                    AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN);
-            focusHeld = r == AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
-        } catch (Exception ignored) {}
-    }
-
-    private void abandonFocus() {
-        try {
-            if (audioManager != null && focusListener != null) {
-                audioManager.abandonAudioFocus(focusListener);
-            }
-        } catch (Exception ignored) {}
-        focusListener = null;
-        focusHeld = false;
-    }
-
-    // ---- format options (before recording; locked while capturing) ----
-
-    private void selectFormat(Fmt f) {
-        if (engine.state == RecordingEngine.State.RECORDING) {
-            try {
-                // Locked mid-take: nudge instead of switching.
-                View v = viewFor(f);
-                if (v != null) PressAnim.nudge(v, 1.06f);
-                Toast.makeText(requireContext(), R.string.studio_recording,
-                        Toast.LENGTH_SHORT).show();
-            } catch (Exception ignored) {}
-            return;
-        }
-        format = f;
-        saveFormatId(f.id);
-        paint();
-    }
-
-    private View viewFor(Fmt f) {
-        switch (f) {
-            case RAW32: return fmtRaw32;
-            case WAV16: return fmtWav16;
-            default: return fmtM4a;
-        }
-    }
-
-    private String loadFormatId() {
-        try {
-            SharedPreferences p = requireContext()
-                    .getSharedPreferences("takeone", Context.MODE_PRIVATE);
-            return p.getString("rec_format", "m4a");
-        } catch (Exception e) {
-            return "m4a";
-        }
-    }
-
-    private void saveFormatId(String id) {
-        try {
-            requireContext().getSharedPreferences("takeone", Context.MODE_PRIVATE)
-                    .edit().putString("rec_format", id).apply();
-        } catch (Exception ignored) {}
-    }
-
-    private String formatLabel(Fmt f) {
-        switch (f) {
-            case RAW32: return getString(R.string.fmt_raw32);
-            case WAV16: return getString(R.string.fmt_wav16);
-            default: return getString(R.string.fmt_m4a);
-        }
-    }
-
-    private String formatShort(Fmt f) {
-        switch (f) {
-            case RAW32: return "RAW • 32-bit float";
-            case WAV16: return "WAV • 16-bit";
-            default: return "M4A • AAC";
-        }
-    }
-
     // ---- progress dialog ----
 
-    private void showProgress(Fmt fmt) {
+    private void showProgress(RecordPreset p) {
+        showProgress(getString(p.titleRes));
+    }
+
+    private void showProgress(String label) {
         try {
             dismissProgress();
             progressDialog = new Dialog(requireContext(), R.style.TakeOneCenterDialog);
@@ -712,7 +776,7 @@ public class StudioFragment extends Fragment {
             ((TextView) root.findViewById(R.id.progressTitle))
                     .setText(getString(R.string.converting_title));
             progressMessage.setText(
-                    getString(R.string.converting_msg, formatLabel(fmt), 0));
+                    getString(R.string.converting_msg, label, 0));
             progressDialog.setCancelable(false);
             Window w = progressDialog.getWindow();
             if (w != null) {
@@ -752,10 +816,9 @@ public class StudioFragment extends Fragment {
         @Override
         public void run() {
             if (getView() == null || !isAdded()) return;
-            boolean active = engine.hasSession()
-                    && (engine.state == RecordingEngine.State.RECORDING
-                    || engine.state == RecordingEngine.State.PAUSED);
-            long ms = active ? engine.durationMs() : 0;
+            // Always show the loaded duration once a session exists, so
+            // recovery / edit punch-ins open with the correct timer.
+            long ms = engine.hasSession() ? engine.durationMs() : 0;
             try {
                 timerText.setText(formatTimer(ms));
                 boolean live = engine.state == RecordingEngine.State.RECORDING;
@@ -763,14 +826,16 @@ public class StudioFragment extends Fragment {
                     lastWaveLive = live;
                     waveform.setLive(live);
                 }
-                if (live) waveform.setMicLevel(engine.level);
+                float lvl = live ? engine.level : 0f;
+                if (live) waveform.setMicLevel(lvl);
+                dbMeter.setLevel(lvl);
             } catch (Exception ignored) {}
-            // Repaint on state/name transitions (FAB morph lives in paint).
+            // Repaint on state/name/preset transitions (FAB morph lives in paint).
             if (engine.state != lastPaintedState
                     || !String.valueOf(displayName()).equals(lastPaintedName)) {
                 paint();
             }
-            handler.postDelayed(this, 100);
+            handler.postDelayed(this, 50);
         }
     };
 
@@ -811,25 +876,20 @@ public class StudioFragment extends Fragment {
         } else if (paused) {
             hintText.setText(R.string.studio_paused_hint);
         } else {
-            hintText.setText(R.string.studio_recovered);
+            hintText.setText(editSourceId != -1
+                    ? getString(R.string.studio_tap_to_start)
+                    : getString(R.string.studio_recovered));
         }
 
-        // Unfinalised indicator: the pending marker means bytes are streamed
-        // but the take is not finalised yet.
+        // Unfinalised indicator: the pending marker means raw 32-bit float
+        // bytes are streamed but the take is not finalised yet.
         boolean unfin = hasSession && isUnfinalised();
         draftBadge.setVisibility(unfin ? View.VISIBLE : View.GONE);
 
-        waveform.setLive(rec);
-
-        formatBadge.setText(formatShort(format));
-        paintFormatChip(fmtRaw32, format == Fmt.RAW32);
-        paintFormatChip(fmtM4a, format == Fmt.M4A);
-        paintFormatChip(fmtWav16, format == Fmt.WAV16);
-        boolean fmtLocked = rec;
-        float alpha = fmtLocked ? 0.45f : 1f;
-        fmtRaw32.setAlpha(alpha);
-        fmtM4a.setAlpha(alpha);
-        fmtWav16.setAlpha(alpha);
+        formatBadge.setText(preset.shortLabel);
+        presetName.setText(preset.titleRes);
+        presetSub.setText(preset.subRes);
+        presetRow.setAlpha(rec ? 0.45f : 1f);
 
         statusDot.setBackgroundResource(rec ? R.drawable.dot_live : R.drawable.bg_round_btn);
         if (rec) startDotPulse(); else stopDotPulse();
@@ -838,12 +898,6 @@ public class StudioFragment extends Fragment {
         try {
             activity().syncFabWithEngine();
         } catch (Exception ignored) {}
-    }
-
-    private void paintFormatChip(TextView chip, boolean active) {
-        chip.setBackgroundResource(active
-                ? R.drawable.bg_chip_selected : R.drawable.bg_chip);
-        chip.setTextColor(active ? 0xFFFFFFFF : 0xFF9AA3AF);
     }
 
     private boolean isUnfinalised() {
@@ -907,22 +961,15 @@ public class StudioFragment extends Fragment {
         }
     }
 
-    private static String formatTimer(long ms) {
-        long tenths = (ms / 100) % 10;
+    /** Centisecond timer (one more decimal place than before). */
+    static String formatTimer(long ms) {
+        long cs = (ms % 1000) / 10;
         long s = (ms / 1000) % 60;
         long m = (ms / 60000);
-        return String.format(Locale.US, "%02d:%02d.%d", m, s, tenths);
+        return String.format(Locale.US, "%02d:%02d.%02d", m, s, cs);
     }
 
     private MainActivity activity() {
         return (MainActivity) requireActivity();
-    }
-
-    @Override
-    public void onDestroy() {
-        // Only release focus when no session survives; a background take
-        // keeps its interruption listener alive via the service-owned engine.
-        if (!engine.hasSession()) abandonFocus();
-        super.onDestroy();
     }
 }

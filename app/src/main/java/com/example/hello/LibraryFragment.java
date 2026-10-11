@@ -1,9 +1,12 @@
 package com.example.hello;
 
+import android.app.Dialog;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.database.Cursor;
+import android.graphics.Color;
+import android.graphics.drawable.ColorDrawable;
 import android.media.MediaPlayer;
 import android.net.Uri;
 import android.os.Bundle;
@@ -16,11 +19,13 @@ import android.text.TextWatcher;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.Window;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.TextView;
 
 import androidx.activity.result.ActivityResultLauncher;
@@ -781,6 +786,110 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                 take.title + "\n" + getString(R.string.export_current_location,
                         currentTakesDirLabel()),
                 items);
+    }
+
+    @Override
+    public void onEdit(Take take) {
+        if (selectionMode) {
+            toggleSelection(take);
+            return;
+        }
+        if (!take.hasFile()) {
+            snackText(getString(R.string.edit_no_audio));
+            return;
+        }
+        if (RecordingEngine.get().hasSession()) {
+            snackText(getString(R.string.edit_busy));
+            return;
+        }
+        if (playingId == take.id) stopPlayback();
+        // Decode a copy to 32-bit float and punch in from its end. The
+        // original stays in the library until the user picks replace/new.
+        final long sourceId = take.id;
+        final String sourceTitle = take.title;
+        final File src = new File(take.filePath);
+        Dialog progress = showDeterminateProgress(
+                getString(R.string.importing_title),
+                getString(R.string.importing_msg, 0));
+        final ProgressBar bar;
+        final TextView msg;
+        try {
+            bar = progress.findViewById(R.id.progressBar);
+            msg = progress.findViewById(R.id.progressMessage);
+        } catch (Exception e) {
+            try {
+                progress.dismiss();
+            } catch (Exception ignored) {}
+            return;
+        }
+        new Thread(() -> {
+            File session = null;
+            String fail = null;
+            try {
+                session = AudioImporter.takeToFloatWav(src,
+                        RecordingEngine.takesDir(
+                                requireContext().getApplicationContext()),
+                        RecordingEngine.sanitize(sourceTitle), pct -> handler.post(() -> {
+                            try {
+                                if (bar != null) bar.setProgress(pct);
+                                if (msg != null) {
+                                    msg.setText(getString(R.string.importing_msg, pct));
+                                }
+                            } catch (Exception ignored) {}
+                        }));
+                RecordingEngine.get().attachExisting(
+                        requireContext().getApplicationContext(), session,
+                        sourceTitle, 2,
+                        RecordingEngine.payloadBytesOf(session));
+            } catch (Exception e) {
+                fail = e.getMessage();
+                if (session != null && session.exists()) {
+                    // noinspection ResultOfMethodCallIgnored
+                    session.delete();
+                }
+            }
+            final File done = session;
+            handler.post(() -> {
+                try {
+                    progress.dismiss();
+                } catch (Exception ignored) {}
+                if (!isAdded()) return;
+                if (done != null && fail == null) {
+                    try {
+                        ((MainActivity) requireActivity())
+                                .openStudioWithEdit(done, sourceId, sourceTitle);
+                    } catch (Exception e) {
+                        RecordingEngine.get().abortAndDelete();
+                        OptionsSheet.showResult(requireContext(), false,
+                                getString(R.string.import_failed_title),
+                                getString(R.string.import_failed_msg, sourceTitle));
+                    }
+                } else {
+                    OptionsSheet.showResult(requireContext(), false,
+                            getString(R.string.import_failed_title),
+                            getString(R.string.import_failed_msg, sourceTitle));
+                }
+            });
+        }).start();
+    }
+
+    /** Styled determinate progress dialog (import / conversion prep). */
+    private Dialog showDeterminateProgress(String title, String message) {
+        Dialog dialog = new Dialog(requireContext(), R.style.TakeOneCenterDialog);
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        View root = LayoutInflater.from(requireContext())
+                .inflate(R.layout.dialog_progress, null);
+        dialog.setContentView(root);
+        ((TextView) root.findViewById(R.id.progressTitle)).setText(title);
+        ((TextView) root.findViewById(R.id.progressMessage)).setText(message);
+        dialog.setCancelable(false);
+        Window w = dialog.getWindow();
+        if (w != null) {
+            w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            w.setDimAmount(0.62f);
+        }
+        dialog.show();
+        return dialog;
     }
 
     @Override

@@ -59,9 +59,14 @@ public final class RecordingEngine {
     public State state = State.IDLE;
     public String takeName;
     public File rawFile;
+    /** Output channels of the streamed float WAV (1 mono / 2 stereo). */
     public int channels = 2;
     public long dataBytes = 0;
     public volatile float level = 0f;
+    /** Audio source used for the current capture (MIC or UNPROCESSED). */
+    public int audioSource = MediaRecorder.AudioSource.MIC;
+    /** True when stereo was requested but the hardware only gave mono. */
+    public volatile boolean fellBackToMono;
 
     private AudioRecord recorder;
     private Thread capThread;
@@ -117,19 +122,30 @@ public final class RecordingEngine {
     // ---- session lifecycle ----
 
     /** Begin a new named session (creates the raw file + pending marker). */
-    public void startNewSession(Context ctx, String name) throws Exception {
+    public void startNewSession(Context ctx, String name, int outChannels) throws Exception {
         synchronized (lock) {
             if (rawFile != null) throw new IllegalStateException("session active");
             takeName = sanitize(name);
-            channels = 2;
+            channels = outChannels == 1 ? 1 : 2;
             File dir = takesDir(ctx);
             rawFile = uniqueRaw(dir, takeName);
             dataBytes = 0;
+            fellBackToMono = false;
             writeHeaderNew(rawFile, channels, 0);
             writePending(rawFile, takeName, channels);
             state = State.IDLE;
             level = 0f;
         }
+    }
+
+    /** Back-compat: stereo session. */
+    public void startNewSession(Context ctx, String name) throws Exception {
+        startNewSession(ctx, name, 2);
+    }
+
+    /** Marker that a raw file is streamed but not yet finalised. */
+    public static void writePendingMarker(File raw, String name, int ch) {
+        writePending(raw, name, ch);
     }
 
     /** Attach to an existing unfinalised file (recovery continue). */
@@ -181,11 +197,11 @@ public final class RecordingEngine {
 
     // ---- capture ----
 
-    public void startCapture(Context ctx) throws Exception {
+    public void startCapture(Context ctx, int requestedSource) throws Exception {
         synchronized (lock) {
             if (rawFile == null) throw new IllegalStateException("no session");
             if (state == State.RECORDING) return;
-            openRecorderLocked();
+            openRecorderLocked(requestedSource, channels);
             raf = new RandomAccessFile(rawFile, "rw");
             raf.seek(raf.length());
             // Reconcile byte count with what is actually on disk.
@@ -197,6 +213,11 @@ public final class RecordingEngine {
             state = State.RECORDING;
             lastHeaderPatch = System.currentTimeMillis();
         }
+    }
+
+    /** Back-compat: capture with the session's stored source. */
+    public void startCapture(Context ctx) throws Exception {
+        startCapture(ctx, audioSource);
     }
 
     public void pauseCapture() {
@@ -234,10 +255,10 @@ public final class RecordingEngine {
         }
     }
 
-    public void resumeCapture(Context ctx) throws Exception {
+    public void resumeCapture(Context ctx, int requestedSource) throws Exception {
         synchronized (lock) {
             if (state != State.PAUSED) return;
-            openRecorderLocked();
+            openRecorderLocked(requestedSource, channels);
             raf = new RandomAccessFile(rawFile, "rw");
             raf.seek(raf.length());
             dataBytes = Math.max(0, raf.length() - 44);
@@ -248,6 +269,11 @@ public final class RecordingEngine {
             state = State.RECORDING;
             lastHeaderPatch = System.currentTimeMillis();
         }
+    }
+
+    /** Back-compat: resume with the session's stored source. */
+    public void resumeCapture(Context ctx) throws Exception {
+        resumeCapture(ctx, audioSource);
     }
 
     /** Clean finalize: stop capture, write final header, remove pending mark. */
@@ -343,48 +369,71 @@ public final class RecordingEngine {
 
     // ---- internals ----
 
-    private void openRecorderLocked() throws Exception {
-        int[][] configs = {
-                {AudioFormat.CHANNEL_IN_STEREO, AudioFormat.ENCODING_PCM_FLOAT},
-                {AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_FLOAT},
-                {AudioFormat.CHANNEL_IN_STEREO, AudioFormat.ENCODING_PCM_16BIT},
-                {AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT},
-        };
+    /**
+     * Opens the mic for {@code wantedOutCh} output channels (1/2) using
+     * {@code requestedSource} first (UNPROCESSED for Music/Raw) and falling
+     * back to plain MIC when the device refuses it. Channel layouts are
+     * tried wanted-first, so a stereo request on single-mic hardware lands
+     * on mono and reports {@link #fellBackToMono} instead of failing.
+     */
+    private void openRecorderLocked(int requestedSource, int wantedOutCh) throws Exception {
+        int[] channelPref = wantedOutCh == 1
+                ? new int[]{AudioFormat.CHANNEL_IN_MONO, AudioFormat.CHANNEL_IN_STEREO}
+                : new int[]{AudioFormat.CHANNEL_IN_STEREO, AudioFormat.CHANNEL_IN_MONO};
+        int[] encPref = {AudioFormat.ENCODING_PCM_FLOAT, AudioFormat.ENCODING_PCM_16BIT};
+        int[] sources = requestedSource == MediaRecorder.AudioSource.UNPROCESSED
+                ? new int[]{MediaRecorder.AudioSource.UNPROCESSED,
+                        MediaRecorder.AudioSource.MIC}
+                : new int[]{requestedSource};
         Exception last = null;
-        for (int[] cfg : configs) {
-            try {
-                int min = AudioRecord.getMinBufferSize(
-                        SAMPLE_RATE, cfg[0], cfg[1]);
-                if (min <= 0) continue;
-                int bufSize = Math.max(min * 4, 32768);
-                AudioRecord ar = new AudioRecord(
-                        MediaRecorder.AudioSource.MIC,
-                        SAMPLE_RATE, cfg[0], cfg[1], bufSize);
-                if (ar.getState() != AudioRecord.STATE_INITIALIZED) {
+        fellBackToMono = false;
+        for (int src : sources) {
+            for (int chCfg : channelPref) {
+                for (int enc : encPref) {
+                    AudioRecord ar = null;
                     try {
-                        ar.release();
-                    } catch (Exception ignored) {}
-                    continue;
+                        int min = AudioRecord.getMinBufferSize(SAMPLE_RATE, chCfg, enc);
+                        if (min <= 0) continue;
+                        int bufSize = Math.max(min * 4, 32768);
+                        ar = new AudioRecord(src, SAMPLE_RATE, chCfg, enc, bufSize);
+                        if (ar.getState() != AudioRecord.STATE_INITIALIZED) {
+                            try {
+                                ar.release();
+                            } catch (Exception ignored) {}
+                            continue;
+                        }
+                        ar.startRecording();
+                        if (ar.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING) {
+                            try {
+                                ar.stop();
+                            } catch (Exception ignored) {}
+                            try {
+                                ar.release();
+                            } catch (Exception ignored) {}
+                            continue;
+                        }
+                        recorder = ar;
+                        audioSource = src;
+                        actualChannels = (chCfg == AudioFormat.CHANNEL_IN_STEREO) ? 2 : 1;
+                        floatNative = enc == AudioFormat.ENCODING_PCM_FLOAT;
+                        // Mono input for a stereo file is duplicated; stereo
+                        // input for a mono file is downmixed. A stereo request
+                        // that only yields mono keeps recording in mono.
+                        channels = wantedOutCh == 1 ? 1 : actualChannels;
+                        fellBackToMono = wantedOutCh == 2 && actualChannels == 1;
+                        // Keep the on-disk header in sync when the channel
+                        // layout was renegotiated (e.g. mono fallback).
+                        patchHeaderLocked();
+                        return;
+                    } catch (Exception e) {
+                        last = e;
+                        if (ar != null) {
+                            try {
+                                ar.release();
+                            } catch (Exception ignored) {}
+                        }
+                    }
                 }
-                ar.startRecording();
-                if (ar.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING) {
-                    try {
-                        ar.stop();
-                    } catch (Exception ignored) {}
-                    try {
-                        ar.release();
-                    } catch (Exception ignored) {}
-                    continue;
-                }
-                recorder = ar;
-                actualChannels = (cfg[0] == AudioFormat.CHANNEL_IN_STEREO) ? 2 : 1;
-                floatNative = cfg[1] == AudioFormat.ENCODING_PCM_FLOAT;
-                // Session files are always stereo float on disk; mono input is
-                // duplicated to both channels on write.
-                channels = 2;
-                return;
-            } catch (Exception e) {
-                last = e;
             }
         }
         throw last != null ? last : new IllegalStateException("no mic config");
@@ -392,8 +441,11 @@ public final class RecordingEngine {
 
     private void capLoop() {
         final int framesPerRead = 2048;
-        final int ch = 2;
-        byte[] out = new byte[framesPerRead * ch * 4];
+        final int outCh;
+        synchronized (lock) {
+            outCh = Math.max(1, channels);
+        }
+        byte[] out = new byte[framesPerRead * outCh * 4];
         ByteBuffer bb = ByteBuffer.wrap(out).order(ByteOrder.LITTLE_ENDIAN);
         int sincePatch = 0;
         try {
@@ -419,9 +471,13 @@ public final class RecordingEngine {
                         float s0 = buf[f * actualChannels];
                         float s1 = actualChannels > 1
                                 ? buf[f * actualChannels + 1] : s0;
-                        bb.putFloat(s0);
-                        bb.putFloat(s1);
-                        float a = Math.abs(s0);
+                        if (outCh == 2) {
+                            bb.putFloat(s0);
+                            bb.putFloat(s1);
+                        } else {
+                            bb.putFloat((s0 + s1) * 0.5f);
+                        }
+                        float a = Math.max(Math.abs(s0), Math.abs(s1));
                         if (a > peak) peak = a;
                     }
                 } else {
@@ -437,13 +493,17 @@ public final class RecordingEngine {
                         float s0 = buf[f * actualChannels] / 32768f;
                         float s1 = actualChannels > 1
                                 ? buf[f * actualChannels + 1] / 32768f : s0;
-                        bb.putFloat(s0);
-                        bb.putFloat(s1);
-                        float a = Math.abs(s0);
+                        if (outCh == 2) {
+                            bb.putFloat(s0);
+                            bb.putFloat(s1);
+                        } else {
+                            bb.putFloat((s0 + s1) * 0.5f);
+                        }
+                        float a = Math.max(Math.abs(s0), Math.abs(s1));
                         if (a > peak) peak = a;
                     }
                 }
-                int bytes = frames * ch * 4;
+                int bytes = frames * outCh * 4;
                 synchronized (lock) {
                     if (raf != null && capRun) {
                         try {

@@ -3,6 +3,7 @@ package com.example.hello;
 import android.media.MediaCodec;
 import android.media.MediaFormat;
 import android.media.MediaMuxer;
+import android.os.SystemClock;
 
 import java.io.File;
 import java.io.RandomAccessFile;
@@ -117,6 +118,15 @@ public final class FormatConverter {
 
     /** 32-bit float WAV -> M4A (AAC) via MediaCodec + MediaMuxer. */
     public static void toM4a(File src, File dst, Progress cb) throws Exception {
+        toM4a(src, dst, 128000, cb);
+    }
+
+    /**
+     * Same with an explicit AAC bitrate (the presets range 64–320 kbps).
+     * Tuned for speed: big input chunks, microsecond codec waits and
+     * throttled progress so a minute of audio converts in seconds.
+     */
+    public static void toM4a(File src, File dst, int bitrate, Progress cb) throws Exception {
         WavInfo info = readFloatWav(src);
         final int ch = info.channels;
         final int sr = info.sampleRate;
@@ -125,10 +135,11 @@ public final class FormatConverter {
 
         MediaFormat fmt = MediaFormat.createAudioFormat(
                 MediaFormat.MIMETYPE_AUDIO_AAC, sr, ch);
-        fmt.setInteger(MediaFormat.KEY_BIT_RATE, 128000);
+        fmt.setInteger(MediaFormat.KEY_BIT_RATE,
+                Math.max(64000, Math.min(320000, bitrate)));
         fmt.setInteger(MediaFormat.KEY_AAC_PROFILE,
                 android.media.MediaCodecInfo.CodecProfileLevel.AACObjectLC);
-        fmt.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 65536);
+        fmt.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 262144);
 
         MediaCodec enc = MediaCodec.createEncoderByType(
                 MediaFormat.MIMETYPE_AUDIO_AAC);
@@ -143,23 +154,24 @@ public final class FormatConverter {
         RandomAccessFile r = new RandomAccessFile(src, "r");
         try {
             r.seek(info.dataStart);
-            byte[] in = new byte[16384 * 4];
+            byte[] in = new byte[16384 * 4 * 2];
             ByteBuffer ib = ByteBuffer.wrap(in).order(ByteOrder.LITTLE_ENDIAN);
             long framesDone = 0;
             boolean inputEos = false;
             boolean outEos = false;
             int lastPct = -1;
+            long lastCbAt = 0;
 
             while (!outEos) {
                 if (!inputEos) {
-                    int idx = enc.dequeueInputBuffer(10000);
+                    int idx = enc.dequeueInputBuffer(2000);
                     if (idx >= 0) {
                         ByteBuffer dstBuf = enc.getInputBuffer(idx);
                         dstBuf.clear();
                         long framesLeft = totalFrames - framesDone;
                         // Never read more file bytes than the codec buffer fits.
                         int maxByBuf = dstBuf.remaining() / 2 / Math.max(1, ch);
-                        int wantFrames = (int) Math.min(4096,
+                        int wantFrames = (int) Math.min(16384,
                                 Math.min(framesLeft, maxByBuf));
                         if (wantFrames <= 0 && framesLeft > 0) {
                             // Codec buffer unexpectedly small: retry next round.
@@ -185,17 +197,20 @@ public final class FormatConverter {
                                     idx, 0, shorts * 2, pts, 0);
                             framesDone += wantFrames;
                             if (cb != null) {
-                                int pct = (int) (framesDone * 90
+                                int pct = (int) (framesDone * 100
                                         / Math.max(1, totalFrames));
-                                if (pct != lastPct) {
+                                long now = SystemClock.elapsedRealtime();
+                                if (pct != lastPct && (pct >= 100
+                                        || now - lastCbAt >= 250)) {
                                     lastPct = pct;
+                                    lastCbAt = now;
                                     cb.onProgress(pct);
                                 }
                             }
                         }
                     }
                 }
-                int oidx = enc.dequeueOutputBuffer(bi, 10000);
+                int oidx = enc.dequeueOutputBuffer(bi, 2000);
                 if (oidx == MediaCodec.INFO_TRY_AGAIN_LATER) {
                     if (inputEos && !muxStarted) {
                         // fall through; keep draining

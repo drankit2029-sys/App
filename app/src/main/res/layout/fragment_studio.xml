@@ -58,16 +58,16 @@
             android:gravity="center"
             android:paddingLeft="12dp"
             android:paddingRight="12dp"
-            android:text="@string/fmt_m4a"
+            android:text="@string/preset_standard"
             android:textColor="@color/text_secondary"
             android:textSize="11sp" />
     </LinearLayout>
 
-    <!-- Status dot + timer -->
+    <!-- Status dot + state -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="18dp"
+        android:layout_marginTop="10dp"
         android:gravity="center"
         android:orientation="horizontal">
 
@@ -87,17 +87,6 @@
             android:textColor="@color/text_secondary"
             android:textSize="12sp" />
     </LinearLayout>
-
-    <TextView
-        android:id="@+id/timerText"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="6dp"
-        android:fontFamily="sans-serif-light"
-        android:gravity="center"
-        android:text="00:00.0"
-        android:textColor="@color/text_primary"
-        android:textSize="58sp" />
 
     <TextView
         android:id="@+id/takeName"
@@ -126,97 +115,109 @@
         android:textSize="11sp"
         android:visibility="gone" />
 
-    <!-- Waveform -->
-    <com.example.hello.WaveformView
-        android:id="@+id/waveform"
+    <!-- dBFS meter (left) + waveform (right) -->
+    <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="150dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingLeft="20dp"
+        android:paddingRight="20dp">
+
+        <com.example.hello.DbMeterView
+            android:id="@+id/dbMeter"
+            android:layout_width="52dp"
+            android:layout_height="150dp" />
+
+        <com.example.hello.WaveformView
+            android:id="@+id/waveform"
+            android:layout_width="0dp"
+            android:layout_height="150dp"
+            android:layout_marginStart="10dp"
+            android:layout_weight="1" />
+    </LinearLayout>
+
+    <!-- Timer above the transport buttons -->
+    <TextView
+        android:id="@+id/timerText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:fontFamily="sans-serif-light"
+        android:gravity="center"
+        android:text="00:00.00"
+        android:textColor="@color/text_primary"
+        android:textSize="52sp" />
+
+    <!-- Preset dropdown below the timer -->
+    <LinearLayout
+        android:id="@+id/presetRow"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
         android:layout_marginLeft="20dp"
-        android:layout_marginTop="16dp"
-        android:layout_marginRight="20dp" />
+        android:layout_marginTop="10dp"
+        android:layout_marginRight="20dp"
+        android:background="@drawable/bg_search"
+        android:clickable="true"
+        android:focusable="true"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingLeft="14dp"
+        android:paddingTop="10dp"
+        android:paddingRight="14dp"
+        android:paddingBottom="10dp">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:letterSpacing="0.1"
+                android:text="@string/preset_label"
+                android:textColor="@color/text_hint"
+                android:textSize="11sp" />
+
+            <TextView
+                android:id="@+id/presetName"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:fontFamily="sans-serif-medium"
+                android:text="@string/preset_standard"
+                android:textColor="@color/text_primary"
+                android:textSize="15sp" />
+
+            <TextView
+                android:id="@+id/presetSub"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="@string/preset_standard_sub"
+                android:textColor="@color/text_secondary"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <ImageView
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:alpha="0.6"
+            android:src="@drawable/ic_chevron" />
+    </LinearLayout>
 
     <TextView
         android:id="@+id/hintText"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="12dp"
+        android:layout_marginTop="10dp"
         android:gravity="center"
         android:text="@string/studio_hint"
         android:textColor="@color/text_hint"
         android:textSize="13sp" />
-
-    <!-- Format options: pick before recording starts -->
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="18dp"
-        android:gravity="center"
-        android:letterSpacing="0.1"
-        android:text="@string/format_pick_label"
-        android:textColor="@color/text_hint"
-        android:textSize="11sp" />
-
-    <HorizontalScrollView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:clipToPadding="false"
-        android:scrollbars="none">
-
-        <LinearLayout
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_gravity="center"
-            android:gravity="center"
-            android:orientation="horizontal"
-            android:paddingLeft="16dp"
-            android:paddingRight="16dp">
-
-            <TextView
-                android:id="@+id/fmtRaw32"
-                android:layout_width="wrap_content"
-                android:layout_height="40dp"
-                android:background="@drawable/bg_chip"
-                android:clickable="true"
-                android:focusable="true"
-                android:fontFamily="sans-serif-medium"
-                android:gravity="center"
-                android:paddingLeft="18dp"
-                android:paddingRight="18dp"
-                android:text="@string/fmt_raw32"
-                android:textSize="13sp" />
-
-            <TextView
-                android:id="@+id/fmtM4a"
-                android:layout_width="wrap_content"
-                android:layout_height="40dp"
-                android:layout_marginStart="8dp"
-                android:background="@drawable/bg_chip"
-                android:clickable="true"
-                android:focusable="true"
-                android:fontFamily="sans-serif-medium"
-                android:gravity="center"
-                android:paddingLeft="18dp"
-                android:paddingRight="18dp"
-                android:text="@string/fmt_m4a"
-                android:textSize="13sp" />
-
-            <TextView
-                android:id="@+id/fmtWav16"
-                android:layout_width="wrap_content"
-                android:layout_height="40dp"
-                android:layout_marginStart="8dp"
-                android:background="@drawable/bg_chip"
-                android:clickable="true"
-                android:focusable="true"
-                android:fontFamily="sans-serif-medium"
-                android:gravity="center"
-                android:paddingLeft="18dp"
-                android:paddingRight="18dp"
-                android:text="@string/fmt_wav16"
-                android:textSize="13sp" />
-        </LinearLayout>
-    </HorizontalScrollView>
 
     <View
         android:layout_width="match_parent"
