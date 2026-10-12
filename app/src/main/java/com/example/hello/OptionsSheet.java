@@ -357,7 +357,7 @@ public final class OptionsSheet {
             cell.setBackgroundResource(R.drawable.bg_chip);
             int hPad = dp(ctx, 6);
             cell.setPadding(hPad, dp(ctx, 8), hPad, dp(ctx, 8));
-            cell.setMinHeight(dp(ctx, 46));
+            cell.setMinimumHeight(dp(ctx, 46));
 
             TextView name = new TextView(ctx);
             name.setText(c.label);
