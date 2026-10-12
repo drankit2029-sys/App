@@ -156,21 +156,6 @@ public class SavePipelineTest {
     }
 
     @Test
-    public void memoAutoStillProducesCompressedM4A() throws Exception {
-        engine.startNewSession(ctx, "Memo", 1);
-        File raw = engine.rawFile;
-        writeCaptureSeconds(0.5);
-        TakeSaver.Result r = TakeSaver.finalizeAndConvert(ctx,
-                RecordPreset.MEMO, SaveFormat.AUTO, null);
-        assertEquals("M4A", r.label);
-        assertTrue(r.file.getName().endsWith(".m4a"));
-        assertFalse("raw should be cleaned up after conversion", raw.exists());
-        // No MP4 structural check here: under Robolectric MediaCodec is a
-        // no-op stub, so the container is empty. Real-encoder coverage lives
-        // in the on-device EncodeFormatsTest.
-    }
-
-    @Test
     public void repeatedSavesLeaveNoOrphans() throws Exception {
         // The reported symptom was "a few saves then dead": repeated cycles
         // must not leak raw files or pending markers. (WAV16 explicitly:
