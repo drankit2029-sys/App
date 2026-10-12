@@ -43,6 +43,32 @@ public class TeleprompterScrollStartTest {
         return false;
     }
 
+    /** Walks up the tree so a collapsed ancestor is obvious. */
+    private static String describe(android.view.View v) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("script=").append(v.getScript() == null
+                ? -1 : v.getScript().length())
+          .append(" segments=").append(v.segmentCount())
+          .append(" max=").append(v.maxScroll()).append(" | chain: ");
+        android.view.View cur = v;
+        int guard = 0;
+        while (cur != null && guard++ < 6) {
+            sb.append(cur.getClass().getSimpleName())
+              .append("[vis=").append(cur.getVisibility())
+              .append(" ").append(cur.getWidth()).append("x")
+              .append(cur.getHeight())
+              .append(android.view.View.VISIBLE == cur.getVisibility()
+                      ? "" : " HIDDEN")
+              .append("] < ");
+            if (cur.getParent() instanceof android.view.View) {
+                cur = (android.view.View) cur.getParent();
+            } else {
+                break;
+            }
+        }
+        return sb.toString();
+    }
+
     private static String manyWords(int n) {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < n; i++) {
@@ -164,12 +190,8 @@ public class TeleprompterScrollStartTest {
         // Give layout a beat, then confirm there is scrollable content.
         InstrumentationRegistry.getInstrumentation().waitForIdleSync();
         SystemClock.sleep(400);
-        assertTrue("no scrollable script loaded (script="
-                + (tele.getScript() == null ? -1 : tele.getScript().length())
-                + " chars, vis=" + tele.getVisibility()
-                + ", w=" + tele.getWidth() + ", h=" + tele.getHeight()
-                + ", segments=" + tele.segmentCount()
-                + ", max=" + tele.maxScroll() + ")", tele.maxScroll() > 0f);
+        assertTrue("no scrollable script loaded; " + describe(tele),
+                tele.maxScroll() > 0f);
 
         View fab = b.findViewById(R.id.fabWrap);
         assertNotNull("no record button", fab);
