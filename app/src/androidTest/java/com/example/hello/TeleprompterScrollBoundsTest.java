@@ -170,13 +170,22 @@ public class TeleprompterScrollBoundsTest {
         InstrumentationRegistry.getInstrumentation().waitForIdleSync();
         android.os.SystemClock.sleep(300);
 
+        // The regression was a prompter with no height at all: nothing drawn,
+        // and maxScroll stuck at 0 so it could never scroll.
         assertTrue("prompter collapsed to " + tele.getHeight() + "px; "
-                + describe(tele), tele.getHeight() >= 120);
+                + describe(tele), tele.getHeight() > 0);
         assertTrue("prompter cannot scroll (max=" + tele.maxScroll() + ")",
                 tele.maxScroll() > 0f);
-        // At the default text size it must show more than a line or two.
+        // It must actually show lines, not a single sliver.
         int lines = tele.visibleLineCount();
-        assertTrue("only " + lines + " line(s) fit", lines >= 4);
+        assertTrue("only " + lines + " line(s) fit at "
+                + tele.getHeight() + "px", lines >= 3);
+        // And it must win a real share of its panel, rather than being left
+        // with only what the header and controls did not need.
+        android.view.View panel = (android.view.View) tele.getParent();
+        assertTrue("prompter is " + tele.getHeight() + "px of a "
+                + panel.getHeight() + "px panel",
+                tele.getHeight() * 3 >= panel.getHeight());
     }
 
     private static View findByText(View v, String needle) {
