@@ -43,6 +43,42 @@ public class TeleprompterScrollStartTest {
         return instr.startActivitySync(i);
     }
 
+    /** Clicks into the studio, clearing the "name this take" prompt if shown. */
+    private TeleprompterView gotoStudio(Activity a) throws Exception {
+        View fab = a.findViewById(R.id.fabWrap);
+        if (fab != null) {
+            a.runOnUiThread(fab::performClick);
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+        }
+        // A fresh install asks for a take name before showing the studio.
+        View root = a.getWindow().getDecorView();
+        TeleprompterView tele = (TeleprompterView) root.findViewById(R.id.teleView);
+        if (tele == null) {
+            View start = findByText(root, "Start");
+            if (start != null) {
+                a.runOnUiThread(start::performClick);
+                InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+            }
+            tele = (TeleprompterView) a.findViewById(R.id.teleView);
+        }
+        return tele;
+    }
+
+    private static View findByText(View v, String needle) {
+        if (v instanceof android.widget.TextView) {
+            CharSequence cs = ((android.widget.TextView) v).getText();
+            if (cs != null && needle.equals(cs.toString().trim())) return v;
+        }
+        if (v instanceof android.view.ViewGroup) {
+            android.view.ViewGroup g = (android.view.ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) {
+                View hit = findByText(g.getChildAt(i), needle);
+                if (hit != null) return hit;
+            }
+        }
+        return null;
+    }
+
     @Test
     public void prompterBeginsScrollingWithRecordingNotAfterACountdown() throws Exception {
         Activity a = launch();
@@ -55,7 +91,7 @@ public class TeleprompterScrollStartTest {
 
         // Relaunch so the fragment picks the script up.
         Activity b = launch();
-        TeleprompterView tele = (TeleprompterView) b.findViewById(R.id.teleView);
+        TeleprompterView tele = gotoStudio(b);
         assertNotNull("teleprompter not on screen", tele);
         // Give layout a beat, then confirm there is scrollable content.
         InstrumentationRegistry.getInstrumentation().waitForIdleSync();
