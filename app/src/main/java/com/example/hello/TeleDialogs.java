@@ -11,6 +11,7 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
+import android.widget.Toast;
 import android.widget.EditText;
 import android.widget.SeekBar;
 import android.widget.TextView;
@@ -102,6 +103,7 @@ public final class TeleDialogs {
         EditText input = root.findViewById(R.id.teleEditorInput);
         TextView meta = root.findViewById(R.id.teleEditorMeta);
         TextView importBtn = root.findViewById(R.id.teleImportBtn);
+        TextView saveBtn = root.findViewById(R.id.teleSaveBtn);
 
         input.setText(script == null ? "" : script);
         input.setSelection(input.getText().length());
@@ -125,6 +127,20 @@ public final class TeleDialogs {
         PressAnim.apply(importBtn);
         importBtn.setOnClickListener(v -> {
             if (onImport != null) onImport.onRequestImport();
+        });
+
+        // Explicit Save, so committing the script is never a guess. Closing
+        // the dialog still commits, which keeps "tap away to keep" working.
+        PressAnim.apply(saveBtn);
+        saveBtn.setOnClickListener(v -> {
+            String text = input.getText().toString().trim();
+            if (text.isEmpty()) {
+                Toast.makeText(ctx, ctx.getString(R.string.tele_empty),
+                        Toast.LENGTH_SHORT).show();
+                return;
+            }
+            if (onSave != null) onSave.onScript(text);
+            d.dismiss();
         });
 
         openInput = input;

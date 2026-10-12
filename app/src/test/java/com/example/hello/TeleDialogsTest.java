@@ -72,9 +72,22 @@ public class TeleDialogsTest {
         importBtn.performClick();
         assertTrue("import hook never fired", imported[0]);
 
-        // Closing commits the script.
-        d.dismiss();
+        // Save commits explicitly.
+        View saveBtn = d.findViewById(R.id.teleSaveBtn);
+        assertTrue("no save button", saveBtn != null);
+        saveBtn.performClick();
         assertEquals("saved=" + saved[0], "hello world\nsecond line", saved[0]);
+        // Closing without saving keeps whatever was last committed.
+        d.dismiss();
+    }
+
+    @Test
+    public void editorRefusesToSaveEmptyScript() {
+        final String[] saved = {null};
+        android.app.Dialog d = TeleDialogs.showEditor(activity(), "   ", 120,
+                text -> saved[0] = text, null);
+        d.findViewById(R.id.teleSaveBtn).performClick();
+        assertTrue("blank script must not commit", saved[0] == null);
     }
 
     @Test
