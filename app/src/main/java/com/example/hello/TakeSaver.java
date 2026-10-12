@@ -54,6 +54,14 @@ public final class TakeSaver {
         File fin = null;
         try {
             switch (eff) {
+                case WAV32:
+                    // True lossless: the raw 32-bit float capture IS the
+                    // finished file. No conversion, no re-encode, nothing
+                    // discarded — so it is kept in place rather than copied.
+                    FormatConverter.readFloatWav(raw);
+                    fin = raw;
+                    post(cb, 100);
+                    break;
                 case WAV16:
                     fin = uniqueFinal(raw, "wav");
                     FormatConverter.toWav16(raw, fin, pct -> post(cb, pct));
@@ -91,8 +99,9 @@ public final class TakeSaver {
         } catch (Exception ex) {
             // A failed conversion must not leave a truncated file behind:
             // half-written containers are exactly the kind of poison that
-            // haunts the next startup sweep.
-            if (fin != null) {
+            // haunts the next startup sweep. Never delete a WAV32 save, whose
+            // output is the raw capture itself — that would destroy the take.
+            if (fin != null && !fin.equals(raw)) {
                 // noinspection ResultOfMethodCallIgnored
                 fin.delete();
             }
@@ -101,16 +110,21 @@ public final class TakeSaver {
         // Last line of defense before the library ever sees the file: a
         // container that fails its own sanity check (truncated by a dying
         // encoder, torn by a kill) is deleted here, not adopted later.
-        // Throws on invalid, in which case the partial is removed too.
         try {
             FormatConverter.validateFinal(fin, eff);
         } catch (Exception ex) {
-            // noinspection ResultOfMethodCallIgnored
-            fin.delete();
+            if (!fin.equals(raw)) {
+                // noinspection ResultOfMethodCallIgnored
+                fin.delete();
+            }
             throw ex;
         }
-        // noinspection ResultOfMethodCallIgnored
-        raw.delete();
+        // The raw is scratch once a converted copy exists — but when the
+        // output IS the raw (WAV32) it must survive.
+        if (!fin.equals(raw)) {
+            // noinspection ResultOfMethodCallIgnored
+            raw.delete();
+        }
         CrashLog.breadcrumb(ctx, "convert end " + eff.id);
         post(cb, 100);
         return new Result(fin, eff.badge, dur, title);

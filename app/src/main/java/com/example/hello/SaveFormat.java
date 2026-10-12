@@ -6,20 +6,20 @@ import android.media.MediaCodec;
 import android.media.MediaFormat;
 
 /**
- * Every container this app can write. WAV16 is produced by our own writer
- * (always available); M4A/AAC is mandatory per the CDD. Everything else is
- * offered only when {@link MediaCodecList} actually finds a platform
- * encoder, so the list gracefully matches what the device supports
- * (encode side — decode-only codecs like MP3/Vorbis-in-some-cases never
- * appear as save targets).
+ * Every container this app can write. WAV16 and WAV32 are produced by our
+ * own writer (always available); M4A/AAC is mandatory per the CDD. Everything
+ * else is offered only when an encoder can actually be created, so the list
+ * gracefully matches what the device supports (decode-only codecs like MP3
+ * never appear as save targets).
  */
 public enum SaveFormat {
     AUTO("auto", R.string.save_auto, R.string.save_auto_sub, "M4A"),
     M4A("m4a", R.string.save_m4a, R.string.save_m4a_sub, "M4A"),
     WAV16("wav16", R.string.save_wav16, R.string.save_wav16_sub, "WAV"),
+    WAV32("wav32", R.string.save_wav32, R.string.save_wav32_sub, "WAV32"),
+    FLAC("flac", R.string.save_flac, R.string.save_flac_sub, "FLAC"),
     AMR_NB("amr_nb", R.string.save_amr_nb, R.string.save_amr_nb_sub, "AMR"),
     AMR_WB("amr_wb", R.string.save_amr_wb, R.string.save_amr_wb_sub, "AMR-WB"),
-    FLAC("flac", R.string.save_flac, R.string.save_flac_sub, "FLAC"),
     OPUS("opus", R.string.save_opus, R.string.save_opus_sub, "OPUS"),
     VORBIS("vorbis", R.string.save_vorbis, R.string.save_vorbis_sub, "VORBIS");
 
@@ -78,6 +78,7 @@ public enum SaveFormat {
             case AUTO:
             case M4A:
             case WAV16:
+            case WAV32:
                 return true;
             case AMR_NB:
                 if (amrNbOk == null) amrNbOk = hasEncoder("audio/3gpp");
@@ -143,7 +144,8 @@ public enum SaveFormat {
     public String extension() {
         switch (this) {
             case M4A: return "m4a";
-            case WAV16: return "wav";
+            case WAV16:
+            case WAV32: return "wav";
             case AMR_NB:
             case AMR_WB: return "3gp";
             case FLAC: return "flac";
@@ -153,9 +155,22 @@ public enum SaveFormat {
         }
     }
 
-    /** Resolve AUTO to the default container (M4A). */
+    /**
+     * What AUTO resolves to for a given preset — the container that actually
+     * suits what was captured, so the user never has to think about it:
+     *
+     * <ul>
+     *   <li><b>Memo / Podcast</b> — speech. AAC is transparent enough and
+     *       gives a fraction of the size, which is the point of a memo.</li>
+     *   <li><b>Music</b> — an unprocessed stereo master. Even 320 kbps AAC
+     *       throws away real detail, so Auto keeps the 32-bit float capture
+     *       untouched. Lossless is the correct default where the source is
+     *       lossless.</li>
+     * </ul>
+     */
     public SaveFormat effective(RecordPreset preset) {
         if (this != AUTO) return this;
+        if (preset != null && preset.savesLosslessByDefault) return WAV32;
         return M4A;
     }
 

@@ -315,6 +315,12 @@ public final class FormatConverter {
         if (dst == null || !dst.exists() || dst.length() < 64) {
             throw new IllegalStateException("output too small");
         }
+        if (fmt == SaveFormat.WAV32) {
+            // Lossless path: the strongest check is the header the converter
+            // itself requires (32-bit float, right channel count/rate).
+            readFloatWav(dst);
+            return;
+        }
         RandomAccessFile r = new RandomAccessFile(dst, "r");
         try {
             byte[] head = new byte[12];
@@ -352,6 +358,9 @@ public final class FormatConverter {
                     }
                     break;
                 case WAV16:
+                case WAV32:
+                    // RIFF/WAVE either way; readFloatWav() has already
+                    // asserted the 32-bit float payload for the WAV32 case.
                     if (head[0] != 'R' || head[1] != 'I'
                             || head[2] != 'F' || head[3] != 'F'
                             || head[8] != 'W' || head[9] != 'A'

@@ -19,7 +19,7 @@ public enum RecordPreset {
     PODCAST("podcast", R.string.preset_podcast, R.string.preset_podcast_sub,
             "POD 256k", 2, 256000, MediaRecorder.AudioSource.MIC),
     MUSIC("music", R.string.preset_music, R.string.preset_music_sub,
-            "MUS 320k", 2, 320000, MediaRecorder.AudioSource.UNPROCESSED);
+            "MUS 320k", 2, 320000, MediaRecorder.AudioSource.UNPROCESSED, true);
 
     public final String id;
     public final int titleRes;
@@ -31,9 +31,23 @@ public enum RecordPreset {
     /** AAC bitrate for the save conversion. */
     public final int aacBitrate;
     public final int audioSource;
+    /**
+     * True when the capture should be kept lossless by default. Only the
+     * unprocessed stereo master qualifies: AAC is transparent for speech but
+     * discards real detail in a music take, so AUTO saves Music as the
+     * original 32-bit float WAV rather than squeezing it through a codec.
+     */
+    public final boolean savesLosslessByDefault;
 
     RecordPreset(String id, int titleRes, int subRes, String shortLabel,
                  int channels, int aacBitrate, int audioSource) {
+        this(id, titleRes, subRes, shortLabel, channels, aacBitrate,
+                audioSource, false);
+    }
+
+    RecordPreset(String id, int titleRes, int subRes, String shortLabel,
+                 int channels, int aacBitrate, int audioSource,
+                 boolean savesLosslessByDefault) {
         this.id = id;
         this.titleRes = titleRes;
         this.subRes = subRes;
@@ -41,6 +55,7 @@ public enum RecordPreset {
         this.channels = channels;
         this.aacBitrate = aacBitrate;
         this.audioSource = audioSource;
+        this.savesLosslessByDefault = savesLosslessByDefault;
     }
 
     public boolean wantsStereo() {

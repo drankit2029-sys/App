@@ -25,19 +25,35 @@ public class SaveFormatTest {
     }
 
     @Test
-    public void effectiveFollowsPreset() {
+    public void autoPicksTheAppropriateContainer() {
+        // Speech: AAC is transparent and far smaller — that is the point.
         assertEquals(SaveFormat.M4A,
                 SaveFormat.AUTO.effective(RecordPreset.MEMO));
         assertEquals(SaveFormat.M4A,
+                SaveFormat.AUTO.effective(RecordPreset.PODCAST));
+        // Music: the capture is an unprocessed lossless master, so Auto keeps
+        // the original 32-bit float rather than squeezing it through AAC.
+        assertEquals(SaveFormat.WAV32,
                 SaveFormat.AUTO.effective(RecordPreset.MUSIC));
+        // An explicit choice always wins.
+        assertEquals(SaveFormat.M4A,
+                SaveFormat.M4A.effective(RecordPreset.MUSIC));
         assertEquals(SaveFormat.WAV16,
-                SaveFormat.WAV16.effective(RecordPreset.MUSIC));
+                SaveFormat.WAV16.effective(RecordPreset.MEMO));
+    }
+
+    @Test
+    public void onlyMusicDefaultsToLossless() {
+        assertTrue(RecordPreset.MUSIC.savesLosslessByDefault);
+        assertFalse(RecordPreset.MEMO.savesLosslessByDefault);
+        assertFalse(RecordPreset.PODCAST.savesLosslessByDefault);
     }
 
     @Test
     public void extensions() {
         assertEquals("m4a", SaveFormat.M4A.extension());
         assertEquals("wav", SaveFormat.WAV16.extension());
+        assertEquals("wav", SaveFormat.WAV32.extension());
         assertEquals("3gp", SaveFormat.AMR_NB.extension());
         assertEquals("flac", SaveFormat.FLAC.extension());
         assertEquals("webm", SaveFormat.OPUS.extension());
@@ -49,6 +65,8 @@ public class SaveFormatTest {
         assertTrue(SaveFormat.AUTO.available(ctx));
         assertTrue(SaveFormat.M4A.available(ctx));
         assertTrue(SaveFormat.WAV16.available(ctx));
+        // Pure-Java lossless path: never gated on a platform encoder.
+        assertTrue(SaveFormat.WAV32.available(ctx));
     }
 
     @Test
@@ -73,11 +91,34 @@ public class SaveFormatTest {
     @Test
     public void takeSaverLabels() {
         assertEquals("M4A", TakeSaver.labelFor(RecordPreset.MEMO, SaveFormat.AUTO));
-        assertEquals("M4A", TakeSaver.labelFor(RecordPreset.MUSIC, SaveFormat.AUTO));
-        assertEquals("WAV",
-                TakeSaver.labelFor(RecordPreset.PODCAST, SaveFormat.WAV16));
-        assertEquals("AMR",
-                TakeSaver.labelFor(RecordPreset.MEMO, SaveFormat.AMR_NB));
+        assertEquals("M4A", TakeSaver.labelFor(RecordPreset.PODCAST, SaveFormat.AUTO));
+        assertEquals("WAV32", TakeSaver.labelFor(RecordPreset.MUSIC, SaveFormat.AUTO));
+        assertEquals("WAV", TakeSaver.labelFor(RecordPreset.MUSIC, SaveFormat.WAV16));
+        assertEquals("AMR", TakeSaver.labelFor(RecordPreset.MEMO, SaveFormat.AMR_NB));
+    }
+
+    @Test
+    public void wav32SurvivesItsOwnValidation() throws Exception {
+        // The lossless save keeps the raw capture, so validation must accept
+        // a 32-bit float WAV rather than only PCM16.
+        java.io.File f = java.io.File.createTempFile("vfy32", ".wav");
+        try {
+            int frames = 480;
+            byte[] hdr = Dsp.wavFloatHeader(2, 48000, (long) frames * 2 * 4);
+            byte[] all = new byte[hdr.length + frames * 2 * 4];
+            System.arraycopy(hdr, 0, all, 0, hdr.length);
+            java.io.FileOutputStream w = new java.io.FileOutputStream(f);
+            try {
+                w.write(all);
+            } finally {
+                w.close();
+            }
+            FormatConverter.validateFinal(f, SaveFormat.WAV32);
+            assertTrue(Dsp.wavDurationMs(f) > 0);
+        } finally {
+            // noinspection ResultOfMethodCallIgnored
+            f.delete();
+        }
     }
 
     @Test

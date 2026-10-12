@@ -134,6 +134,41 @@ public class SavePipelineTest {
     }
 
     @Test
+    public void musicAutoSavesTheRawCaptureLosslessly() throws Exception {
+        // Music defaults to the 32-bit float capture: the finished file must
+        // BE that capture (same bytes), and it must survive the save.
+        engine.startNewSession(ctx, "Lossless Master", 2);
+        File raw = engine.rawFile;
+        writeCaptureSeconds(0.5);
+        long rawBytes = raw.length();
+
+        TakeSaver.Result r = TakeSaver.finalizeAndConvert(ctx,
+                RecordPreset.MUSIC, SaveFormat.AUTO, null);
+
+        assertEquals("WAV32", r.label);
+        assertTrue("output must be the raw capture itself",
+                r.file.equals(raw));
+        assertTrue("raw capture was deleted", raw.exists());
+        assertEquals(rawBytes, r.file.length());
+        // Still a genuine, readable 32-bit float WAV.
+        assertTrue(Dsp.wavDurationMs(r.file) > 0);
+        FormatConverter.validateFinal(r.file, SaveFormat.WAV32);
+    }
+
+    @Test
+    public void memoAutoStillProducesCompressedM4A() throws Exception {
+        engine.startNewSession(ctx, "Memo", 1);
+        File raw = engine.rawFile;
+        writeCaptureSeconds(0.5);
+        TakeSaver.Result r = TakeSaver.finalizeAndConvert(ctx,
+                RecordPreset.MEMO, SaveFormat.AUTO, null);
+        assertEquals("M4A", r.label);
+        assertTrue(r.file.getName().endsWith(".m4a"));
+        assertFalse("raw should be cleaned up after conversion", raw.exists());
+        FormatConverter.validateFinal(r.file, SaveFormat.M4A);
+    }
+
+    @Test
     public void repeatedSavesLeaveNoOrphans() throws Exception {
         // The reported symptom was "a few saves then dead": repeated cycles
         // must not leak raw files or pending markers. (WAV16 explicitly:
