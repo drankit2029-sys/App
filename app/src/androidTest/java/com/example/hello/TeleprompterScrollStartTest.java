@@ -52,12 +52,8 @@ public class TeleprompterScrollStartTest {
                 .putBoolean("tele_auto", true)
                 .apply();
         TeleSettings.invalidateCache();
-        a.runOnUiThread(() -> {
-            Activity a2 = launch();
-            View tele = a2.findViewById(R.id.teleView);
-            assertNotNull("teleprompter not on screen", tele);
-        });
 
+        // Relaunch so the fragment picks the script up.
         Activity b = launch();
         TeleprompterView tele = (TeleprompterView) b.findViewById(R.id.teleView);
         assertNotNull("teleprompter not on screen", tele);
