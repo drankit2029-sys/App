@@ -38,7 +38,7 @@ public class ConversionBenchTest {
         try {
             w.setLength(0);
             w.write(Dsp.wavFloatHeader(CH, SR, (long) frames * CH * 4));
-            float[] buf = new float[8192];
+            float[] buf = new float[8192 * CH];
             double phase = 0;
             for (int off = 0; off < frames; off += 8192) {
                 int n = Math.min(8192, frames - off);
@@ -71,9 +71,11 @@ public class ConversionBenchTest {
         Log.i(TAG, String.format(java.util.Locale.US,
                 "%s: %d bytes in %d ms = %.1f MB/s (%.2fx realtime)", label,
                 rawBytes, ms, mbps, SECONDS / (ms / 1000d)));
+        long outBytes = out.exists() ? out.length() : 0L;
         // noinspection ResultOfMethodCallIgnored
         out.delete();
-        assertTrue(label + " produced no output", out.exists() || ms >= 0);
+        assertTrue(label + " produced no output (" + outBytes + " bytes)",
+                outBytes > 0);
     }
 
     private interface Runner {
