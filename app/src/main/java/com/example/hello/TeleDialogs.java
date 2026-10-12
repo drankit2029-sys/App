@@ -87,9 +87,10 @@ public final class TeleDialogs {
 
     // ---- editor ----
 
-    public static void showEditor(Context ctx, String script, int wpm,
-                                  ScriptCallback onSave,
-                                  ImportRequest onImport) {
+    /** @return the shown dialog, so callers/tests can drive its controls. */
+    public static Dialog showEditor(Context ctx, String script, int wpm,
+                                    ScriptCallback onSave,
+                                    ImportRequest onImport) {
         Dialog d = new Dialog(ctx, R.style.TakeOneCenterDialog);
         // Must precede setContentView, or the framework throws
         // "requestFeature() must be called before adding content".
@@ -138,6 +139,7 @@ public final class TeleDialogs {
             String s = input.getText().toString().trim();
             if (!s.isEmpty() && onSave != null) onSave.onScript(s);
         });
+        return d;
     }
 
     // ---- tuner ----
@@ -146,9 +148,10 @@ public final class TeleDialogs {
      * @param availWidthPx teleprompter width, so the words-per-line clamp can
      *                      be evaluated and explained against real space
      */
-    public static void showTuner(Context ctx, TeleSettings s,
-                                 int availWidthPx, float textSizePx,
-                                 TuneCallback cb) {
+    /** @return the shown dialog, so callers/tests can drive its controls. */
+    public static Dialog showTuner(Context ctx, TeleSettings s,
+                                   int availWidthPx, float textSizePx,
+                                   TuneCallback cb) {
         Dialog d = new Dialog(ctx, R.style.TakeOneCenterDialog);
         // Must precede setContentView, or the framework throws
         // "requestFeature() must be called before adding content".
@@ -241,5 +244,6 @@ public final class TeleDialogs {
             s.save(ctx);
             if (cb != null) cb.onTuned();
         });
+        return d;
     }
 }

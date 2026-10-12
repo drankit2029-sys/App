@@ -4,6 +4,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 import android.app.Activity;
+import android.view.View;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.Robolectric;
@@ -57,13 +58,23 @@ public class TeleDialogsTest {
     }
 
     @Test
-    public void editorOpensWithScriptAndImportHook() {
+    public void editorOpensImportAndSaves() {
         final boolean[] imported = {false};
         final String[] saved = {null};
-        TeleDialogs.showEditor(activity(), "hello world\nsecond line", 120,
+        android.app.Dialog d = TeleDialogs.showEditor(activity(),
+                "hello world\nsecond line", 120,
                 text -> saved[0] = text,
                 () -> imported[0] = true);
+
+        // The import button must actually fire the hook when tapped.
+        View importBtn = d.findViewById(R.id.teleImportBtn);
+        assertTrue("no import button", importBtn != null);
+        importBtn.performClick();
         assertTrue("import hook never fired", imported[0]);
+
+        // Closing commits the script.
+        d.dismiss();
+        assertEquals("hello world\nsecond line", saved[0]);
     }
 
     @Test
