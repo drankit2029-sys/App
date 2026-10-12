@@ -4,25 +4,31 @@ import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.LinearGradient;
 import android.graphics.Paint;
+import android.graphics.RectF;
 import android.graphics.Shader;
 import android.util.AttributeSet;
 import android.view.View;
 
 /**
- * Vertical dBFS meter (-60..0&nbsp;dB) with green/amber/red segments and a
- * decaying peak-hold marker. Fed with the same 0..1 raw peak as the waveform.
+ * Slim vertical dBFS meter (-60..0&nbsp;dB).
+ *
+ * <p>Designed to live as a thin rail beside the timer: a rounded capsule
+ * track with a soft glow at the fill head, a single continuous colour ramp
+ * rather than hard colour bands, and a peak-hold tick that decays slowly.
  */
 public class DbMeterView extends View {
 
     private static final float FLOOR_DB = -60f;
 
-    private final Paint bgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint trackPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint fillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint glowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint peakPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint tickPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final RectF rect = new RectF();
 
     private float level; // 0..1 smoothed
     private float peak;  // 0..1 peak-hold
+    private float radius;
 
     public DbMeterView(Context context) {
         super(context);
@@ -35,20 +41,18 @@ public class DbMeterView extends View {
     }
 
     private void init() {
-        bgPaint.setColor(0xFF171B21);
+        trackPaint.setColor(0xFF171B21);
+        glowPaint.setColor(0x66FFFFFF);
         peakPaint.setColor(0xFFF2F4F7);
-        peakPaint.setStrokeWidth(3f);
-        tickPaint.setColor(0xFF3A414B);
-        tickPaint.setStrokeWidth(1f);
-        tickPaint.setTextSize(16f);
     }
 
     /** Push one 0..1 peak sample; call at the studio tick cadence. */
     public void setLevel(float v) {
         v = Math.max(0f, Math.min(1f, v));
-        // Fast attack, slow release smoothing.
-        level = v > level ? v : level + (v - level) * 0.35f;
-        peak = Math.max(v, peak - 0.012f);
+        // Fast attack so transients are not hidden, slow release so the bar
+        // does not flicker between words.
+        level = v > level ? v : level + (v - level) * 0.22f;
+        peak = Math.max(v, peak - 0.010f);
         invalidate();
     }
 
@@ -70,42 +74,43 @@ public class DbMeterView extends View {
         int h = getHeight();
         if (w <= 0 || h <= 0) return;
 
-        float pad = 6f;
-        float barLeft = pad;
-        // Thin meter: numeric labels only when there is room for them.
-        boolean roomForLabels = w > 64;
-        float barRight = roomForLabels ? w - pad - 34f : w - pad;
-        if (barRight <= barLeft + 4) barRight = barLeft + 8;
-        float top = pad;
-        float bottom = h - pad;
+        radius = Math.min(w / 2f, 6f);
+        float inset = 0f;
+        float top = inset;
+        float bottom = h - inset;
 
-        canvas.drawRect(barLeft, top, barRight, bottom, bgPaint);
-
-        // Scale ticks every 12 dB.
-        for (int db = 0; db >= -60; db -= 12) {
-            float y = top + (0 - db) / 60f * (bottom - top);
-            canvas.drawLine(barRight + 3, y, barRight + 9, y, tickPaint);
-            if (roomForLabels) {
-                canvas.drawText(String.valueOf(db), barRight + 11, y + 5, tickPaint);
-            }
-        }
+        rect.set(0, top, w, bottom);
+        canvas.drawRoundRect(rect, radius, radius, trackPaint);
 
         float db = toDb(level);
         float frac = (db - FLOOR_DB) / (0 - FLOOR_DB);
         float fillTop = bottom - frac * (bottom - top);
+        if (fillTop >= bottom - 0.5f) return;
 
-        // One vertical gradient (green -> amber -> red) mapped over the whole
-        // bar, so color follows height smoothly instead of hard thresholds.
+        // One smooth ramp across the full height: red at the top, amber
+        // through the mids, green near the floor. No banding.
         fillPaint.setShader(new LinearGradient(0, top, 0, bottom,
-                new int[]{0xFFFF3B30, 0xFFFF9F0A, 0xFF34C759},
-                new float[]{0f, 0.25f, 0.55f},
+                new int[]{0xFFFF453A, 0xFFFF9F0A, 0xFF34C759},
+                new float[]{0f, 0.30f, 0.62f},
                 Shader.TileMode.CLAMP));
-        canvas.drawRect(barLeft, fillTop, barRight, bottom, fillPaint);
+        rect.set(0, fillTop, w, bottom);
+        canvas.drawRoundRect(rect, radius, radius, fillPaint);
         fillPaint.setShader(null);
+
+        // Soft cap highlight at the fill head.
+        glowPaint.setAlpha(70);
+        float capH = Math.min(10f, Math.max(3f, h * 0.02f));
+        rect.set(0, fillTop, w, fillTop + capH);
+        canvas.drawRoundRect(rect, radius, radius, glowPaint);
+        glowPaint.setAlpha(255);
 
         float pdb = toDb(peak);
         float pfrac = (pdb - FLOOR_DB) / (0 - FLOOR_DB);
         float py = bottom - pfrac * (bottom - top);
-        canvas.drawLine(barLeft, py, barRight, py, peakPaint);
+        if (py > top && py < bottom) {
+            peakPaint.setStrokeWidth(Math.max(1.5f, w * 0.16f));
+            peakPaint.setStrokeCap(Paint.Cap.ROUND);
+            canvas.drawLine(w * 0.28f, py, w * 0.72f, py, peakPaint);
+        }
     }
 }

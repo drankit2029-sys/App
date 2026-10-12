@@ -23,6 +23,51 @@ public final class FormatConverter {
      */
     private static final long DRAIN_TIMEOUT_MS = 10_000L;
 
+    /**
+     * Samples per bulk-conversion chunk. Large enough that per-chunk setup is
+     * irrelevant next to the per-sample work.
+     */
+    private static final int CONV_CHUNK = 65536;
+
+    /**
+     * Clamped float samples to 16-bit PCM, written into {@code dst}.
+     *
+     * <p>Typed views plus absolute indexing replace per-sample
+     * {@code ByteBuffer.getFloat/putShort}, which re-checked the buffer type
+     * and byte-swapped on every element. This loop is the single hottest path
+     * in a save, so it is worth doing once here rather than three times.
+     *
+     * <p>Rounding is half-away-from-zero, which is symmetric about silence;
+     * the previous {@code Math.round} biased toward +inf and cost a
+     * {@code long} intermediate per sample.
+     */
+    static int toInt16(java.nio.FloatBuffer src, int n,
+                       java.nio.ShortBuffer dst) {
+        for (int i = 0; i < n; i++) {
+            float s = src.get(i);
+            if (s > 1f) s = 1f;
+            else if (s < -1f) s = -1f;
+            float t = s * 32767f;
+            dst.put(i, (short) (t >= 0f ? t + 0.5f : t - 0.5f));
+        }
+        return n;
+    }
+
+    /** Same clamp into 24-bit range, ready to be split into 3 bytes LE. */
+    static int toInt24(java.nio.FloatBuffer src, int n,
+                       java.nio.IntBuffer dst) {
+        for (int i = 0; i < n; i++) {
+            float s = src.get(i);
+            if (s > 1f) s = 1f;
+            else if (s < -1f) s = -1f;
+            float t = s * 8388607f;
+            int v = (int) (t >= 0f ? t + 0.5f : t - 0.5f);
+            dst.put(i, v > 8388607 ? 8388607
+                    : (v < -8388608 ? -8388608 : v));
+        }
+        return n;
+    }
+
     public interface Progress {
         void onProgress(int percent);
     }
@@ -80,25 +125,18 @@ public final class FormatConverter {
             w.setLength(0);
             w.write(wav16Header(info.channels, info.sampleRate, 0));
             r.seek(info.dataStart);
-            byte[] in = new byte[32768 * 4];
-            byte[] out = new byte[32768 * 2];
-            ByteBuffer ib = ByteBuffer.wrap(in).order(ByteOrder.LITTLE_ENDIAN);
-            ByteBuffer ob = ByteBuffer.wrap(out).order(ByteOrder.LITTLE_ENDIAN);
+            byte[] in = new byte[CONV_CHUNK * 4];
+            byte[] out = new byte[CONV_CHUNK * 2];
+            java.nio.FloatBuffer fb = ByteBuffer.wrap(in)
+                    .order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer();
+            java.nio.ShortBuffer sb = ByteBuffer.wrap(out)
+                    .order(ByteOrder.LITTLE_ENDIAN).asShortBuffer();
             long done = 0;
             int lastPct = -1;
             while (done < totalSamples) {
-                int want = (int) Math.min(32768, totalSamples - done);
-                int bytes = want * 4;
-                r.readFully(in, 0, bytes);
-                ib.clear();
-                ib.limit(bytes);
-                ob.clear();
-                for (int i = 0; i < want; i++) {
-                    float s = ib.getFloat();
-                    if (s > 1f) s = 1f;
-                    else if (s < -1f) s = -1f;
-                    ob.putShort((short) Math.round(s * 32767f));
-                }
+                int want = (int) Math.min(CONV_CHUNK, totalSamples - done);
+                r.readFully(in, 0, want * 4);
+                toInt16(fb, want, sb);
                 w.write(out, 0, want * 2);
                 done += want;
                 if (cb != null) {
@@ -155,28 +193,21 @@ public final class FormatConverter {
             w.setLength(0);
             w.write(Dsp.wav24Header(info.channels, info.sampleRate, 0));
             r.seek(info.dataStart);
-            // 32768 samples in, 3 bytes each out.
-            byte[] in = new byte[32768 * 4];
-            byte[] out = new byte[32768 * 3];
-            ByteBuffer ib = ByteBuffer.wrap(in).order(ByteOrder.LITTLE_ENDIAN);
+            byte[] in = new byte[CONV_CHUNK * 4];
+            byte[] out = new byte[CONV_CHUNK * 3];
+            java.nio.FloatBuffer fb = ByteBuffer.wrap(in)
+                    .order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer();
+            java.nio.IntBuffer ib = ByteBuffer.allocate(CONV_CHUNK * 4)
+                    .order(ByteOrder.NATIVE_ORDER).asIntBuffer();
             long done = 0;
             int lastPct = -1;
             while (done < totalSamples) {
-                int want = (int) Math.min(32768, totalSamples - done);
-                int bytes = want * 4;
-                r.readFully(in, 0, bytes);
-                ib.clear();
-                ib.limit(bytes);
+                int want = (int) Math.min(CONV_CHUNK, totalSamples - done);
+                r.readFully(in, 0, want * 4);
+                toInt24(fb, want, ib);
                 int p = 0;
                 for (int i = 0; i < want; i++) {
-                    float s = ib.getFloat();
-                    if (s > 1f) s = 1f;
-                    else if (s < -1f) s = -1f;
-                    // +1.0 maps to 0x7FFFFF (full-scale positive); the most
-                    // negative sample is representable, +1.0 is not.
-                    int v = (int) Math.round(s * 8388607f);
-                    if (v > 8388607) v = 8388607;
-                    else if (v < -8388608) v = -8388608;
+                    int v = ib.get(i);
                     out[p++] = (byte) (v & 0xFF);
                     out[p++] = (byte) ((v >> 8) & 0xFF);
                     out[p++] = (byte) ((v >> 16) & 0xFF);
@@ -245,7 +276,8 @@ public final class FormatConverter {
         try {
             r.seek(info.dataStart);
             byte[] in = new byte[16384 * 4 * 2];
-            ByteBuffer ib = ByteBuffer.wrap(in).order(ByteOrder.LITTLE_ENDIAN);
+            java.nio.FloatBuffer fb = ByteBuffer.wrap(in)
+                    .order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer();
             long framesDone = 0;
             boolean inputEos = false;
             boolean outEos = false;
@@ -282,15 +314,13 @@ public final class FormatConverter {
                         } else {
                             int wantBytes = wantFrames * ch * 4;
                             r.readFully(in, 0, wantBytes);
-                            ib.clear();
-                            ib.limit(wantBytes);
                             int shorts = wantFrames * ch;
-                            for (int i = 0; i < shorts; i++) {
-                                float s = ib.getFloat();
-                                if (s > 1f) s = 1f;
-                                else if (s < -1f) s = -1f;
-                                dstBuf.putShort((short) Math.round(s * 32767f));
-                            }
+                            java.nio.ShortBuffer sb = dstBuf
+                                    .order(ByteOrder.LITTLE_ENDIAN)
+                                    .asShortBuffer();
+                            toInt16(fb, shorts, sb);
+                            dstBuf.position(0);
+                            dstBuf.limit(shorts * 2);
                             long pts = framesDone * 1_000_000L / sr;
                             enc.queueInputBuffer(
                                     idx, 0, shorts * 2, pts, 0);
@@ -470,20 +500,26 @@ public final class FormatConverter {
         RandomAccessFile r = new RandomAccessFile(src, "r");
         try {
             r.seek(info.dataStart);
-            byte[] in = new byte[32768 * info.channels * 4];
-            ByteBuffer ib = ByteBuffer.wrap(in).order(ByteOrder.LITTLE_ENDIAN);
+            int ch = info.channels;
+            byte[] in = new byte[CONV_CHUNK * ch * 4];
+            java.nio.FloatBuffer fb = ByteBuffer.wrap(in)
+                    .order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer();
             long done = 0;
             int lastPct = -1;
             int pos = 0;
             while (done < totalFrames) {
-                int want = (int) Math.min(32768, totalFrames - done);
-                r.readFully(in, 0, want * info.channels * 4);
-                ib.clear();
-                ib.limit(want * info.channels * 4);
-                for (int f = 0; f < want; f++) {
-                    float s0 = ib.getFloat();
-                    float s1 = info.channels > 1 ? ib.getFloat() : s0;
-                    mono[pos++] = (s0 + s1) * 0.5f;
+                int want = (int) Math.min(CONV_CHUNK, totalFrames - done);
+                r.readFully(in, 0, want * ch * 4);
+                if (ch > 1) {
+                    for (int f = 0; f < want; f++) {
+                        float s0 = fb.get(f * 2);
+                        float s1 = fb.get(f * 2 + 1);
+                        mono[pos++] = (s0 + s1) * 0.5f;
+                    }
+                } else {
+                    for (int f = 0; f < want; f++) {
+                        mono[pos++] = fb.get(f);
+                    }
                 }
                 done += want;
                 if (cb != null) {
@@ -505,19 +541,26 @@ public final class FormatConverter {
         int delay = taps / 2;
         int outLen = (int) (totalFrames / decim);
         short[] pcm = new short[outLen];
-        for (int n = 0; n < outLen; n++) {
-            double acc = 0;
-            int center = n * decim;
-            for (int k = 0; k < taps; k++) {
-                int idx = center - delay + k;
-                float s = (idx < 0 || idx >= mono.length) ? 0f : mono[idx];
-                acc += s * fir[k];
+        int n = mono.length;
+        // The window is symmetric (firLowpass guarantees it), so each tap
+        // pair is one multiply-add instead of two: half the MACs of the
+        // straightforward loop, which is the costliest part of an AMR save.
+        int half = taps / 2;
+        for (int o = 0; o < outLen; o++) {
+            float acc = 0f;
+            int center = o * decim - delay;
+            for (int k = 0; k < half; k++) {
+                int i1 = center + k;
+                int i2 = center + taps - 1 - k;
+                float s1 = (i1 >= 0 && i1 < n) ? mono[i1] : 0f;
+                float s2 = (i2 >= 0 && i2 < n) ? mono[i2] : 0f;
+                acc += s1 * fir[k] + s2 * fir[taps - 1 - k];
             }
-            if (acc > 1) acc = 1;
-            else if (acc < -1) acc = -1;
-            pcm[n] = (short) Math.round(acc * 32767f);
-            if (cb != null && (n & 0x3FFF) == 0) {
-                cb.onProgress(35 + (int) (n * 20L / Math.max(1, outLen)));
+            if (acc > 1f) acc = 1f;
+            else if (acc < -1f) acc = -1f;
+            pcm[o] = (short) (acc * 32767f);
+            if (cb != null && (o & 0x3FFF) == 0) {
+                cb.onProgress(35 + (int) (o * 20L / Math.max(1, outLen)));
             }
         }
         mono = null; // release before encoding
@@ -560,9 +603,12 @@ public final class FormatConverter {
                             drainDeadline = SystemClock.elapsedRealtime()
                                     + DRAIN_TIMEOUT_MS;
                         } else {
-                            for (int i = 0; i < want; i++) {
-                                dstBuf.putShort(pcm[(int) fed + i]);
-                            }
+                            java.nio.ShortBuffer sb = dstBuf
+                                    .order(ByteOrder.LITTLE_ENDIAN)
+                                    .asShortBuffer();
+                            sb.put(pcm, (int) fed, want);
+                            dstBuf.position(0);
+                            dstBuf.limit(want * 2);
                             long pts = fed * 1_000_000L / outRate;
                             enc.queueInputBuffer(idx, 0, want * 2, pts, 0);
                             fed += want;
@@ -656,7 +702,8 @@ public final class FormatConverter {
             java.io.ByteArrayOutputStream pending = new java.io.ByteArrayOutputStream();
             RandomAccessFile r = new RandomAccessFile(src, "r");
             byte[] in = new byte[16384 * 4 * 2];
-            ByteBuffer ib = ByteBuffer.wrap(in).order(ByteOrder.LITTLE_ENDIAN);
+            java.nio.FloatBuffer fb = ByteBuffer.wrap(in)
+                    .order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer();
             MediaCodec.BufferInfo bi = new MediaCodec.BufferInfo();
             long framesDone = 0;
             boolean inEos = false;
@@ -688,15 +735,13 @@ public final class FormatConverter {
                             } else {
                                 int wantBytes = wantFrames * ch * 4;
                                 r.readFully(in, 0, wantBytes);
-                                ib.clear();
-                                ib.limit(wantBytes);
                                 int shorts = wantFrames * ch;
-                                for (int i = 0; i < shorts; i++) {
-                                    float s = ib.getFloat();
-                                    if (s > 1f) s = 1f;
-                                    else if (s < -1f) s = -1f;
-                                    dstBuf.putShort((short) Math.round(s * 32767f));
-                                }
+                                java.nio.ShortBuffer sb = dstBuf
+                                        .order(ByteOrder.LITTLE_ENDIAN)
+                                        .asShortBuffer();
+                                toInt16(fb, shorts, sb);
+                                dstBuf.position(0);
+                                dstBuf.limit(shorts * 2);
                                 long pts = framesDone * 1_000_000L / sr;
                                 enc.queueInputBuffer(idx, 0, shorts * 2, pts, 0);
                                 framesDone += wantFrames;

@@ -12,14 +12,14 @@
         android:gravity="center_vertical"
         android:orientation="horizontal"
         android:paddingLeft="8dp"
-        android:paddingTop="8dp"
+        android:paddingTop="6dp"
         android:paddingRight="16dp"
-        android:paddingBottom="4dp">
+        android:paddingBottom="2dp">
 
         <ImageView
             android:id="@+id/backBtn"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
             android:contentDescription="@string/cd_back"
             android:padding="12dp"
             android:src="@drawable/ic_arrow_left" />
@@ -36,311 +36,398 @@
                 android:fontFamily="sans-serif-medium"
                 android:text="@string/studio_title"
                 android:textColor="@color/text_primary"
-                android:textSize="20sp" />
+                android:textSize="18sp" />
 
             <TextView
                 android:id="@+id/statusText"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="2dp"
+                android:layout_marginTop="1dp"
                 android:clickable="true"
                 android:focusable="true"
                 android:text="@string/studio_ready"
                 android:textColor="@color/text_secondary"
-                android:textSize="13sp" />
+                android:textSize="12sp" />
         </LinearLayout>
 
         <TextView
             android:id="@+id/formatBadge"
             android:layout_width="wrap_content"
-            android:layout_height="32dp"
+            android:layout_height="26dp"
             android:background="@drawable/bg_badge"
             android:gravity="center"
-            android:paddingLeft="12dp"
-            android:paddingRight="12dp"
+            android:paddingLeft="10dp"
+            android:paddingRight="10dp"
             android:text="@string/preset_memo"
             android:textColor="@color/text_secondary"
-            android:textSize="11sp" />
+            android:textSize="10sp" />
     </LinearLayout>
 
-    <!-- Status dot + state -->
+    <!-- State + draft indicator (one compact row) -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="6dp"
-        android:gravity="center"
-        android:orientation="horizontal">
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingBottom="2dp">
 
         <View
             android:id="@+id/statusDot"
-            android:layout_width="10dp"
-            android:layout_height="10dp"
+            android:layout_width="8dp"
+            android:layout_height="8dp"
             android:background="@drawable/bg_round_btn" />
 
         <TextView
             android:id="@+id/stateLabel"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
+            android:layout_marginStart="6dp"
             android:letterSpacing="0.12"
             android:text="@string/studio_ready"
             android:textColor="@color/text_secondary"
-            android:textSize="12sp" />
+            android:textSize="11sp" />
+
+        <TextView
+            android:id="@+id/draftBadge"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="10dp"
+            android:background="@drawable/bg_badge"
+            android:paddingLeft="8dp"
+            android:paddingTop="2dp"
+            android:paddingRight="8dp"
+            android:paddingBottom="2dp"
+            android:text="@string/studio_streaming"
+            android:textColor="@color/record"
+            android:textSize="10sp"
+            android:visibility="gone" />
+    </LinearLayout>
+
+    <!-- Teleprompter: on top, fills whatever the recording strip leaves -->
+    <LinearLayout
+        android:id="@+id/telePanel"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_marginLeft="14dp"
+        android:layout_marginTop="4dp"
+        android:layout_marginRight="14dp"
+        android:layout_weight="1"
+        android:background="@drawable/bg_search"
+        android:minHeight="120dp"
+        android:orientation="vertical"
+        android:paddingTop="6dp"
+        android:paddingBottom="6dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingLeft="12dp"
+            android:paddingRight="6dp">
+
+            <TextView
+                android:id="@+id/teleTitle"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:letterSpacing="0.1"
+                android:maxLines="1"
+                android:text="@string/teleprompter"
+                android:textColor="@color/text_hint"
+                android:textSize="10sp" />
+
+            <TextView
+                android:id="@+id/teleEditBtn"
+                android:layout_width="wrap_content"
+                android:layout_height="30dp"
+                android:background="@drawable/bg_round_btn"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:paddingLeft="12dp"
+                android:paddingRight="12dp"
+                android:text="@string/tele_edit"
+                android:textColor="@color/text_primary"
+                android:textSize="11sp" />
+
+            <TextView
+                android:id="@+id/teleTuneBtn"
+                android:layout_width="wrap_content"
+                android:layout_height="30dp"
+                android:layout_marginStart="4dp"
+                android:background="@drawable/bg_round_btn"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:paddingLeft="12dp"
+                android:paddingRight="12dp"
+                android:text="@string/tele_tune"
+                android:textColor="@color/text_primary"
+                android:textSize="11sp" />
+
+            <TextView
+                android:id="@+id/teleHideBtn"
+                android:layout_width="wrap_content"
+                android:layout_height="30dp"
+                android:layout_marginStart="4dp"
+                android:background="@drawable/bg_round_btn"
+                android:clickable="true"
+                android:contentDescription="@string/tele_hide"
+                android:focusable="true"
+                android:gravity="center"
+                android:paddingLeft="12dp"
+                android:paddingRight="12dp"
+                android:text="@string/tele_hide_short"
+                android:textColor="@color/text_secondary"
+                android:textSize="11sp" />
+        </LinearLayout>
+
+        <com.example.hello.TeleprompterView
+            android:id="@+id/teleView"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_marginTop="2dp"
+            android:layout_weight="1" />
+    </LinearLayout>
+
+    <!-- Recording strip: slim dB rail | waveform + zoom over timer + pills -->
+    <LinearLayout
+        android:id="@+id/recStrip"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingLeft="16dp"
+        android:paddingRight="14dp">
+
+        <com.example.hello.DbMeterView
+            android:id="@+id/dbMeter"
+            android:layout_width="8dp"
+            android:layout_height="168dp" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="12dp"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <!-- Upper group: waveform with its zoom controls on the right -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <com.example.hello.WaveformView
+                    android:id="@+id/waveform"
+                    android:layout_width="0dp"
+                    android:layout_height="64dp"
+                    android:layout_weight="1" />
+
+                <LinearLayout
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="6dp"
+                    android:gravity="center"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:id="@+id/btnZoomIn"
+                        android:layout_width="26dp"
+                        android:layout_height="26dp"
+                        android:background="@drawable/bg_round_btn"
+                        android:clickable="true"
+                        android:contentDescription="@string/zoom_in"
+                        android:focusable="true"
+                        android:gravity="center"
+                        android:text="+"
+                        android:textColor="@color/text_primary"
+                        android:textSize="13sp" />
+
+                    <TextView
+                        android:id="@+id/zoomLabel"
+                        android:layout_width="26dp"
+                        android:layout_height="wrap_content"
+                        android:gravity="center"
+                        android:text="1x"
+                        android:textColor="@color/text_hint"
+                        android:textSize="9sp" />
+
+                    <TextView
+                        android:id="@+id/btnZoomOut"
+                        android:layout_width="26dp"
+                        android:layout_height="26dp"
+                        android:layout_marginTop="2dp"
+                        android:background="@drawable/bg_round_btn"
+                        android:clickable="true"
+                        android:contentDescription="@string/zoom_out"
+                        android:focusable="true"
+                        android:gravity="center"
+                        android:text="−"
+                        android:textColor="@color/text_primary"
+                        android:textSize="13sp" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- Lower group: timer -->
+            <TextView
+                android:id="@+id/timerText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:fontFamily="sans-serif-light"
+                android:gravity="center"
+                android:text="00:00.00"
+                android:textColor="@color/text_primary"
+                android:textSize="38sp" />
+
+            <!-- Preset pill + teleprompter pill, half width each -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:orientation="horizontal">
+
+                <LinearLayout
+                    android:id="@+id/settingsRow"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginEnd="3dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/bg_search"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:paddingLeft="10dp"
+                    android:paddingTop="7dp"
+                    android:paddingRight="8dp"
+                    android:paddingBottom="7dp">
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:letterSpacing="0.1"
+                            android:text="@string/settings_label"
+                            android:textColor="@color/text_hint"
+                            android:textSize="9sp" />
+
+                        <TextView
+                            android:id="@+id/settingsName"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="1dp"
+                            android:fontFamily="sans-serif-medium"
+                            android:text="@string/preset_memo"
+                            android:textColor="@color/text_primary"
+                            android:textSize="13sp" />
+
+                        <TextView
+                            android:id="@+id/settingsSub"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="1dp"
+                            android:ellipsize="end"
+                            android:maxLines="1"
+                            android:text="@string/preset_memo_sub"
+                            android:textColor="@color/text_secondary"
+                            android:textSize="10sp" />
+                    </LinearLayout>
+
+                    <ImageView
+                        android:layout_width="16dp"
+                        android:layout_height="16dp"
+                        android:alpha="0.6"
+                        android:src="@drawable/ic_chevron" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/teleToggle"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="3dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/bg_search"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:paddingLeft="10dp"
+                    android:paddingTop="7dp"
+                    android:paddingRight="10dp"
+                    android:paddingBottom="7dp">
+
+                    <ImageView
+                        android:id="@+id/teleToggleIcon"
+                        android:layout_width="16dp"
+                        android:layout_height="16dp"
+                        android:alpha="0.75"
+                        android:src="@drawable/ic_pencil" />
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="8dp"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:letterSpacing="0.1"
+                            android:text="@string/teleprompter"
+                            android:textColor="@color/text_hint"
+                            android:textSize="9sp" />
+
+                        <TextView
+                            android:id="@+id/teleState"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="1dp"
+                            android:fontFamily="sans-serif-medium"
+                            android:text="@string/tele_show"
+                            android:textColor="@color/text_primary"
+                            android:textSize="13sp" />
+                    </LinearLayout>
+                </LinearLayout>
+            </LinearLayout>
+        </LinearLayout>
     </LinearLayout>
 
     <TextView
         android:id="@+id/takeName"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="2dp"
+        android:layout_marginTop="6dp"
         android:clickable="true"
         android:focusable="true"
         android:gravity="center"
         android:textColor="@color/text_hint"
-        android:textSize="13sp" />
-
-    <TextView
-        android:id="@+id/draftBadge"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_gravity="center_horizontal"
-        android:layout_marginTop="6dp"
-        android:background="@drawable/bg_badge"
-        android:paddingLeft="10dp"
-        android:paddingRight="10dp"
-        android:paddingTop="4dp"
-        android:paddingBottom="4dp"
-        android:text="@string/studio_streaming"
-        android:textColor="@color/record"
-        android:textSize="11sp"
-        android:visibility="gone" />
-
-    <!-- Teleprompter panel (above the recording section) -->
-    <LinearLayout
-        android:id="@+id/telePanel"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginLeft="20dp"
-        android:layout_marginTop="8dp"
-        android:layout_marginRight="20dp"
-        android:background="@drawable/bg_search"
-        android:orientation="vertical"
-        android:padding="12dp"
-        android:visibility="gone">
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:letterSpacing="0.1"
-            android:text="@string/teleprompter"
-            android:textColor="@color/text_hint"
-            android:textSize="11sp" />
-
-        <ScrollView
-            android:id="@+id/teleScroll"
-            android:layout_width="match_parent"
-            android:layout_height="96dp"
-            android:layout_marginTop="6dp">
-
-            <EditText
-                android:id="@+id/teleScript"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:background="@null"
-                android:gravity="top"
-                android:hint="@string/teleprompter_hint"
-                android:inputType="textMultiLine|textCapSentences"
-                android:minLines="4"
-                android:textColor="@color/text_primary"
-                android:textColorHint="@color/text_hint"
-                android:textSize="15sp" />
-        </ScrollView>
-    </LinearLayout>
-
-    <!-- dBFS meter (left) + waveform (middle) + zoom (right) -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="10dp"
-        android:gravity="center_vertical"
-        android:orientation="horizontal"
-        android:paddingLeft="20dp"
-        android:paddingRight="12dp">
-
-        <com.example.hello.DbMeterView
-            android:id="@+id/dbMeter"
-            android:layout_width="30dp"
-            android:layout_height="140dp" />
-
-        <com.example.hello.WaveformView
-            android:id="@+id/waveform"
-            android:layout_width="0dp"
-            android:layout_height="140dp"
-            android:layout_marginStart="8dp"
-            android:layout_weight="1" />
-
-        <LinearLayout
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="6dp"
-            android:gravity="center"
-            android:orientation="vertical">
-
-            <TextView
-                android:id="@+id/btnZoomIn"
-                android:layout_width="36dp"
-                android:layout_height="36dp"
-                android:background="@drawable/bg_round_btn"
-                android:clickable="true"
-                android:contentDescription="@string/zoom_in"
-                android:focusable="true"
-                android:fontFamily="sans-serif-medium"
-                android:gravity="center"
-                android:text="+"
-                android:textColor="@color/text_primary"
-                android:textSize="18sp" />
-
-            <TextView
-                android:id="@+id/zoomLabel"
-                android:layout_width="36dp"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:gravity="center"
-                android:text="1x"
-                android:textColor="@color/text_hint"
-                android:textSize="10sp" />
-
-            <TextView
-                android:id="@+id/btnZoomOut"
-                android:layout_width="36dp"
-                android:layout_height="36dp"
-                android:layout_marginTop="4dp"
-                android:background="@drawable/bg_round_btn"
-                android:clickable="true"
-                android:contentDescription="@string/zoom_out"
-                android:focusable="true"
-                android:fontFamily="sans-serif-medium"
-                android:gravity="center"
-                android:text="−"
-                android:textColor="@color/text_primary"
-                android:textSize="18sp" />
-        </LinearLayout>
-    </LinearLayout>
-
-    <!-- Timer above the transport buttons -->
-    <TextView
-        android:id="@+id/timerText"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="2dp"
-        android:fontFamily="sans-serif-light"
-        android:gravity="center"
-        android:text="00:00.00"
-        android:textColor="@color/text_primary"
-        android:textSize="40sp" />
-
-    <!-- Preset pill + save pill + teleprompter toggle -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginLeft="20dp"
-        android:layout_marginTop="8dp"
-        android:layout_marginRight="20dp"
-        android:gravity="center_vertical"
-        android:orientation="horizontal">
-
-        <LinearLayout
-            android:id="@+id/settingsRow"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginEnd="4dp"
-            android:layout_weight="1"
-            android:background="@drawable/bg_search"
-            android:clickable="true"
-            android:focusable="true"
-            android:gravity="center_vertical"
-            android:orientation="horizontal"
-            android:paddingLeft="12dp"
-            android:paddingTop="8dp"
-            android:paddingRight="10dp"
-            android:paddingBottom="8dp">
-
-            <LinearLayout
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:orientation="vertical">
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:letterSpacing="0.1"
-                    android:text="@string/settings_label"
-                    android:textColor="@color/text_hint"
-                    android:textSize="10sp" />
-
-                <TextView
-                    android:id="@+id/settingsName"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="1dp"
-                    android:fontFamily="sans-serif-medium"
-                    android:text="@string/preset_memo"
-                    android:textColor="@color/text_primary"
-                    android:textSize="14sp" />
-
-                <TextView
-                    android:id="@+id/settingsSub"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="1dp"
-                    android:ellipsize="end"
-                    android:maxLines="1"
-                    android:text="@string/preset_memo_sub"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="11sp" />
-            </LinearLayout>
-
-            <ImageView
-                android:layout_width="20dp"
-                android:layout_height="20dp"
-                android:alpha="0.6"
-                android:src="@drawable/ic_chevron" />
-        </LinearLayout>
-
-        <FrameLayout
-            android:id="@+id/teleToggle"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
-            android:layout_marginStart="4dp"
-            android:background="@drawable/bg_round_btn"
-            android:clickable="true"
-            android:contentDescription="@string/teleprompter"
-            android:focusable="true">
-
-            <ImageView
-                android:id="@+id/teleToggleIcon"
-                android:layout_width="22dp"
-                android:layout_height="22dp"
-                android:layout_gravity="center"
-                android:alpha="0.6"
-                android:src="@drawable/ic_pencil" />
-        </FrameLayout>
-    </LinearLayout>
+        android:textSize="12sp" />
 
     <TextView
         android:id="@+id/hintText"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
+        android:layout_marginTop="6dp"
         android:gravity="center"
         android:text="@string/studio_hint"
         android:textColor="@color/text_hint"
-        android:textSize="13sp" />
+        android:textSize="12sp" />
 
     <View
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1" />
+        android:layout_weight="0.4" />
 
 </LinearLayout>

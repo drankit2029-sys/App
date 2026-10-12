@@ -70,10 +70,19 @@ public class StudioFragment extends Fragment {
     private TextView settingsName;
     private TextView settingsSub;
     private View telePanel;
-    private android.widget.ScrollView teleScroll;
-    private android.widget.EditText teleScript;
+    private TeleprompterView teleView;
     private View teleToggle;
     private android.widget.ImageView teleToggleIcon;
+    private TextView teleState;
+    private TextView teleTitle;
+    private View teleEditBtn;
+    private View teleTuneBtn;
+    private View teleHideBtn;
+    private TeleSettings tele;
+    /** Manual scroll override: auto-scroll stays off briefly after a drag. */
+    private long teleManualUntil;
+    private long teleCountdownUntil;
+    private ActivityResultLauncher<String[]> scriptPicker;
     private View btnZoomIn;
     private View btnZoomOut;
     private TextView zoomLabel;
@@ -145,10 +154,14 @@ public class StudioFragment extends Fragment {
         settingsName = v.findViewById(R.id.settingsName);
         settingsSub = v.findViewById(R.id.settingsSub);
         telePanel = v.findViewById(R.id.telePanel);
-        teleScroll = v.findViewById(R.id.teleScroll);
-        teleScript = v.findViewById(R.id.teleScript);
+        teleView = v.findViewById(R.id.teleView);
         teleToggle = v.findViewById(R.id.teleToggle);
         teleToggleIcon = v.findViewById(R.id.teleToggleIcon);
+        teleState = v.findViewById(R.id.teleState);
+        teleTitle = v.findViewById(R.id.teleTitle);
+        teleEditBtn = v.findViewById(R.id.teleEditBtn);
+        teleTuneBtn = v.findViewById(R.id.teleTuneBtn);
+        teleHideBtn = v.findViewById(R.id.teleHideBtn);
         btnZoomIn = v.findViewById(R.id.btnZoomIn);
         btnZoomOut = v.findViewById(R.id.btnZoomOut);
         zoomLabel = v.findViewById(R.id.zoomLabel);
@@ -169,12 +182,31 @@ public class StudioFragment extends Fragment {
         // would wipe the converting dim. applySoft only touches scale.
         PressAnim.applySoft(settingsRow, 0.97f);
         teleToggle.setOnClickListener(view -> toggleTeleprompter());
-        PressAnim.applySoft(teleToggle, 0.9f);
+        PressAnim.applySoft(teleToggle, 0.97f);
+        teleHideBtn.setOnClickListener(view -> setTeleprompterVisible(false));
+        PressAnim.applySoft(teleHideBtn, 0.95f);
+        teleEditBtn.setOnClickListener(view -> openTeleEditor());
+        PressAnim.applySoft(teleEditBtn, 0.95f);
+        teleTuneBtn.setOnClickListener(view -> openTeleTuner());
+        PressAnim.applySoft(teleTuneBtn, 0.95f);
+        // Vertical drag on the waveform zooms, like a timeline in a DAW.
+        waveform.setOnZoomGesture((dir, dy) -> {
+            if (dy > 0) {
+                stepZoom(1);
+            } else {
+                stepZoom(-1);
+            }
+        });
+        // Touching the script lets the performer scrub it by hand.
+        teleView.setOnTouchListener((v2, ev) -> {
+            teleManualUntil = SystemClock.elapsedRealtime() + 6000L;
+            return false;
+        });
         btnZoomIn.setOnClickListener(view -> stepZoom(1));
         btnZoomOut.setOnClickListener(view -> stepZoom(-1));
         PressAnim.applySoft(btnZoomIn, 0.9f);
         PressAnim.applySoft(btnZoomOut, 0.9f);
-        teleScript.setText(loadTeleScript());
+        initTeleprompter();
         zoomLabel.setText(zoomText(waveform.getZoom()));
 
         // Recovery (crash prompt / notification tap) or an edit punch-in:
@@ -469,36 +501,130 @@ public class StudioFragment extends Fragment {
 
     // ---- teleprompter ----
 
-    private void toggleTeleprompter() {
-        if (telePanel.getVisibility() == View.VISIBLE) {
-            persistTeleScript();
-            try {
-                android.view.inputmethod.InputMethodManager imm =
-                        (android.view.inputmethod.InputMethodManager) requireContext()
-                                .getSystemService(Context.INPUT_METHOD_SERVICE);
-                if (imm != null) {
-                    imm.hideSoftInputFromWindow(teleScript.getWindowToken(), 0);
+    private void initTeleprompter() {
+        tele = TeleSettings.load(requireContext());
+        teleView.setScript(loadTeleScript());
+        applyTeleSettings();
+        // On by default: a performer opening the studio wants the script,
+        // not an empty recorder.
+        setTeleprompterVisible(true);
+        scriptPicker = registerForActivityResult(
+                new ActivityResultContracts.OpenDocument(), uri -> {
+                    if (uri == null || !isAdded()) return;
+                    ScriptImporter.Result r = ScriptImporter.read(
+                            requireContext(), uri);
+                    if (!r.ok()) {
+                        Toast.makeText(requireContext(),
+                                getString(R.string.tele_import_failed),
+                                Toast.LENGTH_LONG).show();
+                        return;
+                    }
+                    persistTeleScript(r.text);
+                    teleView.setScript(r.text);
+                    teleTitle.setText(scriptNameOf(r.text));
+                    // Reflect it in the editor too, if it is still open.
+                    TeleDialogs.applyImported(requireContext(), r.text,
+                            scriptNameOf(r.text), tele.wordsPerMinute);
+                    Toast.makeText(requireContext(),
+                            getString(R.string.tele_imported,
+                                    scriptNameOf(r.text),
+                                    TeleMath.wordCount(r.text)),
+                            Toast.LENGTH_SHORT).show();
+                });
+    }
+
+    private static String scriptNameOf(String text) {
+        String first = "";
+        if (text != null) {
+            for (String line : text.split("\n")) {
+                String t = line.trim();
+                if (!t.isEmpty()) {
+                    first = t;
+                    break;
                 }
-            } catch (Exception ignored) {}
-            teleScript.clearFocus();
-            telePanel.setVisibility(View.GONE);
-            setTeleActive(false);
-        } else {
-            telePanel.setVisibility(View.VISIBLE);
-            setTeleActive(true);
-            teleScript.requestFocus();
+            }
+        }
+        if (first.isEmpty()) return "Script";
+        return first.length() > 28 ? first.substring(0, 28) + "…" : first;
+    }
+
+    /** Pushes settings into the view, applying the words-per-line clamp. */
+    private void applyTeleSettings() {
+        if (tele == null || teleView == null || getView() == null) return;
+        float density = getResources().getDisplayMetrics().density;
+        teleView.setTextSizePx(tele.textSizeSp * density);
+        teleView.setWordsPerLine(tele.wordsPerLine);
+        teleView.setMirror(tele.mirror);
+        int avail = Math.max(0, teleView.getWidth() - teleView.getPaddingLeft()
+                - teleView.getPaddingRight());
+        int effective = TeleMath.wordsPerLine(avail,
+                tele.textSizeSp * density, tele.wordsPerLine);
+        if (teleState != null) {
+            teleState.setText(effective + "w · " + tele.wordsPerMinute
+                    + "wpm");
         }
     }
 
+    private void setTeleprompterVisible(boolean visible) {
+        if (telePanel == null) return;
+        telePanel.setVisibility(visible ? View.VISIBLE : View.GONE);
+        setTeleActive(visible);
+    }
+
+    private void toggleTeleprompter() {
+        setTeleprompterVisible(telePanel.getVisibility() != View.VISIBLE);
+    }
+
     private void setTeleActive(boolean active) {
-        teleToggle.setBackgroundResource(active
-                ? R.drawable.bg_chip_selected : R.drawable.bg_round_btn);
-        teleToggleIcon.setAlpha(active ? 1f : 0.6f);
+        if (teleToggle != null) {
+            teleToggle.setBackgroundResource(active
+                    ? R.drawable.bg_chip_selected : R.drawable.bg_search);
+        }
+        if (teleToggleIcon != null) {
+            teleToggleIcon.setAlpha(active ? 1f : 0.55f);
+        }
+        if (teleState != null) {
+            teleState.setText(active ? R.string.tele_show : R.string.tele_hide_short);
+        }
+    }
+
+    private void openTeleEditor() {
+        if (!isAdded()) return;
+        TeleDialogs.showEditor(requireContext(), loadTeleScript(),
+                tele != null ? tele.wordsPerMinute : 120,
+                script -> {
+                    persistTeleScript(script);
+                    if (teleView != null) teleView.setScript(script);
+                    if (teleTitle != null) teleTitle.setText(scriptNameOf(script));
+                },
+                () -> {
+                    try {
+                        scriptPicker.launch(new String[]{
+                                "text/plain",
+                                "application/vnd.openxmlformats-officedocument"
+                                        + ".wordprocessingml.document",
+                                "*/*"
+                        });
+                    } catch (Exception e) {
+                        Toast.makeText(requireContext(),
+                                getString(R.string.tele_import_failed),
+                                Toast.LENGTH_SHORT).show();
+                    }
+                });
+    }
+
+    private void openTeleTuner() {
+        if (!isAdded() || tele == null || teleView == null) return;
+        TeleDialogs.showTuner(requireContext(), tele,
+                Math.max(0, teleView.getWidth()),
+                tele.textSizeSp * getResources().getDisplayMetrics().density,
+                this::applyTeleSettings);
     }
 
     private String loadTeleScript() {
         try {
-            return requireContext().getSharedPreferences("takeone", Context.MODE_PRIVATE)
+            return requireContext().getSharedPreferences("takeone",
+                            Context.MODE_PRIVATE)
                     .getString("tele_script", "");
         } catch (Exception e) {
             return "";
@@ -506,11 +632,50 @@ public class StudioFragment extends Fragment {
     }
 
     private void persistTeleScript() {
+        if (teleView != null) persistTeleScript(teleView.getScript());
+    }
+
+    private void persistTeleScript(String text) {
         try {
-            String text = teleScript != null ? teleScript.getText().toString() : "";
             requireContext().getSharedPreferences("takeone", Context.MODE_PRIVATE)
-                    .edit().putString("tele_script", text).apply();
+                    .edit().putString("tele_script", text == null ? "" : text)
+                    .apply();
         } catch (Exception ignored) {}
+    }
+
+    /**
+     * Drives the prompter: auto-scroll only while actually recording, at the
+     * performer's chosen reading speed, and always yieldable to a manual
+     * drag for a few seconds afterwards.
+     */
+    private void advanceTeleprompter() {
+        if (teleView == null || tele == null) return;
+        if (!tele.autoScroll) return;
+        if (telePanel == null || telePanel.getVisibility() != View.VISIBLE) return;
+        long now = SystemClock.elapsedRealtime();
+        if (now < teleManualUntil) return;
+        if (engine.state != RecordingEngine.State.RECORDING) {
+            teleCountdownUntil = 0L;
+            return;
+        }
+        if (now < teleCountdownUntil) return;
+        float px = TeleMath.scrollPxPerSecond(tele.wordsPerMinute,
+                teleView.getWordsPerLine(), teleView.getTextSizePx());
+        if (px <= 0f) return;
+        // tick runs every 50 ms.
+        teleView.scrollBy(px * 0.05f);
+    }
+
+    /** Called when capture starts so the script begins from the top. */
+    private void teleprompterArmForTake() {
+        if (tele == null || !tele.autoScroll) {
+            teleCountdownUntil = 0L;
+            return;
+        }
+        if (teleView != null) teleView.rewind();
+        teleCountdownUntil = SystemClock.elapsedRealtime()
+                + tele.countdownSec * 1000L;
+        teleManualUntil = 0L;
     }
 
     // ---- waveform zoom (time shown per unit length) ----
@@ -680,6 +845,11 @@ public class StudioFragment extends Fragment {
             if (engine.fellBackToMono) {
                 Toast.makeText(requireContext(), R.string.mono_fallback_toast,
                         Toast.LENGTH_LONG).show();
+            }
+            // Fresh capture: rewind the prompter and start its countdown so
+            // the performer is not thrown straight into mid-script.
+            if (engine.state == RecordingEngine.State.RECORDING) {
+                teleprompterArmForTake();
             }
             RecordingService.start(requireContext(), preset.id);
         } catch (Exception e) {
@@ -1013,12 +1183,9 @@ public class StudioFragment extends Fragment {
                 float lvl = live ? engine.level : 0f;
                 if (live) waveform.setMicLevel(lvl);
                 dbMeter.setLevel(lvl);
-                // Teleprompter drifts upward hands-free while recording.
-                if (live && telePanel.getVisibility() == View.VISIBLE) {
-                    try {
-                        teleScroll.smoothScrollBy(0, 2);
-                    } catch (Exception ignored) {}
-                }
+                // Prompter advances at the performer's reading speed while
+                // recording, and stops the moment capture stops.
+                advanceTeleprompter();
             } catch (Exception ignored) {}
             // Repaint on state/name/preset transitions (FAB morph lives in paint).
             if (engine.state != lastPaintedState
