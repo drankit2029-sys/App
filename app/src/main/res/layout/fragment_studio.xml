@@ -103,8 +103,10 @@
             android:visibility="gone" />
     </LinearLayout>
 
-    <!-- Teleprompter: on top, fills whatever the recording strip leaves -->
-    <LinearLayout
+    <!-- Teleprompter: on top, fills whatever the recording strip leaves.
+         The header and controls are overlaid rather than stacked, so the
+         script gets the whole panel instead of what the chrome left over. -->
+    <FrameLayout
         android:id="@+id/telePanel"
         android:layout_width="match_parent"
         android:layout_height="0dp"
@@ -113,12 +115,22 @@
         android:layout_marginRight="14dp"
         android:layout_weight="1"
         android:background="@drawable/bg_search"
-        android:minHeight="150dp"
-        android:orientation="vertical"
-        android:paddingTop="6dp"
-        android:paddingBottom="6dp">
+        android:clipChildren="true"
+        android:minHeight="150dp">
+
+        <com.example.hello.TeleprompterView
+            android:id="@+id/teleView"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
 
         <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_tele_chrome"
+            android:orientation="vertical"
+            android:paddingBottom="6dp">
+
+            <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:gravity="center_vertical"
@@ -200,7 +212,7 @@
         </LinearLayout>
 
         <!-- Inline prompter controls: no separate tuning dialog -->
-        <LinearLayout
+            <LinearLayout
             android:id="@+id/teleControls"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -234,15 +246,8 @@
 
 
         </LinearLayout>
-
-        <com.example.hello.TeleprompterView
-            android:id="@+id/teleView"
-            android:layout_width="match_parent"
-            android:layout_height="0dp"
-            android:layout_marginTop="2dp"
-            android:layout_weight="1"
-            android:minHeight="96dp" />
-    </LinearLayout>
+        </LinearLayout>
+    </FrameLayout>
 
     <!-- Recording strip: slim dB rail | waveform + zoom over timer + pills -->
     <LinearLayout
