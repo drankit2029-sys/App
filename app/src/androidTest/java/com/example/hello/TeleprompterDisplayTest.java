@@ -5,6 +5,7 @@ import static org.junit.Assert.assertTrue;
 
 import android.app.Activity;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.TextView;
 
 import androidx.test.ext.junit.runners.AndroidJUnit4;
@@ -187,18 +188,33 @@ public class TeleprompterDisplayTest {
         assertNotNullId(root, R.id.telePauseBtn);
         assertNotNullId(root, R.id.zoomValue);
         // The separate tuning entry point is gone from the studio screen.
-        assertEquals("Tune button still present",
-                -1, indexOfId(root, R.id.teleTuneBtn));
+        assertTrue("Tune button still present",
+                findByText(root, "Tune") == null);
+    }
+
+    /** Depth-first search for a visible TextView with the given label. */
+    private static View findByText(View v, String needle) {
+        if (v instanceof TextView) {
+            CharSequence cs = ((TextView) v).getText();
+            if (cs != null
+                    && needle.equals(cs.toString().trim())) {
+                return v;
+            }
+        }
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) {
+                View hit = findByText(g.getChildAt(i), needle);
+                if (hit != null) return hit;
+            }
+        }
+        return null;
     }
 
     private static void assertNotNullId(View root, int id) {
         if (root.findViewById(id) == null) {
             throw new AssertionError("missing view id " + id);
         }
-    }
-
-    private static int indexOfId(View root, int id) {
-        return root.findViewById(id) == null ? -1 : 1;
     }
 
     @Test
