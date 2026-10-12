@@ -32,6 +32,12 @@ jobs:
       - name: Run unit tests
         run: ./gradlew testDebugUnitTest --stacktrace
 
+      - name: Compile on-device (instrumentation) tests
+        # The androidTest source set is not built by the unit-test or
+        # assembleDebug tasks, so a broken on-device test would otherwise
+        # only surface when someone runs it on a real device/emulator.
+        run: ./gradlew assembleDebugAndroidTest --stacktrace
+
       - name: Upload test reports
         if: failure()
         uses: actions/upload-artifact@v4
