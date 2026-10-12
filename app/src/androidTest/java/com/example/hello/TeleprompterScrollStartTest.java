@@ -11,8 +11,11 @@ import android.view.View;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
 
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+
+import androidx.test.rule.GrantPermissionRule;
 
 /**
  * Proves the prompter starts moving with the recording.
@@ -23,6 +26,10 @@ import org.junit.runner.RunWith;
  */
 @RunWith(AndroidJUnit4.class)
 public class TeleprompterScrollStartTest {
+
+    @Rule
+    public GrantPermissionRule mic = GrantPermissionRule.grant(
+            android.Manifest.permission.RECORD_AUDIO);
 
     private static String manyWords(int n) {
         StringBuilder sb = new StringBuilder();
