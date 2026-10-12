@@ -54,8 +54,7 @@ public final class FormatConverter {
     }
 
     /** Same clamp into 24-bit range, ready to be split into 3 bytes LE. */
-    static int toInt24(java.nio.FloatBuffer src, int n,
-                       java.nio.IntBuffer dst) {
+    static int toInt24(java.nio.FloatBuffer src, int n, int[] dst) {
         for (int i = 0; i < n; i++) {
             float s = src.get(i);
             if (s > 1f) s = 1f;
@@ -197,17 +196,16 @@ public final class FormatConverter {
             byte[] out = new byte[CONV_CHUNK * 3];
             java.nio.FloatBuffer fb = ByteBuffer.wrap(in)
                     .order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer();
-            java.nio.IntBuffer ib = ByteBuffer.allocate(CONV_CHUNK * 4)
-                    .order(ByteOrder.NATIVE_ORDER).asIntBuffer();
+            int[] ints = new int[CONV_CHUNK];
             long done = 0;
             int lastPct = -1;
             while (done < totalSamples) {
                 int want = (int) Math.min(CONV_CHUNK, totalSamples - done);
                 r.readFully(in, 0, want * 4);
-                toInt24(fb, want, ib);
+                toInt24(fb, want, ints);
                 int p = 0;
                 for (int i = 0; i < want; i++) {
-                    int v = ib.get(i);
+                    int v = ints[i];
                     out[p++] = (byte) (v & 0xFF);
                     out[p++] = (byte) ((v >> 8) & 0xFF);
                     out[p++] = (byte) ((v >> 16) & 0xFF);
