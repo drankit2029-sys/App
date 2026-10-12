@@ -150,4 +150,38 @@ public class EncodeFormatsTest {
         assertTrue(r.file.exists());
         engine.clearSession();
     }
+
+    /** Auto for Music must keep the raw 32-bit float master, untouched. */
+    @Test
+    public void musicAutoKeepsLosslessMaster() throws Exception {
+        Context ctx = InstrumentationRegistry.getInstrumentation()
+                .getTargetContext();
+        RecordingEngine engine = RecordingEngine.get();
+        engine.clearSession();
+        engine.startNewSession(ctx, "Lossless Check", 2);
+        File raw = engine.rawFile;
+        int frames = 24000;
+        RandomAccessFile w = new RandomAccessFile(raw, "rw");
+        try {
+            w.seek(w.length());
+            for (int i = 0; i < frames * 2; i++) {
+                w.writeFloat((float) Math.sin(i * 0.05) * 0.4f);
+            }
+        } finally {
+            w.close();
+        }
+        long bytes = raw.length();
+        TakeSaver.Result r = TakeSaver.finalizeAndConvert(ctx,
+                RecordPreset.MUSIC, SaveFormat.AUTO, null);
+        Log.i(TAG, "LOSSLESS label=" + r.label + " sameAsRaw="
+                + r.file.equals(raw) + " bytes=" + r.file.length()
+                + " expected=" + bytes);
+        assertEquals("WAV32", r.label);
+        assertTrue("output must be the raw capture itself", r.file.equals(raw));
+        assertTrue("raw capture must survive a lossless save", raw.exists());
+        assertEquals(bytes, r.file.length());
+        FormatConverter.validateFinal(r.file, SaveFormat.WAV32);
+        assertTrue(Dsp.wavDurationMs(r.file) > 0);
+        engine.clearSession();
+    }
 }
