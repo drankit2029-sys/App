@@ -155,16 +155,17 @@ public class TeleprompterScrollBoundsTest {
             InstrumentationRegistry.getInstrumentation().waitForIdleSync();
         }
         View root = a.getWindow().getDecorView();
-        TeleprompterView tele = (TeleprompterView) root.findViewById(R.id.teleView);
-        if (tele == null) {
+        TeleprompterView found = (TeleprompterView) root.findViewById(R.id.teleView);
+        if (found == null) {
             View start = findByText(root, "Start");
             if (start != null) {
                 a.runOnUiThread(start::performClick);
                 InstrumentationRegistry.getInstrumentation().waitForIdleSync();
             }
-            tele = (TeleprompterView) a.findViewById(R.id.teleView);
+            found = (TeleprompterView) a.findViewById(R.id.teleView);
         }
-        assertTrue("prompter not found", tele != null);
+        assertTrue("prompter not found", found != null);
+        final TeleprompterView tele = found;
         a.runOnUiThread(() -> tele.setScript(manyWords(400)));
         InstrumentationRegistry.getInstrumentation().waitForIdleSync();
         android.os.SystemClock.sleep(300);
