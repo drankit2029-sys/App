@@ -78,8 +78,8 @@ public class StudioFragment extends Fragment {
     private TextView teleTitle;
     private View teleEditBtn;
     private View teleHideBtn;
-    private View telePauseBtn;
-    private View teleMirrorBtn;
+    private TextView telePauseBtn;
+    private TextView teleMirrorBtn;
     private TeleValue teleSizeValue;
     private TeleValue teleSpeedValue;
     private TeleValue teleWplValue;
@@ -203,7 +203,7 @@ public class StudioFragment extends Fragment {
         });
         PressAnim.applySoft(teleMirrorBtn, 0.95f);
         // Vertical drag on the waveform zooms, like a timeline in a DAW.
-        waveform.setOnZoomGesture((dir, dy) -> stepZoom(dir));
+        waveform.setOnZoomGesture((dir, dy) -> stepZoom(dir > 0 ? 1 : -1));
         // Touching the script lets the performer scrub it by hand. While the
         // prompter is paused this is the primary way to reposition the text;
         // auto-scroll resumes on lift.
