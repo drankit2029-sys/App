@@ -241,6 +241,11 @@ public class TeleprompterView extends View {
      * Scroll bounds. The last segment must be able to reach the centre line,
      * otherwise the tail of the script scrolls past the bottom and the panel
      * goes blank.
+     *
+     * <p>First baseline is {@code h/2 - scrollOffset} and segment k sits at
+     * {@code h/2 - scrollOffset + k*lh}. Requiring the final segment
+     * (k = n-1) to land on the centre line gives
+     * {@code scrollOffset = (n-1)*lh - centreOffset}.
      */
     private void recomputeMaxScroll() {
         int h = getHeight();
@@ -248,10 +253,10 @@ public class TeleprompterView extends View {
             maxScroll = 0f;
             return;
         }
+        float lh = lineHeight();
+        float centreOffset = lh * 0.36f;
         float total = contentHeight();
-        float centreLine = h / 2f + lineHeight() * 0.36f;
-        // Enough travel to bring the final line up to the centre line.
-        maxScroll = Math.max(0f, total - centreLine);
+        maxScroll = Math.max(0f, total - lh - centreOffset);
         if (scrollOffset > maxScroll) scrollOffset = maxScroll;
     }
 

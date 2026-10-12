@@ -136,13 +136,17 @@ public class TeleprompterDisplayTest {
         v.setScript(manyWords(500));
 
         v.setScrollOffset(Float.MAX_VALUE);
-        // Scrolled to the end, the final segment must still be positioned so
-        // the tail is on screen rather than vanished past the bottom.
         assertTrue("nothing scrollable", v.maxScroll() > 0f);
         float lh = v.lineHeight();
-        float lastTop = v.maxScroll() + (v.segmentCount() - 1) * lh - v.maxScroll();
-        assertTrue("last line drifted above the viewport", lastTop <= h);
-        assertTrue("last line is off the bottom", lastTop + lh >= 0f);
+        // At full scroll the last segment must land on the centre line.
+        float centreLine = h / 2f + lh * 0.36f;
+        float lastBaseline = h / 2f - v.maxScroll()
+                + (v.segmentCount() - 1) * lh;
+        assertEquals("last line did not reach the centre line",
+                centreLine, lastBaseline, 2f);
+        // And it must be comfortably inside the viewport, not clipped.
+        assertTrue("last line is below the viewport", lastBaseline < h);
+        assertTrue("last line is above the viewport", lastBaseline > 0f);
     }
 
     @Test
@@ -181,7 +185,11 @@ public class TeleprompterDisplayTest {
     @Test
     public void studioShowsInlineControlsInsteadOfTuneMenu() {
         Activity a = launch();
-        View root = a.findViewById(android.R.id.content);
+        // Inflate the studio layout directly: this asserts the screen's
+        // contract without depending on which fragment happens to be
+        // on-screen after launch (a name modal or library can be showing).
+        View root = android.view.LayoutInflater.from(a)
+                .inflate(R.layout.fragment_studio, null, false);
         assertNotNullId(root, R.id.teleSizeValue);
         assertNotNullId(root, R.id.teleSpeedValue);
         assertNotNullId(root, R.id.teleWplValue);
