@@ -164,7 +164,12 @@ public class TeleprompterScrollStartTest {
         // Give layout a beat, then confirm there is scrollable content.
         InstrumentationRegistry.getInstrumentation().waitForIdleSync();
         SystemClock.sleep(400);
-        assertTrue("no scrollable script loaded", tele.maxScroll() > 0f);
+        assertTrue("no scrollable script loaded (script="
+                + (tele.getScript() == null ? -1 : tele.getScript().length())
+                + " chars, vis=" + tele.getVisibility()
+                + ", w=" + tele.getWidth() + ", h=" + tele.getHeight()
+                + ", segments=" + tele.segmentCount()
+                + ", max=" + tele.maxScroll() + ")", tele.maxScroll() > 0f);
 
         View fab = b.findViewById(R.id.fabWrap);
         assertNotNull("no record button", fab);
