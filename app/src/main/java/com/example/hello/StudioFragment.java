@@ -77,16 +77,19 @@ public class StudioFragment extends Fragment {
     private TextView teleState;
     private TextView teleTitle;
     private View teleEditBtn;
-    private View teleTuneBtn;
     private View teleHideBtn;
+    private View telePauseBtn;
+    private View teleMirrorBtn;
+    private TeleValue teleSizeValue;
+    private TeleValue teleSpeedValue;
+    private TeleValue teleWplValue;
+    private TeleValue zoomValue;
+    private boolean telePaused;
     private TeleSettings tele;
     /** Manual scroll override: auto-scroll stays off briefly after a drag. */
     private long teleManualUntil;
     private long teleCountdownUntil;
     private ActivityResultLauncher<String[]> scriptPicker;
-    private View btnZoomIn;
-    private View btnZoomOut;
-    private TextView zoomLabel;
 
     private String pendingName;
     private RecordPreset preset = RecordPreset.MEMO;
@@ -161,11 +164,13 @@ public class StudioFragment extends Fragment {
         teleState = v.findViewById(R.id.teleState);
         teleTitle = v.findViewById(R.id.teleTitle);
         teleEditBtn = v.findViewById(R.id.teleEditBtn);
-        teleTuneBtn = v.findViewById(R.id.teleTuneBtn);
         teleHideBtn = v.findViewById(R.id.teleHideBtn);
-        btnZoomIn = v.findViewById(R.id.btnZoomIn);
-        btnZoomOut = v.findViewById(R.id.btnZoomOut);
-        zoomLabel = v.findViewById(R.id.zoomLabel);
+        telePauseBtn = v.findViewById(R.id.telePauseBtn);
+        teleMirrorBtn = v.findViewById(R.id.teleMirrorBtn);
+        teleSizeValue = v.findViewById(R.id.teleSizeValue);
+        teleSpeedValue = v.findViewById(R.id.teleSpeedValue);
+        teleWplValue = v.findViewById(R.id.teleWplValue);
+        zoomValue = v.findViewById(R.id.zoomValue);
 
         preset = RecordPreset.load(requireContext());
         saveFormat = SaveFormat.load(requireContext());
@@ -188,27 +193,39 @@ public class StudioFragment extends Fragment {
         PressAnim.applySoft(teleHideBtn, 0.95f);
         teleEditBtn.setOnClickListener(view -> openTeleEditor());
         PressAnim.applySoft(teleEditBtn, 0.95f);
-        teleTuneBtn.setOnClickListener(view -> openTeleTuner());
-        PressAnim.applySoft(teleTuneBtn, 0.95f);
-        // Vertical drag on the waveform zooms, like a timeline in a DAW.
-        waveform.setOnZoomGesture((dir, dy) -> {
-            if (dy > 0) {
-                stepZoom(1);
-            } else {
-                stepZoom(-1);
-            }
+        telePauseBtn.setOnClickListener(view -> toggleTelePaused());
+        PressAnim.applySoft(telePauseBtn, 0.95f);
+        teleMirrorBtn.setOnClickListener(view -> {
+            tele = TeleSettings.load(requireContext());
+            TeleSettings.toggleMirror(requireContext(), !tele.mirror);
+            applyTeleSettings();
+            paintTeleMirror();
         });
-        // Touching the script lets the performer scrub it by hand.
+        PressAnim.applySoft(teleMirrorBtn, 0.95f);
+        // Vertical drag on the waveform zooms, like a timeline in a DAW.
+        waveform.setOnZoomGesture((dir, dy) -> stepZoom(dir));
+        // Touching the script lets the performer scrub it by hand. While the
+        // prompter is paused this is the primary way to reposition the text;
+        // auto-scroll resumes on lift.
         teleView.setOnTouchListener((v2, ev) -> {
-            teleManualUntil = SystemClock.elapsedRealtime() + 6000L;
+            switch (ev.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                case MotionEvent.ACTION_MOVE:
+                    teleManualUntil = Long.MAX_VALUE;
+                    break;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    if (!telePaused) {
+                        teleManualUntil = SystemClock.elapsedRealtime() + 1500L;
+                    }
+                    break;
+                default:
+                    break;
+            }
             return false;
         });
-        btnZoomIn.setOnClickListener(view -> stepZoom(1));
-        btnZoomOut.setOnClickListener(view -> stepZoom(-1));
-        PressAnim.applySoft(btnZoomIn, 0.9f);
-        PressAnim.applySoft(btnZoomOut, 0.9f);
         initTeleprompter();
-        zoomLabel.setText(zoomText(waveform.getZoom()));
+        initTeleValueControls();
 
         // Recovery (crash prompt / notification tap) or an edit punch-in:
         // a session is already attached — never show the name modal.
@@ -614,14 +631,6 @@ public class StudioFragment extends Fragment {
                 });
     }
 
-    private void openTeleTuner() {
-        if (!isAdded() || tele == null || teleView == null) return;
-        TeleDialogs.showTuner(requireContext(), tele,
-                Math.max(0, teleView.getWidth()),
-                tele.textSizeSp * getResources().getDisplayMetrics().density,
-                this::applyTeleSettings);
-    }
-
     private String loadTeleScript() {
         try {
             return requireContext().getSharedPreferences("takeone",
@@ -652,6 +661,9 @@ public class StudioFragment extends Fragment {
     private void advanceTeleprompter() {
         if (teleView == null || tele == null) return;
         if (!tele.autoScroll) return;
+        // A pause is sticky: it outranks recording, so the performer can hold
+        // a position mid-take without the script running away from them.
+        if (telePaused) return;
         if (telePanel == null || telePanel.getVisibility() != View.VISIBLE) return;
         long now = SystemClock.elapsedRealtime();
         if (now < teleManualUntil) return;
@@ -659,7 +671,6 @@ public class StudioFragment extends Fragment {
             teleCountdownUntil = 0L;
             return;
         }
-        if (now < teleCountdownUntil) return;
         float px = TeleMath.scrollPxPerSecond(tele.wordsPerMinute,
                 teleView.getWordsPerLine(), teleView.getTextSizePx());
         if (px <= 0f) return;
@@ -667,36 +678,95 @@ public class StudioFragment extends Fragment {
         teleView.scrollBy(px * 0.05f);
     }
 
+    private void toggleTelePaused() {
+        telePaused = !telePaused;
+        if (telePauseBtn != null) {
+            telePauseBtn.setText(telePaused
+                    ? R.string.tele_resume_short : R.string.tele_pause_short);
+            telePauseBtn.setSelected(telePaused);
+            PressAnim.nudge(telePauseBtn, 1.12f);
+        }
+        if (teleState != null) {
+            teleState.setText(telePaused
+                    ? R.string.tele_paused_label : R.string.tele_scrolling_label);
+        }
+        // Resuming hands control back to the auto-scroll clock immediately.
+        if (!telePaused) teleManualUntil = 0L;
+    }
+
+    private void paintTeleMirror() {
+        if (teleMirrorBtn == null) return;
+        boolean on = tele != null && tele.mirror;
+        teleMirrorBtn.setSelected(on);
+        teleMirrorBtn.setAlpha(on ? 1f : 0.55f);
+    }
+
+    /** Inline size / speed / words-per-line controls, plus zoom. */
+    private void initTeleValueControls() {
+        teleSizeValue.configure(16, 72, 1, tele.textSizeSp, "sp");
+        teleSpeedValue.configure(40, 400, 5, tele.wordsPerMinute, "");
+        teleWplValue.configure(TeleMath.MIN_WORDS_PER_LINE, 24, 1,
+                tele.wordsPerLine, "");
+
+        teleSizeValue.setOnValueChanged(val -> {
+            TeleSettings.setTextSize(requireContext(), val);
+            tele = TeleSettings.load(requireContext());
+            applyTeleSettings();
+        });
+        teleSpeedValue.setOnValueChanged(val -> {
+            TeleSettings.setWordsPerMinute(requireContext(), val);
+            tele = TeleSettings.load(requireContext());
+            applyTeleSettings();
+        });
+        teleWplValue.setOnValueChanged(val -> {
+            TeleSettings.setWordsPerLine(requireContext(), val);
+            tele = TeleSettings.load(requireContext());
+            applyTeleSettings();
+        });
+
+        // Zoom shares the same control; its floor moves with the timeline.
+        refreshZoomValue();
+        zoomValue.setOnValueChanged(this::applyZoomValue);
+        paintTeleMirror();
+    }
+
+    private void applyZoomValue(int percent) {
+        waveform.setZoom(percent / 100f);
+        paintZoomLabel();
+    }
+
+    private void refreshZoomValue() {
+        float z = waveform.getZoom();
+        int pct = Math.max(1, Math.round(z * 100f));
+        zoomValue.configure(Math.max(1, Math.round(
+                        waveform.minimumZoom() * 100f)), 400, 5, pct, "%");
+        paintZoomLabel();
+    }
+
+    private void paintZoomLabel() {
+        // The zoom control renders its own percentage; nothing to mirror
+        // elsewhere. Kept as a hook so the gesture path stays symmetric.
+    }
+
     /** Called when capture starts so the script begins from the top. */
     private void teleprompterArmForTake() {
-        if (tele == null || !tele.autoScroll) {
-            teleCountdownUntil = 0L;
-            return;
-        }
         if (teleView != null) teleView.rewind();
-        teleCountdownUntil = SystemClock.elapsedRealtime()
-                + tele.countdownSec * 1000L;
         teleManualUntil = 0L;
+        // The prompter starts with the recording. A countdown is a head start
+        // for the performer, not a delay before the script moves — holding
+        // the text still for N seconds desynchronised the take.
+        teleCountdownUntil = 0L;
     }
 
     // ---- waveform zoom (time shown per unit length) ----
 
     private void stepZoom(int dir) {
-        float[] steps = WaveformView.ZOOM_STEPS;
-        float cur = waveform.getZoom();
-        int idx = 0;
-        for (int i = 0; i < steps.length; i++) {
-            if (Math.abs(steps[i] - cur) < 0.01f) idx = i;
-        }
-        int next = Math.max(0, Math.min(steps.length - 1, idx + dir));
-        waveform.setZoom(steps[next]);
-        zoomLabel.setText(zoomText(steps[next]));
-        PressAnim.nudge(dir > 0 ? btnZoomIn : btnZoomOut, 1.12f);
-    }
-
-    private static String zoomText(float z) {
-        if (Math.abs(z - Math.round(z)) < 0.01f) return Math.round(z) + "x";
-        return String.valueOf(z) + "x";
+        // Gesture zoom works on the same percentage scale as the control, so
+        // the two never disagree about where the zoom currently sits.
+        int pct = Math.max(1, Math.round(waveform.getZoom() * 100f));
+        int step = pct < 100 ? 5 : (pct < 200 ? 20 : 50);
+        int next = Math.max(1, Math.min(400, pct + dir * step));
+        zoomValue.setValue(next, true);
     }
 
     // ---- called by MainActivity's shared buttons ----

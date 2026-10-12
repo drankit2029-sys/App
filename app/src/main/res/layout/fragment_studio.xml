@@ -153,21 +153,6 @@
                 android:textSize="11sp" />
 
             <TextView
-                android:id="@+id/teleTuneBtn"
-                android:layout_width="wrap_content"
-                android:layout_height="30dp"
-                android:layout_marginStart="4dp"
-                android:background="@drawable/bg_round_btn"
-                android:clickable="true"
-                android:focusable="true"
-                android:gravity="center"
-                android:paddingLeft="12dp"
-                android:paddingRight="12dp"
-                android:text="@string/tele_tune"
-                android:textColor="@color/text_primary"
-                android:textSize="11sp" />
-
-            <TextView
                 android:id="@+id/teleHideBtn"
                 android:layout_width="wrap_content"
                 android:layout_height="30dp"
@@ -180,6 +165,98 @@
                 android:paddingLeft="12dp"
                 android:paddingRight="12dp"
                 android:text="@string/tele_hide_short"
+                android:textColor="@color/text_secondary"
+                android:textSize="11sp" />
+
+            <TextView
+                android:id="@+id/telePauseBtn"
+                android:layout_width="wrap_content"
+                android:layout_height="30dp"
+                android:layout_marginStart="4dp"
+                android:background="@drawable/bg_round_btn"
+                android:clickable="true"
+                android:contentDescription="@string/tele_pause"
+                android:focusable="true"
+                android:gravity="center"
+                android:paddingLeft="12dp"
+                android:paddingRight="12dp"
+                android:text="@string/tele_pause_short"
+                android:textColor="@color/text_secondary"
+                android:textSize="11sp" />
+        </LinearLayout>
+
+        <!-- Inline prompter controls: no separate tuning dialog -->
+        <LinearLayout
+            android:id="@+id/teleControls"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingLeft="12dp"
+            android:paddingRight="12dp">
+
+            <TextView
+                android:id="@+id/teleSizeLbl"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="4dp"
+                android:letterSpacing="0.1"
+                android:text="@string/tele_size_short"
+                android:textColor="@color/text_hint"
+                android:textSize="10sp" />
+
+            <com.example.hello.TeleValue
+                android:id="@+id/teleSizeValue"
+                android:layout_width="0dp"
+                android:layout_height="30dp"
+                android:layout_weight="1"
+                android:layout_marginEnd="8dp" />
+
+            <TextView
+                android:id="@+id/teleSpeedLbl"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="4dp"
+                android:letterSpacing="0.1"
+                android:text="@string/tele_speed_short"
+                android:textColor="@color/text_hint"
+                android:textSize="10sp" />
+
+            <com.example.hello.TeleValue
+                android:id="@+id/teleSpeedValue"
+                android:layout_width="0dp"
+                android:layout_height="30dp"
+                android:layout_weight="1"
+                android:layout_marginEnd="8dp" />
+
+            <TextView
+                android:id="@+id/teleWplLbl"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="4dp"
+                android:letterSpacing="0.1"
+                android:text="@string/tele_wpl_short"
+                android:textColor="@color/text_hint"
+                android:textSize="10sp" />
+
+            <com.example.hello.TeleValue
+                android:id="@+id/teleWplValue"
+                android:layout_width="0dp"
+                android:layout_height="30dp"
+                android:layout_weight="1"
+                android:layout_marginEnd="8dp" />
+
+            <TextView
+                android:id="@+id/teleMirrorBtn"
+                android:layout_width="wrap_content"
+                android:layout_height="30dp"
+                android:background="@drawable/bg_round_btn"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:paddingLeft="10dp"
+                android:paddingRight="10dp"
+                android:text="@string/tele_mirror_short"
                 android:textColor="@color/text_secondary"
                 android:textSize="11sp" />
         </LinearLayout>
@@ -235,41 +312,11 @@
                     android:gravity="center"
                     android:orientation="vertical">
 
-                    <TextView
-                        android:id="@+id/btnZoomIn"
-                        android:layout_width="26dp"
-                        android:layout_height="26dp"
-                        android:background="@drawable/bg_round_btn"
-                        android:clickable="true"
-                        android:contentDescription="@string/zoom_in"
-                        android:focusable="true"
-                        android:gravity="center"
-                        android:text="+"
-                        android:textColor="@color/text_primary"
-                        android:textSize="13sp" />
-
-                    <TextView
-                        android:id="@+id/zoomLabel"
-                        android:layout_width="26dp"
-                        android:layout_height="wrap_content"
-                        android:gravity="center"
-                        android:text="1x"
-                        android:textColor="@color/text_hint"
-                        android:textSize="9sp" />
-
-                    <TextView
-                        android:id="@+id/btnZoomOut"
-                        android:layout_width="26dp"
-                        android:layout_height="26dp"
-                        android:layout_marginTop="2dp"
-                        android:background="@drawable/bg_round_btn"
-                        android:clickable="true"
-                        android:contentDescription="@string/zoom_out"
-                        android:focusable="true"
-                        android:gravity="center"
-                        android:text="−"
-                        android:textColor="@color/text_primary"
-                        android:textSize="13sp" />
+                    <com.example.hello.TeleValue
+                        android:id="@+id/zoomValue"
+                        android:layout_width="34dp"
+                        android:layout_height="30dp"
+                        android:layout_marginStart="6dp" />
                 </LinearLayout>
             </LinearLayout>
 

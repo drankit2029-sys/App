@@ -23,11 +23,24 @@ public class WaveformView extends View {
 
     private static final int COLS = 150;
 
+    /**
+     * Hard ceiling on retained peak columns. When the history outgrows this it
+     * is halved in resolution rather than truncated, so a long take still
+     * shows its whole shape — just coarser.
+     */
+    private static final int MAX_HISTORY = 8192;
+
     private final Paint barPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint linePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint barGlowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint playPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final float[] history = new float[COLS];
+
+    /**
+     * Growable peak history. Unlike a fixed ring buffer this keeps the entire
+     * recording, which is what lets the minimum zoom be "whole timeline fits
+     * left of the playhead" instead of an arbitrary constant.
+     */
+    private float[] history = new float[COLS];
 
     private int count;
     private boolean live;
@@ -72,10 +85,29 @@ public class WaveformView extends View {
         zoomListener = l;
     }
 
+    /**
+     * Smallest zoom allowed for the current history length: the level at which
+     * every retained sample fits to the left of the red centre line.
+     *
+     * <p>Bars occupy {@code COLS / zoom} columns across the full width, and the
+     * playhead sits at {@code w / 2}, so the whole timeline fits when
+     * {@code count * gap <= w / 2}.
+     */
+    public synchronized float minimumZoom() {
+        int n = Math.max(count, 1);
+        return (float) Math.min(ZOOM_STEPS[0],
+                Math.max(0.02f, COLS / (2f * n)));
+    }
+
+    public synchronized int historyCount() {
+        return count;
+    }
+
     /** Zoom step index into {@link #ZOOM_STEPS}; clamps + invalidates. */
     public void setZoom(float z) {
-        float nz = Math.max(ZOOM_STEPS[0],
-                Math.min(ZOOM_STEPS[ZOOM_STEPS.length - 1], z));
+        float lo = minimumZoom();
+        float hi = ZOOM_STEPS[ZOOM_STEPS.length - 1];
+        float nz = Math.max(lo, Math.min(hi, z));
         if (Math.abs(nz - zoom) > 0.001f) {
             zoom = nz;
             invalidate();
@@ -97,13 +129,27 @@ public class WaveformView extends View {
     }
 
     public synchronized void push(float v) {
-        if (count < COLS) {
-            history[count++] = v;
-        } else {
-            System.arraycopy(history, 1, history, 0, COLS - 1);
-            history[COLS - 1] = v;
+        if (count == history.length) {
+            if (history.length >= MAX_HISTORY) {
+                halveHistory();
+            } else {
+                float[] bigger = new float[Math.min(MAX_HISTORY,
+                        history.length * 2)];
+                System.arraycopy(history, 0, bigger, 0, count);
+                history = bigger;
+            }
         }
+        history[count++] = v;
         postInvalidateOnAnimation();
+    }
+
+    /** Drops resolution by one bit so an hour-long take still fits in memory. */
+    private void halveHistory() {
+        int half = count / 2;
+        for (int i = 0; i < half; i++) {
+            history[i] = Math.max(history[i * 2], history[i * 2 + 1]);
+        }
+        count = half;
     }
 
     public synchronized void clear() {

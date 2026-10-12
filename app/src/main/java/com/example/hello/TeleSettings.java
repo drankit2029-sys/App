@@ -64,4 +64,39 @@ public final class TeleSettings {
     private static int clamp(int v, int lo, int hi) {
         return Math.max(lo, Math.min(hi, v));
     }
+
+    // ---- inline control setters ----
+    //
+    // These mutate the cached instance in place and persist it, so a drag on
+    // the inline controls never re-reads (or races with) a stale snapshot.
+
+    public static void setTextSize(Context ctx, int sp) {
+        TeleSettings s = load(ctx);
+        s.textSizeSp = clamp(sp, TeleMath.MIN_TEXT_SP, TeleMath.MAX_TEXT_SP);
+        s.save(ctx);
+    }
+
+    public static void setWordsPerMinute(Context ctx, int wpm) {
+        TeleSettings s = load(ctx);
+        s.wordsPerMinute = clamp(wpm, MIN_WPM, MAX_WPM);
+        s.save(ctx);
+    }
+
+    public static void setWordsPerLine(Context ctx, int wpl) {
+        TeleSettings s = load(ctx);
+        s.wordsPerLine = clamp(wpl, TeleMath.MIN_WORDS_PER_LINE,
+                TeleMath.MAX_WORDS_PER_LINE);
+        s.save(ctx);
+    }
+
+    public static void toggleMirror(Context ctx, boolean mirror) {
+        TeleSettings s = load(ctx);
+        s.mirror = mirror;
+        s.save(ctx);
+    }
+
+    /** Drops the cache; used after importing settings from elsewhere. */
+    public static void invalidateCache() {
+        cached = null;
+    }
 }
