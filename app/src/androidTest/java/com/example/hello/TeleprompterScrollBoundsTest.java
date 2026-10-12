@@ -170,8 +170,8 @@ public class TeleprompterScrollBoundsTest {
         InstrumentationRegistry.getInstrumentation().waitForIdleSync();
         android.os.SystemClock.sleep(300);
 
-        assertTrue("prompter collapsed to " + tele.getHeight() + "px",
-                tele.getHeight() >= 120);
+        assertTrue("prompter collapsed to " + tele.getHeight() + "px; "
+                + describe(tele), tele.getHeight() >= 120);
         assertTrue("prompter cannot scroll (max=" + tele.maxScroll() + ")",
                 tele.maxScroll() > 0f);
         // At the default text size it must show more than a line or two.
@@ -192,6 +192,24 @@ public class TeleprompterScrollBoundsTest {
             }
         }
         return null;
+    }
+
+    /** Walks up the tree so a collapsed ancestor is obvious. */
+    static String describe(android.view.View v0) {
+        StringBuilder sb = new StringBuilder("chain: ");
+        android.view.View cur = v0;
+        int guard = 0;
+        while (cur != null && guard++ < 7) {
+            sb.append(cur.getClass().getSimpleName()).append("[")
+              .append(cur.getWidth()).append("x").append(cur.getHeight())
+              .append("] < ");
+            if (cur.getParent() instanceof android.view.View) {
+                cur = (android.view.View) cur.getParent();
+            } else {
+                break;
+            }
+        }
+        return sb.toString();
     }
 
     private MotionEvent motion(int action, float x, float y) {
