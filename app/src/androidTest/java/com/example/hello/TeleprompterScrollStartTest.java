@@ -44,7 +44,7 @@ public class TeleprompterScrollStartTest {
     }
 
     /** Walks up the tree so a collapsed ancestor is obvious. */
-    private static String describe(android.view.View v) {
+    private static String describe(TeleprompterView v) {
         StringBuilder sb = new StringBuilder();
         sb.append("script=").append(v.getScript() == null
                 ? -1 : v.getScript().length())
