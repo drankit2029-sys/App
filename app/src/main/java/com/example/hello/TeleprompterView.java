@@ -369,7 +369,9 @@ public class TeleprompterView extends View {
                 downY = event.getY();
                 lastTouchY = event.getY();
                 dragging = false;
-                getParent().requestDisallowInterceptTouchEvent(true);
+                if (getParent() != null) {
+                    getParent().requestDisallowInterceptTouchEvent(true);
+                }
                 return true;
             case MotionEvent.ACTION_MOVE: {
                 int idx = event.findPointerIndex(activePointer);
@@ -392,7 +394,9 @@ public class TeleprompterView extends View {
                 activePointer = -1;
                 if (!dragging) performClick();
                 dragging = false;
-                getParent().requestDisallowInterceptTouchEvent(false);
+                if (getParent() != null) {
+                    getParent().requestDisallowInterceptTouchEvent(false);
+                }
                 return true;
             default:
                 return true;

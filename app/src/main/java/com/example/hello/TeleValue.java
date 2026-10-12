@@ -334,7 +334,9 @@ public class TeleValue extends LinearLayout {
                     }
                     scrubbing = true;
                     dragStartValue = value;
-                    getParent().requestDisallowInterceptTouchEvent(true);
+                    if (getParent() != null) {
+                        getParent().requestDisallowInterceptTouchEvent(true);
+                    }
                 }
                 lastX = ev.getX();
                 int delta = (int) Math.round((ev.getX() - downX)
@@ -346,7 +348,9 @@ public class TeleValue extends LinearLayout {
             case MotionEvent.ACTION_CANCEL:
                 if (scrubbing) {
                     scrubbing = false;
-                    getParent().requestDisallowInterceptTouchEvent(false);
+                    if (getParent() != null) {
+                        getParent().requestDisallowInterceptTouchEvent(false);
+                    }
                     performClick();
                     return true;
                 }
