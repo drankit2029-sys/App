@@ -54,7 +54,8 @@ public class TeleValue extends LinearLayout {
 
     private float downX;
     private float lastX;
-    private boolean dragging;
+    private boolean scrubbing;
+    private float downY;
     private int dragStartValue;
     private long lastTapAt;
 
@@ -131,40 +132,6 @@ public class TeleValue extends LinearLayout {
             return true;
         });
 
-        setOnTouchListener((v, ev) -> {
-            switch (ev.getActionMasked()) {
-                case MotionEvent.ACTION_DOWN:
-                    downX = ev.getX();
-                    lastX = ev.getX();
-                    dragging = true;
-                    dragStartValue = value;
-                    break;
-                case MotionEvent.ACTION_MOVE: {
-                    if (!dragging) break;
-                    float dx = ev.getX() - downX;
-                    // Only claim the gesture once it is clearly horizontal,
-                    // so taps on the buttons still register normally.
-                    if (Math.abs(dx) < dp(getContext(), 8)) {
-                        lastX = ev.getX();
-                        return false;
-                    }
-                    lastX = ev.getX();
-                    int delta = (int) Math.round(dx / dp(getContext(), 6));
-                    int next = clamp(dragStartValue + delta * step);
-                    if (next != value) {
-                        setValue(next, true);
-                    }
-                    return true;
-                }
-                case MotionEvent.ACTION_UP:
-                case MotionEvent.ACTION_CANCEL:
-                    dragging = false;
-                    break;
-                default:
-                    break;
-            }
-            return false;
-        });
     }
 
     private TextView button(Context ctx, String glyph) {
@@ -336,6 +303,57 @@ public class TeleValue extends LinearLayout {
                 }
             });
         } catch (Exception ignored) {
+        }
+    }
+
+    /**
+     * Horizontal scrubs are intercepted here rather than in an
+     * {@code OnTouchListener}: the minus, value and plus children are all
+     * clickable, so they consume ACTION_DOWN and the parent would never see
+     * the gesture at all.
+     *
+     * <p>Taps still fall through to the children, which keep their behaviour.
+     */
+    @Override
+    public boolean dispatchTouchEvent(MotionEvent ev) {
+        switch (ev.getActionMasked()) {
+            case MotionEvent.ACTION_DOWN:
+                downX = ev.getX();
+                lastX = ev.getX();
+                downY = ev.getY();
+                scrubbing = false;
+                return super.dispatchTouchEvent(ev);
+            case MotionEvent.ACTION_MOVE: {
+                float dx = ev.getX() - downX;
+                float dy = ev.getY() - downY;
+                float slop = dp(getContext(), 6);
+                if (!scrubbing) {
+                    // Claim the gesture only once it is clearly horizontal.
+                    if (Math.abs(dx) < slop || Math.abs(dx) <= Math.abs(dy)) {
+                        return super.dispatchTouchEvent(ev);
+                    }
+                    scrubbing = true;
+                    dragStartValue = value;
+                    getParent().requestDisallowInterceptTouchEvent(true);
+                }
+                lastX = ev.getX();
+                int delta = (int) Math.round((ev.getX() - downX)
+                        / dp(getContext(), 7));
+                setValue(dragStartValue + delta * step, true);
+                return true;
+            }
+            case MotionEvent.ACTION_UP:
+            case MotionEvent.ACTION_CANCEL:
+                if (scrubbing) {
+                    scrubbing = false;
+                    getParent().requestDisallowInterceptTouchEvent(false);
+                    performClick();
+                    return true;
+                }
+                scrubbing = false;
+                return super.dispatchTouchEvent(ev);
+            default:
+                return super.dispatchTouchEvent(ev);
         }
     }
 

@@ -211,13 +211,15 @@ public class StudioFragment extends Fragment {
             switch (ev.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
                 case MotionEvent.ACTION_MOVE:
-                    teleManualUntil = Long.MAX_VALUE;
+                    teleManualUntil = SystemClock.elapsedRealtime() + 1500L;
                     break;
                 case MotionEvent.ACTION_UP:
                 case MotionEvent.ACTION_CANCEL:
-                    if (!telePaused) {
-                        teleManualUntil = SystemClock.elapsedRealtime() + 1500L;
-                    }
+                    // Bounded either way: an up event can be swallowed if a
+                    // parent steals the gesture, and an unbounded value here
+                    // would freeze auto-scroll permanently.
+                    teleManualUntil = SystemClock.elapsedRealtime()
+                            + (telePaused ? 600000L : 1500L);
                     break;
                 default:
                     break;

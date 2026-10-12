@@ -8,6 +8,7 @@ import android.graphics.PorterDuff;
 import android.graphics.PorterDuffXfermode;
 import android.graphics.Shader;
 import android.util.AttributeSet;
+import android.view.MotionEvent;
 import android.view.View;
 
 import java.util.ArrayList;
@@ -49,6 +50,7 @@ public class TeleprompterView extends View {
 
     /** Cache key for the wrap, so scrolling never re-wraps the script. */
     private int wrapWidth = -1;
+    private int wrapHeight = -1;
     private float wrapSizePx = -1f;
     private int wrapWpl = -1;
 
@@ -66,6 +68,9 @@ public class TeleprompterView extends View {
         textPaint.setTextAlign(Paint.Align.CENTER);
         textPaint.setSubpixelText(true);
         setWillNotDraw(false);
+        // Without this the view never receives touch events for dragging.
+        setClickable(true);
+        setFocusable(true);
     }
 
     public void setTextColor(int color) {
@@ -166,6 +171,8 @@ public class TeleprompterView extends View {
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
         super.onSizeChanged(w, h, oldw, oldh);
         fadePx = h * 0.44f;
+        // Height feeds the scroll bounds, so the cached split is only reusable
+        // when the height is unchanged too.
         rewrap();
     }
 
@@ -184,14 +191,19 @@ public class TeleprompterView extends View {
                 segments.clear();
             }
             wrapWidth = width;
+            wrapHeight = getHeight();
             wrapSizePx = textSizePx;
             wrapWpl = wordsPerLine;
             recomputeMaxScroll();
             return;
         }
         // Nothing changed — keep the existing split so scrolling is stable.
-        if (width == wrapWidth && textSizePx == wrapSizePx
-                && wordsPerLine == wrapWpl && !segments.isEmpty()) {
+        // The bounds are still recomputed below because they depend on height,
+        // which is not part of the split itself.
+        if (width == wrapWidth && getHeight() == wrapHeight
+                && textSizePx == wrapSizePx && wordsPerLine == wrapWpl
+                && !segments.isEmpty()) {
+            recomputeMaxScroll();
             return;
         }
 
@@ -232,6 +244,7 @@ public class TeleprompterView extends View {
         }
 
         wrapWidth = width;
+        wrapHeight = getHeight();
         wrapSizePx = textSizePx;
         wrapWpl = wordsPerLine;
         recomputeMaxScroll();
@@ -329,10 +342,70 @@ public class TeleprompterView extends View {
         canvas.restoreToCount(save);
     }
 
-    /** True when the whole script is shorter than the viewport. */
+    /**
+     * True when the whole script is shorter than the viewport.
+     */
     private boolean totalLinesFits(int count) {
         return count > 0 && segments.size() <= count
                 && scrollOffset <= 0.01f;
+    }
+
+    // ---- dragging the script by hand ----
+
+    private float downY;
+    private float lastTouchY;
+    private int activePointer = -1;
+    private boolean dragging;
+
+    @Override
+    public boolean onTouchEvent(MotionEvent event) {
+        if (maxScroll() <= 0f) {
+            // Nothing to scroll: let taps through, but do not claim drags.
+            return super.onTouchEvent(event);
+        }
+        switch (event.getActionMasked()) {
+            case MotionEvent.ACTION_DOWN:
+                activePointer = event.getPointerId(0);
+                downY = event.getY();
+                lastTouchY = event.getY();
+                dragging = false;
+                getParent().requestDisallowInterceptTouchEvent(true);
+                return true;
+            case MotionEvent.ACTION_MOVE: {
+                int idx = event.findPointerIndex(activePointer);
+                if (idx < 0) return true;
+                float y = event.getY(idx);
+                float dy = y - lastTouchY;
+                if (!dragging && Math.abs(y - downY) > touchSlopPx()
+                        && Math.abs(y - downY) > Math.abs(event.getX() - event.getX(0))) {
+                    dragging = true;
+                }
+                if (dragging) {
+                    // Drag down moves the text down, i.e. back through the script.
+                    scrollBy(-dy);
+                    lastTouchY = y;
+                }
+                return true;
+            }
+            case MotionEvent.ACTION_UP:
+            case MotionEvent.ACTION_CANCEL:
+                activePointer = -1;
+                if (!dragging) performClick();
+                dragging = false;
+                getParent().requestDisallowInterceptTouchEvent(false);
+                return true;
+            default:
+                return true;
+        }
+    }
+
+    private float touchSlopPx() {
+        return getResources().getDisplayMetrics().density * 8f;
+    }
+
+    @Override
+    public boolean performClick() {
+        return super.performClick();
     }
 
     /**
