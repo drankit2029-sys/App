@@ -3,6 +3,7 @@ package com.example.hello;
 import android.app.AlertDialog;
 import android.app.Dialog;
 import android.content.Context;
+import android.util.AttributeSet;
 import android.graphics.Color;
 import android.graphics.drawable.ColorDrawable;
 import android.text.InputType;
@@ -55,16 +56,15 @@ public class TeleValue extends LinearLayout {
     private boolean dragging;
     private int dragStartValue;
     private long lastTapAt;
-    private final Runnable longPress;
 
     public TeleValue(Context context) {
-        super(context);
+        this(context, null);
+    }
+
+    /** Required for XML inflation; without it the studio screen crashes. */
+    public TeleValue(Context context, AttributeSet attrs) {
+        super(context, attrs);
         build(context);
-        longPress = () -> {
-            if (label != null) label.performHapticFeedback(
-                    HapticFeedbackConstants.LONG_PRESS);
-            promptKeyboard();
-        };
     }
 
     private void build(Context ctx) {
@@ -107,7 +107,9 @@ public class TeleValue extends LinearLayout {
             }
         });
         label.setOnLongClickListener(v -> {
-            longPress.run();
+            if (label != null) label.performHapticFeedback(
+                    HapticFeedbackConstants.LONG_PRESS);
+            promptKeyboard();
             return true;
         });
 
