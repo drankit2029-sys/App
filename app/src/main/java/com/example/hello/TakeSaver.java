@@ -39,6 +39,16 @@ public final class TakeSaver {
      */
     private static final double FLAC_MIN_RATIO = 0.9d;
 
+    /**
+     * True when a "compressed" FLAC save came out no smaller than the float
+     * source, i.e. the encoder passed frames through instead of compressing.
+     * Exposed for the unit test; real-encoder behaviour is covered on device.
+     */
+    static boolean flacLooksIneffective(long flacBytes, long rawBytes) {
+        if (rawBytes <= 0) return false;
+        return flacBytes > rawBytes * FLAC_MIN_RATIO;
+    }
+
     /** Short UI label for a (preset, save-format) pair, e.g. "M4A". */
     public static String labelFor(RecordPreset preset, SaveFormat save) {
         return save.effective(preset).badge;
@@ -98,8 +108,8 @@ public final class TakeSaver {
             // hand back a near-full-size file under a lossless-compressed
             // label. Some devices do that, so measure rather than trust: fall
             // back to 24-bit WAV, which is lossless by definition.
-            if (eff == SaveFormat.FLAC
-                    && fin.length() > raw.length() * FLAC_MIN_RATIO) {
+            if (eff == SaveFormat.FLAC && flacLooksIneffective(fin.length(),
+                    raw.length())) {
                 long bloated = fin.length();
                 File wav = uniqueFinal(raw, "wav");
                 FormatConverter.toWav24(raw, wav, null);

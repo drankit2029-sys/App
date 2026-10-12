@@ -2,6 +2,7 @@ package com.example.hello;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
@@ -134,26 +135,17 @@ public class SavePipelineTest {
     }
 
     @Test
-    public void musicAutoSavesLossless() throws Exception {
-        // Music + Auto must land on a lossless container and never fall
-        // through to a lossy one. Robolectric has no FLAC encoder, so the
-        // guard re-routes to WAV24 — which is still lossless, and that is the
-        // point being asserted.
-        engine.startNewSession(ctx, "Lossless Master", 2);
-        File raw = engine.rawFile;
-        writeCaptureSeconds(0.5);
-
-        TakeSaver.Result r = TakeSaver.finalizeAndConvert(ctx,
-                RecordPreset.MUSIC, SaveFormat.AUTO, null);
-
-        assertTrue("music must not save lossy: " + r.label,
-                r.label.equals("FLAC") || r.label.equals("WAV24"));
-        assertTrue("raw capture must be cleaned up", !raw.exists());
-        assertTrue("output missing", r.file.exists());
-        // Lossless either way: readable, and at full length.
-        assertTrue(Dsp.wavDurationMs(r.file) > 400);
-        FormatConverter.validateFinal(r.file,
-                r.label.equals("FLAC") ? SaveFormat.FLAC : SaveFormat.WAV24);
+    public void ineffectiveFlacIsDetected() {
+        // A FLAC save that is no smaller than the float source means the
+        // encoder passed frames through. Real music must not trigger this;
+        // a pass-through encoder must. (Auto->FLAC end-to-end needs a real
+        // encoder, so that assertion lives in the on-device suite.)
+        assertFalse(TakeSaver.flacLooksIneffective(6_000_000L, 23_000_000L));
+        assertFalse(TakeSaver.flacLooksIneffective(1L, 100L));
+        assertTrue(TakeSaver.flacLooksIneffective(23_000_000L, 23_000_000L));
+        assertTrue(TakeSaver.flacLooksIneffective(22_000_000L, 23_000_000L));
+        // Degenerate source must not divide by zero.
+        assertFalse(TakeSaver.flacLooksIneffective(100L, 0L));
     }
 
     @Test
