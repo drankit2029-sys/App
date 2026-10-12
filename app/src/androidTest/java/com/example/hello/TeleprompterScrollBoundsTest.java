@@ -141,6 +141,58 @@ public class TeleprompterScrollBoundsTest {
                 0f, v.scrollOffset(), 0.5f);
     }
 
+    /**
+     * The prompter must have real height on the actual studio screen. It once
+     * collapsed to 0px because the fixed content below overran the layout, so
+     * nothing was drawn and nothing could scroll.
+     */
+    @Test
+    public void prompterHasUsableHeightOnTheRealScreen() {
+        Activity a = launch();
+        View fab = a.findViewById(R.id.fabWrap);
+        if (fab != null) {
+            a.runOnUiThread(fab::performClick);
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+        }
+        View root = a.getWindow().getDecorView();
+        TeleprompterView tele = (TeleprompterView) root.findViewById(R.id.teleView);
+        if (tele == null) {
+            View start = findByText(root, "Start");
+            if (start != null) {
+                a.runOnUiThread(start::performClick);
+                InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+            }
+            tele = (TeleprompterView) a.findViewById(R.id.teleView);
+        }
+        assertTrue("prompter not found", tele != null);
+        a.runOnUiThread(() -> tele.setScript(manyWords(400)));
+        InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+        SystemClock.sleep(300);
+
+        assertTrue("prompter collapsed to " + tele.getHeight() + "px",
+                tele.getHeight() >= 120);
+        assertTrue("prompter cannot scroll (max=" + tele.maxScroll() + ")",
+                tele.maxScroll() > 0f);
+        // At the default text size it must show more than a line or two.
+        int lines = tele.visibleLineCount();
+        assertTrue("only " + lines + " line(s) fit", lines >= 4);
+    }
+
+    private static View findByText(View v, String needle) {
+        if (v instanceof android.widget.TextView) {
+            CharSequence cs = ((android.widget.TextView) v).getText();
+            if (cs != null && needle.equals(cs.toString().trim())) return v;
+        }
+        if (v instanceof android.view.ViewGroup) {
+            android.view.ViewGroup g = (android.view.ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) {
+                View hit = findByText(g.getChildAt(i), needle);
+                if (hit != null) return hit;
+            }
+        }
+        return null;
+    }
+
     private MotionEvent motion(int action, float x, float y) {
         long t = android.os.SystemClock.uptimeMillis();
         return MotionEvent.obtain(t, t, action, x, y, 0);
