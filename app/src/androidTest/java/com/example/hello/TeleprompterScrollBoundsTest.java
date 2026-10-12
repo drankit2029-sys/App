@@ -167,7 +167,7 @@ public class TeleprompterScrollBoundsTest {
         assertTrue("prompter not found", tele != null);
         a.runOnUiThread(() -> tele.setScript(manyWords(400)));
         InstrumentationRegistry.getInstrumentation().waitForIdleSync();
-        SystemClock.sleep(300);
+        android.os.SystemClock.sleep(300);
 
         assertTrue("prompter collapsed to " + tele.getHeight() + "px",
                 tele.getHeight() >= 120);
