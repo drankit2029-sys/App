@@ -47,6 +47,7 @@ public class TeleValue extends LinearLayout {
     private String unit = "";
     private OnValueChanged listener;
 
+    private TextView caption;
     private TextView minus;
     private TextView plus;
     private TextView label;
@@ -68,27 +69,44 @@ public class TeleValue extends LinearLayout {
     }
 
     private void build(Context ctx) {
-        setOrientation(HORIZONTAL);
-        setGravity(Gravity.CENTER_VERTICAL);
-        setBackgroundResource(R.drawable.bg_search);
-        int pad = dp(ctx, 4);
-        setPadding(dp(ctx, 4), pad, dp(ctx, 4), pad);
+        setOrientation(VERTICAL);
+        setGravity(Gravity.CENTER_HORIZONTAL);
+
+        caption = new TextView(ctx);
+        caption.setTextSize(8.5f);
+        caption.setGravity(Gravity.CENTER);
+        caption.setTextColor(0xFF8A93A0);
+        caption.setSingleLine(true);
+        caption.setVisibility(GONE);
+        addView(caption, new LayoutParams(LayoutParams.MATCH_PARENT,
+                LayoutParams.WRAP_CONTENT));
+
+        LinearLayout row = new LinearLayout(ctx);
+        row.setOrientation(HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setBackgroundResource(R.drawable.bg_search);
+        row.setPadding(dp(ctx, 2), 0, dp(ctx, 2), 0);
 
         minus = button(ctx, "−");
         plus = button(ctx, "+");
 
         label = new TextView(ctx);
         label.setTextColor(0xFFF2F4F7);
-        label.setTextSize(13);
+        label.setTextSize(12);
         label.setGravity(Gravity.CENTER);
-        label.setMinWidth(dp(ctx, 54));
         label.setSingleLine(true);
+        label.setMaxLines(1);
         label.setContentDescription("value");
 
-        addView(minus, new LayoutParams(dp(ctx, 30), dp(ctx, 30)));
-        addView(label, new LayoutParams(LayoutParams.WRAP_CONTENT,
-                LayoutParams.WRAP_CONTENT));
-        addView(plus, new LayoutParams(dp(ctx, 30), dp(ctx, 30)));
+        row.addView(minus, new LayoutParams(dp(ctx, 26), dp(ctx, 24)));
+        LinearLayout.LayoutParams lp =
+                new LinearLayout.LayoutParams(0,
+                        LayoutParams.WRAP_CONTENT, 1f);
+        row.addView(label, lp);
+        row.addView(plus, new LayoutParams(dp(ctx, 26), dp(ctx, 24)));
+
+        addView(row, new LayoutParams(LayoutParams.MATCH_PARENT,
+                dp(ctx, 26)));
 
         minus.setOnClickListener(v -> setValue(value - step, true));
         plus.setOnClickListener(v -> setValue(value + step, true));
@@ -152,12 +170,23 @@ public class TeleValue extends LinearLayout {
     private TextView button(Context ctx, String glyph) {
         TextView t = new TextView(ctx);
         t.setText(glyph);
-        t.setTextSize(16);
+        t.setTextSize(15);
         t.setGravity(Gravity.CENTER);
         t.setTextColor(0xFFF2F4F7);
         t.setBackgroundResource(R.drawable.bg_round_btn);
         t.setContentDescription(glyph.equals("+") ? "increase" : "decrease");
         return t;
+    }
+
+    /** Small name shown above the stepper, so controls need no external label. */
+    public void setCaption(String s) {
+        if (caption == null) return;
+        if (s == null || s.isEmpty()) {
+            caption.setVisibility(GONE);
+        } else {
+            caption.setText(s);
+            caption.setVisibility(VISIBLE);
+        }
     }
 
     private void maybeOpenPicker() {

@@ -703,10 +703,13 @@ public class StudioFragment extends Fragment {
 
     /** Inline size / speed / words-per-line controls, plus zoom. */
     private void initTeleValueControls() {
-        teleSizeValue.configure(16, 72, 1, tele.textSizeSp, "sp");
+        teleSizeValue.setCaption(getString(R.string.tele_size_short));
+        teleSpeedValue.setCaption(getString(R.string.tele_speed_short));
+        teleWplValue.setCaption(getString(R.string.tele_wpl_short));
+        teleSizeValue.configure(12, 56, 1, tele.textSizeSp, "");
         teleSpeedValue.configure(40, 400, 5, tele.wordsPerMinute, "");
-        teleWplValue.configure(TeleMath.MIN_WORDS_PER_LINE, 24, 1,
-                tele.wordsPerLine, "");
+        teleWplValue.configure(TeleMath.MIN_WORDS_PER_LINE,
+                TeleMath.MAX_WORDS_PER_LINE, 1, tele.wordsPerLine, "");
 
         teleSizeValue.setOnValueChanged(val -> {
             TeleSettings.setTextSize(requireContext(), val);
