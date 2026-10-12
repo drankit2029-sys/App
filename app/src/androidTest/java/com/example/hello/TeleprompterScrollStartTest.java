@@ -113,6 +113,7 @@ public class TeleprompterScrollStartTest {
         float first = tele.scrollOffset();
         long firstMoveAt = -1L;
         long t0 = SystemClock.elapsedRealtime();
+        StringBuilder trace = new StringBuilder();
         while (SystemClock.elapsedRealtime() - t0 < 6000L) {
             SystemClock.sleep(150);
             InstrumentationRegistry.getInstrumentation().waitForIdleSync();
@@ -121,8 +122,16 @@ public class TeleprompterScrollStartTest {
                 firstMoveAt = SystemClock.elapsedRealtime() - t0;
                 break;
             }
+            if (trace.length() < 400) {
+                trace.append(String.format(" [off=%.1f max=%.1f vis=%s wpm=%d auto=%s]",
+                        now, tele.maxScroll(),
+                        tele.getVisibility() == View.VISIBLE,
+                        tele.getWordsPerLine(),
+                        TeleSettings.load(b).autoScroll));
+            }
         }
-        assertTrue("prompter never started scrolling", firstMoveAt >= 0L);
+        assertTrue("prompter never started scrolling; trace:" + trace,
+                firstMoveAt >= 0L);
         assertTrue("prompter waited " + firstMoveAt
                 + "ms before moving; it must move with the recording",
                 firstMoveAt < 1500L);
