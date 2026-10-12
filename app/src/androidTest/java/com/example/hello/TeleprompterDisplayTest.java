@@ -168,8 +168,18 @@ public class TeleprompterDisplayTest {
         // Ink in the first 40px would mean the text hugs the left padding.
         int farLeft = inked(bmp, 0, 40);
         assertEquals("text is flush to the left edge", 0, farLeft);
+        int farRight = inked(bmp, w - 40, w);
+        assertEquals("text is flush to the right edge", 0, farRight);
         // And there should be ink somewhere in the middle band.
         assertTrue("nothing rendered", inked(bmp, w / 4, w - w / 4) > 0);
+
+        // Symmetry: ink left of centre should roughly mirror ink right of it.
+        // A left-aligned prompter shows a large, stable imbalance.
+        int left = inked(bmp, 0, w / 2);
+        int right = inked(bmp, w / 2, w);
+        float skew = Math.abs(left - right) / (float) Math.max(1, left + right);
+        assertTrue("ink is not balanced about the centre (skew=" + skew
+                + ", left=" + left + ", right=" + right + ")", skew < 0.18f);
     }
 
     private static int inked(android.graphics.Bitmap b, int x0, int x1) {
