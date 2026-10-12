@@ -74,7 +74,7 @@ public class TeleDialogsTest {
 
         // Closing commits the script.
         d.dismiss();
-        assertEquals("hello world\nsecond line", saved[0]);
+        assertEquals("saved=" + saved[0], "hello world\nsecond line", saved[0]);
     }
 
     @Test
