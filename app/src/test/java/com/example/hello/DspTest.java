@@ -88,6 +88,37 @@ public class DspTest {
         assertEquals(16000, s32(h, 24));
         assertEquals(16, u16(h, 34));
         assertEquals(500, s32(h, 40));
+        // blockAlign = channels * bytesPerSample
+        assertEquals(2, u16(h, 32));
+    }
+
+    @Test
+    public void wav24HeaderFields() {
+        byte[] h = Dsp.wav24Header(2, 48000, 900);
+        assertEquals('R', h[0]);
+        assertEquals('W', h[8]);
+        assertEquals('d', h[36]);
+        assertEquals(1, u16(h, 20)); // integer PCM, not float
+        assertEquals(2, u16(h, 22));
+        assertEquals(48000, s32(h, 24));
+        assertEquals(24, u16(h, 34));
+        // 2 channels * 3 bytes = 6 byte frames; byte rate = rate * align.
+        assertEquals(6, u16(h, 32));
+        assertEquals(48000 * 6, s32(h, 28));
+        assertEquals(900, s32(h, 40));
+        assertEquals(44, h.length);
+    }
+
+    @Test
+    public void pcmHeaderRejectsOddDepth() {
+        // Only 16 and 24 are writable; anything else would produce a header
+        // no editor could open.
+        try {
+            Dsp.wavPcmHeader(1, 48000, 20, 100);
+            org.junit.Assert.fail("expected rejection of 20-bit PCM");
+        } catch (IllegalArgumentException expected) {
+            // correct
+        }
     }
 
     // ---- FIR ----
@@ -126,6 +157,24 @@ public class DspTest {
     @Test
     public void wavDurationPcm16Mono8k() throws Exception {
         assertEquals(2000, Dsp.wavDurationMs(writeWav(false, 1, 8000, 16000)));
+    }
+
+    @Test
+    public void wavDurationPcm24() throws Exception {
+        // 24-bit must resolve to the same duration as the equivalent file,
+        // or every WAV24 export would show a wrong length in the library.
+        File f = tmp.newFile("c24.wav");
+        int frames = 24000; // 0.5s @ 48 kHz stereo
+        byte[] h = Dsp.wav24Header(2, 48000, (long) frames * 2 * 3);
+        RandomAccessFile w = new RandomAccessFile(f, "rw");
+        try {
+            w.setLength(0);
+            w.write(h);
+            w.write(new byte[frames * 2 * 3]);
+        } finally {
+            w.close();
+        }
+        assertEquals(500, Dsp.wavDurationMs(f));
     }
 
     @Test

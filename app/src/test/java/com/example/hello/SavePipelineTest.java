@@ -134,25 +134,43 @@ public class SavePipelineTest {
     }
 
     @Test
-    public void musicAutoSavesTheRawCaptureLosslessly() throws Exception {
-        // Music defaults to the 32-bit float capture: the finished file must
-        // BE that capture (same bytes), and it must survive the save.
+    public void musicAutoSavesLossless() throws Exception {
+        // Music + Auto must land on a lossless container and never fall
+        // through to a lossy one. Robolectric has no FLAC encoder, so the
+        // guard re-routes to WAV24 — which is still lossless, and that is the
+        // point being asserted.
         engine.startNewSession(ctx, "Lossless Master", 2);
         File raw = engine.rawFile;
         writeCaptureSeconds(0.5);
-        long rawBytes = raw.length();
 
         TakeSaver.Result r = TakeSaver.finalizeAndConvert(ctx,
                 RecordPreset.MUSIC, SaveFormat.AUTO, null);
 
-        assertEquals("WAV32", r.label);
-        assertTrue("output must be the raw capture itself",
-                r.file.equals(raw));
-        assertTrue("raw capture was deleted", raw.exists());
-        assertEquals(rawBytes, r.file.length());
-        // Still a genuine, readable 32-bit float WAV.
-        assertTrue(Dsp.wavDurationMs(r.file) > 0);
-        FormatConverter.validateFinal(r.file, SaveFormat.WAV32);
+        assertTrue("music must not save lossy: " + r.label,
+                r.label.equals("FLAC") || r.label.equals("WAV24"));
+        assertTrue("raw capture must be cleaned up", !raw.exists());
+        assertTrue("output missing", r.file.exists());
+        // Lossless either way: readable, and at full length.
+        assertTrue(Dsp.wavDurationMs(r.file) > 400);
+        FormatConverter.validateFinal(r.file,
+                r.label.equals("FLAC") ? SaveFormat.FLAC : SaveFormat.WAV24);
+    }
+
+    @Test
+    public void wav24ConversionKeepsFullDuration() throws Exception {
+        engine.startNewSession(ctx, "Master 24", 2);
+        File raw = engine.rawFile;
+        writeCaptureSeconds(0.5);
+        TakeSaver.Result r = TakeSaver.finalizeAndConvert(ctx,
+                RecordPreset.MUSIC, SaveFormat.WAV24, null);
+        assertEquals("WAV24", r.label);
+        assertTrue(r.file.getName().endsWith(".wav"));
+        assertFalse("raw should be cleaned up", raw.exists());
+        // Half a second in, ~half a second out: a byte-count mistake in the
+        // 3-byte sample assembly would show up here as a wrong duration.
+        long dur = Dsp.wavDurationMs(r.file);
+        assertTrue("duration off: " + dur, dur >= 450 && dur <= 550);
+        FormatConverter.validateFinal(r.file, SaveFormat.WAV24);
     }
 
     @Test

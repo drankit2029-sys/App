@@ -140,16 +140,74 @@ public final class FormatConverter {
                 android.media.MediaCodecInfo.CodecProfileLevel.AACObjectLC, cb);
     }
 
+    /**
+     * 32-bit float WAV -> 24-bit PCM WAV.
+     *
+     * <p>24-bit samples are not 4-byte aligned, so each one is assembled
+     * byte-wise rather than through a typed {@link ByteBuffer} read.
+     */
+    public static void toWav24(File src, File dst, Progress cb) throws Exception {
+        WavInfo info = readFloatWav(src);
+        long totalSamples = info.dataBytes / 4;
+        RandomAccessFile r = new RandomAccessFile(src, "r");
+        RandomAccessFile w = new RandomAccessFile(dst, "rw");
+        try {
+            w.setLength(0);
+            w.write(Dsp.wav24Header(info.channels, info.sampleRate, 0));
+            r.seek(info.dataStart);
+            // 32768 samples in, 3 bytes each out.
+            byte[] in = new byte[32768 * 4];
+            byte[] out = new byte[32768 * 3];
+            ByteBuffer ib = ByteBuffer.wrap(in).order(ByteOrder.LITTLE_ENDIAN);
+            long done = 0;
+            int lastPct = -1;
+            while (done < totalSamples) {
+                int want = (int) Math.min(32768, totalSamples - done);
+                int bytes = want * 4;
+                r.readFully(in, 0, bytes);
+                ib.clear();
+                ib.limit(bytes);
+                int p = 0;
+                for (int i = 0; i < want; i++) {
+                    float s = ib.getFloat();
+                    if (s > 1f) s = 1f;
+                    else if (s < -1f) s = -1f;
+                    // +1.0 maps to 0x7FFFFF (full-scale positive); the most
+                    // negative sample is representable, +1.0 is not.
+                    int v = (int) Math.round(s * 8388607f);
+                    if (v > 8388607) v = 8388607;
+                    else if (v < -8388608) v = -8388608;
+                    out[p++] = (byte) (v & 0xFF);
+                    out[p++] = (byte) ((v >> 8) & 0xFF);
+                    out[p++] = (byte) ((v >> 16) & 0xFF);
+                }
+                w.write(out, 0, p);
+                done += want;
+                if (cb != null) {
+                    int pct = (int) (done * 100 / Math.max(1, totalSamples));
+                    if (pct != lastPct) {
+                        lastPct = pct;
+                        cb.onProgress(pct);
+                    }
+                }
+            }
+            long pcmBytes = totalSamples * 3;
+            w.seek(0);
+            w.write(Dsp.wav24Header(info.channels, info.sampleRate, pcmBytes));
+        } finally {
+            try {
+                r.close();
+            } catch (Exception ignored) {}
+            try {
+                w.close();
+            } catch (Exception ignored) {}
+        }
+        if (cb != null) cb.onProgress(100);
+    }
+
     /** Opus in WebM (probe-gated: only offered when an encoder exists). */
     public static void toOpus(File src, File dst, int bitrate, Progress cb) throws Exception {
         encodeMuxed(src, dst, "audio/opus",
-                Math.max(32000, Math.min(256000, bitrate <= 0 ? 128000 : bitrate)),
-                MediaMuxer.OutputFormat.MUXER_OUTPUT_WEBM, -1, cb);
-    }
-
-    /** Vorbis in WebM (probe-gated). */
-    public static void toVorbis(File src, File dst, int bitrate, Progress cb) throws Exception {
-        encodeMuxed(src, dst, "audio/vorbis",
                 Math.max(32000, Math.min(256000, bitrate <= 0 ? 128000 : bitrate)),
                 MediaMuxer.OutputFormat.MUXER_OUTPUT_WEBM, -1, cb);
     }
@@ -315,12 +373,6 @@ public final class FormatConverter {
         if (dst == null || !dst.exists() || dst.length() < 64) {
             throw new IllegalStateException("output too small");
         }
-        if (fmt == SaveFormat.WAV32) {
-            // Lossless path: the strongest check is the header the converter
-            // itself requires (32-bit float, right channel count/rate).
-            readFloatWav(dst);
-            return;
-        }
         RandomAccessFile r = new RandomAccessFile(dst, "r");
         try {
             byte[] head = new byte[12];
@@ -343,7 +395,6 @@ public final class FormatConverter {
                     }
                     break;
                 case OPUS:
-                case VORBIS:
                     // EBML header.
                     if ((head[0] & 0xFF) != 0x1A || (head[1] & 0xFF) != 0x45
                             || (head[2] & 0xFF) != 0xDF
@@ -358,9 +409,9 @@ public final class FormatConverter {
                     }
                     break;
                 case WAV16:
-                case WAV32:
-                    // RIFF/WAVE either way; readFloatWav() has already
-                    // asserted the 32-bit float payload for the WAV32 case.
+                case WAV24:
+                    // RIFF/WAVE; wavDurationMs() re-reads the header and
+                    // rejects a bit depth it does not understand.
                     if (head[0] != 'R' || head[1] != 'I'
                             || head[2] != 'F' || head[3] != 'F'
                             || head[8] != 'W' || head[9] != 'A'

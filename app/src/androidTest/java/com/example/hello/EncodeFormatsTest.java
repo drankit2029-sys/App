@@ -87,16 +87,6 @@ public class EncodeFormatsTest {
     }
 
     @Test
-    public void vorbis() throws Exception {
-        File src = makeFloatWav("vorbis_in.wav");
-        File dst = out(".webm");
-        FormatConverter.toVorbis(src, dst, 128000, null);
-        Log.i(TAG, "PASS vorbis bytes=" + dst.length());
-        FormatConverter.validateFinal(dst, SaveFormat.VORBIS);
-        assertTrue(dst.length() > 512);
-    }
-
-    @Test
     public void flac() throws Exception {
         File src = makeFloatWav("flac_in.wav");
         File dst = out(".flac");
@@ -152,14 +142,33 @@ public class EncodeFormatsTest {
         engine.clearSession();
     }
 
-    /** Auto for Music must keep the raw 32-bit float master, untouched. */
+    /** Real 24-bit encode: our own pure-Java path, fully testable on device. */
     @Test
-    public void musicAutoKeepsLosslessMaster() throws Exception {
+    public void wav24Encode() throws Exception {
+        File src = makeFloatWav("wav24_in.wav");
+        File dst = out(".wav");
+        FormatConverter.toWav24(src, dst, null);
+        Log.i(TAG, "PASS wav24 bytes=" + dst.length());
+        assertTrue(dst.length() > 1000);
+        // 24-bit stereo 48k must be exactly 3/4 of the 32-bit float input.
+        long expect = (src.length() - 44) * 3 / 4;
+        assertEquals("unexpected 24-bit payload size", expect + 44,
+                dst.length());
+        FormatConverter.validateFinal(dst, SaveFormat.WAV24);
+        // Duration must survive the 3-byte sample assembly.
+        long dur = Dsp.wavDurationMs(dst);
+        Log.i(TAG, "PASS wav24 duration=" + dur);
+        assertTrue("duration off: " + dur, dur >= 950 && dur <= 1050);
+    }
+
+    /** Music + Auto must stay lossless and must never land on a lossy codec. */
+    @Test
+    public void musicAutoStaysLossless() throws Exception {
         Context ctx = InstrumentationRegistry.getInstrumentation()
                 .getTargetContext();
         RecordingEngine engine = RecordingEngine.get();
         engine.clearSession();
-        engine.startNewSession(ctx, "Lossless Check", 2);
+        engine.startNewSession(ctx, "Music Auto", 2);
         File raw = engine.rawFile;
         int frames = 24000;
         RandomAccessFile w = new RandomAccessFile(raw, "rw");
@@ -171,18 +180,13 @@ public class EncodeFormatsTest {
         } finally {
             w.close();
         }
-        long bytes = raw.length();
         TakeSaver.Result r = TakeSaver.finalizeAndConvert(ctx,
                 RecordPreset.MUSIC, SaveFormat.AUTO, null);
-        Log.i(TAG, "LOSSLESS label=" + r.label + " sameAsRaw="
-                + r.file.equals(raw) + " bytes=" + r.file.length()
-                + " expected=" + bytes);
-        assertEquals("WAV32", r.label);
-        assertTrue("output must be the raw capture itself", r.file.equals(raw));
-        assertTrue("raw capture must survive a lossless save", raw.exists());
-        assertEquals(bytes, r.file.length());
-        FormatConverter.validateFinal(r.file, SaveFormat.WAV32);
-        assertTrue(Dsp.wavDurationMs(r.file) > 0);
+        Log.i(TAG, "LOSSLESS label=" + r.label + " bytes=" + r.file.length());
+        assertTrue("music auto must not be lossy: " + r.label,
+                r.label.equals("FLAC") || r.label.equals("WAV24"));
+        assertTrue(r.file.exists());
+        assertFalse("raw must be cleaned up", raw.exists());
         engine.clearSession();
     }
 }

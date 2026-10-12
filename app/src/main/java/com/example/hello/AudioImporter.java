@@ -82,6 +82,9 @@ public final class AudioImporter {
                 totalSamples = onDisk / 4;
             } else if (audioFormat == 1 && bits == 16) {
                 totalSamples = onDisk / 2;
+            } else if (audioFormat == 1 && bits == 24) {
+                // 24-bit sample source: 3 bytes, assembled byte-wise below.
+                totalSamples = onDisk / 3;
             } else {
                 throw new IllegalStateException("unsupported wav encoding");
             }
@@ -115,17 +118,34 @@ public final class AudioImporter {
                         // output frames are want/1 -> want stereo frames.
                         w.write(out, 0, ch == 2 ? want * 4 : want * 8);
                     } else {
-                        r.readFully(in, 0, want * 2);
-                        ib.clear();
-                        ib.limit(want * 2);
-                        ob.clear();
-                        for (int i = 0; i < want; i++) {
-                            float s = ib.getShort() / 32768f;
-                            if (ch == 2) {
+                        if (bits == 24) {
+                            r.readFully(in, 0, want * 3);
+                            ib.clear();
+                            ib.limit(want * 3);
+                            ob.clear();
+                            for (int i = 0; i < want; i++) {
+                                int v = (ib.get() & 0xFF)
+                                        | ((ib.get() & 0xFF) << 8)
+                                        | (ib.get() << 16);
+                                // Sign-extend the 24-bit value, then scale.
+                                if ((v & 0x800000) != 0) v |= 0xFF000000;
+                                float s = v / 8388608f;
                                 ob.putFloat(s);
-                            } else {
-                                ob.putFloat(s);
-                                ob.putFloat(s);
+                                if (ch == 1) ob.putFloat(s);
+                            }
+                        } else {
+                            r.readFully(in, 0, want * 2);
+                            ib.clear();
+                            ib.limit(want * 2);
+                            ob.clear();
+                            for (int i = 0; i < want; i++) {
+                                float s = ib.getShort() / 32768f;
+                                if (ch == 2) {
+                                    ob.putFloat(s);
+                                } else {
+                                    ob.putFloat(s);
+                                    ob.putFloat(s);
+                                }
                             }
                         }
                         w.write(out, 0, ch == 2 ? want * 4 : want * 8);

@@ -72,17 +72,22 @@ public final class OptionsSheet {
     /** One save-format toggle chip inside the unified recording dialog. */
     public static final class Chip {
         public final String label;
+        /** Approximate storage per minute, e.g. "17 MB/min". */
+        public final String size;
         public final boolean checked;
         public final Runnable action;
 
-        public Chip(String label, boolean checked, Runnable action) {
+        public Chip(String label, String size, boolean checked,
+                    Runnable action) {
             this.label = label;
+            this.size = size;
             this.checked = checked;
             this.action = action;
         }
 
-        public static Chip of(String label, boolean checked, Runnable action) {
-            return new Chip(label, checked, action);
+        public static Chip of(String label, String size, boolean checked,
+                              Runnable action) {
+            return new Chip(label, size, checked, action);
         }
     }
 
@@ -277,8 +282,9 @@ public final class OptionsSheet {
         java.util.List<Integer> pillDefaultColors = new java.util.ArrayList<>();
         // Built after the pills but referenced by their tap handler, so the
         // chip state travels in boxes created up front.
-        final java.util.List<TextView> chipViews = new java.util.ArrayList<>();
-        final java.util.List<Integer> chipDefaultColors = new java.util.ArrayList<>();
+        final java.util.List<View> chipViews = new java.util.ArrayList<>();
+        final java.util.List<TextView> chipNames = new java.util.ArrayList<>();
+        final java.util.List<TextView> chipSizes = new java.util.ArrayList<>();
         final TextView formatHintView = new TextView(ctx);
         formatHintView.setTextSize(11);
         formatHintView.setTextColor(0xFF9AA3AF);
@@ -315,7 +321,7 @@ public final class OptionsSheet {
             row.setOnClickListener(v -> {
                 if (it.action != null) it.action.run();
                 rebindSettings(state, pillRows, pillLabels, pillChecks,
-                        pillDefaultColors, chipViews, chipDefaultColors,
+                        pillDefaultColors, chipViews, chipNames, chipSizes,
                         formatHintView);
             });
         }
@@ -343,16 +349,33 @@ public final class OptionsSheet {
                 LinearLayout.LayoutParams.WRAP_CONTENT));
         for (Chip chip : state.formats()) {
             final Chip c = chip;
-            TextView tv = new TextView(ctx);
-            tv.setText(c.label);
-            tv.setTextSize(12);
-            tv.setTypeface(null, android.graphics.Typeface.BOLD);
-            tv.setGravity(Gravity.CENTER);
-            tv.setSingleLine(true);
-            tv.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            // Two lines: format name over its approximate size per minute,
+            // so storage cost is visible before committing to a format.
+            LinearLayout cell = new LinearLayout(ctx);
+            cell.setOrientation(LinearLayout.VERTICAL);
+            cell.setGravity(Gravity.CENTER);
+            cell.setBackgroundResource(R.drawable.bg_chip);
             int hPad = dp(ctx, 6);
-            tv.setPadding(hPad, dp(ctx, 9), hPad, dp(ctx, 9));
-            tv.setMinHeight(dp(ctx, 44));
+            cell.setPadding(hPad, dp(ctx, 8), hPad, dp(ctx, 8));
+            cell.setMinHeight(dp(ctx, 46));
+
+            TextView name = new TextView(ctx);
+            name.setText(c.label);
+            name.setTextSize(12);
+            name.setTypeface(null, android.graphics.Typeface.BOLD);
+            name.setGravity(Gravity.CENTER);
+            name.setSingleLine(true);
+            name.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            cell.addView(name);
+
+            TextView size = new TextView(ctx);
+            size.setText(c.size);
+            size.setTextSize(10);
+            size.setGravity(Gravity.CENTER);
+            size.setSingleLine(true);
+            size.setAlpha(0.85f);
+            cell.addView(size);
+
             android.widget.GridLayout.LayoutParams glp =
                     new android.widget.GridLayout.LayoutParams();
             glp.width = 0;
@@ -360,15 +383,16 @@ public final class OptionsSheet {
                     android.widget.GridLayout.UNDEFINED, 1f);
             int m = dp(ctx, 4);
             glp.setMargins(m, m, m, m);
-            tv.setLayoutParams(glp);
-            grid.addView(tv);
-            chipViews.add(tv);
-            chipDefaultColors.add(0xFF9AA3AF);
-            PressAnim.apply(tv);
-            tv.setOnClickListener(v -> {
+            cell.setLayoutParams(glp);
+            grid.addView(cell);
+            chipViews.add(cell);
+            chipNames.add(name);
+            chipSizes.add(size);
+            PressAnim.apply(cell);
+            cell.setOnClickListener(v -> {
                 if (c.action != null) c.action.run();
                 rebindSettings(state, pillRows, pillLabels, pillChecks,
-                        pillDefaultColors, chipViews, chipDefaultColors,
+                        pillDefaultColors, chipViews, chipNames, chipSizes,
                         formatHintView);
             });
         }
@@ -393,7 +417,8 @@ public final class OptionsSheet {
 
         dialog.setContentView(scroll);
         rebindSettings(state, pillRows, pillLabels, pillChecks,
-                pillDefaultColors, chipViews, chipDefaultColors, formatHintView);
+                pillDefaultColors, chipViews, chipNames, chipSizes,
+                formatHintView);
         styleAsCentered(dialog);
         dialog.show();
     }
@@ -417,8 +442,9 @@ public final class OptionsSheet {
                                        java.util.List<TextView> pillLabels,
                                        java.util.List<ImageView> pillChecks,
                                        java.util.List<Integer> pillColors,
-                                       java.util.List<TextView> chipViews,
-                                       java.util.List<Integer> chipColors,
+                                       java.util.List<View> chipViews,
+                                       java.util.List<TextView> chipNames,
+                                       java.util.List<TextView> chipSizes,
                                        TextView hintView) {
         java.util.List<Item> presets;
         java.util.List<Chip> formats;
@@ -446,8 +472,13 @@ public final class OptionsSheet {
             chipViews.get(i).setBackgroundResource(c.checked
                     ? R.drawable.bg_chip_selected
                     : R.drawable.bg_chip);
-            chipViews.get(i).setTextColor(c.checked
-                    ? 0xFFFFFFFF : chipColors.get(i));
+            int col = c.checked ? 0xFFFFFFFF : 0xFF9AA3AF;
+            chipNames.get(i).setTextColor(col);
+            chipSizes.get(i).setTextColor(col);
+            // Size text follows the resolved format, so a preset switch
+            // (mono vs stereo) updates the storage estimate in place.
+            chipSizes.get(i).setText(c.size);
+            chipNames.get(i).setText(c.label);
         }
         try {
             hintView.setText(state.formatHint());

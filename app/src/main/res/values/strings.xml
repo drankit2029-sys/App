@@ -122,7 +122,7 @@
     <string name="preset_podcast">Podcast</string>
     <string name="preset_podcast_sub">256 kbps AAC • stereo • 48 kHz</string>
     <string name="preset_music">Music</string>
-    <string name="preset_music_sub">320 kbps AAC • stereo • 48 kHz • unprocessed • saves lossless</string>
+    <string name="preset_music_sub">stereo • 48 kHz • unprocessed • saves lossless (FLAC)</string>
     <string name="preset_title">Recording preset</string>
     <string name="preset_locked">Preset is locked while recording</string>
     <string name="settings_title">Recording settings</string>
@@ -153,8 +153,8 @@
     <string name="save_m4a_sub">Preset bitrate • best compatibility</string>
     <string name="save_wav16">WAV • 16-bit PCM</string>
     <string name="save_wav16_sub">Lossless • large files</string>
-    <string name="save_wav32">WAV • 32-bit float</string>
-    <string name="save_wav32_sub">The raw capture • true lossless</string>
+    <string name="save_wav24">WAV • 24-bit PCM</string>
+    <string name="save_wav24_sub">Lossless pro master • any DAW</string>
     <string name="save_amr_nb">AMR-NB • voice</string>
     <string name="save_amr_nb_sub">Tiny files • phone-call quality</string>
     <string name="save_amr_wb">AMR-WB • HD voice</string>
@@ -163,8 +163,6 @@
     <string name="save_flac_sub">Lossless compressed</string>
     <string name="save_opus">Opus</string>
     <string name="save_opus_sub">Modern • great at low bitrates</string>
-    <string name="save_vorbis">Vorbis</string>
-    <string name="save_vorbis_sub">Open codec • WebM container</string>
     <string name="save_locked">Save format is locked while converting</string>
     <string name="teleprompter">Teleprompter</string>
     <string name="teleprompter_hint">Paste your script here…</string>

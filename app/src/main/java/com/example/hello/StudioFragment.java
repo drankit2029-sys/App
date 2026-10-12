@@ -411,11 +411,16 @@ public class StudioFragment extends Fragment {
                     if (!f.available(requireContext())) continue;
                     final SaveFormat pick = f;
                     String label = f == SaveFormat.AUTO
-                            ? getString(R.string.save_auto) + " ("
-                                    + TakeSaver.labelFor(preset, SaveFormat.AUTO)
-                                    + ")"
+                            ? getString(R.string.save_auto)
                             : chipLabel(f);
-                    chips.add(OptionsSheet.Chip.of(label, f == saveFormat,
+                    // Size is resolved against AUTO so the Auto chip shows
+                    // what it will actually produce, and re-read on every
+                    // preset change so mono/stereo estimates stay honest.
+                    SaveFormat shown = f == SaveFormat.AUTO ? f.effective(preset)
+                            : f;
+                    chips.add(OptionsSheet.Chip.of(label,
+                            shown.sizePerMinuteLabel(preset),
+                            f == saveFormat,
                             () -> {
                                 if (saving) {
                                     try {
@@ -446,14 +451,11 @@ public class StudioFragment extends Fragment {
                 getString(R.string.settings_done));
     }
 
-    /** Short chip text: "M4A", "WAV 16", "WAV 32", "AMR", "FLAC", … */
+    /** Short chip text: "M4A", "WAV 16", "WAV 24", "AMR", "FLAC", … */
     private String chipLabel(SaveFormat f) {
         switch (f) {
-            case M4A: return "M4A";
             case WAV16: return "WAV 16";
-            case WAV32: return "WAV 32";
-            case AMR_NB: return "AMR";
-            case AMR_WB: return "AMR-WB";
+            case WAV24: return "WAV 24";
             default: return TakeSaver.labelFor(preset, f);
         }
     }

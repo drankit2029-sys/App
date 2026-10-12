@@ -34,10 +34,10 @@ public enum RecordPreset {
     /**
      * True when the capture should be kept lossless by default. Only the
      * unprocessed stereo master qualifies: AAC is transparent for speech but
-     * discards real detail in a music take, so AUTO saves Music as the
-     * original 32-bit float WAV rather than squeezing it through a codec.
+     * discards real detail in a music take, so AUTO saves Music as FLAC
+     * rather than squeezing it through a lossy codec.
      */
-    public final boolean savesLosslessByDefault;
+    public final boolean autoSavesLossless;
 
     RecordPreset(String id, int titleRes, int subRes, String shortLabel,
                  int channels, int aacBitrate, int audioSource) {
@@ -47,7 +47,7 @@ public enum RecordPreset {
 
     RecordPreset(String id, int titleRes, int subRes, String shortLabel,
                  int channels, int aacBitrate, int audioSource,
-                 boolean savesLosslessByDefault) {
+                 boolean autoSavesLossless) {
         this.id = id;
         this.titleRes = titleRes;
         this.subRes = subRes;
@@ -55,7 +55,7 @@ public enum RecordPreset {
         this.channels = channels;
         this.aacBitrate = aacBitrate;
         this.audioSource = audioSource;
-        this.savesLosslessByDefault = savesLosslessByDefault;
+        this.autoSavesLossless = autoSavesLossless;
     }
 
     public boolean wantsStereo() {

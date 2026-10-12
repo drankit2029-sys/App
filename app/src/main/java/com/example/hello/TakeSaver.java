@@ -32,6 +32,13 @@ public final class TakeSaver {
 
     private TakeSaver() {}
 
+    /**
+     * If a FLAC save comes out larger than this fraction of the float raw
+     * file, the encoder is not compressing and WAV24 is the better answer.
+     * Real FLAC lands far below this; only a pass-through lands above.
+     */
+    private static final double FLAC_MIN_RATIO = 0.9d;
+
     /** Short UI label for a (preset, save-format) pair, e.g. "M4A". */
     public static String labelFor(RecordPreset preset, SaveFormat save) {
         return save.effective(preset).badge;
@@ -54,17 +61,13 @@ public final class TakeSaver {
         File fin = null;
         try {
             switch (eff) {
-                case WAV32:
-                    // True lossless: the raw 32-bit float capture IS the
-                    // finished file. No conversion, no re-encode, nothing
-                    // discarded — so it is kept in place rather than copied.
-                    FormatConverter.readFloatWav(raw);
-                    fin = raw;
-                    post(cb, 100);
-                    break;
                 case WAV16:
                     fin = uniqueFinal(raw, "wav");
                     FormatConverter.toWav16(raw, fin, pct -> post(cb, pct));
+                    break;
+                case WAV24:
+                    fin = uniqueFinal(raw, "wav");
+                    FormatConverter.toWav24(raw, fin, pct -> post(cb, pct));
                     break;
                 case AMR_NB:
                     fin = uniqueFinal(raw, "3gp");
@@ -83,11 +86,6 @@ public final class TakeSaver {
                     FormatConverter.toOpus(raw, fin, preset.aacBitrate,
                             pct -> post(cb, pct));
                     break;
-                case VORBIS:
-                    fin = uniqueFinal(raw, "webm");
-                    FormatConverter.toVorbis(raw, fin, preset.aacBitrate,
-                            pct -> post(cb, pct));
-                    break;
                 case M4A:
                 case AUTO:
                 default:
@@ -96,12 +94,27 @@ public final class TakeSaver {
                             pct -> post(cb, pct));
                     break;
             }
+            // A FLAC encoder that doesn't actually compress would silently
+            // hand back a near-full-size file under a lossless-compressed
+            // label. Some devices do that, so measure rather than trust: fall
+            // back to 24-bit WAV, which is lossless by definition.
+            if (eff == SaveFormat.FLAC
+                    && fin.length() > raw.length() * FLAC_MIN_RATIO) {
+                long bloated = fin.length();
+                File wav = uniqueFinal(raw, "wav");
+                FormatConverter.toWav24(raw, wav, null);
+                // noinspection ResultOfMethodCallIgnored
+                fin.delete();
+                fin = wav;
+                eff = SaveFormat.WAV24;
+                CrashLog.breadcrumb(ctx, "flac ineffective ("
+                        + bloated + " bytes), fell back to wav24");
+            }
         } catch (Exception ex) {
             // A failed conversion must not leave a truncated file behind:
             // half-written containers are exactly the kind of poison that
-            // haunts the next startup sweep. Never delete a WAV32 save, whose
-            // output is the raw capture itself — that would destroy the take.
-            if (fin != null && !fin.equals(raw)) {
+            // haunts the next startup sweep.
+            if (fin != null) {
                 // noinspection ResultOfMethodCallIgnored
                 fin.delete();
             }
@@ -113,18 +126,13 @@ public final class TakeSaver {
         try {
             FormatConverter.validateFinal(fin, eff);
         } catch (Exception ex) {
-            if (!fin.equals(raw)) {
-                // noinspection ResultOfMethodCallIgnored
-                fin.delete();
-            }
+            // noinspection ResultOfMethodCallIgnored
+            fin.delete();
             throw ex;
         }
-        // The raw is scratch once a converted copy exists — but when the
-        // output IS the raw (WAV32) it must survive.
-        if (!fin.equals(raw)) {
-            // noinspection ResultOfMethodCallIgnored
-            raw.delete();
-        }
+        // The raw float capture was scratch; the finished file is its own copy.
+        // noinspection ResultOfMethodCallIgnored
+        raw.delete();
         CrashLog.breadcrumb(ctx, "convert end " + eff.id);
         post(cb, 100);
         return new Result(fin, eff.badge, dur, title);

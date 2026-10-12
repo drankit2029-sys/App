@@ -66,23 +66,38 @@ public final class Dsp {
         return b.array();
     }
 
-    /** 44-byte PCM-16 WAV header (audioFormat 1). */
-    public static byte[] wav16Header(int ch, int sr, long pcmBytes) {
+    /** 44-byte PCM WAV header. bits must be 16 or 24. */
+    public static byte[] wavPcmHeader(int ch, int sr, int bits, long pcmBytes) {
+        if (bits != 16 && bits != 24) {
+            throw new IllegalArgumentException("unsupported pcm depth: " + bits);
+        }
+        int bytesPerSample = bits / 8;
+        int blockAlign = ch * bytesPerSample;
         ByteBuffer b = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN);
         b.put(new byte[]{'R', 'I', 'F', 'F'});
         b.putInt((int) Math.min(Integer.MAX_VALUE, 36 + pcmBytes));
         b.put(new byte[]{'W', 'A', 'V', 'E'});
         b.put(new byte[]{'f', 'm', 't', ' '});
         b.putInt(16);
-        b.putShort((short) 1);
+        b.putShort((short) 1); // integer PCM
         b.putShort((short) ch);
         b.putInt(sr);
-        b.putInt(sr * ch * 2);
-        b.putShort((short) (ch * 2));
-        b.putShort((short) 16);
+        b.putInt(sr * blockAlign);
+        b.putShort((short) blockAlign);
+        b.putShort((short) bits);
         b.put(new byte[]{'d', 'a', 't', 'a'});
         b.putInt((int) Math.min(Integer.MAX_VALUE, pcmBytes));
         return b.array();
+    }
+
+    /** 44-byte PCM-16 WAV header (audioFormat 1). */
+    public static byte[] wav16Header(int ch, int sr, long pcmBytes) {
+        return wavPcmHeader(ch, sr, 16, pcmBytes);
+    }
+
+    /** 44-byte PCM-24 WAV header (audioFormat 1, 3 bytes per sample). */
+    public static byte[] wav24Header(int ch, int sr, long pcmBytes) {
+        return wavPcmHeader(ch, sr, 24, pcmBytes);
     }
 
     /** Hamming-windowed sinc lowpass; cutoff in cycles/sample (0..0.5). */
@@ -105,7 +120,8 @@ public final class Dsp {
     }
 
     /**
-     * Duration of a float32/PCM16 WAV in ms, read from its own header.
+     * Duration of a float32 / PCM16 / PCM24 WAV in ms, read from its own
+     * header.
      *
      * @return ms, or -1 when the file is not a readable WAV (callers fall
      * back to MediaMetadataRetriever for compressed containers).
@@ -127,6 +143,7 @@ public final class Dsp {
             int bytesPerSample;
             if (audioFormat == 3 && bits == 32) bytesPerSample = 4;
             else if (audioFormat == 1 && bits == 16) bytesPerSample = 2;
+            else if (audioFormat == 1 && bits == 24) bytesPerSample = 3;
             else return -1;
             if (ch < 1 || sr <= 0) return -1;
             long frames = dataBytes / bytesPerSample / ch;

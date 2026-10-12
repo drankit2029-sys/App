@@ -31,9 +31,9 @@ public class SaveFormatTest {
                 SaveFormat.AUTO.effective(RecordPreset.MEMO));
         assertEquals(SaveFormat.M4A,
                 SaveFormat.AUTO.effective(RecordPreset.PODCAST));
-        // Music: the capture is an unprocessed lossless master, so Auto keeps
-        // the original 32-bit float rather than squeezing it through AAC.
-        assertEquals(SaveFormat.WAV32,
+        // Music: an unprocessed stereo master, so Auto stays lossless — but
+        // compressed, because the next step is loading this into an editor.
+        assertEquals(SaveFormat.FLAC,
                 SaveFormat.AUTO.effective(RecordPreset.MUSIC));
         // An explicit choice always wins.
         assertEquals(SaveFormat.M4A,
@@ -44,16 +44,16 @@ public class SaveFormatTest {
 
     @Test
     public void onlyMusicDefaultsToLossless() {
-        assertTrue(RecordPreset.MUSIC.savesLosslessByDefault);
-        assertFalse(RecordPreset.MEMO.savesLosslessByDefault);
-        assertFalse(RecordPreset.PODCAST.savesLosslessByDefault);
+        assertTrue(RecordPreset.MUSIC.autoSavesLossless);
+        assertFalse(RecordPreset.MEMO.autoSavesLossless);
+        assertFalse(RecordPreset.PODCAST.autoSavesLossless);
     }
 
     @Test
     public void extensions() {
         assertEquals("m4a", SaveFormat.M4A.extension());
         assertEquals("wav", SaveFormat.WAV16.extension());
-        assertEquals("wav", SaveFormat.WAV32.extension());
+        assertEquals("wav", SaveFormat.WAV24.extension());
         assertEquals("3gp", SaveFormat.AMR_NB.extension());
         assertEquals("flac", SaveFormat.FLAC.extension());
         assertEquals("webm", SaveFormat.OPUS.extension());
@@ -66,7 +66,7 @@ public class SaveFormatTest {
         assertTrue(SaveFormat.M4A.available(ctx));
         assertTrue(SaveFormat.WAV16.available(ctx));
         // Pure-Java lossless path: never gated on a platform encoder.
-        assertTrue(SaveFormat.WAV32.available(ctx));
+        assertTrue(SaveFormat.WAV24.available(ctx));
     }
 
     @Test
@@ -92,20 +92,19 @@ public class SaveFormatTest {
     public void takeSaverLabels() {
         assertEquals("M4A", TakeSaver.labelFor(RecordPreset.MEMO, SaveFormat.AUTO));
         assertEquals("M4A", TakeSaver.labelFor(RecordPreset.PODCAST, SaveFormat.AUTO));
-        assertEquals("WAV32", TakeSaver.labelFor(RecordPreset.MUSIC, SaveFormat.AUTO));
+        assertEquals("FLAC", TakeSaver.labelFor(RecordPreset.MUSIC, SaveFormat.AUTO));
         assertEquals("WAV", TakeSaver.labelFor(RecordPreset.MUSIC, SaveFormat.WAV16));
+        assertEquals("WAV24", TakeSaver.labelFor(RecordPreset.MUSIC, SaveFormat.WAV24));
         assertEquals("AMR", TakeSaver.labelFor(RecordPreset.MEMO, SaveFormat.AMR_NB));
     }
 
     @Test
-    public void wav32SurvivesItsOwnValidation() throws Exception {
-        // The lossless save keeps the raw capture, so validation must accept
-        // a 32-bit float WAV rather than only PCM16.
-        java.io.File f = java.io.File.createTempFile("vfy32", ".wav");
+    public void wav24SurvivesItsOwnValidation() throws Exception {
+        java.io.File f = java.io.File.createTempFile("vfy24", ".wav");
         try {
             int frames = 480;
-            byte[] hdr = Dsp.wavFloatHeader(2, 48000, (long) frames * 2 * 4);
-            byte[] all = new byte[hdr.length + frames * 2 * 4];
+            byte[] hdr = Dsp.wav24Header(2, 48000, (long) frames * 2 * 3);
+            byte[] all = new byte[hdr.length + frames * 2 * 3];
             System.arraycopy(hdr, 0, all, 0, hdr.length);
             java.io.FileOutputStream w = new java.io.FileOutputStream(f);
             try {
@@ -113,7 +112,9 @@ public class SaveFormatTest {
             } finally {
                 w.close();
             }
-            FormatConverter.validateFinal(f, SaveFormat.WAV32);
+            FormatConverter.validateFinal(f, SaveFormat.WAV24);
+            // 24-bit must be understood by the duration reader too, or the
+            // library and orphan adoption would show 00:00 for these files.
             assertTrue(Dsp.wavDurationMs(f) > 0);
         } finally {
             // noinspection ResultOfMethodCallIgnored
@@ -122,9 +123,53 @@ public class SaveFormatTest {
     }
 
     @Test
+    public void storageEstimatesTrackChannelsAndClamp() {
+        // WAV is exact and scales with the preset's channel count.
+        assertEquals(48000L * 2 * 2 * 60,
+                SaveFormat.WAV16.bytesPerMinute(RecordPreset.MUSIC));
+        assertEquals(48000L * 1 * 2 * 60,
+                SaveFormat.WAV16.bytesPerMinute(RecordPreset.MEMO));
+        assertEquals(48000L * 2 * 3 * 60,
+                SaveFormat.WAV24.bytesPerMinute(RecordPreset.MUSIC));
+        // Music's Opus clamps 320k -> 256k, and the estimate must match the
+        // file rather than the nominal preset bitrate.
+        assertEquals(256000L / 8 * 60,
+                SaveFormat.OPUS.bytesPerMinute(RecordPreset.MUSIC));
+        assertEquals(320000L / 8 * 60,
+                SaveFormat.M4A.bytesPerMinute(RecordPreset.MUSIC));
+        // AMR always decimates to mono, so it is preset-independent.
+        assertEquals(SaveFormat.AMR_NB.bytesPerMinute(RecordPreset.MUSIC),
+                SaveFormat.AMR_NB.bytesPerMinute(RecordPreset.MEMO));
+        // Auto reports whatever it resolves to.
+        assertEquals(SaveFormat.M4A.bytesPerMinute(RecordPreset.MEMO),
+                SaveFormat.AUTO.bytesPerMinute(RecordPreset.MEMO));
+        assertEquals(SaveFormat.FLAC.bytesPerMinute(RecordPreset.MUSIC),
+                SaveFormat.AUTO.bytesPerMinute(RecordPreset.MUSIC));
+        // FLAC must actually be smaller than the PCM it replaces.
+        assertTrue(SaveFormat.FLAC.bytesPerMinute(RecordPreset.MUSIC)
+                < SaveFormat.WAV16.bytesPerMinute(RecordPreset.MUSIC));
+    }
+
+    @Test
+    public void sizeLabelsAreCompactAndMarkEstimates() {
+        assertEquals("17 MB/min",
+                SaveFormat.WAV24.sizePerMinuteLabel(RecordPreset.MUSIC));
+        assertEquals("11 MB/min",
+                SaveFormat.WAV16.sizePerMinuteLabel(RecordPreset.MUSIC));
+        assertEquals("0.7 MB/min",
+                SaveFormat.M4A.sizePerMinuteLabel(RecordPreset.MEMO));
+        assertEquals("0.1 MB/min",
+                SaveFormat.AMR_NB.sizePerMinuteLabel(RecordPreset.MUSIC));
+        // Content-dependent sizes are flagged so they never read as exact.
+        assertTrue(SaveFormat.FLAC.sizePerMinuteLabel(RecordPreset.MUSIC)
+                .startsWith("~"));
+        assertFalse(SaveFormat.WAV16.sizeIsApproximate());
+        assertTrue(SaveFormat.FLAC.sizeIsApproximate());
+    }
+
+    @Test
     public void fallbackLadder() {
         assertEquals(SaveFormat.M4A, SaveFormat.OPUS.fallbackAfterCrash());
-        assertEquals(SaveFormat.M4A, SaveFormat.VORBIS.fallbackAfterCrash());
         assertEquals(SaveFormat.M4A, SaveFormat.FLAC.fallbackAfterCrash());
         assertEquals(SaveFormat.M4A, SaveFormat.AMR_NB.fallbackAfterCrash());
         assertEquals(SaveFormat.M4A, SaveFormat.AMR_WB.fallbackAfterCrash());
