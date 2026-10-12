@@ -165,7 +165,9 @@ public class SavePipelineTest {
         assertEquals("M4A", r.label);
         assertTrue(r.file.getName().endsWith(".m4a"));
         assertFalse("raw should be cleaned up after conversion", raw.exists());
-        FormatConverter.validateFinal(r.file, SaveFormat.M4A);
+        // No MP4 structural check here: under Robolectric MediaCodec is a
+        // no-op stub, so the container is empty. Real-encoder coverage lives
+        // in the on-device EncodeFormatsTest.
     }
 
     @Test
