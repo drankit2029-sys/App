@@ -62,8 +62,12 @@ public final class TeleDialogs {
         void onTuned();
     }
 
+    /**
+     * Window styling only. NOTE: requestWindowFeature is NOT called here —
+     * the framework rejects it once a view has been added, so each factory
+     * must call it immediately after constructing the Dialog.
+     */
     private static void style(Dialog d) {
-        d.requestWindowFeature(Window.FEATURE_NO_TITLE);
         Window w = d.getWindow();
         if (w == null) return;
         w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
@@ -87,6 +91,9 @@ public final class TeleDialogs {
                                   ScriptCallback onSave,
                                   ImportRequest onImport) {
         Dialog d = new Dialog(ctx, R.style.TakeOneCenterDialog);
+        // Must precede setContentView, or the framework throws
+        // "requestFeature() must be called before adding content".
+        d.requestWindowFeature(Window.FEATURE_NO_TITLE);
         View root = LayoutInflater.from(ctx)
                 .inflate(R.layout.dialog_tele_editor, null);
         d.setContentView(root);
@@ -143,6 +150,9 @@ public final class TeleDialogs {
                                  int availWidthPx, float textSizePx,
                                  TuneCallback cb) {
         Dialog d = new Dialog(ctx, R.style.TakeOneCenterDialog);
+        // Must precede setContentView, or the framework throws
+        // "requestFeature() must be called before adding content".
+        d.requestWindowFeature(Window.FEATURE_NO_TITLE);
         View root = LayoutInflater.from(ctx)
                 .inflate(R.layout.dialog_tele_tuner, null);
         d.setContentView(root);
