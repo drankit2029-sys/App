@@ -49,10 +49,17 @@ public class TeleMathTest {
     }
 
     @Test
-    public void degenerateSpaceDoesNotDivideByZero() {
-        assertEquals(TeleMath.MIN_WORDS_PER_LINE, TeleMath.wordsPerLine(0, 40f, 6));
-        assertEquals(TeleMath.MIN_WORDS_PER_LINE, TeleMath.wordsPerLine(800, 0f, 6));
-        assertFalse(TeleMath.wordsPerLineWasClamped(0, 0f, 6));
+    public void degenerateSpaceFallsBackSafely() {
+        // No width or no text size (view not laid out yet): return the
+        // floor rather than dividing by zero. This is reported as clamped,
+        // which is honest - the request genuinely could not be honoured.
+        assertEquals(TeleMath.MIN_WORDS_PER_LINE,
+                TeleMath.wordsPerLine(0, 40f, 6));
+        assertEquals(TeleMath.MIN_WORDS_PER_LINE,
+                TeleMath.wordsPerLine(800, 0f, 6));
+        assertEquals(TeleMath.MIN_WORDS_PER_LINE,
+                TeleMath.wordsPerLine(0, 0f, 6));
+        assertTrue(TeleMath.wordsPerLineWasClamped(0, 0f, 6));
     }
 
     // ---- pacing ----
