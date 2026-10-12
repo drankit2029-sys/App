@@ -61,8 +61,8 @@ public final class FormatConverter {
             else if (s < -1f) s = -1f;
             float t = s * 8388607f;
             int v = (int) (t >= 0f ? t + 0.5f : t - 0.5f);
-            dst.put(i, v > 8388607 ? 8388607
-                    : (v < -8388608 ? -8388608 : v));
+            dst[i] = v > 8388607 ? 8388607
+                    : (v < -8388608 ? -8388608 : v);
         }
         return n;
     }
