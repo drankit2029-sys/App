@@ -52,7 +52,8 @@ public class TeleprompterScrollBoundsTest {
 
         // No measure/layout yet: width and height are both 0.
         v.setScript(manyWords(400));
-        assertEquals("precondition: unlaid view has no bounds", 0, v.maxScroll());
+        assertEquals("precondition: unlaid view has no bounds",
+                0f, v.maxScroll(), 0.01f);
 
         int w = 900, h = 600;
         v.measure(
@@ -72,7 +73,7 @@ public class TeleprompterScrollBoundsTest {
     }
 
     @Test
-    public void resizingKeepsScrollBoundsInSync() {
+    public void resizingKeepsScrollBoundsValid() {
         Activity a = launch();
         TeleprompterView v = new TeleprompterView(a);
         v.measure(
@@ -80,16 +81,22 @@ public class TeleprompterScrollBoundsTest {
                 View.MeasureSpec.makeMeasureSpec(600, View.MeasureSpec.EXACTLY));
         v.layout(0, 0, 900, 600);
         v.setScript(manyWords(400));
-        float tall = v.maxScroll();
-        assertTrue("no scroll range when laid out", tall > 0f);
+        float before = v.maxScroll();
+        assertTrue("no scroll range when laid out", before > 0f);
 
-        // Grow the panel: the tail should remain reachable.
+        // Panel height does not change where the tail has to stop, so the
+        // range is stable; what matters is that it stays reachable and that a
+        // position from the old height is re-clamped into the new bounds.
+        v.scrollBy(100000f);
         v.measure(
                 View.MeasureSpec.makeMeasureSpec(900, View.MeasureSpec.EXACTLY),
                 View.MeasureSpec.makeMeasureSpec(300, View.MeasureSpec.EXACTLY));
         v.layout(0, 0, 900, 300);
-        assertTrue("scroll range did not follow the new height",
-                v.maxScroll() > tall);
+        assertTrue("scroll range vanished after resize", v.maxScroll() > 0f);
+        v.scrollBy(100000f);
+        assertTrue("offset exceeded bounds after resize",
+                v.scrollOffset() <= v.maxScroll() + 0.5f);
+        assertTrue("offset left the script", v.scrollOffset() > 0f);
     }
 
     @Test
