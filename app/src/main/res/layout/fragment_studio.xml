@@ -3,7 +3,8 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@color/bg"
-    android:orientation="vertical">
+    android:orientation="vertical"
+    android:paddingBottom="132dp">
 
     <!-- Top bar -->
     <LinearLayout
@@ -263,7 +264,7 @@
         <com.example.hello.DbMeterView
             android:id="@+id/dbMeter"
             android:layout_width="8dp"
-            android:layout_height="56dp" />
+            android:layout_height="168dp" />
 
         <LinearLayout
             android:layout_width="0dp"
@@ -294,9 +295,8 @@
 
                     <com.example.hello.TeleValue
                         android:id="@+id/zoomValue"
-                        android:layout_width="96dp"
-                        android:layout_height="wrap_content"
-                        android:layout_marginStart="6dp" />
+                        android:layout_width="40dp"
+                        android:layout_height="wrap_content" />
                 </LinearLayout>
             </LinearLayout>
 
@@ -310,7 +310,7 @@
                 android:gravity="center"
                 android:text="00:00.00"
                 android:textColor="@color/text_primary"
-                android:textSize="22sp" />
+                android:textSize="38sp" />
 
             <!-- Preset pill + teleprompter pill, half width each -->
             <LinearLayout
@@ -322,7 +322,7 @@
                 <LinearLayout
                     android:id="@+id/settingsRow"
                     android:layout_width="0dp"
-                    android:layout_height="wrap_content"
+                    android:layout_height="40dp"
                     android:layout_marginEnd="3dp"
                     android:layout_weight="1"
                     android:background="@drawable/bg_search"
@@ -331,9 +331,9 @@
                     android:gravity="center_vertical"
                     android:orientation="horizontal"
                     android:paddingLeft="10dp"
-                    android:paddingTop="7dp"
+                    android:paddingTop="4dp"
                     android:paddingRight="8dp"
-                    android:paddingBottom="7dp">
+                    android:paddingBottom="4dp">
 
                     <LinearLayout
                         android:layout_width="0dp"
@@ -347,17 +347,19 @@
                             android:letterSpacing="0.1"
                             android:text="@string/settings_label"
                             android:textColor="@color/text_hint"
-                            android:textSize="9sp" />
+                            android:textSize="9sp"
+                            android:visibility="gone" />
 
                         <TextView
                             android:id="@+id/settingsName"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:layout_marginTop="1dp"
+                            android:ellipsize="end"
                             android:fontFamily="sans-serif-medium"
+                            android:maxLines="1"
                             android:text="@string/preset_memo"
                             android:textColor="@color/text_primary"
-                            android:textSize="13sp" />
+                            android:textSize="12sp" />
 
                         <TextView
                             android:id="@+id/settingsSub"
@@ -366,7 +368,6 @@
                             android:layout_marginTop="1dp"
                             android:ellipsize="end"
                             android:maxLines="1"
-                            android:text="@string/preset_memo_sub"
                             android:textColor="@color/text_secondary"
                             android:textSize="10sp" />
                     </LinearLayout>
@@ -381,7 +382,7 @@
                 <LinearLayout
                     android:id="@+id/teleToggle"
                     android:layout_width="0dp"
-                    android:layout_height="wrap_content"
+                    android:layout_height="40dp"
                     android:layout_marginStart="3dp"
                     android:layout_weight="1"
                     android:background="@drawable/bg_search"
@@ -390,9 +391,9 @@
                     android:gravity="center_vertical"
                     android:orientation="horizontal"
                     android:paddingLeft="10dp"
-                    android:paddingTop="7dp"
+                    android:paddingTop="4dp"
                     android:paddingRight="10dp"
-                    android:paddingBottom="7dp">
+                    android:paddingBottom="4dp">
 
                     <ImageView
                         android:id="@+id/teleToggleIcon"
@@ -414,17 +415,19 @@
                             android:letterSpacing="0.1"
                             android:text="@string/teleprompter"
                             android:textColor="@color/text_hint"
-                            android:textSize="9sp" />
+                            android:textSize="9sp"
+                            android:visibility="gone" />
 
                         <TextView
                             android:id="@+id/teleState"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:layout_marginTop="1dp"
+                            android:ellipsize="end"
                             android:fontFamily="sans-serif-medium"
+                            android:maxLines="1"
                             android:text="@string/tele_show"
                             android:textColor="@color/text_primary"
-                            android:textSize="13sp" />
+                            android:textSize="12sp" />
                     </LinearLayout>
                 </LinearLayout>
             </LinearLayout>

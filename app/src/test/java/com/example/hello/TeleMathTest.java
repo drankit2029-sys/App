@@ -86,6 +86,15 @@ public class TeleMathTest {
     }
 
     @Test
+    public void scrollSpeedMatchesRenderedLineMotion() {
+        // 120 wpm is two words/second. On two-word lines, that is exactly one
+        // rendered line-height per second.
+        assertEquals(72f, TeleMath.scrollPxPerSecond(120, 2, 48f), 0.001f);
+        // Halving the effective words per line doubles the required line rate.
+        assertEquals(144f, TeleMath.scrollPxPerSecond(120, 1, 48f), 0.001f);
+    }
+
+    @Test
     public void charsPerSecondScalesWithLineLength() {
         assertTrue(TeleMath.charsPerSecond(8, 120)
                 > TeleMath.charsPerSecond(4, 120));

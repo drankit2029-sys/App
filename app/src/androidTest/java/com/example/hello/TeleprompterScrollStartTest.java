@@ -90,38 +90,19 @@ public class TeleprompterScrollStartTest {
 
     /** Clicks into the studio, clearing the "name this take" prompt if shown. */
     private TeleprompterView gotoStudio(Activity a) throws Exception {
+        // Pre-seed a session so the studio opens directly without the name
+        // dialog (which otherwise keeps the activity from laying out fully).
+        RecordingEngine engine = RecordingEngine.get();
+        engine.abortAndDelete();
+        engine.startNewSession(
+                InstrumentationRegistry.getInstrumentation().getTargetContext(),
+                "Instrumentation", 2);
         View fab = a.findViewById(R.id.fabWrap);
         if (fab != null) {
             a.runOnUiThread(fab::performClick);
             InstrumentationRegistry.getInstrumentation().waitForIdleSync();
         }
-        // A fresh install asks for a take name before showing the studio.
-        View root = a.getWindow().getDecorView();
-        TeleprompterView tele = (TeleprompterView) root.findViewById(R.id.teleView);
-        if (tele == null) {
-            View start = findByText(root, "Start");
-            if (start != null) {
-                a.runOnUiThread(start::performClick);
-                InstrumentationRegistry.getInstrumentation().waitForIdleSync();
-            }
-            tele = (TeleprompterView) a.findViewById(R.id.teleView);
-        }
-        return tele;
-    }
-
-    private static View findByText(View v, String needle) {
-        if (v instanceof android.widget.TextView) {
-            CharSequence cs = ((android.widget.TextView) v).getText();
-            if (cs != null && needle.equals(cs.toString().trim())) return v;
-        }
-        if (v instanceof android.view.ViewGroup) {
-            android.view.ViewGroup g = (android.view.ViewGroup) v;
-            for (int i = 0; i < g.getChildCount(); i++) {
-                View hit = findByText(g.getChildAt(i), needle);
-                if (hit != null) return hit;
-            }
-        }
-        return null;
+        return (TeleprompterView) a.findViewById(R.id.teleView);
     }
 
     /**
@@ -132,6 +113,7 @@ public class TeleprompterScrollStartTest {
     @Test
     public void armingForATakeDoesNotArmACountdown() throws Exception {
         Activity a = launch();
+        try {
         TeleprompterView tele = gotoStudio(a);
         assertNotNull("teleprompter not on screen", tele);
 
@@ -157,6 +139,9 @@ public class TeleprompterScrollStartTest {
                 + "ms after record", until <= SystemClock.elapsedRealtime());
         assertTrue("teleprompter should be rewound to the top",
                 tele.scrollOffset() == 0f);
+        } finally {
+            RecordingEngine.get().abortAndDelete();
+        }
     }
 
     private static StudioFragment studioFragment(Activity a) {
@@ -183,6 +168,7 @@ public class TeleprompterScrollStartTest {
                 .apply();
         TeleSettings.invalidateCache();
 
+        try {
         // Relaunch so the fragment picks the script up.
         Activity b = launch();
         TeleprompterView tele = gotoStudio(b);
@@ -236,12 +222,15 @@ public class TeleprompterScrollStartTest {
         assertTrue("prompter waited " + firstMoveAt
                 + "ms before moving; it must move with the recording",
                 firstMoveAt < 1500L);
-
-        // Stop capture so the emulator is not left recording.
-        View stop = b.findViewById(R.id.fabStopWrap);
-        if (stop != null) {
-            b.runOnUiThread(stop::performClick);
-            InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+        } finally {
+            // Stop capture directly so the emulator is not left recording,
+            // without going through the save dialog.
+            RecordingEngine engine = RecordingEngine.get();
+            try {
+                engine.pauseCapture();
+            } catch (Exception ignored) {
+            }
+            engine.abortAndDelete();
         }
     }
 }

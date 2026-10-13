@@ -147,33 +147,35 @@ public class TeleprompterScrollBoundsTest {
      * nothing was drawn and nothing could scroll.
      */
     @Test
-    public void prompterHasUsableHeightOnTheRealScreen() {
-        Activity a = launch();
-        View fab = a.findViewById(R.id.fabWrap);
-        if (fab != null) {
-            a.runOnUiThread(fab::performClick);
-            InstrumentationRegistry.getInstrumentation().waitForIdleSync();
-        }
-        View root = a.getWindow().getDecorView();
-        TeleprompterView found = (TeleprompterView) root.findViewById(R.id.teleView);
-        if (found == null) {
-            View start = findByText(root, "Start");
-            if (start != null) {
-                a.runOnUiThread(start::performClick);
+    public void prompterHasUsableHeightOnTheRealScreen() throws Exception {
+        // Pre-seed a session so the studio opens directly: the name dialog
+        // otherwise stays up and the activity behind it never lays out fully.
+        // Also seed a long script so there is somewhere to scroll to.
+        android.content.Context ctx =
+                InstrumentationRegistry.getInstrumentation().getTargetContext();
+        RecordingEngine engine = RecordingEngine.get();
+        engine.abortAndDelete();
+        engine.startNewSession(ctx, "Instrumentation", 2);
+        ctx.getSharedPreferences("takeone", android.content.Context.MODE_PRIVATE)
+                .edit().putString("tele_script", manyWords(400)).apply();
+        TeleSettings.invalidateCache();
+        try {
+            Activity a = launch();
+            View fab = a.findViewById(R.id.fabWrap);
+            if (fab != null) {
+                a.runOnUiThread(fab::performClick);
                 InstrumentationRegistry.getInstrumentation().waitForIdleSync();
             }
-            found = (TeleprompterView) a.findViewById(R.id.teleView);
-        }
-        assertTrue("prompter not found", found != null);
-        final TeleprompterView tele = found;
-        a.runOnUiThread(() -> tele.setScript(manyWords(400)));
-        InstrumentationRegistry.getInstrumentation().waitForIdleSync();
-        android.os.SystemClock.sleep(300);
+            final TeleprompterView tele =
+                    (TeleprompterView) a.findViewById(R.id.teleView);
+            assertTrue("prompter not found", tele != null);
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+            android.os.SystemClock.sleep(300);
 
-        // The regression was a prompter with no height at all: nothing drawn,
-        // and maxScroll stuck at 0 so it could never scroll.
-        assertTrue("prompter collapsed to " + tele.getHeight() + "px; "
-                + describe(tele), tele.getHeight() > 0);
+            // The regression was a prompter with no height at all: nothing
+            // drawn, and maxScroll stuck at 0 so it could never scroll.
+            assertTrue("prompter collapsed to " + tele.getHeight() + "px; "
+                            + describe(tele), tele.getHeight() > 0);
         assertTrue("prompter cannot scroll (max=" + tele.maxScroll() + ")",
                 tele.maxScroll() > 0f);
         // It must actually show lines, not a single sliver.
@@ -186,21 +188,9 @@ public class TeleprompterScrollBoundsTest {
         assertTrue("prompter is " + tele.getHeight() + "px of a "
                 + panel.getHeight() + "px panel",
                 tele.getHeight() * 3 >= panel.getHeight());
-    }
-
-    private static View findByText(View v, String needle) {
-        if (v instanceof android.widget.TextView) {
-            CharSequence cs = ((android.widget.TextView) v).getText();
-            if (cs != null && needle.equals(cs.toString().trim())) return v;
+        } finally {
+            engine.abortAndDelete();
         }
-        if (v instanceof android.view.ViewGroup) {
-            android.view.ViewGroup g = (android.view.ViewGroup) v;
-            for (int i = 0; i < g.getChildCount(); i++) {
-                View hit = findByText(g.getChildAt(i), needle);
-                if (hit != null) return hit;
-            }
-        }
-        return null;
     }
 
     /** Walks up the tree so a collapsed ancestor is obvious. */
@@ -235,8 +225,19 @@ public class TeleprompterScrollBoundsTest {
         Activity a = launch();
         TeleValue tv = new TeleValue(a);
         tv.configure(10, 100, 1, 50, "");
-        final int[] seen = {-1};
-        tv.setOnValueChanged(v -> seen[0] = v);
+        final int[] live = {-1};
+        final int[] finished = {-1};
+        final int[] discrete = {-1};
+        tv.setOnScrubListener(new TeleValue.OnScrubListener() {
+            @Override public void onScrubValueChanged(int v) {
+                live[0] = v;
+            }
+
+            @Override public void onScrubFinished(int v) {
+                finished[0] = v;
+            }
+        });
+        tv.setOnValueChanged(v -> discrete[0] = v);
 
         int w = 200, h = 40;
         tv.measure(
@@ -249,11 +250,14 @@ public class TeleprompterScrollBoundsTest {
         for (float x = 104f; x <= 160f; x += 6f) {
             tv.dispatchTouchEvent(motion(MotionEvent.ACTION_MOVE, x, 21f));
         }
+        assertTrue("horizontal drag did not change the value live (still "
+                + tv.getValue() + ")", live[0] > 50);
         tv.dispatchTouchEvent(motion(MotionEvent.ACTION_UP, 160f, 21f));
 
-        assertTrue("horizontal drag did not change the value (still "
-                + tv.getValue() + ")", tv.getValue() > 50);
-        assertEquals("listener was not notified", tv.getValue(), seen[0]);
+        assertEquals("scrub did not report its final value",
+                tv.getValue(), finished[0]);
+        assertEquals("a scrub must not also fire the discrete tap listener",
+                -1, discrete[0]);
     }
 
     @Test

@@ -30,6 +30,9 @@ import java.util.List;
  */
 public class TeleprompterView extends View {
 
+    /** Line height as a fraction of the rendered text size. */
+    private static final float LINE_HEIGHT_EM = 1.5f;
+
     private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint maskPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
@@ -38,6 +41,8 @@ public class TeleprompterView extends View {
 
     private String script = "";
     private float textSizePx = 44f;
+    private boolean previewingSize;
+    private float previewSizePx = 44f;
     private int wordsPerLine = TeleMath.MIN_WORDS_PER_LINE;
     private int textColor = 0xFFF2F4F7;
     private boolean mirror;
@@ -85,6 +90,10 @@ public class TeleprompterView extends View {
 
     public void setScript(String text) {
         script = text == null ? "" : text;
+        previewingSize = false;
+        // A new script always starts at the top; preserving an old fractional
+        // line across unrelated content would show an arbitrary position.
+        scrollOffset = 0f;
         wrapWidth = -1; // force a re-split
         rewrap();
         invalidate();
@@ -95,9 +104,27 @@ public class TeleprompterView extends View {
     }
 
     public void setTextSizePx(float px) {
+        previewingSize = false;
         if (px > 0f && Math.abs(px - textSizePx) > 0.5f) {
+            float linePosition = linePosition();
             textSizePx = px;
             rewrap();
+            restoreLinePosition(linePosition);
+            invalidate();
+        }
+    }
+
+    /**
+     * Live size preview while a value control is being scrubbed. Unlike
+     * {@link #setTextSizePx(float)}, this changes only the rendered size and
+     * never re-splits the script, so the visible words do not snap to new
+     * lines until the caller commits the value.
+     */
+    public void previewTextSizePx(float px) {
+        if (px > 0f && Math.abs(px - renderedTextSizePx()) > 0.01f) {
+            previewingSize = true;
+            previewSizePx = px;
+            recomputeMaxScroll();
             invalidate();
         }
     }
@@ -106,11 +133,18 @@ public class TeleprompterView extends View {
         return textSizePx;
     }
 
+    /** Size actually being drawn, including an uncommitted scrub preview. */
+    public float renderedTextSizePx() {
+        return previewingSize ? previewSizePx : textSizePx;
+    }
+
     public void setWordsPerLine(int wpl) {
         int w = Math.max(TeleMath.MIN_WORDS_PER_LINE, wpl);
         if (w != wordsPerLine) {
+            float linePosition = linePosition();
             wordsPerLine = w;
             rewrap();
+            restoreLinePosition(linePosition);
             invalidate();
         }
     }
@@ -119,8 +153,34 @@ public class TeleprompterView extends View {
         return wordsPerLine;
     }
 
+    /**
+     * Words actually shown on a wrapped line. The requested count is clamped
+     * to the measured width during {@link #rewrap()}, so callers must use this
+     * value—not the requested value—when converting reading speed into pixels.
+     */
+    public int effectiveWordsPerLine() {
+        int width = getWidth();
+        if (width <= 0) {
+            return Math.max(TeleMath.MIN_WORDS_PER_LINE,
+                    Math.min(TeleMath.MAX_WORDS_PER_LINE, wordsPerLine));
+        }
+        float pad = getPaddingLeft() + getPaddingRight();
+        return TeleMath.wordsPerLine(Math.round(Math.max(1f, width - pad)),
+                textSizePx, wordsPerLine);
+    }
+
     public float lineHeight() {
-        return textSizePx * 1.5f;
+        return renderedTextSizePx() * LINE_HEIGHT_EM;
+    }
+
+    /** Current scroll position measured in lines, independent of text size. */
+    private float linePosition() {
+        float lh = lineHeight();
+        return lh > 0f ? scrollOffset / lh : 0f;
+    }
+
+    private void restoreLinePosition(float linePosition) {
+        setScrollOffset(linePosition * lineHeight());
     }
 
     /** How many display lines fit in the viewport right now. */
@@ -273,6 +333,39 @@ public class TeleprompterView extends View {
         if (scrollOffset > maxScroll) scrollOffset = maxScroll;
     }
 
+    /**
+     * Baseline for the beginning of the visible window.
+     *
+     * <p>The absolute baseline of segment {@code absoluteIndex} is always
+     * {@code viewHeight / 2 - scrollOffset + absoluteIndex * lineHeight}. When
+     * only the visible window is drawn, its first segment is therefore not at
+     * the nominal first baseline: the window start must retain
+     * {@code firstSegment * lineHeight}. Omitting that term is what used to
+     * make every line snap upward by one full line each time scrolling crossed
+     * a line boundary.
+     */
+    static float windowStartBaseline(float viewHeight, float scrollOffset,
+                                     int firstSegment, float lineHeight) {
+        return viewHeight / 2f - scrollOffset + firstSegment * lineHeight;
+    }
+
+    /**
+     * Returns exactly {@code visibleLines} segments starting at
+     * {@code firstSegment}, substituting {@code ""} for any index outside the
+     * script.
+     */
+    static String[] windowForScroll(List<String> segments, int visibleLines,
+                                    int firstSegment) {
+        if (visibleLines <= 0) return new String[0];
+        String[] out = new String[visibleLines];
+        for (int i = 0; i < visibleLines; i++) {
+            int idx = firstSegment + i;
+            // Empty segments at both ends instead of crashing.
+            out[i] = (idx < 0 || idx >= segments.size()) ? "" : segments.get(idx);
+        }
+        return out;
+    }
+
     @Override
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
@@ -295,13 +388,13 @@ public class TeleprompterView extends View {
                     - (segments.size() - 1) * lh / 2f + lh * 0.36f;
             fromIndex = 0;
         } else {
-            firstBaseline = centreY - scrollOffset;
             fromIndex = (int) Math.floor(scrollOffset / lh);
+            firstBaseline = windowStartBaseline(h, scrollOffset, fromIndex, lh);
         }
 
         // Window of exactly `count` segments, padded with empty segments so a
         // partially-scrolled script never indexes out of bounds.
-        String[] window = windowOf(count, fromIndex);
+        String[] window = windowForScroll(segments, count, fromIndex);
 
         int save = canvas.save();
         if (mirror) {
@@ -311,7 +404,7 @@ public class TeleprompterView extends View {
         int layer = canvas.saveLayer(0, 0, w, h, null);
 
         textPaint.setColor(textColor);
-        textPaint.setTextSize(textSizePx);
+        textPaint.setTextSize(renderedTextSizePx());
         textPaint.setTextAlign(Paint.Align.CENTER);
         textPaint.setShader(null);
         textPaint.setXfermode(null);
@@ -412,18 +505,7 @@ public class TeleprompterView extends View {
         return super.performClick();
     }
 
-    /**
-     * Returns exactly {@code count} segments starting at {@code from},
-     * substituting "" for any index outside the script.
-     */
     private String[] windowOf(int count, int from) {
-        if (count <= 0) return new String[0];
-        String[] out = new String[count];
-        for (int i = 0; i < count; i++) {
-            int idx = from + i;
-            // Empty segments at both ends instead of crashing.
-            out[i] = (idx < 0 || idx >= segments.size()) ? "" : segments.get(idx);
-        }
-        return out;
+        return windowForScroll(segments, count, from);
     }
 }

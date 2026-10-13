@@ -89,6 +89,7 @@ public class StudioFragment extends Fragment {
     /** Manual scroll override: auto-scroll stays off briefly after a drag. */
     private long teleManualUntil;
     private long teleCountdownUntil;
+    private long lastTeleAdvanceMs;
     private ActivityResultLauncher<String[]> scriptPicker;
 
     private String pendingName;
@@ -208,18 +209,18 @@ public class StudioFragment extends Fragment {
         // prompter is paused this is the primary way to reposition the text;
         // auto-scroll resumes on lift.
         teleView.setOnTouchListener((v2, ev) -> {
+            if (ev == null) return false;
             switch (ev.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
                 case MotionEvent.ACTION_MOVE:
-                    teleManualUntil = SystemClock.elapsedRealtime() + 1500L;
+                    noteTeleManualOverride();
                     break;
                 case MotionEvent.ACTION_UP:
                 case MotionEvent.ACTION_CANCEL:
                     // Bounded either way: an up event can be swallowed if a
                     // parent steals the gesture, and an unbounded value here
                     // would freeze auto-scroll permanently.
-                    teleManualUntil = SystemClock.elapsedRealtime()
-                            + (telePaused ? 600000L : 1500L);
+                    noteTeleManualOverride();
                     break;
                 default:
                     break;
@@ -575,14 +576,6 @@ public class StudioFragment extends Fragment {
         teleView.setTextSizePx(tele.textSizeSp * density);
         teleView.setWordsPerLine(tele.wordsPerLine);
         teleView.setMirror(tele.mirror);
-        int avail = Math.max(0, teleView.getWidth() - teleView.getPaddingLeft()
-                - teleView.getPaddingRight());
-        int effective = TeleMath.wordsPerLine(avail,
-                tele.textSizeSp * density, tele.wordsPerLine);
-        if (teleState != null) {
-            teleState.setText(effective + "w · " + tele.wordsPerMinute
-                    + "wpm");
-        }
     }
 
     private void setTeleprompterVisible(boolean visible) {
@@ -662,26 +655,55 @@ public class StudioFragment extends Fragment {
      */
     private void advanceTeleprompter() {
         if (teleView == null || tele == null) return;
-        if (!tele.autoScroll) return;
-        // A pause is sticky: it outranks recording, so the performer can hold
-        // a position mid-take without the script running away from them.
-        if (telePaused) return;
-        if (telePanel == null || telePanel.getVisibility() != View.VISIBLE) return;
         long now = SystemClock.elapsedRealtime();
-        if (now < teleManualUntil) return;
-        if (engine.state != RecordingEngine.State.RECORDING) {
-            teleCountdownUntil = 0L;
+        if (!tele.autoScroll) {
+            lastTeleAdvanceMs = 0L;
             return;
         }
+        // A pause is sticky: it outranks recording, so the performer can hold
+        // a position mid-take without the script running away from them.
+        if (telePaused) {
+            lastTeleAdvanceMs = 0L;
+            return;
+        }
+        if (telePanel == null || telePanel.getVisibility() != View.VISIBLE) {
+            lastTeleAdvanceMs = 0L;
+            return;
+        }
+        if (now < teleManualUntil) {
+            // Keep the clock current while yielding so auto-scroll resumes
+            // without a catch-up jump when the override expires.
+            lastTeleAdvanceMs = now;
+            return;
+        }
+        if (engine.state != RecordingEngine.State.RECORDING) {
+            teleCountdownUntil = 0L;
+            lastTeleAdvanceMs = 0L;
+            return;
+        }
+        float dt = lastTeleAdvanceMs > 0
+                ? Math.max(0f, (now - lastTeleAdvanceMs) / 1000f)
+                : 0.05f;
+        // A long UI stall must not turn into one large jump when the tick
+        // resumes. Cap one frame at a quarter-second of reading.
+        dt = Math.min(dt, 0.25f);
+        lastTeleAdvanceMs = now;
         float px = TeleMath.scrollPxPerSecond(tele.wordsPerMinute,
-                teleView.getWordsPerLine(), teleView.getTextSizePx());
+                teleView.effectiveWordsPerLine(),
+                teleView.renderedTextSizePx());
         if (px <= 0f) return;
-        // tick runs every 50 ms.
-        teleView.scrollBy(px * 0.05f);
+        teleView.scrollBy(px * dt);
+    }
+
+    private void noteTeleManualOverride() {
+        long now = SystemClock.elapsedRealtime();
+        teleManualUntil = now + 1500L;
+        lastTeleAdvanceMs = now;
     }
 
     private void toggleTelePaused() {
         telePaused = !telePaused;
+        lastTeleAdvanceMs = 0L;
         if (telePauseBtn != null) {
             telePauseBtn.setText(telePaused
                     ? R.string.tele_resume_short : R.string.tele_pause_short);
@@ -708,31 +730,90 @@ public class StudioFragment extends Fragment {
         teleSizeValue.setCaption(getString(R.string.tele_size_short));
         teleSpeedValue.setCaption(getString(R.string.tele_speed_short));
         teleWplValue.setCaption(getString(R.string.tele_wpl_short));
+        zoomValue.setCaption(getString(R.string.zoom));
+        zoomValue.setStacked(true);
         teleSizeValue.configure(12, 56, 1, tele.textSizeSp, "");
         teleSpeedValue.configure(40, 400, 5, tele.wordsPerMinute, "");
         teleWplValue.configure(TeleMath.MIN_WORDS_PER_LINE,
                 TeleMath.MAX_WORDS_PER_LINE, 1, tele.wordsPerLine, "");
 
-        teleSizeValue.setOnValueChanged(val -> {
-            TeleSettings.setTextSize(requireContext(), val);
-            tele = TeleSettings.load(requireContext());
-            applyTeleSettings();
+        teleSizeValue.setOnScrubListener(new TeleValue.OnScrubListener() {
+            @Override
+            public void onScrubValueChanged(int val) {
+                previewTeleSize(val);
+            }
+
+            @Override
+            public void onScrubFinished(int val) {
+                commitTeleSize(val);
+            }
         });
-        teleSpeedValue.setOnValueChanged(val -> {
-            TeleSettings.setWordsPerMinute(requireContext(), val);
-            tele = TeleSettings.load(requireContext());
-            applyTeleSettings();
+        teleSpeedValue.setOnScrubListener(new TeleValue.OnScrubListener() {
+            @Override
+            public void onScrubValueChanged(int val) {
+                commitTeleSpeed(val);
+            }
+
+            @Override
+            public void onScrubFinished(int val) {
+                commitTeleSpeed(val);
+            }
         });
-        teleWplValue.setOnValueChanged(val -> {
-            TeleSettings.setWordsPerLine(requireContext(), val);
-            tele = TeleSettings.load(requireContext());
-            applyTeleSettings();
+        teleWplValue.setOnScrubListener(new TeleValue.OnScrubListener() {
+            @Override
+            public void onScrubValueChanged(int val) {
+                // Words-per-line changes the segmentation itself, so it is
+                // committed only when the scrub ends.
+            }
+
+            @Override
+            public void onScrubFinished(int val) {
+                commitTeleWordsPerLine(val);
+            }
         });
+        teleSizeValue.setOnValueChanged(this::commitTeleSize);
+        teleSpeedValue.setOnValueChanged(this::commitTeleSpeed);
+        teleWplValue.setOnValueChanged(this::commitTeleWordsPerLine);
 
         // Zoom shares the same control; its floor moves with the timeline.
         refreshZoomValue();
+        zoomValue.setOnScrubListener(new TeleValue.OnScrubListener() {
+            @Override
+            public void onScrubValueChanged(int percent) {
+                applyZoomValue(percent);
+            }
+
+            @Override
+            public void onScrubFinished(int percent) {
+                applyZoomValue(percent);
+            }
+        });
         zoomValue.setOnValueChanged(this::applyZoomValue);
         paintTeleMirror();
+    }
+
+    private void previewTeleSize(int textSizeSp) {
+        if (teleView == null) return;
+        float density = getResources().getDisplayMetrics().density;
+        teleView.previewTextSizePx(textSizeSp * density);
+    }
+
+    private void commitTeleSize(int textSizeSp) {
+        TeleSettings.setTextSize(requireContext(), textSizeSp);
+        tele = TeleSettings.load(requireContext());
+        applyTeleSettings();
+    }
+
+    private void commitTeleSpeed(int wordsPerMinute) {
+        TeleSettings.setWordsPerMinute(requireContext(), wordsPerMinute);
+        tele = TeleSettings.load(requireContext());
+        applyTeleSettings();
+    }
+
+    private void commitTeleWordsPerLine(int wordsPerLine) {
+        TeleSettings.setWordsPerLine(requireContext(), wordsPerLine);
+        tele = TeleSettings.load(requireContext());
+        applyTeleSettings();
     }
 
     private void applyZoomValue(int percent) {
@@ -757,6 +838,7 @@ public class StudioFragment extends Fragment {
     private void teleprompterArmForTake() {
         if (teleView != null) teleView.rewind();
         teleManualUntil = 0L;
+        lastTeleAdvanceMs = 0L;
         // The prompter starts with the recording. A countdown is a head start
         // for the performer, not a delay before the script moves — holding
         // the text still for N seconds desynchronised the take.
@@ -1322,11 +1404,8 @@ public class StudioFragment extends Fragment {
         formatBadge.setText(preset.shortLabel + " → "
                 + TakeSaver.labelFor(preset, saveFormat));
         settingsName.setText(preset.titleRes);
-        String saveName = saveFormat == SaveFormat.AUTO
-                ? getString(R.string.save_auto) + " ("
-                        + TakeSaver.labelFor(preset, SaveFormat.AUTO) + ")"
-                : getString(saveFormat.titleRes);
-        settingsSub.setText(getString(preset.subRes) + " • " + saveName);
+        settingsSub.setText(preset.shortLabel + " → "
+                + TakeSaver.labelFor(preset, saveFormat));
         settingsRow.setAlpha(saving ? 0.45f : 1f);
         setTeleActive(telePanel.getVisibility() == View.VISIBLE);
 

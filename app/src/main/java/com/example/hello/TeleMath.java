@@ -63,19 +63,22 @@ public final class TeleMath {
         return (wordsPerLine * AVG_WORD_CHARS) * (wpm / 60f);
     }
 
-    /**
+        /**
      * Auto-scroll speed in pixels per second for a given reading rate.
      *
      * @param wpm            target reading speed, words per minute
      * @param wordsPerLine   effective (possibly clamped) words per line
      * @param textSizePx     rendered text size, which sets line height
-     */
-    public static float scrollPxPerSecond(int wpm, int wordsPerLine,
+     */    public static float scrollPxPerSecond(int wpm, int wordsPerLine,
                                           float textSizePx) {
         if (wpm <= 0 || wordsPerLine <= 0 || textSizePx <= 0f) return 0f;
-        float lineHeightPx = textSizePx * 1.55f;
-        float linesPerSecond = charsPerSecond(wordsPerLine, wpm)
-                / (wordsPerLine * AVG_WORD_CHARS);
+        // Must match TeleprompterView's rendered line height exactly. A
+        // mismatched constant makes scrolling drift relative to line motion.
+        float lineHeightPx = textSizePx * 1.5f;
+        // Words per second divided by the words actually shown on each line.
+        // The caller must pass the effective count: using the requested count
+        // makes short wrapped lines scroll too slowly and long lines too fast.
+        float linesPerSecond = (wpm / 60f) / wordsPerLine;
         return linesPerSecond * lineHeightPx;
     }
 
