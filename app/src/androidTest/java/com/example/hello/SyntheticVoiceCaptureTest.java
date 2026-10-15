@@ -50,26 +50,51 @@ public class SyntheticVoiceCaptureTest {
         android.media.AudioDeviceInfo[] ins =
                 am.getDevices(android.media.AudioManager.GET_DEVICES_INPUTS);
         if (ins == null || ins.length == 0) return false;
-        // Probe it: a source can be listed and still refuse to open.
-        android.media.AudioRecord probe = null;
+        // Opening a record is not proof of a source: on a host with no audio
+        // backend the HAL hands back an initialised record that never
+        // produces a sample. Read briefly and require real energy.
+        android.media.AudioRecord rec = null;
         try {
             int min = android.media.AudioRecord.getMinBufferSize(48000,
                     android.media.AudioFormat.CHANNEL_IN_MONO,
                     android.media.AudioFormat.ENCODING_PCM_FLOAT);
             if (min <= 0) min = 8192;
-            probe = new android.media.AudioRecord(
+            rec = new android.media.AudioRecord(
                     android.media.MediaRecorder.AudioSource.MIC, 48000,
                     android.media.AudioFormat.CHANNEL_IN_MONO,
                     android.media.AudioFormat.ENCODING_PCM_FLOAT,
                     min * 2);
-            return probe.getState()
-                    == android.media.AudioRecord.STATE_INITIALIZED;
+            if (rec.getState() != android.media.AudioRecord.STATE_INITIALIZED) {
+                return false;
+            }
+            rec.startRecording();
+            if (rec.getRecordingState()
+                    != android.media.AudioRecord.RECORDSTATE_RECORDING) {
+                return false;
+            }
+            float peak = 0f;
+            byte[] buf = new byte[4096];
+            long until = System.currentTimeMillis() + 1200;
+            while (System.currentTimeMillis() < until && peak < 0.001f) {
+                int n = rec.read(buf, 0, buf.length);
+                if (n <= 0) continue;
+                ByteBuffer bb = ByteBuffer.wrap(buf, 0, n)
+                        .order(ByteOrder.LITTLE_ENDIAN);
+                while (bb.remaining() >= 4) {
+                    float v = Math.abs(bb.getFloat());
+                    if (v > peak) peak = v;
+                }
+            }
+            return peak > 0.001f;
         } catch (Throwable t) {
             return false;
         } finally {
-            if (probe != null) {
+            if (rec != null) {
                 try {
-                    probe.release();
+                    rec.stop();
+                } catch (Throwable ignored) {}
+                try {
+                    rec.release();
                 } catch (Throwable ignored) {}
             }
         }
