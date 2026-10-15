@@ -343,8 +343,13 @@ public class ConversionService extends Service {
                 take = TakesRepository.replaceRecording(job.replaceTakeId,
                         r.file, r.durationMs, rt, r.label);
             } else {
+                // r.title is the title this conversion STARTED with, so a
+                // rename made while it ran was dropped and the finished take
+                // snapped back to the old name. Read the live title instead.
+                String title = job.title != null && !job.title.trim().isEmpty()
+                        ? job.title.trim() : r.title;
                 take = TakesRepository.addRecording(r.file, r.durationMs,
-                        r.title, r.label);
+                        title, r.label);
             }
             ConversionJobs.noteCompletion(job.rawPath, take.id);
             // STU-03: an Edit on the converting card decodes this same raw.

@@ -287,6 +287,67 @@ public class ConversionConcurrencyTest {
         }
     }
 
+    /**
+     * Renaming a take while it converts must be the name the finished take
+     * ends up with. The conversion captures its title when it starts, so a
+     * rename made mid-flight used to be dropped and the take snapped back to
+     * the original name the moment the card turned into a real take.
+     */
+    @Test
+    public void renameDuringConversionReachesTheFinishedTake() throws Exception {
+        RecordingEngine engine = RecordingEngine.get();
+        engine.abortAndDelete();
+        File raw = new File(RecordingEngine.takesDir(ctx()), "renamed.wav");
+        long frames = 48000L * 90L;
+        writeRaw(raw, (int) frames);
+        int before = TakesRepository.all().size();
+
+        ConversionJob job = ConversionJobs.enqueue(ctx(), raw,
+                "Original name", RecordPreset.MEMO, SaveFormat.M4A, 90000);
+        ConversionService.startJob(ctx(), job.jobId);
+        try {
+            // Wait until the worker is genuinely mid-conversion.
+            ConversionJob cur = ConversionJobs.get(job.jobId);
+            long until = System.currentTimeMillis() + 60000;
+            while (System.currentTimeMillis() < until) {
+                cur = ConversionJobs.get(job.jobId);
+                if (cur == null) break;
+                if (ConversionJob.RUNNING.equals(cur.state)) break;
+                Thread.sleep(50);
+            }
+            assertNotNull("job never started", cur);
+            assertEquals("conversion finished before it could be renamed; "
+                    + "use a longer take", ConversionJob.RUNNING, cur.state);
+
+            // This is what the library does when a converting card is renamed.
+            cur.title = "Renamed mid flight";
+            cur.write();
+
+            until = System.currentTimeMillis() + 180000;
+            while (System.currentTimeMillis() < until) {
+                cur = ConversionJobs.get(job.jobId);
+                if (cur == null) break;
+                if (ConversionJob.DONE.equals(cur.state)
+                        || ConversionJob.FAILED.equals(cur.state)) break;
+                Thread.sleep(200);
+            }
+            if (cur != null) {
+                assertEquals("conversion failed: " + cur.error,
+                        ConversionJob.DONE, cur.state);
+            }
+            assertEquals("job produced more than one take",
+                    before + 1, TakesRepository.all().size());
+            Take made = TakesRepository.all().get(0);
+            assertEquals("rename during conversion was dropped",
+                    "Renamed mid flight", made.title);
+            TakesRepository.delete(made.id);
+        } finally {
+            ConversionJobs.cancel(job.jobId, false);
+            // noinspection ResultOfMethodCallIgnored
+            raw.delete();
+        }
+    }
+
     private void writeRaw(File f, int frames) throws Exception {
         byte[] payload = new byte[frames * 4 * 2];
         try (RandomAccessFile w = new RandomAccessFile(f, "rw")) {
