@@ -33,10 +33,54 @@ public class SyntheticVoiceCaptureTest {
             androidx.test.rule.GrantPermissionRule.grant(
                     android.Manifest.permission.RECORD_AUDIO);
 
+    /**
+     * True when the device offers a usable capture input.
+     *
+     * <p>This test needs a real audio source behind the mic: the emulator's
+     * virtual mic, fed by the host. On a runner with no audio backend the HAL
+     * rejects the input format outright ("getInputBufferSize:
+     * INVALID_ARGUMENTS"), and there is nothing to assert about the app in
+     * that case.
+     */
+    private boolean captureInputAvailable(Context ctx) {
+        android.media.AudioManager am =
+                (android.media.AudioManager) ctx.getSystemService(
+                        Context.AUDIO_SERVICE);
+        if (am == null) return false;
+        android.media.AudioDeviceInfo[] ins =
+                am.getDevices(android.media.AudioManager.GET_DEVICES_INPUTS);
+        if (ins == null || ins.length == 0) return false;
+        // Probe it: a source can be listed and still refuse to open.
+        android.media.AudioRecord probe = null;
+        try {
+            int min = android.media.AudioRecord.getMinBufferSize(48000,
+                    android.media.AudioFormat.CHANNEL_IN_MONO,
+                    android.media.AudioFormat.ENCODING_PCM_FLOAT);
+            if (min <= 0) min = 8192;
+            probe = new android.media.AudioRecord(
+                    android.media.MediaRecorder.AudioSource.MIC, 48000,
+                    android.media.AudioFormat.CHANNEL_IN_MONO,
+                    android.media.AudioFormat.ENCODING_PCM_FLOAT,
+                    min * 2);
+            return probe.getState()
+                    == android.media.AudioRecord.STATE_INITIALIZED;
+        } catch (Throwable t) {
+            return false;
+        } finally {
+            if (probe != null) {
+                try {
+                    probe.release();
+                } catch (Throwable ignored) {}
+            }
+        }
+    }
+
     @Test
     public void virtualMicCapturesGeneratedSpeech() throws Exception {
         Context ctx = InstrumentationRegistry.getInstrumentation()
                 .getTargetContext();
+        org.junit.Assume.assumeTrue("no usable capture input on this device",
+                captureInputAvailable(ctx));
         RecordingEngine engine = RecordingEngine.get();
         engine.abortAndDelete();
         engine.startNewSession(ctx, "Synthetic Voice", 2);
