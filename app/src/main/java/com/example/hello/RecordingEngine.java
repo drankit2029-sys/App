@@ -187,6 +187,8 @@ public final class RecordingEngine {
             }
             takeName = clean;
         }
+        ConversionService.onRecordingStateChanged();
+        RecordingService.onRecordingStateChanged();
     }
 
     public void clearSession() {
@@ -201,6 +203,7 @@ public final class RecordingEngine {
         }
         // Let a parked conversion worker yield/resume immediately.
         ConversionService.onRecordingStateChanged();
+        RecordingService.onRecordingStateChanged();
     }
 
     // ---- incremental background encoding ----
@@ -303,6 +306,7 @@ public final class RecordingEngine {
         }
         // Let a parked conversion worker yield/resume immediately.
         ConversionService.onRecordingStateChanged();
+        RecordingService.onRecordingStateChanged();
     }
 
     /** Back-compat: capture with the session's stored source. */
@@ -333,6 +337,7 @@ public final class RecordingEngine {
         }
         // Let a parked conversion worker yield/resume immediately.
         ConversionService.onRecordingStateChanged();
+        RecordingService.onRecordingStateChanged();
     }
 
     public void resumeCapture(Context ctx, int requestedSource) throws Exception {
@@ -351,6 +356,7 @@ public final class RecordingEngine {
         }
         // Let a parked conversion worker yield/resume immediately.
         ConversionService.onRecordingStateChanged();
+        RecordingService.onRecordingStateChanged();
     }
 
     /** Back-compat: resume with the session's stored source. */
@@ -384,6 +390,7 @@ public final class RecordingEngine {
             }
             // Capture is over: let a parked conversion worker resume.
             ConversionService.onRecordingStateChanged();
+            RecordingService.onRecordingStateChanged();
             return out;
         }
     }
@@ -451,6 +458,7 @@ public final class RecordingEngine {
             if (raw.exists() && !raw.delete()) ok = false;
         }
         ConversionService.onRecordingStateChanged();
+        RecordingService.onRecordingStateChanged();
         return ok;
     }
 

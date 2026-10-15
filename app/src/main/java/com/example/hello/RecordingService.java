@@ -59,6 +59,18 @@ public class RecordingService extends Service {
     private long lastPctPush;
     private long captureStartedAt;
 
+    private static volatile RecordingService activeInstance;
+
+    private PendingIntent cachedContentIntent;
+    private PendingIntent cachedToggleIntent;
+    private PendingIntent cachedSaveIntent;
+    private PendingIntent cachedCancelIntent;
+
+    private String lastNotifTitle = "";
+    private String lastNotifText = "";
+    private Boolean lastNotifPaused = null;
+    private int lastNotifPct = -2;
+
     private AudioManager audioManager;
     private AudioManager.OnAudioFocusChangeListener focusListener;
 
@@ -85,6 +97,18 @@ public class RecordingService extends Service {
         } catch (Exception ignored) {}
     }
 
+    /**
+     * Called by RecordingEngine whenever capture starts, pauses, resumes,
+     * finalizes, clears, aborts, or renames, so the notification updates
+     * immediately without waiting for the next tick.
+     */
+    public static void onRecordingStateChanged() {
+        RecordingService s = activeInstance;
+        if (s != null) {
+            s.handler.post(() -> s.refreshNotif(true));
+        }
+    }
+
     public static boolean isRunning(Context ctx) {
         // Best-effort: true while the engine holds an active capture session.
         RecordingEngine e = RecordingEngine.get();
@@ -97,8 +121,10 @@ public class RecordingService extends Service {
     public void onCreate() {
         CrashLog.install(this);
         super.onCreate();
+        activeInstance = this;
         ensureChannel();
         audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+        initPendingIntents();
     }
 
     @Override
@@ -138,6 +164,7 @@ public class RecordingService extends Service {
 
     @Override
     public void onDestroy() {
+        if (activeInstance == this) activeInstance = null;
         stopTick();
         abandonFocus();
         super.onDestroy();
@@ -355,6 +382,10 @@ public class RecordingService extends Service {
     }
 
     private void startFg() {
+        lastNotifTitle = "";
+        lastNotifText = "";
+        lastNotifPaused = null;
+        lastNotifPct = -2;
         Notification n = buildNotif();
         try {
             if (Build.VERSION.SDK_INT >= 29) {
@@ -381,10 +412,51 @@ public class RecordingService extends Service {
     }
 
     private void refreshNotif() {
+        refreshNotif(false);
+    }
+
+    private void refreshNotif(boolean force) {
         try {
+            RecordingEngine e = RecordingEngine.get();
+            if (!e.hasSession() && !busy) return;
+            String name = e.takeName != null ? e.takeName : getString(R.string.app_name);
+            boolean paused = e.state != RecordingEngine.State.RECORDING;
+            RecordPreset preset = RecordPreset.load(this);
+            String presetTitle = getString(preset.titleRes);
+            long durMs = e.durationMs();
+            String timer = Take.formatDuration(durMs);
+
+            String title;
+            String text;
+            if (convertingPct >= 0) {
+                title = getString(R.string.notif_converting, convertingPct);
+                text = getString(R.string.converting_msg, presetTitle, convertingPct);
+            } else if (paused) {
+                title = getString(R.string.notif_paused, name);
+                text = presetTitle + " • " + timer;
+            } else {
+                title = getString(R.string.notif_recording, name);
+                text = presetTitle + " • " + timer;
+            }
+
+            // Skip redundant Binder IPC calls when nothing visible changed.
+            if (!force
+                    && title.equals(lastNotifTitle)
+                    && text.equals(lastNotifText)
+                    && lastNotifPaused != null && lastNotifPaused == paused
+                    && lastNotifPct == convertingPct) {
+                return;
+            }
+            lastNotifTitle = title;
+            lastNotifText = text;
+            lastNotifPaused = paused;
+            lastNotifPct = convertingPct;
+
             NotificationManager nm =
                     (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-            if (nm != null) nm.notify(NOTIF_ID, buildNotif());
+            if (nm != null) {
+                nm.notify(NOTIF_ID, buildNotifWith(title, text, paused, durMs));
+            }
         } catch (Exception ignored) {}
     }
 
@@ -397,10 +469,11 @@ public class RecordingService extends Service {
     private Notification buildNotif() {
         RecordingEngine e = RecordingEngine.get();
         String name = e.takeName != null ? e.takeName : getString(R.string.app_name);
-        boolean paused = e.state == RecordingEngine.State.PAUSED;
+        boolean paused = e.state != RecordingEngine.State.RECORDING;
         RecordPreset preset = RecordPreset.load(this);
         String presetTitle = getString(preset.titleRes);
-        String timer = formatTimer(e.durationMs());
+        long durMs = e.durationMs();
+        String timer = Take.formatDuration(durMs);
 
         String title;
         String text;
@@ -414,19 +487,18 @@ public class RecordingService extends Service {
             title = getString(R.string.notif_recording, name);
             text = presetTitle + " • " + timer;
         }
+        lastNotifTitle = title;
+        lastNotifText = text;
+        lastNotifPaused = paused;
+        lastNotifPct = convertingPct;
+        return buildNotifWith(title, text, paused, durMs);
+    }
 
-        Intent open = new Intent(this, MainActivity.class);
-        open.putExtra("open_studio", true);
-        open.setAction("com.example.hello.OPEN_STUDIO");
-        PendingIntent content;
-        try {
-            content = PendingIntent.getActivity(this, 10, open,
-                    PendingIntent.FLAG_UPDATE_CURRENT
-                            | PendingIntent.FLAG_IMMUTABLE);
-        } catch (Exception ex) {
-            content = null;
+    private Notification buildNotifWith(String title, String text,
+                                        boolean paused, long durMs) {
+        if (cachedContentIntent == null && cachedToggleIntent == null) {
+            initPendingIntents();
         }
-
         androidx.core.app.NotificationCompat.Builder b =
                 new androidx.core.app.NotificationCompat.Builder(this, CHANNEL);
         b.setSmallIcon(R.drawable.ic_mic);
@@ -434,22 +506,53 @@ public class RecordingService extends Service {
         b.setContentText(text);
         b.setOngoing(true);
         b.setOnlyAlertOnce(true);
-        if (content != null) b.setContentIntent(content);
+        b.setSilent(true);
+        // Native SystemUI Chronometer ticks in real time on the system UI
+        // thread without requiring sub-second Binder IPC updates.
+        if (convertingPct < 0 && !paused) {
+            b.setWhen(System.currentTimeMillis() - Math.max(0L, durMs));
+            b.setShowWhen(true);
+            b.setUsesChronometer(true);
+        } else {
+            b.setShowWhen(false);
+            b.setUsesChronometer(false);
+        }
+        if (cachedContentIntent != null) {
+            b.setContentIntent(cachedContentIntent);
+        }
         if (convertingPct < 0) {
             b.addAction(0,
                     paused ? getString(R.string.notif_resume)
                             : getString(R.string.notif_pause),
-                    action(ACTION_TOGGLE, 21));
+                    cachedToggleIntent);
             b.addAction(0, getString(R.string.notif_save),
-                    action(ACTION_SAVE, 22));
+                    cachedSaveIntent);
             b.addAction(0, getString(R.string.notif_cancel),
-                    action(ACTION_CANCEL, 23));
+                    cachedCancelIntent);
+        } else {
+            b.setProgress(100, Math.max(0, Math.min(100, convertingPct)), false);
         }
         try {
             return b.build();
         } catch (Exception ex) {
             return new Notification();
         }
+    }
+
+    private void initPendingIntents() {
+        Intent open = new Intent(this, MainActivity.class);
+        open.putExtra("open_studio", true);
+        open.setAction("com.example.hello.OPEN_STUDIO");
+        try {
+            cachedContentIntent = PendingIntent.getActivity(this, 10, open,
+                    PendingIntent.FLAG_UPDATE_CURRENT
+                            | PendingIntent.FLAG_IMMUTABLE);
+        } catch (Exception ex) {
+            cachedContentIntent = null;
+        }
+        cachedToggleIntent = action(ACTION_TOGGLE, 21);
+        cachedSaveIntent = action(ACTION_SAVE, 22);
+        cachedCancelIntent = action(ACTION_CANCEL, 23);
     }
 
     private PendingIntent action(String what, int code) {
@@ -480,8 +583,17 @@ public class RecordingService extends Service {
         @Override
         public void run() {
             if (!ticking) return;
-            refreshNotif();
-            handler.postDelayed(this, 250);
+            refreshNotif(false);
+            // Align to the next whole-second boundary while recording so the
+            // MM:SS readout steps in sync with the audio duration and never
+            // exceeds 1 update/sec.
+            RecordingEngine e = RecordingEngine.get();
+            long delay = 1000L;
+            if (e.state == RecordingEngine.State.RECORDING) {
+                long rem = 1000L - (e.durationMs() % 1000L);
+                delay = Math.max(200L, Math.min(1000L, rem));
+            }
+            handler.postDelayed(this, delay);
         }
     };
 
@@ -503,10 +615,5 @@ public class RecordingService extends Service {
         try {
             Toast.makeText(getApplicationContext(), text, Toast.LENGTH_LONG).show();
         } catch (Exception ignored) {}
-    }
-
-    /** Centisecond timer. */
-    static String formatTimer(long ms) {
-        return TimeFmt.formatTimer(ms);
     }
 }

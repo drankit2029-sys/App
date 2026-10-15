@@ -96,6 +96,13 @@ public final class ConversionJobs {
             new HashMap<>();
     /** Synthetic (negative) take id -> raw path, for edit-replace lookup. */
     private static final Map<Long, String> NEG_TO_RAW = new HashMap<>();
+    /**
+     * rawPath -> latest user-chosen title from a rename requested while its
+     * take was converting. Kept separately from {@link ConversionJob#title}
+     * so a rename that arrives after the worker read the title but before the
+     * finished take is visible can still be applied exactly once.
+     */
+    private static final Map<String, String> RENAMED_TITLES = new HashMap<>();
 
     public static synchronized void addListener(Listener l) {
         if (l != null) LISTENERS.add(l);
@@ -143,6 +150,107 @@ public final class ConversionJobs {
         return COMPLETED.get(rawPath);
     }
 
+    /**
+     * Atomically records a rename for a take that was (or still is)
+     * converting. Updates the active job and sidecar when the job is still in
+     * flight, remembers the override by raw path so the worker handoff cannot
+     * miss it, and renames the finished take when the job already completed
+     * while the rename dialog was open.
+     *
+     * <p>The repository rename happens after this class's lock is released:
+     * the worker can hold the repository lock while calling back into this
+     * registry, so nesting those two locks in the other order could deadlock.
+     */
+    public static String renameConvertingOrCompleted(String jobId,
+                                                     long syntheticTakeId,
+                                                     String rawPath,
+                                                     String newTitle) {
+        String clean = newTitle != null ? newTitle.trim() : "";
+        if (clean.isEmpty()) return "";
+        final String effectiveRaw;
+        final Long doneId;
+        synchronized (ConversionJobs.class) {
+            ConversionJob job = null;
+            if (jobId != null && !jobId.isEmpty()) {
+                job = ACTIVE.get(jobId);
+            }
+            if (job == null && syntheticTakeId < 0) {
+                for (ConversionJob j : ACTIVE.values()) {
+                    if (j.takeId() == syntheticTakeId) {
+                        job = j;
+                        break;
+                    }
+                }
+            }
+            if (job == null && rawPath != null && !rawPath.isEmpty()) {
+                for (ConversionJob j : ACTIVE.values()) {
+                    if (rawPath.equals(j.rawPath)) {
+                        job = j;
+                        break;
+                    }
+                }
+            }
+            String eff = rawPath;
+            if ((eff == null || eff.isEmpty()) && job != null) {
+                eff = job.rawPath;
+            }
+            if ((eff == null || eff.isEmpty()) && syntheticTakeId < 0) {
+                eff = NEG_TO_RAW.get(syntheticTakeId);
+            }
+            if (eff != null && !eff.isEmpty()) {
+                RENAMED_TITLES.put(eff, clean);
+            }
+            if (job != null) {
+                job.title = clean;
+                if (job.replaceTitle != null) {
+                    job.replaceTitle = clean;
+                }
+                job.updatedAt = System.currentTimeMillis();
+                job.write();
+            }
+            effectiveRaw = eff;
+            doneId = (eff != null && !eff.isEmpty())
+                    ? COMPLETED.get(eff) : null;
+        }
+        if (doneId != null) {
+            TakesRepository.rename(doneId, clean);
+        }
+        fireChanged();
+        return clean;
+    }
+
+    /**
+     * Returns the most up-to-date title for {@code job}, honouring any rename
+     * that arrived while the job was queued or running.
+     */
+    public static synchronized String latestTitle(ConversionJob job,
+                                                  String fallback) {
+        String cleanFallback = fallback != null ? fallback : "";
+        if (job == null) return cleanFallback;
+        String byRaw = RENAMED_TITLES.get(job.rawPath);
+        if (byRaw != null && !byRaw.trim().isEmpty()) {
+            job.title = byRaw.trim();
+            return job.title;
+        }
+        if (job.title != null && !job.title.trim().isEmpty()) {
+            return job.title.trim();
+        }
+        return cleanFallback;
+    }
+
+    /**
+     * Takes and clears a pending rename override recorded by
+     * {@link #renameConvertingOrCompleted}. The worker calls this after the
+     * finished take is visible, then applies the result without holding this
+     * class's lock.
+     */
+    public static synchronized String consumeRenamedTitle(String rawPath) {
+        if (rawPath == null || rawPath.isEmpty()) return null;
+        String renamed = RENAMED_TITLES.remove(rawPath);
+        if (renamed == null || renamed.trim().isEmpty()) return null;
+        return renamed.trim();
+    }
+
     public static synchronized void noteTakeRaw(long takeId, String rawPath) {
         NEG_TO_RAW.put(takeId, rawPath);
     }
@@ -153,6 +261,7 @@ public final class ConversionJobs {
 
     public static synchronized void forgetCompletion(String rawPath) {
         COMPLETED.remove(rawPath);
+        RENAMED_TITLES.remove(rawPath);
     }
 
     /** Marks {@code rawPath} as being read. Pair every call with {@link #endRawRead}. */

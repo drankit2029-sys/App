@@ -1258,29 +1258,36 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
 
     @Override
     public void onRename(Take take) {
-        // Renaming a converting take is safe: it only changes the title, and
-        // the worker reads the job's title when it inserts the finished take.
+        // A converting card can finish while this modal input is open. Capture
+        // only identifiers in the dialog callback: if the job is still active
+        // the helper updates it, and if it already finished the helper renames
+        // the completed take instead of silently dropping the new name.
         OptionsSheet.showInput(requireContext(), getString(R.string.rename_title),
                 take.title, getString(R.string.rename_save), text -> {
                     try {
-                        if (take.converting) {
-                            ConversionJob job = take.convJobId != null
-                                    ? ConversionJobs.get(take.convJobId)
-                                    : ConversionJobs.forTakeId(take.id);
-                            if (job != null) {
-                                String clean = text.trim();
-                                if (!clean.isEmpty()) {
-                                    job.title = clean;
-                                    job.write();
-                                }
+                        String clean = text != null ? text.trim() : "";
+                        if (take.converting || take.id < 0) {
+                            String applied =
+                                    ConversionJobs.renameConvertingOrCompleted(
+                                            take.convJobId, take.id,
+                                            take.convRawPath, clean);
+                            if (applied.isEmpty()) {
+                                OptionsSheet.showResult(requireContext(), false,
+                                        getString(R.string.rename_failed_title),
+                                        getString(R.string.rename_failed_msg));
+                                return;
                             }
-                        } else {
-                            TakesRepository.rename(take.id, text);
+                            refreshImmediate();
+                            OptionsSheet.showResult(requireContext(), true,
+                                    getString(R.string.rename_success_title),
+                                    getString(R.string.rename_success_msg,
+                                            applied));
+                            return;
                         }
+                        TakesRepository.rename(take.id, clean);
                         refresh();
                         Take updated = TakesRepository.find(take.id);
-                        String name = take.converting ? text.trim()
-                                : (updated != null ? updated.title : text);
+                        String name = updated != null ? updated.title : clean;
                         OptionsSheet.showResult(requireContext(), true,
                                 getString(R.string.rename_success_title),
                                 getString(R.string.rename_success_msg, name));

@@ -333,25 +333,29 @@ public class ConversionService extends Service {
                         format, cb);
             }
             if (job.cancelled) throw new CancellationException();
+            // A rename can arrive after encoding finished but before the
+            // finished take is visible. Resolve the latest title first so both
+            // plain and edit-replace completions use it, including the
+            // notification and broadcast below.
+            String liveTitle = ConversionJobs.latestTitle(job, r.title);
+            job.title = liveTitle;
             Take take;
             if (job.replaceTakeId != -1) {
                 // Edit punch-in saved to the background worker: honour the
                 // replace-vs-new choice made up front instead of duplicating.
-                String rt = job.replaceTitle != null
-                        && !job.replaceTitle.isEmpty()
-                        ? job.replaceTitle : job.title;
+                // A rename during conversion overrides the initial
+                // replaceTitle.
                 take = TakesRepository.replaceRecording(job.replaceTakeId,
-                        r.file, r.durationMs, rt, r.label);
+                        r.file, r.durationMs, liveTitle, r.label);
             } else {
-                // r.title is the title this conversion STARTED with, so a
-                // rename made while it ran was dropped and the finished take
-                // snapped back to the old name. Read the live title instead.
-                String title = job.title != null && !job.title.trim().isEmpty()
-                        ? job.title.trim() : r.title;
                 take = TakesRepository.addRecording(r.file, r.durationMs,
-                        title, r.label);
+                        liveTitle, r.label);
             }
             ConversionJobs.noteCompletion(job.rawPath, take.id);
+            String renamed = ConversionJobs.consumeRenamedTitle(job.rawPath);
+            if (renamed != null && !renamed.equals(take.title)) {
+                TakesRepository.rename(take.id, renamed);
+            }
             // STU-03: an Edit on the converting card decodes this same raw.
             // Keep the file while a reader holds it instead of deleting it
             // out from under AudioImporter.

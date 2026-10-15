@@ -320,8 +320,11 @@ public class ConversionConcurrencyTest {
                     + "use a longer take", ConversionJob.RUNNING, cur.state);
 
             // This is what the library does when a converting card is renamed.
-            cur.title = "Renamed mid flight";
-            cur.write();
+            assertEquals("rename helper rejected the new title",
+                    "Renamed mid flight",
+                    ConversionJobs.renameConvertingOrCompleted(
+                            cur.jobId, cur.takeId(), cur.rawPath,
+                            "Renamed mid flight"));
 
             until = System.currentTimeMillis() + 180000;
             while (System.currentTimeMillis() < until) {

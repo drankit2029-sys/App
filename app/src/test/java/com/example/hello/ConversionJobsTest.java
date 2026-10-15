@@ -232,4 +232,69 @@ public class ConversionJobsTest {
         assertTrue(ConversionJobs.get(
                 r != null && r.job != null ? r.job.jobId : "?") == null);
     }
+
+    @Test
+    public void renameActiveJobUpdatesSidecarAndOverride() throws Exception {
+        RecordingEngine engine = RecordingEngine.get();
+        engine.abortAndDelete();
+        String session = "Rename Active " + System.nanoTime();
+        engine.startNewSession(ctx(), session, 2);
+        ConversionJob job = null;
+        try {
+            job = ConversionJobs.enqueue(ctx(), engine.rawFile, session,
+                    RecordPreset.MEMO, SaveFormat.M4A, 1000);
+            String applied = ConversionJobs.renameConvertingOrCompleted(
+                    job.jobId, job.takeId(), job.rawPath, "Renamed Active");
+            assertEquals("Renamed Active", applied);
+            assertEquals("Renamed Active", job.title);
+            ConversionJob back = ConversionJob.read(job.sidecar());
+            assertNotNull("sidecar unreadable", back);
+            assertEquals("Renamed Active", back.title);
+            assertEquals("Renamed Active",
+                    ConversionJobs.latestTitle(job, "fallback"));
+        } finally {
+            if (job != null) ConversionJobs.cancel(job.jobId, true);
+            engine.abortAndDelete();
+        }
+    }
+
+    @Test
+    public void renameAfterCompletionRenamesFinishedTake() {
+        File dir = RecordingEngine.takesDir(ctx());
+        File raw = new File(dir, "rename-done-" + System.nanoTime() + ".m4a");
+        Take take = TakesRepository.addRecording(raw, 1000, "Before", "M4A");
+        try {
+            ConversionJobs.noteCompletion(raw.getAbsolutePath(), take.id);
+            String applied = ConversionJobs.renameConvertingOrCompleted(
+                    null, -1, raw.getAbsolutePath(), "After");
+            assertEquals("After", applied);
+            assertNotNull(TakesRepository.find(take.id));
+            assertEquals("After", TakesRepository.find(take.id).title);
+        } finally {
+            TakesRepository.delete(take.id);
+            ConversionJobs.forgetCompletion(raw.getAbsolutePath());
+        }
+    }
+
+    @Test
+    public void completionConsumesPendingRenameOverride() {
+        File dir = RecordingEngine.takesDir(ctx());
+        String rawPath = new File(dir,
+                "rename-consume-" + System.nanoTime() + ".wav")
+                .getAbsolutePath();
+        ConversionJob job = new ConversionJob("job-consume", "Before", rawPath,
+                rawPath + ".part", "memo", "m4a", 1, 96000, 5000, 240000);
+        try {
+            assertEquals("After", ConversionJobs.renameConvertingOrCompleted(
+                    null, -1, rawPath, "After"));
+            assertEquals("After",
+                    ConversionJobs.latestTitle(job, "fallback"));
+            assertEquals("After",
+                    ConversionJobs.consumeRenamedTitle(rawPath));
+            assertNull(ConversionJobs.consumeRenamedTitle(rawPath));
+        } finally {
+            ConversionJobs.consumeRenamedTitle(rawPath);
+            ConversionJobs.forgetCompletion(rawPath);
+        }
+    }
 }
