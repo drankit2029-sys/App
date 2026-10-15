@@ -58,7 +58,7 @@ public class LibraryFlowTest {
                 View v = root.findViewById(ids[i]);
                 android.util.Log.e("LibDiag", tag + " " + names[i] + "="
                         + (v == null ? "NULL"
-                        : "vis=" + v.getVisibility() + " shown=" + v.getShown()
+                        : "vis=" + v.getVisibility() + " shown=" + v.isShown()
                         + " size=" + v.getWidth() + "x" + v.getHeight()));
             }
             android.util.Log.e("LibDiag", tag + " windowFocus="
