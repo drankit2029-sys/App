@@ -41,62 +41,29 @@ public class LibraryFlowTest {
     }
 
     /**
-     * Records why a uiautomator lookup came up empty: the accessibility tree
-     * it actually sees, plus the real state of the views being looked for.
+     * Records why a uiautomator lookup came up empty, using only the view tree
+     * the test already has: how many takes exist, what is converting, and the
+     * real state of the views being looked for.
      */
-    private void diag(Activity a, UiDevice d, String tag) {
+    private void diag(Activity a, String tag) {
         try {
-            java.io.File f = new java.io.File("/sdcard/Download/libdiag-"
-                    + tag + ".xml");
-            boolean dumped = d.dumpWindowHierarchy(f);
-            int bytes = 0, nodes = 0;
-            boolean hasFav = false, hasSearch = false;
-            if (dumped && f.exists()) {
-                StringBuilder sb = new StringBuilder();
-                java.io.BufferedReader r = new java.io.BufferedReader(
-                        new java.io.InputStreamReader(
-                                new java.io.FileInputStream(f), "UTF-8"));
-                String line;
-                while ((line = r.readLine()) != null) sb.append(line).append('\n');
-                r.close();
-                String xml = sb.toString();
-                bytes = xml.length();
-                int i = 0;
-                while ((i = xml.indexOf("<node", i)) >= 0) { nodes++; i += 5; }
-                hasFav = xml.contains("Favorites");
-                hasSearch = xml.contains("Search takes");
-            }
-            android.util.Log.e("LibDiag", tag + " dumped=" + dumped
-                    + " bytes=" + bytes + " nodes=" + nodes
-                    + " hasFav=" + hasFav + " hasSearch=" + hasSearch);
+            android.util.Log.e("LibDiag", tag + " takes="
+                    + TakesRepository.all().size()
+                    + " activeJobs=" + ConversionJobs.active().size());
             View root = a.getWindow().getDecorView();
             int[] ids = {R.id.chipAll, R.id.chipFav, R.id.searchToggle,
                     R.id.sortBtn};
             String[] names = {"chipAll", "chipFav", "searchToggle", "sortBtn"};
             for (int i = 0; i < ids.length; i++) {
                 View v = root.findViewById(ids[i]);
-                if (v == null) {
-                    android.util.Log.e("LibDiag", tag + " " + names[i]
-                            + " = NULL");
-                    continue;
-                }
-                android.graphics.Rect r2 = new android.graphics.Rect();
-                boolean onScreen = v.getGlobalVisibleRect(r2);
-                android.util.Log.e("LibDiag", tag + " " + names[i]
-                        + " vis=" + v.getVisibility()
-                        + " shown=" + v.getShown()
-                        + " size=" + v.getWidth() + "x" + v.getHeight()
-                        + " onScreen=" + onScreen + " rect=" + r2.toShortString()
-                        + " parent=" + (v.getParent() == null ? "none"
-                        : v.getParent().getClass().getSimpleName()));
+                android.util.Log.e("LibDiag", tag + " " + names[i] + "="
+                        + (v == null ? "NULL"
+                        : "vis=" + v.getVisibility() + " shown=" + v.getShown()
+                        + " size=" + v.getWidth() + "x" + v.getHeight()));
             }
-            android.view.ViewGroup rg = root instanceof android.view.ViewGroup
-                    ? (android.view.ViewGroup) root : null;
-            android.util.Log.e("LibDiag", tag + " rootChildren="
-                    + (rg == null ? -1 : rg.getChildCount())
-                    + " focus=" + a.getWindow().getDecorView().isFocused()
-                    + " resumed=" + (a instanceof android.app.Activity
-                    && ((android.app.Activity) a).hasWindowFocus()));
+            android.util.Log.e("LibDiag", tag + " windowFocus="
+                    + a.getWindow().getDecorView().isFocused()
+                    + " resumed=" + a.hasWindowFocus());
         } catch (Throwable t) {
             android.util.Log.e("LibDiag", tag + " diag failed: " + t);
         }
@@ -208,7 +175,7 @@ public class LibraryFlowTest {
             InstrumentationRegistry.getInstrumentation().waitForIdleSync();
             UiObject search = d.findObject(new UiSelector()
                     .description("Search takes"));
-            if (!search.waitForExists(3000)) diag(a, d, "search");
+            if (!search.waitForExists(3000)) diag(a, "search");
             assertTrue("no search toggle", search.waitForExists(5000));
             search.click();
             UiObject input = d.findObject(new UiSelector()
@@ -267,7 +234,7 @@ public class LibraryFlowTest {
             InstrumentationRegistry.getInstrumentation().waitForIdleSync();
             Thread.sleep(600);
             UiObject chip = d.findObject(new UiSelector().text("Favorites"));
-            if (!chip.waitForExists(3000)) diag(a, d, "favChip");
+            if (!chip.waitForExists(3000)) diag(a, "favChip");
             assertTrue("no favorites chip", chip.waitForExists(5000));
             chip.click();
             Thread.sleep(800);
