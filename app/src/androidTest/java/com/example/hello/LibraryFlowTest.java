@@ -40,72 +40,6 @@ public class LibraryFlowTest {
         return instr.startActivitySync(i);
     }
 
-    /**
-     * Records why a uiautomator lookup came up empty, using only the view tree
-     * the test already has: how many takes exist, what is converting, and the
-     * real state of the views being looked for.
-     */
-    private void diag(Activity a, String tag) {
-        try {
-            android.util.Log.e("LibDiag", tag + " takes="
-                    + TakesRepository.all().size()
-                    + " activeJobs=" + ConversionJobs.active().size());
-            try {
-                UiDevice du = device();
-                android.util.Log.e("LibDiag", tag + " currentPkg="
-                        + du.getCurrentPackageName());
-                java.io.File hf = new java.io.File(
-                        "/sdcard/Download/libdiag-" + tag + ".xml");
-                du.dumpWindowHierarchy(hf);
-                if (hf.exists()) {
-                    java.io.BufferedReader hr = new java.io.BufferedReader(
-                            new java.io.InputStreamReader(
-                                    new java.io.FileInputStream(hf), "UTF-8"));
-                    StringBuilder hb = new StringBuilder();
-                    String hl;
-                    while ((hl = hr.readLine()) != null) hb.append(hl).append(' ');
-                    hr.close();
-                    String hx = hb.toString();
-                    java.util.TreeSet<String> ids = new java.util.TreeSet<>();
-                    java.util.regex.Matcher mi = java.util.regex.Pattern
-                            .compile("resource-id=\"([^\"]*)\"").matcher(hx);
-                    while (mi.find()) {
-                        if (mi.group(1).length() > 0) ids.add(mi.group(1));
-                    }
-                    java.util.TreeSet<String> cls = new java.util.TreeSet<>();
-                    java.util.regex.Matcher mc = java.util.regex.Pattern
-                            .compile("class=\"([^\"]*)\"").matcher(hx);
-                    while (mc.find()) cls.add(mc.group(1));
-                    android.util.Log.e("LibDiag", tag + " topWindowIds="
-                            + ids + " classes=" + cls
-                            + " hasFavorites=" + hx.contains("Favorites")
-                            + " hasSearch=" + hx.contains("Search takes"));
-                } else {
-                    android.util.Log.e("LibDiag", tag
-                            + " hierarchy file missing");
-                }
-            } catch (Throwable t) {
-                android.util.Log.e("LibDiag", tag + " window diag failed: " + t);
-            }
-            View root = a.getWindow().getDecorView();
-            int[] ids = {R.id.chipAll, R.id.chipFav, R.id.searchToggle,
-                    R.id.sortBtn};
-            String[] names = {"chipAll", "chipFav", "searchToggle", "sortBtn"};
-            for (int i = 0; i < ids.length; i++) {
-                View v = root.findViewById(ids[i]);
-                android.util.Log.e("LibDiag", tag + " " + names[i] + "="
-                        + (v == null ? "NULL"
-                        : "vis=" + v.getVisibility() + " shown=" + v.isShown()
-                        + " size=" + v.getWidth() + "x" + v.getHeight()));
-            }
-            android.util.Log.e("LibDiag", tag + " windowFocus="
-                    + a.getWindow().getDecorView().isFocused()
-                    + " resumed=" + a.hasWindowFocus());
-        } catch (Throwable t) {
-            android.util.Log.e("LibDiag", tag + " diag failed: " + t);
-        }
-    }
-
     private UiDevice device() {
         return UiDevice.getInstance(
                 InstrumentationRegistry.getInstrumentation());
@@ -196,8 +130,48 @@ public class LibraryFlowTest {
                     findByText(root, "FlowLib Alpha"));
             assertNotNull("beta card missing",
                     findByText(root, "FlowLib Beta"));
-        } finally {
-            cleanupTitle("FlowLib Alpha");
+        } finally    /**
+     * Finds a view, tolerating a leftover result dialog.
+     *
+     * <p>Background conversions started by an earlier test class can finish
+     * while this class is browsing, and the "conversion done" dialog is
+     * modal: while it is up, uiautomator only sees the dialog window, so every
+     * library lookup fails even though the views are there. The dialog is the
+     * app behaving correctly, so the test dismisses it and looks again.
+     */
+    private UiObject findAllowingDialog(UiDevice d, UiSelector sel,
+                                        String what) {
+        UiObject o = d.findObject(sel);
+        if (o.waitForExists(2500)) return o;
+        dismissStrayDialogs(d);
+        o = d.findObject(sel);
+        if (!o.waitForExists(4000)) {
+            throw new AssertionError(what + " not found (library chrome "
+                    + "unavailable after a stray dialog)");
+        }
+        return o;
+    }
+
+    private void dismissStrayDialogs(UiDevice d) {
+        for (int i = 0; i < 3; i++) {
+            UiObject cancel = d.findObject(new UiSelector()
+                    .resourceId("com.example.hello:id/dialogCancel"));
+            if (!cancel.waitForExists(400)) return;
+            try {
+                cancel.click();
+            } catch (Exception ignored) {
+                return;
+            }
+            try {
+                Thread.sleep(400);
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+    }
+
+    private UiDevice device() {owLib Alpha");
             cleanupTitle("FlowLib Beta");
         }
     }
@@ -210,10 +184,9 @@ public class LibraryFlowTest {
             seedTake("FlowLib Alpha", "M4A");
             seedTake("FlowLib Beta", "WAV");
             InstrumentationRegistry.getInstrumentation().waitForIdleSync();
-            UiObject search = d.findObject(new UiSelector()
-                    .description("Search takes"));
-            if (!search.waitForExists(3000)) diag(a, "search");
-            assertTrue("no search toggle", search.waitForExists(5000));
+            UiObject search = findAllowingDialog(d,
+                    new UiSelector().description("Search takes"),
+                    "search toggle");
             search.click();
             UiObject input = d.findObject(new UiSelector()
                     .resourceId("com.example.hello:id/searchInput"));
@@ -242,9 +215,10 @@ public class LibraryFlowTest {
             assertTrue(!t.favorite);
             UiDevice d = device();
             // Newest take is first: its heart is the first fav icon.
-            UiObject heart = d.findObject(new UiSelector()
-                    .resourceId("com.example.hello:id/favIcon").instance(0));
-            assertTrue("no heart", heart.waitForExists(5000));
+            UiObject heart = findAllowingDialog(d,
+                    new UiSelector()
+                            .resourceId("com.example.hello:id/favIcon")
+                            .instance(0), "favorite heart");
             heart.click();
             Thread.sleep(600);
             assertTrue("favorite did not persist",
@@ -270,9 +244,8 @@ public class LibraryFlowTest {
             TakesRepository.toggleFavorite(fav.id);
             InstrumentationRegistry.getInstrumentation().waitForIdleSync();
             Thread.sleep(600);
-            UiObject chip = d.findObject(new UiSelector().text("Favorites"));
-            if (!chip.waitForExists(3000)) diag(a, "favChip");
-            assertTrue("no favorites chip", chip.waitForExists(5000));
+            UiObject chip = findAllowingDialog(d,
+                    new UiSelector().text("Favorites"), "favorites chip");
             chip.click();
             Thread.sleep(800);
             View root = a.getWindow().getDecorView();
@@ -419,9 +392,9 @@ public class LibraryFlowTest {
             job = ConversionJobs.enqueue(ctx, raw, "FlowLib Warn",
                     RecordPreset.MEMO, SaveFormat.M4A, 1000);
             Thread.sleep(1200);
-            UiObject card = d.findObject(new UiSelector()
-                    .text("FlowLib Warn"));
-            assertTrue("no converting card", card.waitForExists(5000));
+            UiObject card = findAllowingDialog(d,
+                    new UiSelector().text("FlowLib Warn"),
+                    "converting card");
             card.click();
             Thread.sleep(600);
             UiObject export = d.findObject(new UiSelector().text("Export"));
