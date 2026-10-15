@@ -50,6 +50,31 @@ public class LibraryFlowTest {
             android.util.Log.e("LibDiag", tag + " takes="
                     + TakesRepository.all().size()
                     + " activeJobs=" + ConversionJobs.active().size());
+            try {
+                UiDevice du = device();
+                android.util.Log.e("LibDiag", tag + " currentPkg="
+                        + du.getCurrentPackageName());
+                java.io.File hf = new java.io.File(
+                        "/sdcard/Download/libdiag-" + tag + ".xml");
+                du.dumpWindowHierarchy(hf);
+                if (hf.exists()) {
+                    java.io.BufferedReader hr = new java.io.BufferedReader(
+                            new java.io.InputStreamReader(
+                                    new java.io.FileInputStream(hf), "UTF-8"));
+                    StringBuilder hb = new StringBuilder();
+                    String hl;
+                    while ((hl = hr.readLine()) != null) hb.append(hl).append(' ');
+                    hr.close();
+                    String hx = hb.toString();
+                    android.util.Log.e("LibDiag", tag + " hierarchy="
+                            + hx.substring(0, Math.min(600, hx.length())));
+                } else {
+                    android.util.Log.e("LibDiag", tag
+                            + " hierarchy file missing");
+                }
+            } catch (Throwable t) {
+                android.util.Log.e("LibDiag", tag + " window diag failed: " + t);
+            }
             View root = a.getWindow().getDecorView();
             int[] ids = {R.id.chipAll, R.id.chipFav, R.id.searchToggle,
                     R.id.sortBtn};
