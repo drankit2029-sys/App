@@ -319,6 +319,12 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         unregisterConvReceiver();
     }
 
+    /**
+     * Last live-job set that triggered a structural refresh. Must be declared
+     * before {@link #jobsListener}, which reads it during initialization.
+     */
+    private String lastStructuralSig = "";
+
     private final ConversionJobs.Listener jobsListener = () -> {
         try {
             if (!isAdded() || getView() == null) return;
@@ -707,9 +713,6 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         lastStructuralMs = SystemClock.elapsedRealtime();
         if (isAdded() && getView() != null) refresh();
     }
-
-    /** Last live-job set that triggered a structural refresh. */
-    private String lastStructuralSig = "";
 
     private boolean structuralPending = false;
     private static final long STRUCTURAL_MIN_GAP_MS = 500;
