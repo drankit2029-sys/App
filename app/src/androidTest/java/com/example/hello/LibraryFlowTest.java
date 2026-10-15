@@ -66,8 +66,20 @@ public class LibraryFlowTest {
                     while ((hl = hr.readLine()) != null) hb.append(hl).append(' ');
                     hr.close();
                     String hx = hb.toString();
-                    android.util.Log.e("LibDiag", tag + " hierarchy="
-                            + hx.substring(0, Math.min(600, hx.length())));
+                    java.util.TreeSet<String> ids = new java.util.TreeSet<>();
+                    java.util.regex.Matcher mi = java.util.regex.Pattern
+                            .compile("resource-id=\"([^\"]*)\"").matcher(hx);
+                    while (mi.find()) {
+                        if (mi.group(1).length() > 0) ids.add(mi.group(1));
+                    }
+                    java.util.TreeSet<String> cls = new java.util.TreeSet<>();
+                    java.util.regex.Matcher mc = java.util.regex.Pattern
+                            .compile("class=\"([^\"]*)\"").matcher(hx);
+                    while (mc.find()) cls.add(mc.group(1));
+                    android.util.Log.e("LibDiag", tag + " topWindowIds="
+                            + ids + " classes=" + cls
+                            + " hasFavorites=" + hx.contains("Favorites")
+                            + " hasSearch=" + hx.contains("Search takes"));
                 } else {
                     android.util.Log.e("LibDiag", tag
                             + " hierarchy file missing");
