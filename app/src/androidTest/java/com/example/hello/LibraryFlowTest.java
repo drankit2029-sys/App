@@ -40,6 +40,48 @@ public class LibraryFlowTest {
         return instr.startActivitySync(i);
     }
 
+    /**
+     * Finds a view, tolerating a leftover result dialog.
+     *
+     * <p>A background conversion started by an earlier test class can finish
+     * while this class browses the library, and the "conversion done" dialog
+     * is modal: while it is up uiautomator only sees the dialog window, so
+     * the chips, heart, search toggle and converting card all read as missing
+     * even though the views are present and visible. The dialog is the app
+     * behaving correctly, so the test dismisses it and looks again.
+     */
+    private UiObject findAllowingDialog(UiDevice d, UiSelector sel,
+                                        String what) {
+        UiObject o = d.findObject(sel);
+        if (o.waitForExists(2500)) return o;
+        dismissStrayDialogs(d);
+        o = d.findObject(sel);
+        if (!o.waitForExists(4000)) {
+            throw new AssertionError(what + " not found after dismissing "
+                    + "a stray dialog");
+        }
+        return o;
+    }
+
+    private void dismissStrayDialogs(UiDevice d) {
+        for (int i = 0; i < 3; i++) {
+            UiObject cancel = d.findObject(new UiSelector()
+                    .resourceId("com.example.hello:id/dialogCancel"));
+            if (!cancel.waitForExists(400)) return;
+            try {
+                cancel.click();
+            } catch (Exception ignored) {
+                return;
+            }
+            try {
+                Thread.sleep(400);
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+    }
+
     private UiDevice device() {
         return UiDevice.getInstance(
                 InstrumentationRegistry.getInstrumentation());
@@ -130,48 +172,8 @@ public class LibraryFlowTest {
                     findByText(root, "FlowLib Alpha"));
             assertNotNull("beta card missing",
                     findByText(root, "FlowLib Beta"));
-        } finally    /**
-     * Finds a view, tolerating a leftover result dialog.
-     *
-     * <p>Background conversions started by an earlier test class can finish
-     * while this class is browsing, and the "conversion done" dialog is
-     * modal: while it is up, uiautomator only sees the dialog window, so every
-     * library lookup fails even though the views are there. The dialog is the
-     * app behaving correctly, so the test dismisses it and looks again.
-     */
-    private UiObject findAllowingDialog(UiDevice d, UiSelector sel,
-                                        String what) {
-        UiObject o = d.findObject(sel);
-        if (o.waitForExists(2500)) return o;
-        dismissStrayDialogs(d);
-        o = d.findObject(sel);
-        if (!o.waitForExists(4000)) {
-            throw new AssertionError(what + " not found (library chrome "
-                    + "unavailable after a stray dialog)");
-        }
-        return o;
-    }
-
-    private void dismissStrayDialogs(UiDevice d) {
-        for (int i = 0; i < 3; i++) {
-            UiObject cancel = d.findObject(new UiSelector()
-                    .resourceId("com.example.hello:id/dialogCancel"));
-            if (!cancel.waitForExists(400)) return;
-            try {
-                cancel.click();
-            } catch (Exception ignored) {
-                return;
-            }
-            try {
-                Thread.sleep(400);
-            } catch (InterruptedException ignored) {
-                Thread.currentThread().interrupt();
-                return;
-            }
-        }
-    }
-
-    private UiDevice device() {owLib Alpha");
+        } finally {
+            cleanupTitle("FlowLib Alpha");
             cleanupTitle("FlowLib Beta");
         }
     }
