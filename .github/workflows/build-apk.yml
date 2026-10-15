@@ -30,7 +30,20 @@ jobs:
         run: chmod +x ./gradlew
 
       - name: Run unit tests
-        run: ./gradlew testDebugUnitTest --stacktrace
+        # Robolectric downloads its android-all jar at test time, outside
+        # Gradle's cache, so a flaky Maven response fails the whole suite with
+        # MavenArtifactFetcher/FileNotFoundException noise unrelated to the
+        # code. Retry: the fetch is cached after the first success.
+        run: |
+          for i in 1 2 3; do
+            if ./gradlew testDebugUnitTest --stacktrace; then
+              echo "unit tests passed on attempt $i"; exit 0
+            fi
+            echo "unit tests failed on attempt $i; retrying"
+            sleep 15
+          done
+          echo "unit tests still failing after 3 attempts"
+          exit 1
 
       - name: Compile on-device (instrumentation) tests
         # The androidTest source set is not built by the unit-test or
