@@ -251,6 +251,18 @@ public final class ConversionJobs {
         return renamed.trim();
     }
 
+    /**
+     * Reads a pending rename override without clearing it, so the worker can
+     * decide which title a completion should carry while still honouring the
+     * initial edit-replace title when no rename arrived.
+     */
+    public static synchronized String peekRenamedTitle(String rawPath) {
+        if (rawPath == null || rawPath.isEmpty()) return null;
+        String renamed = RENAMED_TITLES.get(rawPath);
+        if (renamed == null || renamed.trim().isEmpty()) return null;
+        return renamed.trim();
+    }
+
     public static synchronized void noteTakeRaw(long takeId, String rawPath) {
         NEG_TO_RAW.put(takeId, rawPath);
     }

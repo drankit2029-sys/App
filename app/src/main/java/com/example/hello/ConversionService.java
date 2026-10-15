@@ -334,17 +334,26 @@ public class ConversionService extends Service {
             }
             if (job.cancelled) throw new CancellationException();
             // A rename can arrive after encoding finished but before the
-            // finished take is visible. Resolve the latest title first so both
-            // plain and edit-replace completions use it, including the
-            // notification and broadcast below.
-            String liveTitle = ConversionJobs.latestTitle(job, r.title);
+            // finished take is visible. It wins over every title captured
+            // earlier; without one, the initial edit-replace title (or the
+            // live job title, or the conversion result) stands as before.
+            String renamed = ConversionJobs.peekRenamedTitle(job.rawPath);
+            String liveTitle;
+            if (renamed != null) {
+                liveTitle = renamed;
+            } else if (job.replaceTakeId != -1 && job.replaceTitle != null
+                    && !job.replaceTitle.isEmpty()) {
+                liveTitle = job.replaceTitle;
+            } else if (job.title != null && !job.title.trim().isEmpty()) {
+                liveTitle = job.title.trim();
+            } else {
+                liveTitle = r.title;
+            }
             job.title = liveTitle;
             Take take;
             if (job.replaceTakeId != -1) {
                 // Edit punch-in saved to the background worker: honour the
                 // replace-vs-new choice made up front instead of duplicating.
-                // A rename during conversion overrides the initial
-                // replaceTitle.
                 take = TakesRepository.replaceRecording(job.replaceTakeId,
                         r.file, r.durationMs, liveTitle, r.label);
             } else {
@@ -352,9 +361,9 @@ public class ConversionService extends Service {
                         liveTitle, r.label);
             }
             ConversionJobs.noteCompletion(job.rawPath, take.id);
-            String renamed = ConversionJobs.consumeRenamedTitle(job.rawPath);
-            if (renamed != null && !renamed.equals(take.title)) {
-                TakesRepository.rename(take.id, renamed);
+            String lateRename = ConversionJobs.consumeRenamedTitle(job.rawPath);
+            if (lateRename != null && !lateRename.equals(take.title)) {
+                TakesRepository.rename(take.id, lateRename);
             }
             // STU-03: an Edit on the converting card decodes this same raw.
             // Keep the file while a reader holds it instead of deleting it
