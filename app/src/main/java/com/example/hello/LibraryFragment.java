@@ -339,13 +339,26 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                     // the raw it was previewing from is gone, so tear the
                     // preview down first and skip the 500ms debounce that
                     // would otherwise leave a dead, clickable card on screen.
-                    if (rawMode && playingId < 0
-                            && ConversionJobs.forTakeId(playingId) == null) {
-                        stopPlayback();
+                    //
+                    // Only act on a real transition, though. This condition can
+                    // hold continuously (a job whose card the active filter
+                    // hides, or a job left QUEUED with no worker), and
+                    // refreshing on every progress tick then rebinds the whole
+                    // list hundreds of times: the UI thread never goes idle,
+                    // which starves accessibility queries. One refresh per
+                    // distinct set of live jobs is the whole requirement.
+                    String sig = new java.util.TreeSet<>(live).toString();
+                    if (!sig.equals(lastStructuralSig)) {
+                        lastStructuralSig = sig;
+                        if (rawMode && playingId < 0
+                                && ConversionJobs.forTakeId(playingId) == null) {
+                            stopPlayback();
+                        }
+                        refreshImmediate();
                     }
-                    refreshImmediate();
                     return;
                 }
+                lastStructuralSig = "";
                 for (Take t : visible) {
                     if (!t.converting) continue;
                     ConversionJob j = ConversionJobs.forTakeId(t.id);
@@ -694,6 +707,9 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         lastStructuralMs = SystemClock.elapsedRealtime();
         if (isAdded() && getView() != null) refresh();
     }
+
+    /** Last live-job set that triggered a structural refresh. */
+    private String lastStructuralSig = "";
 
     private boolean structuralPending = false;
     private static final long STRUCTURAL_MIN_GAP_MS = 500;
