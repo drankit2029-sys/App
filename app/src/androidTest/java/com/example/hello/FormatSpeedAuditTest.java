@@ -204,10 +204,11 @@ public class FormatSpeedAuditTest {
                         FormatConverter.readFloatWav(back);
                 assertEquals("imported rate", RATE, info.sampleRate);
                 float peak = 0f;
-                int n = info.dataBytes / 4;
+                long n = info.dataBytes / 4L;
                 try (RandomAccessFile r = new RandomAccessFile(back, "r")) {
                     r.seek(info.dataStart);
-                    byte[] b = new byte[Math.min(info.dataBytes, 65536)];
+                    byte[] b = new byte[(int) Math.min(info.dataBytes,
+                            65536L)];
                     r.readFully(b);
                     java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(b)
                             .order(java.nio.ByteOrder.LITTLE_ENDIAN);
