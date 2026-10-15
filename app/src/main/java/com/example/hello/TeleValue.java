@@ -72,13 +72,15 @@ public class TeleValue extends LinearLayout {
 
     private float downX;
     private boolean scrubbing;
+    private boolean verticalScrubbing;
+    private boolean verticalScrubEnabled;
     private float downY;
     private int activePointerId = -1;
     private boolean downOnLabel;
     private boolean movedBeyondSlop;
     private boolean longPressFired;
     private int dragStartValue;
-    private float dragStartX;
+    private float dragStartPos;
     private long lastTapAt = -DOUBLE_TAP_MS - 1;
     private Runnable pendingPicker;
     private final Runnable longPressCheck = () -> {
@@ -263,6 +265,24 @@ public class TeleValue extends LinearLayout {
         requestLayout();
     }
 
+    /** Values the wheel may show when {@code step > 1}, padded to range. */
+    private String[] steppedLabels() {
+        java.util.ArrayList<String> out = new java.util.ArrayList<>();
+        int first = Math.min(max, ((min + step - 1) / step) * step);
+        for (int v = first; v <= max; v += step) {
+            out.add(unit.isEmpty() ? String.valueOf(v) : v + unit);
+        }
+        if (out.isEmpty()) {
+            for (int v = min; v <= max; v++) out.add(String.valueOf(v));
+        }
+        return out.toArray(new String[0]);
+    }
+
+    /** Test hook: the wheel labels for the configured step. */
+    String[] steppedLabelsForTest() {
+        return steppedLabels();
+    }
+
     private void maybeOpenPicker() {
         if (android.os.SystemClock.uptimeMillis() - lastTapAt >= 270) {
             lastTapAt = 0;
@@ -296,8 +316,21 @@ public class TeleValue extends LinearLayout {
         scrubListener = l;
     }
 
+    /**
+     * Allows vertical drags to scrub the value (drag up increases), reported
+     * through the same {@link OnScrubListener} as horizontal scrubs. Off by
+     * default so a vertical pass over an unrelated control stays inert.
+     */
+    public void setVerticalScrub(boolean enabled) {
+        verticalScrubEnabled = enabled;
+    }
+
     public int getValue() {
         return value;
+    }
+
+    public int getMin() {
+        return min;
     }
 
     private int clamp(int v) {
@@ -333,6 +366,13 @@ public class TeleValue extends LinearLayout {
             np.setMaxValue(max);
             np.setValue(value);
             np.setWrapSelectorWheel(false);
+            // A4-14: honour the step. A step of 5 must offer 40, 45, 50 ...
+            // not every integer, which is what the +/- buttons produce.
+            try {
+                if (step > 1) {
+                    np.setDisplayedValues(steppedLabels());
+                }
+            } catch (Exception ignored) {}
             final Dialog d = new Dialog(ctx, R.style.TakeOneCenterDialog);
             d.requestWindowFeature(Window.FEATURE_NO_TITLE);
             LinearLayout box = new LinearLayout(ctx);
@@ -400,9 +440,58 @@ public class TeleValue extends LinearLayout {
             box.setPadding(pad, pad, pad, pad);
             box.addView(input, new LayoutParams(LayoutParams.MATCH_PARENT,
                     LayoutParams.WRAP_CONTENT));
+            // A4-14: an explicit row. Without it the only ways out were the
+            // back gesture (which silently committed) and nothing to confirm.
+            LinearLayout row = new LinearLayout(ctx);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            TextView cancelBtn = new TextView(ctx);
+            cancelBtn.setText(ctx.getString(R.string.cancel));
+            cancelBtn.setTextSize(14);
+            cancelBtn.setGravity(Gravity.CENTER);
+            cancelBtn.setTextColor(0xFFF2F4F7);
+            cancelBtn.setBackgroundResource(R.drawable.bg_btn_ghost);
+            TextView okBtn = new TextView(ctx);
+            okBtn.setText(ctx.getString(R.string.settings_done));
+            okBtn.setTextSize(14);
+            okBtn.setGravity(Gravity.CENTER);
+            okBtn.setTextColor(0xFFFFFFFF);
+            okBtn.setBackgroundResource(R.drawable.bg_btn_primary);
+            LayoutParams half = new LayoutParams(0,
+                    LayoutParams.WRAP_CONTENT, 1f);
+            half.topMargin = dp(ctx, 10);
+            LayoutParams half2 = new LayoutParams(0,
+                    LayoutParams.WRAP_CONTENT, 1f);
+            half2.topMargin = dp(ctx, 10);
+            half2.leftMargin = dp(ctx, 8);
+            row.addView(cancelBtn, half);
+            row.addView(okBtn, half2);
+            box.addView(row, new LayoutParams(LayoutParams.MATCH_PARENT,
+                    LayoutParams.WRAP_CONTENT));
+
             final Dialog d = new Dialog(ctx, R.style.TakeOneCenterDialog);
             d.requestWindowFeature(Window.FEATURE_NO_TITLE);
             d.setContentView(box);
+            // A4-14: the numeric keyboard has no action key, so Done on the
+            // IME is the other confirm path.
+            input.setImeOptions(android.view.inputmethod.EditorInfo
+                    .IME_ACTION_DONE);
+            input.setOnEditorActionListener((v2, actionId, ev) -> {
+                if (actionId == android.view.inputmethod.EditorInfo
+                        .IME_ACTION_DONE) {
+                    commitTyped(input);
+                    d.dismiss();
+                    return true;
+                }
+                return false;
+            });
+            cancelBtn.setOnClickListener(v -> {
+                d.setOnDismissListener(null);
+                d.dismiss();
+            });
+            okBtn.setOnClickListener(v -> {
+                commitTyped(input);
+                d.dismiss();
+            });
             Window w = d.getWindow();
             if (w != null) {
                 w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
@@ -426,13 +515,16 @@ public class TeleValue extends LinearLayout {
                                     .SHOW_IMPLICIT);
                 }
             });
-            d.setOnDismissListener(dd -> {
-                try {
-                    int v = Integer.parseInt(input.getText().toString().trim());
-                    setValue(v, true);
-                } catch (Exception ignored) {
-                }
-            });
+            d.setOnDismissListener(dd -> commitTyped(input));
+        } catch (Exception ignored) {
+        }
+    }
+
+    /** Parses and commits the typed value exactly once. */
+    private void commitTyped(EditText input) {
+        try {
+            int v = Integer.parseInt(input.getText().toString().trim());
+            setValue(v, true);
         } catch (Exception ignored) {
         }
     }
@@ -459,6 +551,7 @@ public class TeleValue extends LinearLayout {
                 downOnLabel = isOnLabel(ev.getX(), ev.getY());
                 movedBeyondSlop = false;
                 scrubbing = false;
+                verticalScrubbing = false;
                 longPressFired = false;
                 if (downOnLabel) {
                     postDelayed(longPressCheck,
@@ -488,21 +581,40 @@ public class TeleValue extends LinearLayout {
                     cancelPendingPicker();
                     clearChildPress();
                 }
-                if (!scrubbing) {
-                    // Claim the gesture only once it is clearly horizontal.
-                    if (!movedBeyondSlop || Math.abs(dx) <= Math.abs(dy)) {
-                        // A vertical move is consumed so it cannot become a
-                        // tap when the finger lifts.
-                        return movedBeyondSlop || super.dispatchTouchEvent(ev);
+                if (!scrubbing && !verticalScrubbing) {
+                    // Claim the gesture once its direction is clear. A
+                    // vertical move is consumed so it cannot become a tap
+                    // when the finger lifts — unless vertical scrubbing is
+                    // enabled, in which case it drives the value.
+                    if (!movedBeyondSlop) {
+                        return super.dispatchTouchEvent(ev);
                     }
-                    scrubbing = true;
-                    dragStartValue = value;
-                    dragStartX = x;
-                    if (getParent() != null) {
-                        getParent().requestDisallowInterceptTouchEvent(true);
+                    if (Math.abs(dx) > Math.abs(dy)) {
+                        scrubbing = true;
+                        dragStartValue = value;
+                        dragStartPos = x;
+                        if (getParent() != null) {
+                            getParent().requestDisallowInterceptTouchEvent(true);
+                        }
+                    } else if (verticalScrubEnabled) {
+                        verticalScrubbing = true;
+                        dragStartValue = value;
+                        dragStartPos = downY;
+                        if (getParent() != null) {
+                            getParent().requestDisallowInterceptTouchEvent(true);
+                        }
+                    } else {
+                        return true;
                     }
                 }
-                int delta = (int) Math.round((x - dragStartX)
+                if (verticalScrubbing) {
+                    // Drag up increases, mirroring the waveform's own gesture.
+                    int delta = (int) Math.round((dragStartPos - y)
+                            / dp(getContext(), 7));
+                    setLiveValue(dragStartValue + delta * step);
+                    return true;
+                }
+                int delta = (int) Math.round((x - dragStartPos)
                         / dp(getContext(), 7));
                 setLiveValue(dragStartValue + delta * step);
                 return true;
@@ -517,8 +629,9 @@ public class TeleValue extends LinearLayout {
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL:
                 removeCallbacks(longPressCheck);
-                if (scrubbing) {
+                if (scrubbing || verticalScrubbing) {
                     scrubbing = false;
+                    verticalScrubbing = false;
                     if (getParent() != null) {
                         getParent().requestDisallowInterceptTouchEvent(false);
                     }
@@ -544,8 +657,9 @@ public class TeleValue extends LinearLayout {
         removeCallbacks(longPressCheck);
         cancelPendingPicker();
         activePointerId = -1;
-        if (scrubbing) {
+        if (scrubbing || verticalScrubbing) {
             scrubbing = false;
+            verticalScrubbing = false;
             if (getParent() != null) {
                 getParent().requestDisallowInterceptTouchEvent(false);
             }
@@ -577,6 +691,7 @@ public class TeleValue extends LinearLayout {
         cancelPendingPicker();
         removeCallbacks(longPressCheck);
         scrubbing = false;
+        verticalScrubbing = false;
         movedBeyondSlop = false;
         longPressFired = false;
         super.onDetachedFromWindow();

@@ -205,7 +205,7 @@ public class DspTest {
         assertTrue(!src.exists());
         assertEquals(100, trashed.length());
         File back = new File(takes, "song.wav");
-        assertTrue(Dsp.restoreFromTrash(trashed, back));
+        assertTrue(Dsp.restoreFromTrashOk(trashed, back));
         assertTrue(back.exists() && !trashed.exists());
     }
 
@@ -224,7 +224,7 @@ public class DspTest {
         File takes = tmp.newFolder("takes3");
         assertTrue(Dsp.moveToTrash(takes, new File(takes, "ghost.wav")) == null);
         assertTrue(Dsp.moveToTrash(takes, null) == null);
-        assertTrue(!Dsp.restoreFromTrash(new File(takes, "ghost.wav"),
+        assertTrue(!Dsp.restoreFromTrashOk(new File(takes, "ghost.wav"),
                 new File(takes, "x.wav")));
     }
 
@@ -239,5 +239,40 @@ public class DspTest {
         assertTrue(fresh.exists());
         assertTrue(!old.exists());
         assertEquals(0, Dsp.pruneTrash(null, 1));
+    }
+
+    @Test
+    public void sanitizeNullAndBlank() {
+        assertEquals("Take", Dsp.sanitize(null));
+        assertEquals("Take", Dsp.sanitize("   "));
+        // Illegal-only names become underscores, not the fallback.
+        assertEquals("___", Dsp.sanitize("///"));
+    }
+
+    @Test
+    public void prettyFileTitleNull() {
+        assertEquals("Take", Dsp.prettyFileTitle(null));
+        // No basename before the extension survives as-is.
+        assertEquals(".wav", Dsp.prettyFileTitle(".wav"));
+    }
+
+    @Test
+    public void sizeLabelBoundaries() {
+        assertEquals("0.1 MB", Dsp.sizeLabel(0));
+        assertEquals("0.1 MB", Dsp.sizeLabel(1024));
+        // 1 MiB = 1048576 bytes -> 10 tenths -> "1.0 MB".
+        assertEquals("1.0 MB", Dsp.sizeLabel(1048576));
+        assertEquals("5.6 MB", Dsp.sizeLabel(5824512L));
+    }
+
+    @Test
+    public void wavDurationMissingFileIsNegative() {
+        assertEquals(-1, Dsp.wavDurationMs(new File(tmp.getRoot(), "nope.wav")));
+    }
+
+    @Test
+    public void firLengthMatchesTaps() {
+        float[] fir = Dsp.firLowpass(0.1, 32);
+        assertEquals(32, fir.length);
     }
 }

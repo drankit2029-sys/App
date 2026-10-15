@@ -130,8 +130,29 @@ public class TeleValueGestureTest {
     }
 
     @Test
-    public void verticalMoveIsConsumedWithoutValueOrDialogs() {
+    public void verticalScrubDrivesValueWhenEnabled() {
         RecordingTeleValue tv = control();
+        tv.setVerticalScrub(true);
+        View label = findValueLabel(tv);
+        float[] c = centerOf(tv, label);
+
+        tv.dispatchTouchEvent(event(MotionEvent.ACTION_DOWN, c[0], c[1]));
+        // Drag upward: the value must climb, like the waveform's own gesture.
+        for (float y = c[1] - 8f; y >= c[1] - 80f; y -= 8f) {
+            tv.dispatchTouchEvent(event(MotionEvent.ACTION_MOVE, c[0], y));
+        }
+        assertTrue("vertical scrub did not report live values: " + tv.live,
+                !tv.live.isEmpty());
+        tv.dispatchTouchEvent(event(MotionEvent.ACTION_UP, c[0], c[1] - 80f));
+
+        assertEquals(tv.getValue(), tv.finished);
+        assertTrue("vertical scrub moved the value down", tv.getValue() > 50);
+        assertEquals(0, tv.pickers);
+        assertEquals(0, tv.keyboards);
+    }
+
+    @Test
+    public void verticalMoveIsConsumedWithoutValueOrDialogs() {        RecordingTeleValue tv = control();
         View label = findValueLabel(tv);
         float[] c = centerOf(tv, label);
 
@@ -235,5 +256,74 @@ public class TeleValueGestureTest {
         assertEquals(tv.getValue(), tv.finished);
         assertEquals(0, tv.pickers);
         assertEquals(0, tv.keyboards);
+    }
+
+    @Test
+    public void configureClampsInitialValue() {
+        RecordingTeleValue tv = control();
+        tv.configure(10, 20, 1, 999, "");
+        assertEquals(20, tv.getValue());
+        tv.configure(10, 20, 1, -999, "");
+        assertEquals(10, tv.getValue());
+        assertEquals(10, tv.getMin());
+    }
+
+    @Test
+    public void captionShowsAndHides() {
+        RecordingTeleValue tv = control();
+        tv.setCaption("Size");
+        android.view.View caption = null;
+        android.view.ViewGroup root = tv;
+        for (int i = 0; i < root.getChildCount(); i++) {
+            android.view.View c = root.getChildAt(i);
+            if (c instanceof android.widget.TextView
+                    && "Size".contentEquals(
+                            ((android.widget.TextView) c).getText())) {
+                caption = c;
+            }
+        }
+        assertTrue(caption != null
+                && caption.getVisibility() == android.view.View.VISIBLE);
+        tv.setCaption("");
+        assertTrue(caption.getVisibility() == android.view.View.GONE);
+        tv.setCaption(null);
+        assertTrue(caption.getVisibility() == android.view.View.GONE);
+    }
+
+    @Test
+    public void plusMinusStepDiscretely() {
+        RecordingTeleValue tv = control();
+        android.view.View plus = null;
+        android.view.View minus = null;
+        android.view.ViewGroup row =
+                (android.view.ViewGroup) tv.getChildAt(1);
+        for (int i = 0; i < row.getChildCount(); i++) {
+            android.view.View c = row.getChildAt(i);
+            CharSequence d = c.getContentDescription();
+            if (d != null && "increase".contentEquals(d)) plus = c;
+            if (d != null && "decrease".contentEquals(d)) minus = c;
+        }
+        assertTrue(plus != null && minus != null);
+        plus.performClick();
+        assertEquals(51, tv.getValue());
+        assertEquals(51, tv.discrete);
+        minus.performClick();
+        minus.performClick();
+        assertEquals(49, tv.getValue());
+    }
+
+    @Test
+    public void unchangedValueDoesNotNotify() {
+        RecordingTeleValue tv = control();
+        tv.setValue(50, true);
+        assertEquals(-1, tv.discrete);
+        tv.setValue(51, true);
+        assertEquals(51, tv.discrete);
+    }
+
+    @Test
+    public void stackedDefaultsOff() {
+        RecordingTeleValue tv = control();
+        assertTrue(!tv.isStacked());
     }
 }

@@ -76,6 +76,14 @@ public final class RecordingEngine {
     private int actualChannels;
     private long lastHeaderPatch;
 
+    /**
+     * Incremental encoder following the raw file while capture runs. Null
+     * when streaming is unavailable or was never started; the raw always
+     * remains the source of truth and a full post-stop conversion covers
+     * every case this misses.
+     */
+    private StreamingEncoder streaming;
+
     private RecordingEngine() {}
 
     // ---- storage helpers ----
@@ -121,6 +129,7 @@ public final class RecordingEngine {
     public void startNewSession(Context ctx, String name, int outChannels) throws Exception {
         synchronized (lock) {
             if (rawFile != null) throw new IllegalStateException("session active");
+            endStreamingAbortLocked();
             takeName = sanitize(name);
             channels = outChannels == 1 ? 1 : 2;
             File dir = takesDir(ctx);
@@ -182,12 +191,95 @@ public final class RecordingEngine {
 
     public void clearSession() {
         synchronized (lock) {
+            endStreamingAbortLocked();
             state = State.IDLE;
             takeName = null;
             rawFile = null;
             channels = 2;
             dataBytes = 0;
             level = 0f;
+        }
+        // Let a parked conversion worker yield/resume immediately.
+        ConversionService.onRecordingStateChanged();
+    }
+
+    // ---- incremental background encoding ----
+
+    /**
+     * Starts the incremental encoder for the current session, if none is
+     * running. Any failure (missing encoder, I/O) is swallowed: capture is
+     * unaffected and the save falls back to a full conversion. Best-effort
+     * by design — the raw file stays the source of truth.
+     */
+    public void beginStreaming(Context ctx, RecordPreset preset,
+                               SaveFormat format) {
+        synchronized (lock) {
+            if (streaming != null || rawFile == null) return;
+            try {
+                streaming = StreamingEncoder.start(preset, format,
+                        Math.max(1, channels), rawFile);
+            } catch (Exception e) {
+                streaming = null;
+                try {
+                    CrashLog.breadcrumb(ctx, "streaming unavailable: " + e);
+                } catch (Exception ignored) {}
+            }
+        }
+    }
+
+    /**
+     * A4-07: switch the incremental encoder to a new format mid-take. The
+     * running pump keeps writing the old container otherwise, and at save
+     * time the mismatch throws the whole .part away and re-converts from
+     * scratch. Returns true when a new pump took over.
+     */
+    public boolean restartStreaming(Context ctx, RecordPreset preset,
+                                    SaveFormat format) {
+        synchronized (lock) {
+            if (rawFile == null) return false;
+            if (streaming != null) {
+                streaming.abort();
+                streaming = null;
+            }
+            try {
+                streaming = StreamingEncoder.start(preset, format,
+                        Math.max(1, channels), rawFile);
+                return streaming != null;
+            } catch (Exception e) {
+                streaming = null;
+                try {
+                    CrashLog.breadcrumb(ctx, "streaming restart failed: " + e);
+                } catch (Exception ignored) {}
+                return false;
+            }
+        }
+    }
+
+    /** Live incremental session, or null when not streaming. */
+    public StreamingEncoder streaming() {
+        synchronized (lock) {
+            return streaming;
+        }
+    }
+
+    /**
+     * Hands the streaming session to the save flow and forgets it. The
+     * caller owns finishing or aborting it.
+     */
+    public StreamingEncoder endStreamingDetach() {
+        synchronized (lock) {
+            StreamingEncoder sess = streaming;
+            streaming = null;
+            return sess;
+        }
+    }
+
+    private void endStreamingAbortLocked() {
+        if (streaming != null) {
+            try {
+                streaming.abort();
+            } catch (Exception ignored) {}
+            streaming = null;
         }
     }
 
@@ -201,7 +293,7 @@ public final class RecordingEngine {
             raf = new RandomAccessFile(rawFile, "rw");
             raf.seek(raf.length());
             // Reconcile byte count with what is actually on disk.
-            dataBytes = Math.max(0, raf.length() - 44);
+            dataBytes = payloadBytesOf(rawFile);
             capRun = true;
             capThread = new Thread(this::capLoop, "takeone-cap");
             capThread.setPriority(Thread.MAX_PRIORITY);
@@ -209,6 +301,8 @@ public final class RecordingEngine {
             state = State.RECORDING;
             lastHeaderPatch = System.currentTimeMillis();
         }
+        // Let a parked conversion worker yield/resume immediately.
+        ConversionService.onRecordingStateChanged();
     }
 
     /** Back-compat: capture with the session's stored source. */
@@ -237,6 +331,8 @@ public final class RecordingEngine {
                 level = 0f;
             }
         }
+        // Let a parked conversion worker yield/resume immediately.
+        ConversionService.onRecordingStateChanged();
     }
 
     public void resumeCapture(Context ctx, int requestedSource) throws Exception {
@@ -245,7 +341,7 @@ public final class RecordingEngine {
             openRecorderLocked(requestedSource, channels);
             raf = new RandomAccessFile(rawFile, "rw");
             raf.seek(raf.length());
-            dataBytes = Math.max(0, raf.length() - 44);
+            dataBytes = payloadBytesOf(rawFile);
             capRun = true;
             capThread = new Thread(this::capLoop, "takeone-cap");
             capThread.setPriority(Thread.MAX_PRIORITY);
@@ -253,6 +349,8 @@ public final class RecordingEngine {
             state = State.RECORDING;
             lastHeaderPatch = System.currentTimeMillis();
         }
+        // Let a parked conversion worker yield/resume immediately.
+        ConversionService.onRecordingStateChanged();
     }
 
     /** Back-compat: resume with the session's stored source. */
@@ -284,6 +382,8 @@ public final class RecordingEngine {
                 // noinspection ResultOfMethodCallIgnored
                 pendingFor(out).delete();
             }
+            // Capture is over: let a parked conversion worker resume.
+            ConversionService.onRecordingStateChanged();
             return out;
         }
     }
@@ -315,6 +415,7 @@ public final class RecordingEngine {
     /** Stop capture and delete everything (returns true if gone). */
     public boolean abortAndDelete() {
         File raw;
+        StreamingEncoder sess;
         synchronized (lock) {
             capRun = false;
         }
@@ -326,8 +427,15 @@ public final class RecordingEngine {
             recorder = null;
             capThread = null;
             raw = rawFile;
+            sess = streaming;
+            streaming = null;
         }
         stopThenJoinThenRelease(rec, th);
+        if (sess != null) {
+            try {
+                sess.abort();
+            } catch (Exception ignored) {}
+        }
         synchronized (lock) {
             closeRafLocked();
             state = State.IDLE;
@@ -342,6 +450,7 @@ public final class RecordingEngine {
             pendingFor(raw).delete();
             if (raw.exists() && !raw.delete()) ok = false;
         }
+        ConversionService.onRecordingStateChanged();
         return ok;
     }
 
@@ -403,7 +512,21 @@ public final class RecordingEngine {
                         // Mono input for a stereo file is duplicated; stereo
                         // input for a mono file is downmixed. A stereo request
                         // that only yields mono keeps recording in mono.
-                        channels = wantedOutCh == 1 ? 1 : actualChannels;
+                        //
+                        // A4-03: never renegotiate the layout of a session
+                        // that already holds audio (punch-in edit, resumed
+                        // take) or is being streamed. Rewriting the header to
+                        // mono while the file holds stereo frames makes it
+                        // play back at half speed and desynchronises the
+                        // incremental encoder, which has already committed to
+                        // the old geometry. capLoop duplicates the mono mic
+                        // input into both channels instead.
+                        boolean hasAudio = dataBytes > 0 || streaming != null;
+                        if (wantedOutCh == 1 && !hasAudio) {
+                            channels = 1;
+                        } else if (!hasAudio && actualChannels > 1) {
+                            channels = actualChannels;
+                        }
                         fellBackToMono = wantedOutCh == 2 && actualChannels == 1;
                         // Keep the on-disk header in sync when the channel
                         // layout was renegotiated (e.g. mono fallback).
@@ -607,7 +730,8 @@ public final class RecordingEngine {
                 String rawName = f.getName().substring(
                         0, f.getName().length() - ".pending".length());
                 File raw = new File(dir, rawName);
-                if (!raw.exists() || raw.length() <= 44) {
+                long payload = payloadBytesOf(raw);
+                if (!raw.exists() || payload <= 0) {
                     // Orphan marker with no usable audio: clean it up silently.
                     // noinspection ResultOfMethodCallIgnored
                     f.delete();
@@ -631,7 +755,6 @@ public final class RecordingEngine {
                     }
                     if (ch < 1) ch = 2;
                 } catch (Exception ignored) {}
-                long payload = Math.max(0, raw.length() - 44);
                 long ms = payload * 1000L / ((long) SAMPLE_RATE * ch * 4L);
                 out.add(new Unfinished(raw, name, ch, ms));
             }
@@ -651,11 +774,23 @@ public final class RecordingEngine {
         return ok;
     }
 
+    /**
+     * NEW-07 fix: locates the real {@code data} chunk via
+     * {@link Dsp#parseWavHeader(RandomAccessFile)} instead of assuming a
+     * fixed 44-byte offset, falling back to {@code raw.length() - 44} only
+     * when the header is unparseable.
+     */
     public static long payloadBytesOf(File raw) {
-        try {
-            return Math.max(0, raw.length() - 44);
+        if (raw == null || !raw.exists()) return 0;
+        try (RandomAccessFile r = new RandomAccessFile(raw, "r")) {
+            Dsp.WavHeader h = Dsp.parseWavHeader(r);
+            return Math.max(0, raw.length() - h.dataStart);
         } catch (Exception e) {
-            return 0;
+            try {
+                return Math.max(0, raw.length() - 44);
+            } catch (Exception ex) {
+                return 0;
+            }
         }
     }
 }

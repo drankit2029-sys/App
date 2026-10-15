@@ -264,4 +264,50 @@ public class SaveFormatTest {
             torn.delete();
         }
     }
+
+    @Test
+    public void encoderMimes() {
+        assertEquals(android.media.MediaFormat.MIMETYPE_AUDIO_AAC,
+                SaveFormat.M4A.encoderMime());
+        assertEquals("audio/flac", SaveFormat.FLAC.encoderMime());
+        assertEquals("audio/opus", SaveFormat.OPUS.encoderMime());
+        assertEquals("audio/3gpp", SaveFormat.AMR_NB.encoderMime());
+        assertEquals("audio/amr-wb", SaveFormat.AMR_WB.encoderMime());
+        assertTrue(SaveFormat.WAV16.encoderMime() == null);
+        assertTrue(SaveFormat.WAV24.encoderMime() == null);
+        assertTrue(SaveFormat.AUTO.encoderMime() == null);
+    }
+
+    @Test
+    public void nonAutoEffectiveIsIdentity() {
+        for (SaveFormat f : SaveFormat.values()) {
+            if (f == SaveFormat.AUTO) continue;
+            assertEquals(f, f.effective(RecordPreset.MEMO));
+            assertEquals(f, f.effective(null));
+        }
+    }
+
+    @Test
+    public void wav16BytesAreExact() {
+        // Null preset defaults to stereo: 48000 * 2ch * 2B * 60.
+        assertEquals(48000L * 2 * 2 * 60, SaveFormat.WAV16.bytesPerMinute(null));
+        assertEquals(48000L * 2 * 2 * 60,
+                SaveFormat.WAV16.bytesPerMinute(RecordPreset.PODCAST));
+        assertEquals(48000L * 1 * 2 * 60,
+                SaveFormat.WAV16.bytesPerMinute(RecordPreset.MEMO));
+    }
+
+    @Test
+    public void amrRatesAreFixed() {
+        assertEquals(12200L / 8 * 60, SaveFormat.AMR_NB.bytesPerMinute(null));
+        assertEquals(23850L / 8 * 60, SaveFormat.AMR_WB.bytesPerMinute(null));
+    }
+
+    @Test
+    public void sizeApproximationFlags() {
+        assertTrue(SaveFormat.FLAC.sizeIsApproximate());
+        assertTrue(SaveFormat.AUTO.sizeIsApproximate());
+        assertTrue(!SaveFormat.M4A.sizeIsApproximate());
+        assertTrue(!SaveFormat.WAV16.sizeIsApproximate());
+    }
 }

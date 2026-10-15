@@ -49,7 +49,6 @@ public class WaveformView extends View {
 
     private float lastTouchY = 0f;
     private float touchAccum = 0f;
-
     public static final float[] ZOOM_STEPS = {0.5f, 1f, 2f, 4f};
 
     /** Notified when a vertical drag crosses a zoom threshold. */
@@ -103,6 +102,12 @@ public class WaveformView extends View {
         return count;
     }
 
+    /** Test hook: peak at an index, or -1 when out of range. */
+    synchronized float peakAtForTest(int i) {
+        if (i < 0 || i >= count) return -1f;
+        return history[i];
+    }
+
     /** Zoom step index into {@link #ZOOM_STEPS}; clamps + invalidates. */
     public void setZoom(float z) {
         float lo = minimumZoom();
@@ -118,7 +123,7 @@ public class WaveformView extends View {
         return zoom;
     }
 
-    public void setLive(boolean live) {
+    public synchronized void setLive(boolean live) {
         this.live = live;
         invalidate();
     }
@@ -158,6 +163,62 @@ public class WaveformView extends View {
         invalidate();
     }
 
+    /**
+     * Populates the timeline from an existing 32-bit float WAV (edit punch-in
+     * or crash recovery), so an attached session shows its waveform instead
+     * of an empty strip.
+     */
+    public void loadFromFloatWav(java.io.File raw) {
+        loadFromFloatWav(raw, null);
+    }
+
+    /**
+     * Same, with an optional UI-thread callback fired once peaks are loaded
+     * (NEW-05 fix: lets the studio refresh its zoom control floor for Edit
+     * sessions, and preserves {@code live} + any newly pushed mic samples if
+     * autostart recovery began recording while disk I/O was in flight).
+     */
+    public void loadFromFloatWav(java.io.File raw, Runnable onLoaded) {
+        if (raw == null) return;
+        new Thread(() -> {
+            try {
+                float[] peaks = Dsp.loadPeaks(raw, MAX_HISTORY);
+                if (peaks.length == 0) return;
+                synchronized (WaveformView.this) {
+                    int n = Math.min(peaks.length, MAX_HISTORY);
+                    int livePushed = count;
+                    int totalNeeded = Math.min(MAX_HISTORY, n + livePushed);
+                    while (history.length < totalNeeded
+                            && history.length < MAX_HISTORY) {
+                        float[] bigger = new float[Math.min(MAX_HISTORY,
+                                history.length * 2)];
+                        System.arraycopy(history, 0, bigger, 0, count);
+                        history = bigger;
+                    }
+                    if (livePushed > 0) {
+                        // Autostart capture pushed samples while we were
+                        // reading disk: prepend the loaded peaks ahead of
+                        // the live tail instead of clobbering it.
+                        int keepLive = Math.min(livePushed,
+                                MAX_HISTORY - n);
+                        if (keepLive > 0) {
+                            System.arraycopy(history, 0, history, n, keepLive);
+                        }
+                        System.arraycopy(peaks, 0, history, 0, n);
+                        count = n + Math.max(0, keepLive);
+                    } else {
+                        System.arraycopy(peaks, 0, history, 0, n);
+                        count = n;
+                    }
+                    zoom = Math.max(minimumZoom(), Math.min(zoom,
+                            ZOOM_STEPS[ZOOM_STEPS.length - 1]));
+                }
+                postInvalidate();
+                if (onLoaded != null) post(onLoaded);
+            } catch (Exception ignored) {}
+        }, "takeone-wave-load").start();
+    }
+
     @Override
     public boolean onTouchEvent(MotionEvent event) {
         switch (event.getActionMasked()) {
@@ -171,14 +232,20 @@ public class WaveformView extends View {
                 lastTouchY = y;
                 // Drag up (negative dy) = zoom in, drag down = zoom out.
                 touchAccum += -dy;
+                // Step live as the finger travels: waiting for release made
+                // short or interrupted drags feel dead.
+                float stepPx = 20f * getResources().getDisplayMetrics().density;
+                while (touchAccum >= stepPx || touchAccum <= -stepPx) {
+                    if (zoomListener != null) {
+                        zoomListener.onZoomGesture(
+                                touchAccum > 0 ? 1 : -1, touchAccum);
+                    }
+                    touchAccum += touchAccum > 0 ? -stepPx : stepPx;
+                }
                 return true;
             }
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL: {
-                if (Math.abs(touchAccum) >= 6f && zoomListener != null) {
-                    zoomListener.onZoomGesture(touchAccum > 0 ? 1 : -1,
-                            touchAccum);
-                }
                 touchAccum = 0f;
                 performClick();
                 return true;
@@ -212,8 +279,10 @@ public class WaveformView extends View {
         float maxH = h * 0.44f;
 
         int n;
+        boolean isLive;
         synchronized (this) {
             n = count;
+            isLive = live;
         }
         int colorLive = 0xFFFF3B30;
         int colorIdle = 0xFF4A5361;
@@ -228,14 +297,14 @@ public class WaveformView extends View {
             // Older bars recede toward the left edge, newest are brightest.
             float vis = Math.min(1f, Math.max(0f, x / Math.max(1f, centerX)));
             float age = 0.30f + 0.70f * vis;
-            barPaint.setColor(live ? colorLive : colorIdle);
+            barPaint.setColor(isLive ? colorLive : colorIdle);
             barPaint.setAlpha(Math.round(255 * age));
             canvas.drawLine(x, centerY - bh / 2f, x, centerY + bh / 2f, barPaint);
         }
         barPaint.setAlpha(255);
 
         // Playhead: a short tick at the centre, brighter while recording.
-        playPaint.setAlpha(live ? 255 : 90);
+        playPaint.setAlpha(isLive ? 255 : 90);
         canvas.drawLine(centerX, centerY - maxH - 4f, centerX, centerY + maxH + 4f,
                 playPaint);
     }

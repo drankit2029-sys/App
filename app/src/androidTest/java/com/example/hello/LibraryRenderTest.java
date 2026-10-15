@@ -4,10 +4,9 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
+import android.app.Activity;
 import android.content.Context;
 
-import androidx.test.core.app.ActivityScenario;
-import androidx.test.core.app.ApplicationProvider;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
 
@@ -25,12 +24,26 @@ import java.io.RandomAccessFile;
  * <p>The emulator cannot fake a microphone, so the capture is synthesised
  * (same as the recorder would stream) and driven through the real
  * save/convert/library path. Everything downstream of the file is genuine.
+ *
+ * <p>Launches via {@code startActivitySync}: ActivityScenario never leaves
+ * PRE_ON_CREATE on this image, so these tests use the same launch path as
+ * every other UI test in the suite.
  */
 @RunWith(AndroidJUnit4.class)
 public class LibraryRenderTest {
 
     private Context ctx() {
-        return ApplicationProvider.getApplicationContext();
+        return InstrumentationRegistry.getInstrumentation().getTargetContext();
+    }
+
+    private Activity launch() {
+        android.app.Instrumentation instr =
+                InstrumentationRegistry.getInstrumentation();
+        android.content.Intent i = new android.content.Intent(
+                instr.getTargetContext(), MainActivity.class);
+        i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                | android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK);
+        return instr.startActivitySync(i);
     }
 
     /** Writes a real float capture and runs the genuine save pipeline. */
@@ -44,9 +57,11 @@ public class LibraryRenderTest {
         RandomAccessFile w = new RandomAccessFile(raw, "rw");
         try {
             w.seek(w.length());
+            float[] buf = new float[frames * channels];
             for (int i = 0; i < frames * channels; i++) {
-                w.writeFloat((float) Math.sin(i * 0.04) * 0.4f);
+                buf[i] = (float) Math.sin(i * 0.04) * 0.4f;
             }
+            Dsp.writeFloatsLE(w, buf, 0, buf.length);
         } finally {
             w.close();
         }
@@ -59,66 +74,94 @@ public class LibraryRenderTest {
 
     @Test
     public void libraryRendersAfterSave() {
-        ActivityScenario<MainActivity> scenario =
-                ActivityScenario.launch(MainActivity.class);
-        scenario.onActivity(activity -> {
+        Activity activity = launch();
+        try {
             // Library is the default screen; it must be alive right now.
             assertNotNull(activity.findViewById(android.R.id.content));
-        });
-        scenario.close();
+        } finally {
+            activity.finish();
+        }
     }
 
     @Test
     public void librarySurvivesARealSavedTake() throws Exception {
-        saveTake("Render Test A", 1, 2);
-
-        ActivityScenario<MainActivity> scenario =
-                ActivityScenario.launch(MainActivity.class);
-        scenario.onActivity(activity -> {
-            // Render the library with a freshly saved take present.
-            activity.findViewById(android.R.id.content).post(() -> { });
-        });
-        // Let the async repository load + reconcile settle, as it does on a
-        // real cold start.
-        sleep(2500);
-        scenario.onActivity(activity ->
-                assertNotNull(activity.findViewById(android.R.id.content)));
-        assertTrue("no takes in library", TakesRepository.all().size() >= 1);
-        scenario.close();
+        File saved = saveTake("Render Test A", 1, 2);
+        Activity activity = launch();
+        try {
+            assertNotNull(activity.findViewById(android.R.id.content));
+            // Let the async repository load + reconcile settle, as it does
+            // on a real cold start.
+            sleep(2500);
+            assertNotNull(activity.findViewById(android.R.id.content));
+            assertTrue("no takes in library",
+                    TakesRepository.all().size() >= 1);
+        } finally {
+            activity.finish();
+            TakesRepository.delete(findId("Render Test A"));
+            if (saved.exists()) {
+                // noinspection ResultOfMethodCallIgnored
+                saved.delete();
+            }
+        }
     }
 
     @Test
     public void libraryRendersAfterSeveralSavesAndRelaunch() throws Exception {
-        saveTake("Render One", 1, 1);
-        saveTake("Render Two", 1, 2);
-        saveTake("Render Three", 1, 1);
+        File one = saveTake("Render One", 1, 1);
+        File two = saveTake("Render Two", 1, 2);
+        File three = saveTake("Render Three", 1, 1);
+        try {
+            // Relaunch: the rows come back from Room, which is where a stale
+            // or null column would surface on the main thread.
+            Activity first = launch();
+            sleep(3000);
+            try {
+                assertNotNull(
+                        first.findViewById(android.R.id.content));
+            } finally {
+                first.finish();
+            }
 
-        // Relaunch: the rows come back from Room, which is where a stale or
-        // null column would surface on the main thread.
-        ActivityScenario<MainActivity> s1 =
-                ActivityScenario.launch(MainActivity.class);
-        sleep(3000);
-        s1.onActivity(a -> assertNotNull(a.findViewById(android.R.id.content)));
-        s1.close();
+            Activity second = launch();
+            sleep(3000);
+            try {
+                assertNotNull(
+                        second.findViewById(android.R.id.content));
+            } finally {
+                second.finish();
+            }
 
-        ActivityScenario<MainActivity> s2 =
-                ActivityScenario.launch(MainActivity.class);
-        sleep(3000);
-        s2.onActivity(a -> assertNotNull(a.findViewById(android.R.id.content)));
-        s2.close();
-
-        // And the studio -> library hand-off, the exact transition reported.
-        ActivityScenario<MainActivity> s3 =
-                ActivityScenario.launch(MainActivity.class);
-        sleep(1500);
-        s3.onActivity(activity -> {
-            activity.openStudio();
-            activity.findViewById(android.R.id.content).post(() ->
-                    activity.exitStudio());
-        });
-        sleep(2500);
-        s3.onActivity(a -> assertNotNull(a.findViewById(android.R.id.content)));
-        s3.close();
+            // And the studio -> library hand-off, the exact transition
+            // reported.
+            Activity third = launch();
+            sleep(1500);
+            final boolean[] done = {false};
+            third.runOnUiThread(() -> {
+                ((MainActivity) third).openStudio();
+                done[0] = true;
+            });
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+            assertTrue(done[0]);
+            sleep(1000);
+            third.runOnUiThread(() -> {
+                ((MainActivity) third).exitStudio();
+                done[0] = false;
+            });
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+            sleep(2500);
+            assertNotNull(third.findViewById(android.R.id.content));
+            third.finish();
+        } finally {
+            deleteTitle("Render One");
+            deleteTitle("Render Two");
+            deleteTitle("Render Three");
+            for (File f : new File[]{one, two, three}) {
+                if (f != null && f.exists()) {
+                    // noinspection ResultOfMethodCallIgnored
+                    f.delete();
+                }
+            }
+        }
     }
 
     @Test
@@ -131,12 +174,30 @@ public class LibraryRenderTest {
                 0, "0.0 MB", "M4A", true, "/nonexistent/x.m4a"));
         TakesRepository.addTake(new Take(9003, "Huge", Long.MAX_VALUE / 4,
                 System.currentTimeMillis(), "999.9 MB", "FLAC", false, null));
+        Activity activity = launch();
+        try {
+            sleep(2500);
+            assertNotNull(activity.findViewById(android.R.id.content));
+            assertTrue("odd takes missing",
+                    TakesRepository.all().size() >= 3);
+        } finally {
+            activity.finish();
+            TakesRepository.delete(9001L);
+            TakesRepository.delete(9002L);
+            TakesRepository.delete(9003L);
+        }
+    }
 
-        ActivityScenario<MainActivity> scenario =
-                ActivityScenario.launch(MainActivity.class);
-        sleep(2500);
-        scenario.onActivity(a -> assertNotNull(a.findViewById(android.R.id.content)));
-        scenario.close();
+    private static long findId(String title) {
+        for (Take t : TakesRepository.all()) {
+            if (title.equals(t.title)) return t.id;
+        }
+        return -1;
+    }
+
+    private static void deleteTitle(String title) {
+        long id = findId(title);
+        if (id >= 0) TakesRepository.delete(id);
     }
 
     private static void sleep(long ms) {

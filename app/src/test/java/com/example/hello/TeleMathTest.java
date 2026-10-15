@@ -95,6 +95,38 @@ public class TeleMathTest {
     }
 
     @Test
+    public void charsPerSecondIsExact() {
+        // 5 words/line * 5.8 chars * 2 words/sec at 120wpm.
+        assertEquals(58f, TeleMath.charsPerSecond(5, 120), 0.0001f);
+    }
+
+    @Test
+    public void estimatedSecondsIsExact() {
+        // 10 words at 60wpm = 10 seconds.
+        assertEquals(10, TeleMath.estimatedSeconds("a b c d e f g h i j", 60));
+    }
+
+    @Test
+    public void wordsPerLineExactTable() {
+        // 1200px / (48px * 0.52) = 48 chars / 5.8 = 8 words, request honored.
+        assertEquals(8, TeleMath.wordsPerLine(1200, 48f, 8));
+        // Request above the maximum is still capped.
+        assertEquals(TeleMath.MAX_WORDS_PER_LINE,
+                TeleMath.wordsPerLine(100000, 10f, 500));
+    }
+
+    @Test
+    public void fadeRespectsExplicitFadeHeight() {
+        // 5px from the top with a 10px fade: fully transparent.
+        assertEquals(0f, TeleMath.fadeAlpha(5f, 300f, 10f), 0.0001f);
+        // 5px off-centre with a 10px fade: half faded.
+        assertEquals(0.5f, TeleMath.fadeAlpha(145f, 300f, 10f), 0.0001f);
+        // Non-positive fade falls back to half the panel.
+        assertEquals(1f - 145f / 150f, TeleMath.fadeAlpha(5f, 300f, 0f),
+                0.0001f);
+    }
+
+    @Test
     public void charsPerSecondScalesWithLineLength() {
         assertTrue(TeleMath.charsPerSecond(8, 120)
                 > TeleMath.charsPerSecond(4, 120));

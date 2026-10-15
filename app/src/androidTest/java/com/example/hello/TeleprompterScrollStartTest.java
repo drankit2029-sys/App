@@ -31,6 +31,27 @@ public class TeleprompterScrollStartTest {
     public GrantPermissionRule mic = GrantPermissionRule.grant(
             android.Manifest.permission.RECORD_AUDIO);
 
+    /**
+     * The studio capture path also gates on POST_NOTIFICATIONS (SDK 33+):
+     * without it the fab opens a rationale instead of recording. Grant it
+     * once per class so these tests verify recording instead of skipping.
+     */
+    @org.junit.BeforeClass
+    public static void grantNotifForUiRecording() {
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            try {
+                androidx.test.platform.app.InstrumentationRegistry
+                        .getInstrumentation().getUiAutomation()
+                        .executeShellCommand("pm grant "
+                                + androidx.test.platform.app
+                                        .InstrumentationRegistry
+                                        .getInstrumentation()
+                                        .getTargetContext().getPackageName()
+                                + " android.permission.POST_NOTIFICATIONS");
+            } catch (Exception ignored) {}
+        }
+    }
+
     /** True if the prompter scrolled at all within the window. */
     private boolean scrollMovedBy(TeleprompterView tele, Activity a, long ms) {
         float f = tele.scrollOffset();

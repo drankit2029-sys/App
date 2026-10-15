@@ -2,14 +2,11 @@ package com.example.hello;
 
 import android.Manifest;
 import android.animation.ObjectAnimator;
-import android.app.Dialog;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
-import android.graphics.Color;
-import android.graphics.drawable.ColorDrawable;
 import android.media.AudioManager;
 import android.os.Build;
 import android.os.Bundle;
@@ -21,8 +18,6 @@ import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
-import android.view.Window;
-import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -35,10 +30,8 @@ import androidx.fragment.app.Fragment;
 
 import java.io.File;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
-import java.util.Set;
 
 /**
  * Name-first studio on top of the crash-safe 32-bit float engine.
@@ -105,9 +98,6 @@ public class StudioFragment extends Fragment {
     private long editSourceId = -1;
     private String editSourceTitle;
 
-    private Dialog progressDialog;
-    private ProgressBar progressBar;
-    private TextView progressMessage;
 
     private AudioManager audioManager;
 
@@ -239,10 +229,20 @@ public class StudioFragment extends Fragment {
             try {
                 File raw = new File(args.getString("recover_raw"));
                 if (raw.exists() && !engine.hasSession()) {
+                    // Attach with the file's real geometry: a mono session
+                    // must stay mono, or punch-in + re-save silently upmixes.
+                    int attachCh = 2;
+                    try {
+                        FormatConverter.WavInfo ai =
+                                FormatConverter.readFloatWav(raw);
+                        if (ai.channels == 1 || ai.channels == 2) {
+                            attachCh = ai.channels;
+                        }
+                    } catch (Exception ignored) {}
                     engine.attachExisting(requireContext(), raw,
                             engine.takeName != null ? engine.takeName
                                     : prettyBase(raw),
-                            2, RecordingEngine.payloadBytesOf(raw));
+                            attachCh, RecordingEngine.payloadBytesOf(raw));
                 }
                 pendingName = engine.takeName;
                 autostart = args.getBoolean("autostart", false);
@@ -273,6 +273,7 @@ public class StudioFragment extends Fragment {
             nameAsked = true;
             attached = true;
         }
+        restoreWaveformForAttachedSession();
 
         paint();
         handler.post(tick);
@@ -338,7 +339,6 @@ public class StudioFragment extends Fragment {
     public void onDestroyView() {
         handler.removeCallbacksAndMessages(null);
         stopDotPulse();
-        dismissProgress();
         persistTeleScript();
         // Never abort here: the take keeps recording in the background via
         // the foreground service when the user leaves the studio.
@@ -439,8 +439,14 @@ public class StudioFragment extends Fragment {
                             getString(p.titleRes), getString(p.subRes),
                             p == preset,
                             () -> {
+                                // NEW-06 fix: lock preset changes whenever
+                                // recording OR when an attached session
+                                // already holds recorded audio on disk
+                                // (whose channel geometry is fixed).
                                 if (engine.state
-                                        == RecordingEngine.State.RECORDING) {
+                                        == RecordingEngine.State.RECORDING
+                                        || (engine.hasSession()
+                                        && engine.dataBytes > 0)) {
                                     try {
                                         PressAnim.nudge(settingsRow, 1.02f);
                                         Toast.makeText(requireContext(),
@@ -485,6 +491,16 @@ public class StudioFragment extends Fragment {
                                 }
                                 saveFormat = pick;
                                 saveFormat.save(requireContext());
+                                // A4-07: keep the incremental encoder in sync
+                                // with the new container, otherwise it keeps
+                                // producing the old format and the partial is
+                                // discarded at save time.
+                                if (engine.hasSession()
+                                        && engine.dataBytes > 0
+                                        && engine.streaming() != null) {
+                                    engine.restartStreaming(requireContext(),
+                                            preset, saveFormat);
+                                }
                                 paint();
                             }));
                 }
@@ -524,8 +540,27 @@ public class StudioFragment extends Fragment {
 
     private void initTeleprompter() {
         tele = TeleSettings.load(requireContext());
-        teleView.setScript(loadTeleScript());
+        String savedScript = loadTeleScript();
+        teleView.setScript(savedScript);
+        // A4-10: the header title only ever updated on an explicit edit, so
+        // reopening the studio showed a stale/empty title.
+        if (teleTitle != null) {
+            teleTitle.setText(scriptNameOf(savedScript));
+        }
         applyTeleSettings();
+        // The control chrome overlays the top of the panel: keep the reading
+        // centre in the middle of the visible area, not the middle of the
+        // view, as the chrome height settles.
+        final View chrome = requireView().findViewById(R.id.teleChrome);
+        if (chrome != null && telePanel != null) {
+            telePanel.addOnLayoutChangeListener(
+                    (v, left, top, right, bottom,
+                     oldLeft, oldTop, oldRight, oldBottom) -> {
+                        if (teleView != null) {
+                            teleView.setCenterShiftPx(chrome.getHeight() / 2f);
+                        }
+                    });
+        }
         // On by default: a performer opening the studio wants the script,
         // not an empty recorder.
         setTeleprompterVisible(true);
@@ -732,6 +767,8 @@ public class StudioFragment extends Fragment {
         teleWplValue.setCaption(getString(R.string.tele_wpl_short));
         zoomValue.setCaption(getString(R.string.zoom));
         zoomValue.setStacked(true);
+        // A vertical pass over the zoom rail zooms, like the waveform itself.
+        zoomValue.setVerticalScrub(true);
         teleSizeValue.configure(12, 56, 1, tele.textSizeSp, "");
         teleSpeedValue.configure(40, 400, 5, tele.wordsPerMinute, "");
         teleWplValue.configure(TeleMath.MIN_WORDS_PER_LINE,
@@ -740,7 +777,7 @@ public class StudioFragment extends Fragment {
         teleSizeValue.setOnScrubListener(new TeleValue.OnScrubListener() {
             @Override
             public void onScrubValueChanged(int val) {
-                previewTeleSize(val);
+                commitTeleSize(val);
             }
 
             @Override
@@ -762,8 +799,9 @@ public class StudioFragment extends Fragment {
         teleWplValue.setOnScrubListener(new TeleValue.OnScrubListener() {
             @Override
             public void onScrubValueChanged(int val) {
-                // Words-per-line changes the segmentation itself, so it is
-                // committed only when the scrub ends.
+                // Re-wrap live like size/speed: the label alone moving while
+                // the script keeps its old segmentation reads as broken.
+                commitTeleWordsPerLine(val);
             }
 
             @Override
@@ -792,12 +830,6 @@ public class StudioFragment extends Fragment {
         paintTeleMirror();
     }
 
-    private void previewTeleSize(int textSizeSp) {
-        if (teleView == null) return;
-        float density = getResources().getDisplayMetrics().density;
-        teleView.previewTextSizePx(textSizeSp * density);
-    }
-
     private void commitTeleSize(int textSizeSp) {
         TeleSettings.setTextSize(requireContext(), textSizeSp);
         tele = TeleSettings.load(requireContext());
@@ -822,6 +854,7 @@ public class StudioFragment extends Fragment {
     }
 
     private void refreshZoomValue() {
+        if (waveform == null || zoomValue == null) return;
         float z = waveform.getZoom();
         int pct = Math.max(1, Math.round(z * 100f));
         zoomValue.configure(Math.max(1, Math.round(
@@ -1004,6 +1037,11 @@ public class StudioFragment extends Fragment {
                 Toast.makeText(requireContext(), R.string.mono_fallback_toast,
                         Toast.LENGTH_LONG).show();
             }
+            // Best-effort incremental encode: converts the take while it is
+            // being recorded so saving is instant. Never affects capture.
+            try {
+                engine.beginStreaming(requireContext(), preset, saveFormat);
+            } catch (Exception ignored) {}
             // Fresh capture: rewind the prompter and start its countdown so
             // the performer is not thrown straight into mid-script.
             if (engine.state == RecordingEngine.State.RECORDING) {
@@ -1058,84 +1096,122 @@ public class StudioFragment extends Fragment {
 
     private void doSaveSequence() {
         if (saving || !engine.hasSession()) return;
-        saving = true;
-        showProgress(preset);
-        final RecordPreset p = preset;
-        final SaveFormat s = saveFormat;
-        final String convLabel = TakeSaver.labelFor(p, s);
         final long editId = editSourceId;
         final String editTitle = editSourceTitle;
+        if (editId != -1) {
+            // Edit punch-in: ask replace-vs-new BEFORE dispatching, so the
+            // choice travels with a background job instead of being wiped
+            // with the lineage when the fast path misses.
+            askEditChoiceUpFront(editId, editTitle);
+            return;
+        }
+        runSaveDispatch(-1, null, false);
+    }
+
+    /** Edit punch-in choice, made up front so background saves honour it. */
+    private void askEditChoiceUpFront(long editId, String editTitle) {
+        if (!isAdded()) return;
+        String sessionTitle = engine.takeName != null ? engine.takeName : "";
+        String target = editTitle != null && !editTitle.isEmpty()
+                ? editTitle : sessionTitle;
+        List<OptionsSheet.Item> items = new ArrayList<>();
+        items.add(OptionsSheet.Item.of(R.drawable.ic_check,
+                getString(R.string.edit_replace, target),
+                () -> runSaveDispatch(editId, target, true)));
+        items.add(OptionsSheet.Item.of(R.drawable.ic_upload,
+                getString(R.string.edit_save_new), () -> {
+                    // Save-as-new drops the lineage now; the save below is
+                    // an ordinary one.
+                    editSourceId = -1;
+                    editSourceTitle = null;
+                    try {
+                        EditLink.clear(requireContext());
+                    } catch (Exception ignored) {}
+                    runSaveDispatch(-1, null, false);
+                }));
+        OptionsSheet.showOptions(requireContext(),
+                getString(R.string.edit_save_title), target, items);
+    }
+
+    /**
+     * Runs the save dispatch on a worker thread. When {@code replacing}, the
+     * edit target travels into the background job; an adopted fast path
+     * applies it directly with no second prompt.
+     */
+    private void runSaveDispatch(long editId, String replaceTitle,
+                                 boolean replacing) {
+        if (saving || !engine.hasSession()) return;
+        saving = true;
+        final RecordPreset p = preset;
+        final SaveFormat s = saveFormat;
+        // A4-02: resolve the application context while still attached; the
+        // worker thread must not call requireContext() (and get detached
+        // mid-save) to finish the save.
+        final Context appCtx = requireContext().getApplicationContext();
         new Thread(() -> {
-            boolean ok;
-            String msg;
-            String label = convLabel;
-            File fin = null;
-            long dur = 1000;
-            String title = engine.takeName != null ? engine.takeName : "";
+            ConversionJobs.SaveResult r = null;
+            String fail = null;
             try {
-                TakeSaver.Result r = TakeSaver.finalizeAndConvert(
-                        requireContext().getApplicationContext(), p, s,
-                        pct -> postProgress(pct, convLabel));
-                fin = r.file;
-                label = r.label;
-                dur = r.durationMs;
-                title = r.title;
-                if (editId == -1) {
-                    TakesRepository.addRecording(fin, dur, title, label);
-                }
-                // Edit punch-ins resolve replace-vs-new on the UI thread below,
-                // where the new file + duration are in hand.
-                engine.clearSession();
-                ok = true;
-                msg = getString(R.string.convert_done_msg, title, label);
-                if (editId != -1) {
-                    final File saved = fin;
-                    final long savedDur = Math.max(dur, 1000);
-                    final String savedLabel = label;
-                    final String savedTitle = title;
-                    handler.post(() -> {
-                        try {
-                            saving = false;
-                            dismissProgress();
-                            if (!isAdded()) return;
-                            RecordingService.stopService(requireContext());
-                            activity().syncFabWithEngine();
-                            askEditReplaceOrNew(editId, editTitle, savedTitle,
-                                    saved, savedDur, savedLabel);
-                        } catch (Exception ex) {
-                            try {
-                                CrashLog.breadcrumb(getContext(),
-                                        "completion-block FAILED: " + ex);
-                            } catch (Exception ignored) {}
-                        }
-                    });
-                    return;
-                }
+                r = ConversionJobs.dispatchSave(
+                        appCtx, p, s, null,
+                        replacing ? editId : -1,
+                        replacing ? replaceTitle : null);
             } catch (Exception e) {
-                ok = false;
-                label = "";
-                msg = getString(R.string.convert_failed_msg, title);
+                fail = e.getMessage();
             }
-            final boolean done = ok;
-            final String text = msg;
+            final ConversionJobs.SaveResult res = r;
+            final String failure = fail;
             handler.post(() -> {
                 try {
                     saving = false;
-                    dismissProgress();
+                    // A4-02: the save already happened. Tearing down the
+                    // service, clearing the session and clearing the edit
+                    // lineage must happen whether or not the fragment is
+                    // still attached — otherwise a rotation/back-out mid-save
+                    // leaves a live service and a stale EditLink behind.
+                    try {
+                        RecordingService.stopService(appCtx);
+                        engine.clearSession();
+                        if (res == null || !res.adopted) {
+                            editSourceId = -1;
+                            editSourceTitle = null;
+                            try {
+                                EditLink.clear(appCtx);
+                            } catch (Exception ignored) {}
+                        }
+                    } catch (Exception ignored) {}
                     if (!isAdded()) return;
-                    RecordingService.stopService(requireContext());
                     activity().syncFabWithEngine();
-                    if (done) {
-                        OptionsSheet.showResult(requireContext(), true,
-                                getString(R.string.convert_done_title), text,
-                                () -> {
-                                    if (isAdded()) activity().exitStudio();
-                                });
+                    if (res != null && res.adopted) {
+                        onSaveAdopted(res, replacing ? editId : -1,
+                                replacing ? replaceTitle : null);
+                    } else if (res != null) {
+                        // Background job running: leave the studio now and
+                        // let the Library + notification carry the progress.
+                        ConversionService.startJob(appCtx, res.job.jobId);
+                        engine.clearSession();
+                        editSourceId = -1;
+                        editSourceTitle = null;
+                        try {
+                            EditLink.clear(appCtx);
+                        } catch (Exception ignored) {}
+                        Toast.makeText(requireContext(),
+                                R.string.conv_bg_toast, Toast.LENGTH_LONG)
+                                .show();
+                        activity().exitStudio();
                     } else {
-                        // Raw is kept so the user can retry or discard.
+                        // Dispatch itself failed: the raw is kept so the user
+                        // can retry or discard.
                         paint();
                         OptionsSheet.showResult(requireContext(), false,
-                                getString(R.string.convert_failed_title), text);
+                                getString(R.string.convert_failed_title),
+                                getString(R.string.convert_failed_msg,
+                                        engine.takeName != null
+                                                ? engine.takeName : ""));
+                    }
+                    if (failure != null && res == null) {
+                        CrashLog.breadcrumb(getContext(),
+                                "save dispatch failed: " + failure);
                     }
                 } catch (Exception ex) {
                     try {
@@ -1147,58 +1223,48 @@ public class StudioFragment extends Fragment {
         }).start();
     }
 
-    /** Edit punch-in done: replace the original or keep both. */
-    private void askEditReplaceOrNew(long originalId, String originalTitle,
-                                     String sessionTitle, File saved,
-                                     long savedDur, String label) {
-        String target = originalTitle != null && !originalTitle.isEmpty()
-                ? originalTitle : sessionTitle;
-        List<OptionsSheet.Item> items = new ArrayList<>();
-        items.add(OptionsSheet.Item.of(R.drawable.ic_check,
-                getString(R.string.edit_replace, target), () -> {
-                    try {
-                        Set<Long> ids = new HashSet<>();
-                        ids.add(originalId);
-                        TakesRepository.deleteMany(ids);
-                        TakesRepository.addRecording(
-                                saved, savedDur, target, label);
-                        editSourceId = -1;
-                        EditLink.clear(requireContext());
-                        OptionsSheet.showResult(requireContext(), true,
-                                getString(R.string.convert_done_title),
-                                getString(R.string.edit_replaced_msg, target),
-                                () -> {
-                                    if (isAdded()) activity().exitStudio();
-                                });
-                    } catch (Exception e) {
-                        OptionsSheet.showResult(requireContext(), false,
-                                getString(R.string.convert_failed_title),
-                                getString(R.string.couldnt_save));
-                    }
-                }));
-        items.add(OptionsSheet.Item.of(R.drawable.ic_upload,
-                getString(R.string.edit_save_new), () -> {
-                    try {
-                        String name = sessionTitle;
-                        if (name.equals(target)) name = name + " (edit)";
-                        TakesRepository.addRecording(
-                                saved, savedDur, name, label);
-                        editSourceId = -1;
-                        EditLink.clear(requireContext());
-                        OptionsSheet.showResult(requireContext(), true,
-                                getString(R.string.convert_done_title),
-                                getString(R.string.convert_done_msg, name, label),
-                                () -> {
-                                    if (isAdded()) activity().exitStudio();
-                                });
-                    } catch (Exception e) {
-                        OptionsSheet.showResult(requireContext(), false,
-                                getString(R.string.convert_failed_title),
-                                getString(R.string.couldnt_save));
-                    }
-                }));
-        OptionsSheet.showOptions(requireContext(),
-                getString(R.string.edit_save_title), target, items);
+    /** Incremental output adopted: the take is saved, synchronously. */
+    private void onSaveAdopted(ConversionJobs.SaveResult res, long editId,
+                               String editTitle) {
+        if (!isAdded()) return;
+        if (editId == -1) {
+            TakesRepository.addRecording(res.file, res.durationMs, res.title,
+                    res.label);
+        }
+        engine.clearSession();
+        if (editId == -1) {
+            OptionsSheet.showResult(requireContext(), true,
+                    getString(R.string.convert_done_title),
+                    getString(R.string.convert_done_msg, res.title, res.label),
+                    () -> {
+                        if (isAdded()) activity().exitStudio();
+                    });
+        } else {
+            // Replace was chosen up front: apply it directly, no second
+            // prompt. The background path applies the same mutation in the
+            // worker via the job's replace lineage.
+            String target = editTitle != null && !editTitle.isEmpty()
+                    ? editTitle : res.title;
+            try {
+                TakesRepository.replaceRecording(editId, res.file,
+                        res.durationMs, target, res.label);
+            } catch (Exception e) {
+                OptionsSheet.showResult(requireContext(), false,
+                        getString(R.string.convert_failed_title),
+                        getString(R.string.couldnt_save));
+                return;
+            }
+            editSourceId = -1;
+            try {
+                EditLink.clear(requireContext());
+            } catch (Exception ignored) {}
+            OptionsSheet.showResult(requireContext(), true,
+                    getString(R.string.convert_done_title),
+                    getString(R.string.edit_replaced_msg, target),
+                    () -> {
+                        if (isAdded()) activity().exitStudio();
+                    });
+        }
     }
 
     private void doDiscardSequence() {
@@ -1269,59 +1335,6 @@ public class StudioFragment extends Fragment {
         }
     }
 
-    // ---- progress dialog ----
-
-    private void showProgress(RecordPreset p) {
-        showProgress(getString(p.titleRes));
-    }
-
-    private void showProgress(String label) {
-        try {
-            dismissProgress();
-            progressDialog = new Dialog(requireContext(), R.style.TakeOneCenterDialog);
-            progressDialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
-            View root = LayoutInflater.from(requireContext())
-                    .inflate(R.layout.dialog_progress, null);
-            progressDialog.setContentView(root);
-            progressBar = root.findViewById(R.id.progressBar);
-            progressMessage = root.findViewById(R.id.progressMessage);
-            ((TextView) root.findViewById(R.id.progressTitle))
-                    .setText(getString(R.string.converting_title));
-            progressMessage.setText(
-                    getString(R.string.converting_msg, label, 0));
-            progressDialog.setCancelable(false);
-            Window w = progressDialog.getWindow();
-            if (w != null) {
-                w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
-                w.setDimAmount(0.62f);
-            }
-            progressDialog.show();
-        } catch (Exception ignored) {}
-    }
-
-    private void postProgress(int pct, String label) {
-        handler.post(() -> {
-            try {
-                if (progressBar != null) progressBar.setProgress(pct);
-                if (progressMessage != null) {
-                    progressMessage.setText(
-                            getString(R.string.converting_msg, label, pct));
-                }
-            } catch (Exception ignored) {}
-        });
-    }
-
-    private void dismissProgress() {
-        try {
-            if (progressDialog != null && progressDialog.isShowing()) {
-                progressDialog.dismiss();
-            }
-        } catch (Exception ignored) {}
-        progressDialog = null;
-        progressBar = null;
-        progressMessage = null;
-    }
-
     // ---- ui ----
 
     private final Runnable tick = new Runnable() {
@@ -1341,6 +1354,13 @@ public class StudioFragment extends Fragment {
                 float lvl = live ? engine.level : 0f;
                 if (live) waveform.setMicLevel(lvl);
                 dbMeter.setLevel(lvl);
+                // The zoom floor sinks as the timeline grows; keep the rail
+                // in sync while recording so its full range stays reachable.
+                if (live && zoomValue != null) {
+                    int floor = Math.max(1, Math.round(
+                            waveform.minimumZoom() * 100f));
+                    if (floor != zoomValue.getMin()) refreshZoomValue();
+                }
                 // Prompter advances at the performer's reading speed while
                 // recording, and stops the moment capture stops.
                 advanceTeleprompter();
@@ -1357,6 +1377,22 @@ public class StudioFragment extends Fragment {
     private String displayName() {
         if (engine.hasSession() && engine.takeName != null) return engine.takeName;
         return pendingName;
+    }
+
+    /** Fills the waveform from an attached edit/recovery file (BUG-04 & NEW-05). */
+    private void restoreWaveformForAttachedSession() {
+        try {
+            if (waveform == null || !engine.hasSession()) return;
+            File raw = engine.rawFile;
+            if (raw == null || !raw.exists()) return;
+            if (RecordingEngine.payloadBytesOf(raw) <= 0) return;
+            if (waveform.historyCount() > 0) return;
+            waveform.loadFromFloatWav(raw, () -> {
+                if (isAdded() && getView() != null) {
+                    refreshZoomValue();
+                }
+            });
+        } catch (Exception ignored) {}
     }
 
     private void paint() {
@@ -1448,8 +1484,26 @@ public class StudioFragment extends Fragment {
     // ---- files ----
 
     private String nextTakeName() {
-        int n = TakesRepository.all().size() + 1;
-        return "Take " + n;
+        // A take still converting is not in the repository yet, so counting
+        // rows alone handed the next recording the same "Take N" as the one
+        // already encoding. Count those and never reuse a live title.
+        List<Take> existing = TakesRepository.all();
+        List<ConversionJob> converting = ConversionJobs.active();
+        int n = existing.size() + converting.size() + 1;
+        while (true) {
+            String candidate = "Take " + n;
+            boolean taken = false;
+            for (Take t : existing) {
+                if (candidate.equalsIgnoreCase(t.title)) { taken = true; break; }
+            }
+            if (!taken) {
+                for (ConversionJob j : converting) {
+                    if (candidate.equalsIgnoreCase(j.title)) { taken = true; break; }
+                }
+            }
+            if (!taken) return candidate;
+            n++;
+        }
     }
 
     private static String prettyBase(File f) {

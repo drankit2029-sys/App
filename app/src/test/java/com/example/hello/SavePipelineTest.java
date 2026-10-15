@@ -2,7 +2,6 @@ package com.example.hello;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
@@ -66,7 +65,7 @@ public class SavePipelineTest {
         RandomAccessFile w = new RandomAccessFile(raw, "rw");
         try {
             w.seek(w.length());
-            for (int i = 0; i < buf.length; i++) w.writeFloat(buf[i]);
+            Dsp.writeFloatsLE(w, buf, 0, buf.length);
         } finally {
             w.close();
         }

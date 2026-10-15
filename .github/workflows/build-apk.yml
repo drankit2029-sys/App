@@ -83,3 +83,74 @@ jobs:
           name: app-debug
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+
+  # The interesting regressions in this app (RecyclerView stable-id swaps,
+  # the conversion service queue, the streaming encoder handoff) only show up
+  # on a device, so the instrumentation suite runs here too.
+  device-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: gradle
+
+      - name: Setup Android SDK packages
+        run: |
+          sdkmanager --install "platform-tools" "platforms;android-35" "build-tools;35.0.0" || true
+          yes | sdkmanager --licenses || true
+
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run instrumentation tests on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: aosp_atd
+          arch: x86_64
+          profile: Nexus 6
+          disable-animations: true
+          emulator-options: -no-window -no-snapshot -gpu swiftshader_indirect -no-boot-anim -camera-back none
+          script: |
+            adb emu avd hostmicon
+            adb shell settings put global stay_on_while_plugged_in 3
+            adb shell input keyevent 82 || true
+            ./gradlew :app:connectedDebugAndroidTest --stacktrace
+
+      - name: Summarise instrumentation results
+        if: always()
+        run: |
+          python3 - <<'EOF'
+          import glob, xml.etree.ElementTree as ET
+          total = failed = skipped = 0
+          for p in glob.glob('app/build/outputs/androidTest-results/connected/debug/*.xml'):
+              r = ET.parse(p).getroot()
+              total += int(r.get('tests', 0))
+              failed += int(r.get('failures', 0)) + int(r.get('errors', 0))
+              skipped += int(r.get('skipped', 0))
+              for tc in r.iter('testcase'):
+                  for x in list(tc):
+                      if x.tag in ('failure', 'error'):
+                          print('FAIL:', tc.get('classname', '').split('.')[-1],
+                              '::', tc.get('name'), '::', (x.get('message') or '')[:200])
+          print('device tests:', total, 'failures:', failed, 'skipped:', skipped)
+          EOF
+
+      - name: Upload instrumentation reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: device-test-reports
+          path: app/build/outputs/androidTest-results/connected/

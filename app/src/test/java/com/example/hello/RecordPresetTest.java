@@ -53,6 +53,25 @@ public class RecordPresetTest {
     }
 
     @Test
+    public void ofNullDefaultsToMemo() {
+        assertEquals(RecordPreset.MEMO, RecordPreset.of(null));
+    }
+
+    @Test
+    public void exactlyThreePresets() {
+        assertEquals(3, RecordPreset.all().length);
+    }
+
+    @Test
+    public void onlyMusicIsUnprocessedAndLossless() {
+        for (RecordPreset preset : RecordPreset.all()) {
+            boolean music = preset == RecordPreset.MUSIC;
+            assertEquals(music, preset.wantsUnprocessed());
+            assertEquals(music, preset.autoSavesLossless);
+        }
+    }
+
+    @Test
     public void persistRoundTrip() {
         Context ctx = ApplicationProvider.getApplicationContext();
         RecordPreset.MUSIC.save(ctx);

@@ -1,6 +1,7 @@
 package com.example.hello;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
@@ -27,6 +28,36 @@ public class TakeTest {
         assertEquals("recorded", t.origin);
         assertEquals(0, t.lastPositionMs);
         assertTrue(t.markersJson == null);
+    }
+
+    @Test
+    public void hasFileReflectsDisk() throws Exception {
+        java.io.File f = new java.io.File(
+                System.getProperty("java.io.tmpdir"), "hasfile.bin");
+        // noinspection ResultOfMethodCallIgnored
+        f.delete();
+        Take missing = new Take(1, "X", 0, 0, "", "M4A", false,
+                f.getAbsolutePath());
+        assertFalse(missing.hasFile());
+        new java.io.RandomAccessFile(f, "rw").close();
+        try {
+            assertTrue(missing.hasFile());
+        } finally {
+            // noinspection ResultOfMethodCallIgnored
+            f.delete();
+        }
+        Take nopath = new Take(2, "X", 0, 0, "", "M4A", false, null);
+        assertFalse(nopath.hasFile());
+    }
+
+    @Test
+    public void convertingDefaultsOff() {
+        Take t = new Take(3, "X", 0, 0, "", "M4A", false, null);
+        assertFalse(t.converting);
+        assertEquals(0, t.convProgress);
+        assertEquals("", t.convFormat);
+        assertEquals("", t.convJobId);
+        assertEquals("", t.convRawPath);
     }
 
     @Test

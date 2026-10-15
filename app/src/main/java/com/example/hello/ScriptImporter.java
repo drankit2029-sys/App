@@ -69,7 +69,11 @@ public final class ScriptImporter {
                 if (zip) {
                     return readDocx(new FileInputStreamWrapper(in, head));
                 }
-                return new Result(readPlain(in), false, null);
+                // Plain text: replay the sniffed header bytes, otherwise
+                // every import silently loses its first four characters.
+                if (n <= 0) return new Result("", false, null);
+                return new Result(readPlain(new FileInputStreamWrapper(in,
+                        java.util.Arrays.copyOf(head, n))), false, null);
             } finally {
                 try {
                     in.close();
@@ -144,7 +148,16 @@ public final class ScriptImporter {
     private static String parseDocumentXml(File docx) throws Exception {
         StringBuilder out = new StringBuilder();
         XmlPullParser p = android.util.Xml.newPullParser();
-        p.setInput(new FileInputStream(docx), "UTF-8");
+        // A4-13: the stream was never closed, leaking a descriptor on every
+        // .docx import.
+        try (java.io.InputStream fis = new FileInputStream(docx)) {
+            p.setInput(fis, "UTF-8");
+            return parseWith(p);
+        }
+    }
+
+    private static String parseWith(XmlPullParser p) throws Exception {
+        StringBuilder out = new StringBuilder();
         int event;
         while ((event = p.next()) != XmlPullParser.END_DOCUMENT) {
             if (event == XmlPullParser.START_TAG) {
@@ -191,39 +204,45 @@ public final class ScriptImporter {
         }
     }
 
+    /** Test hook for the sniffed-header replay stream. */
+    static java.io.InputStream wrapForTest(java.io.InputStream src,
+                                            byte[] head) {
+        return new FileInputStreamWrapper(src, head);
+    }
+
     /** Re-injects the magic bytes already consumed while sniffing. */
     private static final class FileInputStreamWrapper extends InputStream {
         private final InputStream src;
         private final byte[] head;
         private int pos;
-        private boolean headDone;
 
         FileInputStreamWrapper(InputStream src, byte[] head) {
             this.src = src;
             this.head = head;
         }
 
+        // A4-13: the buffered head is served purely by `pos < head.length`.
+        // A one-shot `headDone` flag was set on the very first read() and
+        // dropped every remaining sniffed byte when the caller did not
+        // consume the whole header in one call.
+
         @Override
         public int read() throws java.io.IOException {
-            if (!headDone) {
-                headDone = true;
-                if (pos < head.length) return head[pos++] & 0xFF;
-            }
+            if (pos < head.length) return head[pos++] & 0xFF;
             return src.read();
         }
 
         @Override
         public int read(byte[] b, int off, int len) throws java.io.IOException {
-            if (!headDone && pos < head.length) {
+            if (len == 0) return 0;
+            if (pos < head.length) {
                 int n = Math.min(len, head.length - pos);
                 System.arraycopy(head, pos, b, off, n);
                 pos += n;
-                headDone = true;
                 if (n == len) return n;
                 int r = src.read(b, off + n, len - n);
                 return r < 0 ? n : n + r;
             }
-            headDone = true;
             return src.read(b, off, len);
         }
 

@@ -66,41 +66,63 @@ public final class TakeSaver {
         // PCM length of their own).
         long dur = Math.max(durationOf(raw), 1000);
         String title = e.takeName != null ? e.takeName : "";
+        Result r = convertRaw(ctx, raw, title, preset, save, cb);
+        // The raw float capture was scratch; the finished file is its own copy.
+        // noinspection ResultOfMethodCallIgnored
+        raw.delete();
+        return r;
+    }
+
+    /**
+     * Converts an already-finalized raw take without touching the engine
+     * session. Used by the background conversion worker; the caller owns the
+     * raw lifecycle (delete on success, keep for recovery on failure).
+     *
+     * <p>NEW-03 fix: encodes into {@link ConversionJob#partFor(File)}
+     * ({@code raw.wav.part}) first, validates the container, and only renames
+     * to {@link #uniqueFinal(File, String)} at the very end. That way a
+     * process kill or native encoder crash mid-conversion never leaves a
+     * half-written {@code .m4a}/{@code .wav} in {@code takes/} for startup
+     * reconcile to adopt as a corrupt take, and WAV conversions interrupted
+     * by process death leave a real {@code .part} file for
+     * {@link ConversionService#resumeWavConvert} to resume.
+     */
+    public static Result convertRaw(Context ctx, File raw, String title,
+                                    RecordPreset preset, SaveFormat save,
+                                    Progress cb) throws Exception {
+        if (raw == null || !raw.exists()) throw new IllegalStateException("empty");
+        long dur = Math.max(durationOf(raw), 1000);
         SaveFormat eff = save.effective(preset);
         CrashLog.breadcrumb(ctx, "convert start " + eff.id);
+        File part = ConversionJob.partFor(raw);
+        // noinspection ResultOfMethodCallIgnored
+        part.delete();
         File fin = null;
         try {
             switch (eff) {
                 case WAV16:
-                    fin = uniqueFinal(raw, "wav");
-                    FormatConverter.toWav16(raw, fin, pct -> post(cb, pct));
+                    FormatConverter.toWav16(raw, part, pct -> post(cb, pct));
                     break;
                 case WAV24:
-                    fin = uniqueFinal(raw, "wav");
-                    FormatConverter.toWav24(raw, fin, pct -> post(cb, pct));
+                    FormatConverter.toWav24(raw, part, pct -> post(cb, pct));
                     break;
                 case AMR_NB:
-                    fin = uniqueFinal(raw, "3gp");
-                    FormatConverter.toAmr(raw, fin, false, pct -> post(cb, pct));
+                    FormatConverter.toAmr(raw, part, false, pct -> post(cb, pct));
                     break;
                 case AMR_WB:
-                    fin = uniqueFinal(raw, "3gp");
-                    FormatConverter.toAmr(raw, fin, true, pct -> post(cb, pct));
+                    FormatConverter.toAmr(raw, part, true, pct -> post(cb, pct));
                     break;
                 case FLAC:
-                    fin = uniqueFinal(raw, "flac");
-                    FormatConverter.toFlac(raw, fin, pct -> post(cb, pct));
+                    FormatConverter.toFlac(raw, part, pct -> post(cb, pct));
                     break;
                 case OPUS:
-                    fin = uniqueFinal(raw, "webm");
-                    FormatConverter.toOpus(raw, fin, preset.aacBitrate,
+                    FormatConverter.toOpus(raw, part, preset.aacBitrate,
                             pct -> post(cb, pct));
                     break;
                 case M4A:
                 case AUTO:
                 default:
-                    fin = uniqueFinal(raw, "m4a");
-                    FormatConverter.toM4a(raw, fin, preset.aacBitrate,
+                    FormatConverter.toM4a(raw, part, preset.aacBitrate,
                             pct -> post(cb, pct));
                     break;
             }
@@ -108,52 +130,55 @@ public final class TakeSaver {
             // hand back a near-full-size file under a lossless-compressed
             // label. Some devices do that, so measure rather than trust: fall
             // back to 24-bit WAV, which is lossless by definition.
-            if (eff == SaveFormat.FLAC && flacLooksIneffective(fin.length(),
+            if (eff == SaveFormat.FLAC && flacLooksIneffective(part.length(),
                     raw.length())) {
-                long bloated = fin.length();
-                File wav = uniqueFinal(raw, "wav");
-                FormatConverter.toWav24(raw, wav, null);
+                long bloated = part.length();
                 // noinspection ResultOfMethodCallIgnored
-                fin.delete();
-                fin = wav;
+                part.delete();
+                FormatConverter.toWav24(raw, part, null);
                 eff = SaveFormat.WAV24;
                 CrashLog.breadcrumb(ctx, "flac ineffective ("
                         + bloated + " bytes), fell back to wav24");
             }
+            // Validate the finished .part container before exposing it under a
+            // real audio extension in takes/.
+            FormatConverter.validateFinal(part, eff);
+            fin = uniqueFinal(raw, eff.extension());
+            if (!part.renameTo(fin)) {
+                throw new IllegalStateException("adopt part failed");
+            }
         } catch (Exception ex) {
-            // A failed conversion must not leave a truncated file behind:
-            // half-written containers are exactly the kind of poison that
-            // haunts the next startup sweep.
-            if (fin != null) {
+            if (part.exists()) {
+                // noinspection ResultOfMethodCallIgnored
+                part.delete();
+            }
+            if (fin != null && fin.exists()) {
                 // noinspection ResultOfMethodCallIgnored
                 fin.delete();
             }
+            // A4-01: close the stage even on failure/cancel. Without this an
+            // unterminated "convert start" makes maybeHealCrashedEncoder()
+            // blame a native codec crash on the next launch and downgrade
+            // the save format for no reason.
+            CrashLog.breadcrumb(ctx, "convert end " + eff.id + " (failed)");
             throw ex;
         }
-        // Last line of defense before the library ever sees the file: a
-        // container that fails its own sanity check (truncated by a dying
-        // encoder, torn by a kill) is deleted here, not adopted later.
-        try {
-            FormatConverter.validateFinal(fin, eff);
-        } catch (Exception ex) {
-            // noinspection ResultOfMethodCallIgnored
-            fin.delete();
-            throw ex;
-        }
-        // The raw float capture was scratch; the finished file is its own copy.
-        // noinspection ResultOfMethodCallIgnored
-        raw.delete();
         CrashLog.breadcrumb(ctx, "convert end " + eff.id);
         post(cb, 100);
         return new Result(fin, eff.badge, dur, title);
     }
 
     private static void post(Progress cb, int pct) {
-        if (cb != null) {
-            try {
-                cb.onProgress(pct);
-            } catch (Exception ignored) {}
-        }
+        if (cb == null) return;
+        try {
+            cb.onProgress(pct);
+        } catch (RuntimeException e) {
+            // Cancellation (and only cancellation — normal progress
+            // callbacks never throw) must propagate so a cancelled
+            // background job stops at the next progress tick instead of
+            // running to completion.
+            throw e;
+        } catch (Exception ignored) {}
     }
 
     static long durationOf(File f) {

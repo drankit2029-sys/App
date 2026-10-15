@@ -31,6 +31,7 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
         void onExport(Take take);
         void onEdit(Take take);
         void onDelete(Take take);
+        void onCancelConversion(Take take);
         void onSeek(Take take, long posMs);
     }
 
@@ -55,18 +56,87 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
 
     @Override
     public long getItemId(int position) {
+        // Stable ids make RecyclerView query this against its own (possibly
+        // stale) position bookkeeping while a rebind is in flight. A
+        // converting card that disappears on completion shortens the list, and
+        // the out-of-range read used to crash the app right as the user was
+        // looking at the finished take.
+        if (position < 0 || position >= takes.size()) {
+            return RecyclerView.NO_ID;
+        }
         return takes.get(position).id;
     }
 
     public void setTakes(List<Take> takes) {
+        setTakesAndState(takes, playingId, paused, selected, selectionMode);
+    }
+
+    /**
+     * Applies list and playback/selection state in a single pass, so a refresh
+     * never issues {@code notifyDataSetChanged()} followed by
+     * {@code notifyItemChanged()} in the same UI turn. Under
+     * {@code setHasStableIds(true)} with an id that just changed sign (a
+     * converting card becoming its finished Room take) that pairing is what
+     * drove RecyclerView into an inconsistent-adapter-state crash.
+     */
+    public void setTakesAndState(List<Take> takes, long playingId,
+                                 boolean paused, Set<Long> selected,
+                                 boolean selectionMode) {
+        // An expanded converting card (negative id) is replaced by a real
+        // take when its job finishes. Hand the open state over so the card the
+        // user opened stays open instead of silently snapping shut.
+        if (expandedId < 0) {
+            String rawPath = ConversionJobs.rawForTakeId(expandedId);
+            Long completed = rawPath != null
+                    ? ConversionJobs.completedTakeIdForRaw(rawPath) : null;
+            if (completed != null) expandedId = completed;
+        }
         this.takes = takes;
-        // Drop stale expanded/playing refs that are no longer visible.
+        this.playingId = playingId;
+        this.paused = paused;
+        this.selected = selected;
+        this.selectionMode = selectionMode;
+        // Drop stale expanded refs that are no longer visible.
         boolean expAlive = false;
         for (Take t : takes) {
             if (t.id == expandedId) expAlive = true;
         }
         if (!expAlive) expandedId = -1;
         notifyDataSetChanged();
+    }
+
+    /**
+     * Keeps a recycled or failing holder from animating a view that is no
+     * longer attached: a running height animator calling requestLayout() on a
+     * detached holder corrupts RecyclerView's layout pass.
+     */
+    @Override
+    public void onViewRecycled(@NonNull Vh h) {
+        cancelHolderAnimations(h);
+        super.onViewRecycled(h);
+    }
+
+    @Override
+    public boolean onFailedToRecycleView(@NonNull Vh h) {
+        cancelHolderAnimations(h);
+        return super.onFailedToRecycleView(h);
+    }
+
+    private void cancelHolderAnimations(Vh h) {
+        if (h == null) return;
+        Object pending = h.expanded.getTag();
+        if (pending instanceof ValueAnimator) {
+            ((ValueAnimator) pending).cancel();
+        }
+        h.expanded.setTag(null);
+        h.expanded.getLayoutParams().height = ViewGroup.LayoutParams.WRAP_CONTENT;
+        h.expanded.setAlpha(1f);
+        h.cardRoot.animate().cancel();
+        h.cardRoot.setScaleX(1f);
+        h.cardRoot.setScaleY(1f);
+        h.playBtn.animate().cancel();
+        h.fav.animate().cancel();
+        h.chevron.animate().cancel();
     }
 
     public void setExpandedId(long id) {
@@ -146,8 +216,21 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
                     if (t.id != playingId) {
                         h.curTime.setText(Take.formatDuration(0));
                         if (!h.tracking) h.scrubber.setProgress(0);
+                    } else {
+                        // A4-12: re-expanding the card that is playing (even
+                        // paused) reset its readout to 00:00 while the audio
+                        // kept its position.
+                        long pos = progressMap != null && progressMap
+                                .containsKey(t.id)
+                                ? progressMap.get(t.id) : 0L;
+                        h.curTime.setText(Take.formatDuration(pos));
+                        if (!h.tracking) {
+                            h.scrubber.setProgress((int) Math.min(SCRUB_MAX,
+                                    pos * SCRUB_MAX / Math.max(1L, t.durationMs)));
+                        }
                     }
-                    h.btnExport.setVisibility(t.hasFile() ? View.VISIBLE : View.GONE);
+                    h.btnExport.setVisibility((t.hasFile() || t.converting)
+                            ? View.VISIBLE : View.GONE);
                 }
                 animateExpand(h.expanded, h.chevron);
             } else {
@@ -331,12 +414,19 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
         applySelectionScale(h, isSel);
 
         h.title.setText(t.title);
-        h.meta.setText(Take.formatDuration(t.durationMs) + "  •  " + t.dateLabel + "  •  " + t.sizeLabel);
+        if (t.converting) {
+            h.meta.setText(h.itemView.getContext().getString(
+                    R.string.conv_card_status, t.convFormat, t.convProgress));
+        } else {
+            h.meta.setText(Take.formatDuration(t.durationMs) + "  •  " + t.dateLabel + "  •  " + t.sizeLabel);
+        }
         h.formatBadge.setText(t.format);
         h.play.setImageResource((playing && !paused) ? R.drawable.ic_pause : R.drawable.ic_play);
         h.play.setContentDescription(h.itemView.getContext().getString(R.string.cd_play));
 
         // Professional heart: outline idle, filled red favorite, with a pop on tap.
+        // Converting rows have no stored row to favorite: hide the control.
+        h.fav.setVisibility(t.converting ? View.GONE : View.VISIBLE);
         h.fav.setImageResource(t.favorite ? R.drawable.ic_heart_filled : R.drawable.ic_heart);
         h.fav.setAlpha(t.favorite ? 1f : 0.55f);
         h.fav.setColorFilter(null);
@@ -345,7 +435,7 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
         // card itself still expands/collapses, so nothing is lost).
         h.chevron.setImageResource(R.drawable.ic_pencil);
         h.chevron.setRotation(0f);
-        h.chevron.setAlpha(t.hasFile() ? 0.85f : 0.35f);
+        h.chevron.setAlpha((t.hasFile() || t.converting) ? 0.85f : 0.35f);
         h.chevron.setContentDescription(
                 h.itemView.getContext().getString(R.string.cd_edit));
         // Reset any mid-animation height leftovers from recycled holders.
@@ -355,6 +445,9 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
         h.expanded.getLayoutParams().height = ViewGroup.LayoutParams.WRAP_CONTENT;
         h.expanded.setAlpha(1f);
         h.expanded.setVisibility(expanded ? View.VISIBLE : View.GONE);
+        // Detach first: setProgress() on a rebound holder fires the PREVIOUS
+        // take's listener, which wrote the old take's position (and seeked it).
+        h.scrubber.setOnSeekBarChangeListener(null);
         if (expanded) {
             h.totalTime.setText(Take.formatDuration(t.durationMs));
             long shown = playing ? progressMap.getOrDefault(t.id, 0L) : 0L;
@@ -363,7 +456,23 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
                 h.scrubber.setProgress(t.durationMs <= 0 ? 0
                         : (int) (shown * SCRUB_MAX / t.durationMs));
             }
-            h.btnExport.setVisibility(t.hasFile() ? View.VISIBLE : View.GONE);
+        }
+        // Conversion chrome is bound on every pass — expanding only animates
+        // visibility, it never rebinds, so expanded-only state set here
+        // would otherwise show whatever a recycled holder carried. The
+        // progress stays visible even collapsed so conversions read at a
+        // glance; only rename is ever hidden (no stored row to rename).
+        h.btnExport.setVisibility((t.hasFile() || t.converting)
+                ? View.VISIBLE : View.GONE);
+        // Renaming is a pure metadata change, so it is safe while the take
+        // converts: the worker inserts the finished file under this title.
+        h.btnRename.setVisibility(View.VISIBLE);
+        h.convStatus.setVisibility(t.converting ? View.VISIBLE : View.GONE);
+        h.convProgress.setVisibility(t.converting ? View.VISIBLE : View.GONE);
+        if (t.converting) {
+            h.convStatus.setText(h.itemView.getContext().getString(
+                    R.string.conv_card_status, t.convFormat, t.convProgress));
+            h.convProgress.setProgress(t.convProgress);
         }
 
         h.cardRoot.setOnClickListener(v -> listener.onCardClick(t));
@@ -399,7 +508,8 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
         });
         h.btnDelete.setOnClickListener(v -> {
             pressBounce(v);
-            listener.onDelete(t);
+            if (t.converting) listener.onCancelConversion(t);
+            else listener.onDelete(t);
         });
 
         h.scrubber.setOnSeekBarChangeListener(null);
@@ -427,6 +537,23 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
     @Override
     public int getItemCount() {
         return takes.size();
+    }
+
+    /** Direct conversion-progress paint without rebind. */
+    public void paintConvProgress(RecyclerView list, long id, int pct,
+                                  String status) {
+        if (list == null) return;
+        RecyclerView.ViewHolder vh = list.findViewHolderForItemId(id);
+        if (vh instanceof Vh) {
+            Vh h = (Vh) vh;
+            if (h.convProgress != null) {
+                h.convProgress.setProgress(Math.max(0, Math.min(100, pct)));
+            }
+            if (status != null) {
+                if (h.convStatus != null) h.convStatus.setText(status);
+                if (h.meta != null) h.meta.setText(status);
+            }
+        }
     }
 
     /** Direct progress paint without rebind (called ~10x/sec while playing). */
@@ -468,6 +595,8 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
         final View btnRename;
         final View btnExport;
         final View btnDelete;
+        final TextView convStatus;
+        final android.widget.ProgressBar convProgress;
         boolean tracking = false;
 
         Vh(@NonNull View itemView) {
@@ -488,20 +617,25 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
             btnRename = itemView.findViewById(R.id.btnRename);
             btnExport = itemView.findViewById(R.id.btnExport);
             btnDelete = itemView.findViewById(R.id.btnDelete);
+            convStatus = itemView.findViewById(R.id.convStatus);
+            convProgress = itemView.findViewById(R.id.convProgress);
         }
 
         void applyProgress(long posMs) {
             int pos = getBindingAdapterPosition();
-            if (pos == RecyclerView.NO_POSITION || pos >= takes.size()) return;
+            if (pos == RecyclerView.NO_POSITION || pos < 0
+                    || pos >= takes.size()) {
+                return;
+            }
             Take t = takes.get(pos);
             progressMap.put(t.id, posMs);
             if (tracking) return;
-            if (t.durationMs > 0) {
+            if (t.durationMs > 0 && scrubber != null) {
                 // Clamp so completion always lands exactly on the end.
                 int p = (int) (posMs * SCRUB_MAX / t.durationMs);
                 scrubber.setProgress(Math.min(p, SCRUB_MAX));
             }
-            curTime.setText(Take.formatDuration(posMs));
+            if (curTime != null) curTime.setText(Take.formatDuration(posMs));
         }
     }
 }

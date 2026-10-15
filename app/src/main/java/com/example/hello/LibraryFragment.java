@@ -1,8 +1,10 @@
 package com.example.hello;
 
 import android.app.Dialog;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.database.Cursor;
 import android.graphics.Color;
@@ -37,7 +39,6 @@ import androidx.documentfile.provider.DocumentFile;
 import androidx.fragment.app.Fragment;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
-import androidx.recyclerview.widget.SimpleItemAnimator;
 
 import com.google.android.material.snackbar.Snackbar;
 
@@ -50,11 +51,82 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
 public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
 
-    private enum Filter { ALL, FAV, DAY, WEEK, SHORT, WAV, M4A }
+    /** A4-12: focus holder for library playback; released in stopPlayback(). */
+    private android.media.AudioManager playAudioManager;
+    private android.media.AudioFocusRequest playFocusRequest;
+
+    private static final int PLAY_FOCUS =
+            android.media.AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK;
+
+    /**
+     * A4-12: library playback never asked for focus, so it could duck or
+     * bleed into a live microphone take. Request transient-may-duck focus and
+     * refuse while the studio is actually capturing.
+     *
+     * @return false when playback should not start.
+     */
+    private boolean acquirePlaybackFocus() {
+        try {
+            if (RecordingEngine.get().state == RecordingEngine.State.RECORDING) {
+                // Playing back through the speaker straight into an open mic.
+                return false;
+            }
+            if (playAudioManager == null) {
+                playAudioManager = (android.media.AudioManager)
+                        requireContext().getApplicationContext()
+                                .getSystemService(Context.AUDIO_SERVICE);
+            }
+            if (playAudioManager == null) return true;
+            if (android.os.Build.VERSION.SDK_INT >= 26) {
+                playFocusRequest = new android.media.AudioFocusRequest.Builder(
+                        android.media.AudioManager.AUDIOFOCUS_GAIN)
+                        .setAudioAttributes(new android.media.AudioAttributes
+                                .Builder()
+                                .setUsage(android.media.AudioAttributes
+                                        .USAGE_MEDIA)
+                                .setContentType(android.media.AudioAttributes
+                                        .CONTENT_TYPE_SPEECH)
+                                .build())
+                        .build();
+                return playAudioManager.requestAudioFocus(playFocusRequest)
+                        == android.media.AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
+            }
+            //noinspection deprecation
+            return playAudioManager.requestAudioFocus(null, PLAY_FOCUS,
+                    android.media.AudioManager.AUDIOFOCUS_REQUEST_GRANTED)
+                    == android.media.AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
+        } catch (Exception e) {
+            return true;
+        }
+    }
+
+    private void releasePlaybackFocus() {
+        try {
+            if (playAudioManager == null) return;
+            if (playFocusRequest != null) {
+                if (android.os.Build.VERSION.SDK_INT >= 26) {
+                    playAudioManager.abandonAudioFocusRequest(
+                            playFocusRequest);
+                }
+                playFocusRequest = null;
+            } else {
+                //noinspection deprecation
+                playAudioManager.abandonAudioFocus(null);
+            }
+        } catch (Exception ignored) {}
+    }
+
+    /** A4-08: jobs cancelled by the user; their done-broadcast is not a failure. */
+    private final Set<String> cancelledJobs =
+            java.util.Collections.newSetFromMap(
+                    new java.util.concurrent.ConcurrentHashMap<String, Boolean>());
+
+    private enum Filter { ALL, FAV, DAY, WEEK, SHORT, WAV, FLAC, OPUS, AMR, M4A }
     private enum Sort { NEWEST, OLDEST, NAME, LONGEST, SHORTEST }
 
     private TakesAdapter adapter;
@@ -83,16 +155,21 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
     private final Set<Long> selection = new HashSet<>();
     private boolean selectionMode = false;
 
-    // Playback: real file via MediaPlayer, demo takes via simulated clock. No popups.
+    // Playback: real file via MediaPlayer, raw preview via AudioTrack,
+    // demo takes via simulated clock. No popups.
     /** Progress repaint cadence — 100ms + fine SeekBar steps = smooth motion. */
     private static final long PROGRESS_MS = 100;
     private MediaPlayer player;
     private long playingId = -1;
     private boolean playPaused = false;
     private boolean simMode = false;
+    private boolean rawMode = false;
+    private RawFloatPlayer rawPlayer;
     private long simBase = 0;
     private long simStartedAt = 0;
     private final Handler handler = new Handler(Looper.getMainLooper());
+
+    private BroadcastReceiver convReceiver;
 
     private long lastBackPress = 0;
 
@@ -146,9 +223,11 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                 v.findViewById(R.id.chipAll), v.findViewById(R.id.chipFav),
                 v.findViewById(R.id.chipDay), v.findViewById(R.id.chipWeek),
                 v.findViewById(R.id.chipShort), v.findViewById(R.id.chipWav),
-                v.findViewById(R.id.chipM4a)};
+                v.findViewById(R.id.chipFlac), v.findViewById(R.id.chipOpus),
+                v.findViewById(R.id.chipAmr), v.findViewById(R.id.chipM4a)};
         chipFilters = new Filter[]{Filter.ALL, Filter.FAV, Filter.DAY, Filter.WEEK,
-                Filter.SHORT, Filter.WAV, Filter.M4A};
+                Filter.SHORT, Filter.WAV, Filter.FLAC, Filter.OPUS, Filter.AMR,
+                Filter.M4A};
         for (int i = 0; i < chips.length; i++) {
             final Filter f = chipFilters[i];
             chips[i].setOnClickListener(view -> {
@@ -165,10 +244,11 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
 
         adapter = new TakesAdapter(this);
         list.setLayoutManager(new LinearLayoutManager(requireContext()));
-        // No fade animation on change events: kills the card flicker on updates.
-        if (list.getItemAnimator() instanceof SimpleItemAnimator) {
-            ((SimpleItemAnimator) list.getItemAnimator()).setSupportsChangeAnimations(false);
-        }
+        // No item animations at all. The animator cannot survive a stable-id
+        // sign flip (converting card -> finished take): it keeps animating a
+        // holder that is never rebound, and change animations on top of
+        // notifyDataSetChanged() also flickered cards on ordinary updates.
+        list.setItemAnimator(null);
         list.setAdapter(adapter);
 
         v.findViewById(R.id.searchToggle).setOnClickListener(view -> toggleSearch());
@@ -226,6 +306,8 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
     @Override
     public void onResume() {
         super.onResume();
+        ConversionJobs.addListener(jobsListener);
+        registerConvReceiver();
         refresh();
     }
 
@@ -233,6 +315,116 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
     public void onPause() {
         super.onPause();
         pauseForBackground();
+        ConversionJobs.removeListener(jobsListener);
+        unregisterConvReceiver();
+    }
+
+    private final ConversionJobs.Listener jobsListener = () -> {
+        try {
+            if (!isAdded() || getView() == null) return;
+            handler.post(() -> {
+                if (!isAdded() || getView() == null || adapter == null) return;
+                // Structural change (job added/finished/cancelled) needs a
+                // full rebind; bare progress ticks only repaint their rows.
+                Set<Long> shown = new HashSet<>();
+                for (Take t : visible) {
+                    if (t.converting) shown.add(t.id);
+                }
+                Set<Long> live = new HashSet<>();
+                for (ConversionJob j : ConversionJobs.active()) {
+                    live.add(j.takeId());
+                }
+                if (!shown.equals(live)) {
+                    // A conversion finishing is not a routine structural tick:
+                    // the raw it was previewing from is gone, so tear the
+                    // preview down first and skip the 500ms debounce that
+                    // would otherwise leave a dead, clickable card on screen.
+                    if (rawMode && playingId < 0
+                            && ConversionJobs.forTakeId(playingId) == null) {
+                        stopPlayback();
+                    }
+                    refreshImmediate();
+                    return;
+                }
+                for (Take t : visible) {
+                    if (!t.converting) continue;
+                    ConversionJob j = ConversionJobs.forTakeId(t.id);
+                    if (j == null) continue;
+                    int pct = Math.max(0, Math.min(100, j.progress));
+                    if (pct == t.convProgress) continue;
+                    t.convProgress = pct;
+                    String status = null;
+                    try {
+                        status = getString(R.string.conv_card_status,
+                                t.convFormat, pct);
+                        t.dateLabel = status;
+                    } catch (Exception ignored) {}
+                    // Direct holder paint: no notify calls on the progress
+                    // hot path, so rapid ticks can never race a layout pass.
+                    // Off-screen rows pick the values up on their next bind.
+                    if (adapter != null && list != null) {
+                        try {
+                            adapter.paintConvProgress(list, t.id, pct, status);
+                        } catch (Exception ignored) {}
+                    }
+                }
+            });
+        } catch (Exception ignored) {}
+    };
+
+    private void registerConvReceiver() {
+        if (convReceiver != null) return;
+        try {
+            convReceiver = new BroadcastReceiver() {
+                @Override
+                public void onReceive(Context context, Intent intent) {
+                    if (!ConversionService.BROADCAST_CONVERSION_DONE.equals(
+                            intent.getAction())) {
+                        return;
+                    }
+                    boolean ok = intent.getBooleanExtra(
+                            ConversionService.EXTRA_OK, false);
+                    String title = intent.getStringExtra(
+                            ConversionService.EXTRA_TITLE);
+                    String label = intent.getStringExtra(
+                            ConversionService.EXTRA_LABEL);
+                    String jobId = intent.getStringExtra(
+                            ConversionService.EXTRA_JOB_ID);
+                    handler.post(() -> {
+                        if (!isAdded()) return;
+                        // A finished raw preview must stop: its file is gone.
+                        if (rawMode) stopPlayback();
+                        requestStructuralRefresh();
+                        if (ok) {
+                            snackText(getString(R.string.conv_saved_bg, title,
+                                    label != null ? label : ""));
+                        } else if (jobId != null
+                                && cancelledJobs.remove(jobId)) {
+                            // The user cancelled this one; it is not a
+                            // failure and must not claim the raw was kept.
+                        } else {
+                            snackText(getString(R.string.conv_failed_bg,
+                                    title != null ? title : ""));
+                        }
+                    });
+                }
+            };
+            IntentFilter f = new IntentFilter(
+                    ConversionService.BROADCAST_CONVERSION_DONE);
+            androidx.core.content.ContextCompat.registerReceiver(
+                    requireContext(), convReceiver, f,
+                    androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED);
+        } catch (Exception ignored) {
+            convReceiver = null;
+        }
+    }
+
+    private void unregisterConvReceiver() {
+        if (convReceiver == null) return;
+        try {
+            requireContext().unregisterReceiver(convReceiver);
+        } catch (Exception ignored) {}
+        convReceiver = null;
     }
 
     @Override
@@ -396,13 +588,30 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         if (adapter == null || getView() == null) return;
         long now = System.currentTimeMillis();
         List<Take> out = new ArrayList<>();
+        List<Take> converting = convertingCards();
+        out.addAll(converting);
         for (Take t : TakesRepository.all()) {
             switch (filter) {
                 case FAV: if (!t.favorite) continue; break;
                 case DAY: if (now - t.timestamp > 24L * 3600_000L) continue; break;
                 case WEEK: if (now - t.timestamp > 7L * 24 * 3600_000L) continue; break;
                 case SHORT: if (t.durationMs >= 5L * 60_000L) continue; break;
-                case WAV: if (!"WAV".equalsIgnoreCase(t.format)) continue; break;
+                case WAV:
+                    if (t.format == null
+                            || !t.format.toUpperCase(Locale.US)
+                            .startsWith("WAV")) continue;
+                    break;
+                case FLAC:
+                    if (!"FLAC".equalsIgnoreCase(t.format)) continue;
+                    break;
+                case OPUS:
+                    if (!"OPUS".equalsIgnoreCase(t.format)) continue;
+                    break;
+                case AMR:
+                    if (t.format == null
+                            || !t.format.toUpperCase(Locale.US)
+                            .startsWith("AMR")) continue;
+                    break;
                 case M4A: if (!"M4A".equalsIgnoreCase(t.format)) continue; break;
                 default: break;
             }
@@ -417,7 +626,13 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             case SHORTEST: cmp = (a, b) -> Long.compare(a.durationMs, b.durationMs); break;
             default: cmp = (a, b) -> Long.compare(b.timestamp, a.timestamp); break;
         }
-        Collections.sort(out, cmp);
+        // Active conversions pin to the top in job order; the library sort
+        // applies to finished takes only.
+        List<Take> finished = new ArrayList<>(out.subList(converting.size(),
+                out.size()));
+        Collections.sort(finished, cmp);
+        out = new ArrayList<>(converting);
+        out.addAll(finished);
         visible = out;
 
         Set<Long> alive = new HashSet<>();
@@ -425,16 +640,30 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         selection.retainAll(alive);
         if (selectionMode && selection.isEmpty()) selectionMode = false;
 
-        adapter.setTakes(out);
-        adapter.setPlayingId(playingId);
-        adapter.setPaused(playPaused);
-        adapter.setSelection(selection, selectionMode);
+        // A finished conversion replaces a synthetic card (negative id) with
+        // its real take (positive id). Under stable ids RecyclerView treats
+        // that as a remove+insert and runs overlapping remove/add/move
+        // animations against a holder that is never rebound, which is what
+        // took the process down. Structural changes are rare and the list
+        // rebinds in one pass anyway.
+        if (rawMode && playingId < 0
+                && ConversionJobs.forTakeId(playingId) == null) {
+            stopPlayback();
+        }
+        adapter.setTakesAndState(out, playingId, playPaused,
+                selection, selectionMode);
 
         int total = TakesRepository.all().size();
         boolean scoped = !query.isEmpty() || filter != Filter.ALL;
-        String base = scoped ? getString(R.string.search_count, out.size(), total)
+        int conv = converting.size();
+        // A4-12: converting cards are synthetic rows that live outside the
+        // Room set, so counting them made "3 of 2 takes" appear.
+        String base = scoped
+                ? getString(R.string.search_count, out.size() - conv, total)
                 : getString(R.string.take_count, total);
-        subtitle.setText(base + "  •  " + sortLabel(sort));
+        subtitle.setText(base + "  •  " + sortLabel(sort)
+                + (conv > 0 ? "  •  " + getString(R.string.conv_active, conv)
+                        : ""));
 
         boolean empty = out.isEmpty();
         list.setVisibility(empty ? View.GONE : View.VISIBLE);
@@ -453,9 +682,88 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         paintSelectionBar();
     }
 
+    /**
+     * Coalesced full rebind for structural job changes. Back-to-back dataset
+     * swaps (appear → progress → disappear) must never stack overlapping
+     * layout passes, so requests inside the window collapse into one.
+     */
+    private long lastStructuralMs = 0;
+    /** Structural refresh with no debounce, for completion/cancellation. */
+    private void refreshImmediate() {
+        structuralPending = false;
+        lastStructuralMs = SystemClock.elapsedRealtime();
+        if (isAdded() && getView() != null) refresh();
+    }
+
+    private boolean structuralPending = false;
+    private static final long STRUCTURAL_MIN_GAP_MS = 500;
+
+    private void requestStructuralRefresh() {
+        long now = SystemClock.elapsedRealtime();
+        if (now - lastStructuralMs < STRUCTURAL_MIN_GAP_MS) {
+            if (structuralPending) return;
+            structuralPending = true;
+            long wait = STRUCTURAL_MIN_GAP_MS - (now - lastStructuralMs);
+            handler.postDelayed(() -> {
+                structuralPending = false;
+                lastStructuralMs = SystemClock.elapsedRealtime();
+                if (isAdded() && getView() != null) refresh();
+            }, wait);
+            return;
+        }
+        lastStructuralMs = now;
+        refresh();
+    }
+
+    /**
+     * Synthetic cards for active background conversions. They are never
+     * persisted (no Room row, stable negative ids) and always pin above
+     * finished takes so conversions are visible at a glance.
+     */
+    private List<Take> convertingCards() {
+        List<Take> cards = new ArrayList<>();
+        long now = System.currentTimeMillis();
+        for (ConversionJob job : ConversionJobs.active()) {
+            String target;
+            try {
+                target = TakeSaver.labelFor(
+                        RecordPreset.of(job.presetId),
+                        SaveFormat.of(job.formatId));
+            } catch (Exception e) {
+                target = "";
+            }
+            String size;
+            try {
+                size = Dsp.sizeLabel(new File(job.rawPath).length());
+            } catch (Exception e) {
+                size = "";
+            }
+            Take t = new Take(job.takeId(), job.title, job.durationMs, now,
+                    size, target, false, "");
+            t.converting = true;
+            t.convProgress = Math.max(0, Math.min(100, job.progress));
+            t.convFormat = target;
+            t.convJobId = job.jobId;
+            t.convRawPath = job.rawPath;
+            t.dateLabel = getString(R.string.conv_card_status, target,
+                    t.convProgress);
+            ConversionJobs.noteTakeRaw(t.id, job.rawPath);
+            cards.add(t);
+        }
+        return cards;
+    }
+
+    /** Jumps to the top where active-conversion cards live. */
+    private void scrollToConversions() {
+        try {
+            if (list != null) list.scrollToPosition(0);
+        } catch (Exception ignored) {}
+    }
+
     // ---- selection ----
 
     private void enterSelection(Take take) {
+        if (take.converting) return; // converting takes cannot be selected
         selectionMode = true;
         selection.add(take.id);
         adapter.collapseAll();
@@ -471,6 +779,7 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
     }
 
     private void toggleSelection(Take take) {
+        if (take.converting) return; // converting takes cannot be selected
         if (selection.contains(take.id)) selection.remove(take.id);
         else selection.add(take.id);
         if (selection.isEmpty()) {
@@ -484,10 +793,19 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
     }
 
     private void toggleSelectAll() {
-        boolean allSel = selection.size() == visible.size() && !visible.isEmpty();
+        // AUDIT-3-03 fix: exclude active converting cards (`t.converting`),
+        // matching `enterSelection` and `toggleSelection`. Including them
+        // made the count comparison never true and selected a card that
+        // refuses selection.
+        List<Take> selectable = new ArrayList<>();
+        for (Take t : visible) {
+            if (!t.converting) selectable.add(t);
+        }
+        boolean allSel = !selectable.isEmpty()
+                && selection.size() == selectable.size();
         selection.clear();
         if (!allSel) {
-            for (Take t : visible) selection.add(t.id);
+            for (Take t : selectable) selection.add(t.id);
         }
         if (selection.isEmpty()) {
             exitSelection();
@@ -551,6 +869,16 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             toggleSelection(take);
             return;
         }
+        // A4-12: only the first start asks for focus; the toggle branches
+        // below are pause/resume of an already-focused player.
+        if (playingId != take.id && !acquirePlaybackFocus()) {
+            snackText(getString(R.string.playback_busy));
+            return;
+        }
+        if (take.converting) {
+            startRawPreview(take);
+            return;
+        }
         if (playingId == take.id) {
             if (playPaused) resumePlayback();
             else pausePlayback();
@@ -560,6 +888,59 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         long resume = take.lastPositionMs;
         if (resume < 10_000 || resume > take.durationMs - 10_000) resume = 0;
         startPlayback(take, resume);
+    }
+
+    /**
+     * Previews the stored raw of a take that is still converting. The final
+     * file does not exist yet; the raw is a valid float WAV and plays
+     * straight through AudioTrack.
+     */
+    private void startRawPreview(Take take) {
+        if (playingId == take.id && rawMode) {
+            if (playPaused) resumePlayback();
+            else pausePlayback();
+            return;
+        }
+        stopPlayback();
+        File raw = new File(take.convRawPath);
+        if (!raw.exists()) {
+            snackText(getString(R.string.edit_no_audio));
+            return;
+        }
+        try {
+            final long id = take.id;
+            rawPlayer = new RawFloatPlayer(raw, completed -> handler.post(() -> {
+                if (playingId == id && rawMode) {
+                    Take t = findVisible(id);
+                    if (t != null) {
+                        adapter.paintProgress(list, id, t.durationMs);
+                    }
+                    stopPlayback();
+                    refresh();
+                }
+            }));
+        } catch (Exception e) {
+            rawPlayer = null;
+            snackText(getString(R.string.edit_no_audio));
+            return;
+        }
+        rawMode = true;
+        playingId = take.id;
+        playPaused = false;
+        adapter.setProgress(list, take.id, 0);
+        adapter.setExpandedId(take.id);
+        adapter.setPlayingId(playingId);
+        adapter.setPaused(false);
+        rawPlayer.play();
+        handler.post(progressTick);
+        snackText(getString(R.string.conv_preview_hint, take.convFormat));
+    }
+
+    private Take findVisible(long id) {
+        for (Take t : visible) {
+            if (t.id == id) return t;
+        }
+        return null;
     }
 
     private void startPlayback(Take take, long startPos) {
@@ -613,7 +994,11 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
     private void pausePlayback() {
         if (playingId == -1 || playPaused) return;
         persistCurrentPosition();
-        if (!simMode && player != null) {
+        if (rawMode && rawPlayer != null) {
+            try {
+                rawPlayer.pause();
+            } catch (Exception ignored) {}
+        } else if (!simMode && player != null) {
             try {
                 player.pause();
             } catch (Exception ignored) {}
@@ -627,7 +1012,11 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
 
     private void resumePlayback() {
         if (playingId == -1 || !playPaused) return;
-        if (!simMode && player != null) {
+        if (rawMode && rawPlayer != null) {
+            try {
+                rawPlayer.play();
+            } catch (Exception ignored) {}
+        } else if (!simMode && player != null) {
             try {
                 player.start();
             } catch (Exception ignored) {}
@@ -659,6 +1048,13 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         handler.removeCallbacks(progressTick);
         playingId = -1;
         playPaused = false;
+        rawMode = false;
+        if (rawPlayer != null) {
+            try {
+                rawPlayer.stop();
+            } catch (Exception ignored) {}
+            rawPlayer = null;
+        }
         if (adapter != null) adapter.clearPlaying();
         if (player != null) {
             try {
@@ -669,6 +1065,7 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             } catch (Exception ignored) {}
             player = null;
         }
+        releasePlaybackFocus();
     }
 
     private long simPosition() {
@@ -680,6 +1077,7 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
     /** Persists where the current take stopped (pause / switch / exit). */
     private void persistCurrentPosition() {
         if (playingId == -1) return;
+        if (rawMode) return; // converting rows have no stored position
         long pos;
         if (simMode) {
             pos = simPosition();
@@ -699,6 +1097,27 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         @Override
         public void run() {
             if (playingId == -1 || playPaused || getView() == null) return;
+            if (rawMode) {
+                Take t = findVisible(playingId);
+                if (t == null || rawPlayer == null) {
+                    stopPlayback();
+                    return;
+                }
+                long pos = rawPlayer.positionMs();
+                if (pos >= t.durationMs) {
+                    if (adapter.isTracking(playingId, list)) {
+                        rawPlayer.seekToMs(0);
+                        adapter.paintProgress(list, playingId, 0);
+                        handler.postDelayed(this, PROGRESS_MS);
+                        return;
+                    }
+                    completeRawPreview(playingId);
+                    return;
+                }
+                adapter.paintProgress(list, playingId, pos);
+                handler.postDelayed(this, PROGRESS_MS);
+                return;
+            }
             Take t = TakesRepository.find(playingId);
             if (t == null) {
                 stopPlayback();
@@ -733,11 +1152,23 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         }
     };
 
+    private void completeRawPreview(long id) {
+        if (playingId != id) return;
+        Take t = findVisible(id);
+        if (t != null) adapter.paintProgress(list, id, t.durationMs);
+        stopPlayback();
+        refresh();
+    }
+
     @Override
     public void onSeek(Take take, long posMs) {
         TakesRepository.updatePosition(take.id, posMs);
         if (playingId == take.id && !playPaused) {
-            if (!simMode && player != null) {
+            if (rawMode && rawPlayer != null) {
+                try {
+                    rawPlayer.seekToMs(posMs);
+                } catch (Exception ignored) {}
+            } else if (!simMode && player != null) {
                 try {
                     player.seekTo((int) posMs);
                 } catch (Exception ignored) {}
@@ -746,7 +1177,11 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                 simStartedAt = SystemClock.elapsedRealtime();
             }
         } else if (playingId == take.id) {
-            if (!simMode && player != null) {
+            if (rawMode && rawPlayer != null) {
+                try {
+                    rawPlayer.seekToMs(posMs);
+                } catch (Exception ignored) {}
+            } else if (!simMode && player != null) {
                 try {
                     player.seekTo((int) posMs);
                 } catch (Exception ignored) {}
@@ -755,7 +1190,16 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             }
             adapter.paintProgress(list, take.id, posMs);
         } else {
-            startPlayback(take, posMs);
+            if (take.converting) {
+                startRawPreview(take);
+                if (posMs > 0 && rawPlayer != null) {
+                    try {
+                        rawPlayer.seekToMs(posMs);
+                    } catch (Exception ignored) {}
+                }
+            } else {
+                startPlayback(take, posMs);
+            }
         }
     }
 
@@ -773,11 +1217,13 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
 
     @Override
     public void onCardLongPress(Take take) {
+        if (take.converting) return;
         if (!selectionMode) enterSelection(take);
     }
 
     @Override
     public void onFavorite(Take take) {
+        if (take.converting) return;
         if (selectionMode) {
             toggleSelection(take);
             return;
@@ -793,13 +1239,29 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
 
     @Override
     public void onRename(Take take) {
+        // Renaming a converting take is safe: it only changes the title, and
+        // the worker reads the job's title when it inserts the finished take.
         OptionsSheet.showInput(requireContext(), getString(R.string.rename_title),
                 take.title, getString(R.string.rename_save), text -> {
                     try {
-                        TakesRepository.rename(take.id, text);
+                        if (take.converting) {
+                            ConversionJob job = take.convJobId != null
+                                    ? ConversionJobs.get(take.convJobId)
+                                    : ConversionJobs.forTakeId(take.id);
+                            if (job != null) {
+                                String clean = text.trim();
+                                if (!clean.isEmpty()) {
+                                    job.title = clean;
+                                    job.write();
+                                }
+                            }
+                        } else {
+                            TakesRepository.rename(take.id, text);
+                        }
                         refresh();
                         Take updated = TakesRepository.find(take.id);
-                        String name = updated != null ? updated.title : text;
+                        String name = take.converting ? text.trim()
+                                : (updated != null ? updated.title : text);
                         OptionsSheet.showResult(requireContext(), true,
                                 getString(R.string.rename_success_title),
                                 getString(R.string.rename_success_msg, name));
@@ -817,8 +1279,137 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             toggleSelection(take);
             return;
         }
+        if (take.converting) {
+            showConvertingShareWarning(take);
+            return;
+        }
         if (!take.hasFile()) return;
         showSingleExportOptions(take);
+    }
+
+    /**
+     * The finished file is not ready, so sharing is blocked — but the stored
+     * raw can be shared instead, with a live look at where the conversion
+     * stands and where to watch it.
+     */
+    private void showConvertingShareWarning(Take take) {
+        if (!isAdded()) return;
+        ConversionJob job = ConversionJobs.forTakeId(take.id);
+        File raw = new File(take.convRawPath);
+        Dialog dialog = new Dialog(requireContext(),
+                R.style.TakeOneCenterDialog);
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        View root = LayoutInflater.from(requireContext())
+                .inflate(R.layout.dialog_progress, null);
+        dialog.setContentView(root);
+        TextView titleView = root.findViewById(R.id.progressTitle);
+        TextView msgView = root.findViewById(R.id.progressMessage);
+        ProgressBar bar = root.findViewById(R.id.progressBar);
+        titleView.setText(R.string.conv_share_title);
+        bar.setMax(100);
+        Runnable paintWarn = () -> {
+            try {
+                ConversionJob j = job != null ? ConversionJobs.get(job.jobId)
+                        : ConversionJobs.forTakeId(take.id);
+                int pct = j != null ? Math.max(0, Math.min(100, j.progress))
+                        : take.convProgress;
+                bar.setProgress(pct);
+                msgView.setText(getString(R.string.conv_share_msg,
+                        take.title, take.convFormat, pct));
+            } catch (Exception ignored) {}
+        };
+        paintWarn.run();
+        // Live progress inside this dialog, plus the list behind it.
+        ConversionJobs.Listener progressPaint = () -> {
+            try {
+                if (dialog.isShowing()) {
+                    handler.post(paintWarn);
+                }
+            } catch (Exception ignored) {}
+        };
+        ConversionJobs.addListener(progressPaint);
+        LinearLayout buttons = new LinearLayout(requireContext());
+        buttons.setOrientation(LinearLayout.HORIZONTAL);
+        buttons.setGravity(android.view.Gravity.CENTER);
+        int pad = Math.round(8 * getResources().getDisplayMetrics().density);
+        buttons.setPadding(0, pad * 2, 0, 0);
+        TextView share = warnButton(getString(R.string.conv_share_wav));
+        share.setOnClickListener(v -> {
+            try {
+                ConversionJobs.removeListener(progressPaint);
+            } catch (Exception ignored) {}
+            try {
+                dialog.dismiss();
+            } catch (Exception ignored) {}
+            if (!raw.exists()) {
+                snackText(getString(R.string.edit_no_audio));
+                return;
+            }
+            Take rawTake = new Take(take.id, take.title + " (WAV)",
+                    take.durationMs, System.currentTimeMillis(),
+                    take.sizeLabel, "WAV", false, raw.getAbsolutePath());
+            shareFiles(singleton(rawTake));
+        });
+        TextView viewAll = warnButton(getString(R.string.conv_view_all));
+        viewAll.setOnClickListener(v -> {
+            try {
+                dialog.dismiss();
+            } catch (Exception ignored) {}
+            // Conversions pin to the top of the library with all filters
+            // cleared so every active job is visible.
+            query = "";
+            try {
+                if (searchInput != null) searchInput.setText("");
+            } catch (Exception ignored) {}
+            filter = Filter.ALL;
+            paintChips();
+            refresh();
+            scrollToConversions();
+        });
+        TextView cancel = warnButton(getString(R.string.cancel));
+        cancel.setOnClickListener(v -> {
+            try {
+                dialog.dismiss();
+            } catch (Exception ignored) {}
+        });
+        buttons.addView(share, buttonParams(1f));
+        buttons.addView(viewAll, buttonParams(1f));
+        buttons.addView(cancel, buttonParams(1f));
+        ((ViewGroup) root).addView(buttons);
+        dialog.setOnDismissListener(d -> {
+            try {
+                ConversionJobs.removeListener(progressPaint);
+            } catch (Exception ignored) {}
+        });
+        Window w = dialog.getWindow();
+        if (w != null) {
+            w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            w.setDimAmount(0.62f);
+        }
+        dialog.show();
+    }
+
+    private TextView warnButton(String text) {
+        TextView b = new TextView(requireContext());
+        b.setText(text);
+        b.setTextSize(13);
+        b.setGravity(android.view.Gravity.CENTER);
+        b.setTextColor(0xFFF2F4F7);
+        b.setBackgroundResource(R.drawable.bg_btn_ghost);
+        int v = Math.round(10 * getResources().getDisplayMetrics().density);
+        int h = Math.round(6 * getResources().getDisplayMetrics().density);
+        b.setPadding(h, v, h, v);
+        b.setSingleLine(true);
+        b.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        return b;
+    }
+
+    private LinearLayout.LayoutParams buttonParams(float weight) {
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, weight);
+        int m = Math.round(4 * getResources().getDisplayMetrics().density);
+        p.setMargins(m, 0, m, 0);
+        return p;
     }
 
     /** Singular export: Share or Export to another folder (folder picker). */
@@ -840,6 +1431,22 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             toggleSelection(take);
             return;
         }
+        if (take.converting) {
+            // Edit from the stored raw: the punch-in copies bytes out, so
+            // the running conversion is never invalidated. The negative
+            // source id lets the replace flow resolve the original later.
+            if (RecordingEngine.get().hasSession()) {
+                snackText(getString(R.string.edit_busy));
+                return;
+            }
+            File raw = new File(take.convRawPath);
+            if (!raw.exists()) {
+                snackText(getString(R.string.edit_no_audio));
+                return;
+            }
+            startEditFromFile(raw, take.id, take.title);
+            return;
+        }
         if (!take.hasFile()) {
             snackText(getString(R.string.edit_no_audio));
             return;
@@ -849,11 +1456,35 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             return;
         }
         if (playingId == take.id) stopPlayback();
+        startEditFromFile(new File(take.filePath), take.id, take.title);
+    }
+
+    /**
+     * Punch-in edit from any readable source file (a finished take or the
+     * stored raw of a converting one). The source is only ever read, so
+     * editing can never invalidate a running conversion.
+     */
+    /** Session channels for an imported file: mono stays mono (BUG-08). */
+    private static int sessionChannels(File session) {
+        try {
+            FormatConverter.WavInfo info =
+                    FormatConverter.readFloatWav(session);
+            if (info.channels == 1 || info.channels == 2) {
+                return info.channels;
+            }
+        } catch (Exception ignored) {}
+        return 2;
+    }
+
+    private void startEditFromFile(File src, long sourceId, String sourceTitle) {
+        // A4-02: capture the application context now (we are on the UI
+        // thread). The worker below must not call requireContext(): a
+        // fragment detached mid-import would otherwise abort after having
+        // already written a session file.
+        final android.content.Context appCtx =
+                requireContext().getApplicationContext();
         // Decode a copy to 32-bit float and punch in from its end. The
         // original stays in the library until the user picks replace/new.
-        final long sourceId = take.id;
-        final String sourceTitle = take.title;
-        final File src = new File(take.filePath);
         Dialog progress = showDeterminateProgress(
                 getString(R.string.importing_title),
                 getString(R.string.importing_msg, 0));
@@ -872,9 +1503,11 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             File session = null;
             String fail = null;
             try {
+                // STU-03: hold the raw while we decode it so the conversion
+                // worker cannot delete it mid-import.
+                ConversionJobs.beginRawRead(src.getAbsolutePath());
                 session = AudioImporter.takeToFloatWav(src,
-                        RecordingEngine.takesDir(
-                                requireContext().getApplicationContext()),
+                        RecordingEngine.takesDir(appCtx),
                         RecordingEngine.sanitize(sourceTitle), pct -> handler.post(() -> {
                             try {
                                 if (bar != null) bar.setProgress(pct);
@@ -884,8 +1517,8 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                             } catch (Exception ignored) {}
                         }));
                 RecordingEngine.get().attachExisting(
-                        requireContext().getApplicationContext(), session,
-                        sourceTitle, 2,
+                        appCtx, session,
+                        sourceTitle, sessionChannels(session),
                         RecordingEngine.payloadBytesOf(session));
             } catch (Exception e) {
                 fail = e.getMessage();
@@ -893,6 +1526,8 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                     // noinspection ResultOfMethodCallIgnored
                     session.delete();
                 }
+            } finally {
+                ConversionJobs.endRawRead(src.getAbsolutePath());
             }
             final File done = session;
             final String failure = fail;
@@ -903,8 +1538,8 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                 if (!isAdded()) return;
                 if (done != null && failure == null) {
                     try {
-                        EditLink.save(requireContext().getApplicationContext(),
-                                sourceId, sourceTitle, done.getAbsolutePath());
+                        EditLink.save(appCtx, sourceId, sourceTitle,
+                                done.getAbsolutePath());
                         ((MainActivity) requireActivity())
                                 .openStudioWithEdit(done, sourceId, sourceTitle);
                     } catch (Exception e) {
@@ -942,13 +1577,51 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
     }
 
     @Override
-    public void onDelete(Take take) {
+    public void onCancelConversion(Take take) {
+        showCancelConversionConfirm(take);
+    }
+
+    @Override
+    public void onDelete(Take take) {        if (take.converting) {
+            showCancelConversionConfirm(take);
+            return;
+        }
         OptionsSheet.showConfirm(requireContext(),
                 getString(R.string.delete_one_title),
                 getString(R.string.delete_one_msg, take.title),
                 getString(R.string.delete_confirm),
                 R.drawable.ic_trash, true,
                 () -> performDeleteSingle(take));
+    }
+
+    /** Delete on a converting card means cancel the conversion. */
+    private void showCancelConversionConfirm(Take take) {
+        ConversionJob job = ConversionJobs.forTakeId(take.id);
+        String target = take.convFormat != null ? take.convFormat : "";
+        OptionsSheet.showConfirm(requireContext(),
+                getString(R.string.conv_cancel_title),
+                getString(R.string.conv_cancel_msg, take.title, target),
+                getString(R.string.delete_confirm),
+                R.drawable.ic_trash, true,
+                () -> {
+                    if (playingId == take.id) stopPlayback();
+                    if (job != null) {
+                        // Tell the worker first so it stops touching a raw we
+                        // are about to delete, then cancel the registry entry.
+                        try {
+                            ConversionService.cancelJob(requireContext()
+                                    .getApplicationContext(), job.jobId);
+                        } catch (Exception ignored) {}
+                        ConversionJobs.cancel(job.jobId, true);
+                        if (job.jobId != null) {
+                            // Stop the done-broadcast from painting a false
+                            // "couldn't save" over the confirmed cancel.
+                            cancelledJobs.add(job.jobId);
+                        }
+                    }
+                    refresh();
+                    snackText(getString(R.string.conv_cancelled));
+                });
     }
 
     private void performDeleteSingle(Take take) {
@@ -1216,6 +1889,9 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         if (lower.endsWith(".m4a") || lower.endsWith(".mp4")) return "audio/mp4";
         if (lower.endsWith(".mp3")) return "audio/mpeg";
         if (lower.endsWith(".ogg")) return "audio/ogg";
+        if (lower.endsWith(".flac")) return "audio/flac";
+        if (lower.endsWith(".webm")) return "audio/webm";
+        if (lower.endsWith(".3gp") || lower.endsWith(".3gpp")) return "audio/3gpp";
         return "audio/*";
     }
 

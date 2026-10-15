@@ -622,7 +622,8 @@ public final class OptionsSheet {
         showResult(ctx, success, title, message, null);
     }
 
-    public static void showResult(Context ctx, boolean success,
+    /** @return the shown dialog, so callers/tests can drive or dismiss it. */
+    public static android.app.Dialog showResult(Context ctx, boolean success,
                                   String title, String message,
                                   Runnable onOk) {
         Dialog dialog = new Dialog(ctx, R.style.TakeOneCenterDialog);
@@ -650,10 +651,22 @@ public final class OptionsSheet {
         if (needsButton) {
             ok.setText(ctx.getString(R.string.ok_got_it));
             PressAnim.apply(ok);
+            // Run once, whichever way the dialog goes away: the button, a tap
+            // outside, or Back. The studio used to rely on this to exit and
+            // stayed open forever when the user just dismissed the popup.
+            final boolean[] fired = {false};
+            final Runnable fire = () -> {
+                if (fired[0]) return;
+                fired[0] = true;
+                try {
+                    onOk.run();
+                } catch (Exception ignored) {}
+            };
             ok.setOnClickListener(v -> {
                 dialog.dismiss();
-                onOk.run();
+                fire.run();
             });
+            dialog.setOnDismissListener(dd -> fire.run());
         }
 
         dialog.setCancelable(true);
@@ -670,7 +683,16 @@ public final class OptionsSheet {
                     if (dialog.isShowing()) dialog.dismiss();
                 } catch (Exception ignored) {}
             }, delay);
+        } else {
+            // The callback path no longer auto-dismisses (the user has to
+            // acknowledge), but a late dismissal still runs it.
+            new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                try {
+                    if (dialog.isShowing() && !success) dialog.dismiss();
+                } catch (Exception ignored) {}
+            }, 8000);
         }
+        return dialog;
     }
 
     // ---- helpers ----

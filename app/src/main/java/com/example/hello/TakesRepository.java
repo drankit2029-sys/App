@@ -99,6 +99,12 @@ public final class TakesRepository {
         } catch (Exception ignored) {}
         List<Runnable> queued;
         synchronized (TakesRepository.class) {
+            // A4-06: the DB load runs on the IO executor while a save or an
+            // import can already have called addRecording()/addTake() on
+            // another thread. Blanket-clearing would wipe those entries
+            // (and could hand out a colliding id), so keep anything already
+            // in memory and only ever move the id counter forward.
+            List<Take> pending = new ArrayList<>(TAKES);
             TAKES.clear();
             long max = 99;
             for (TakeEntity e : rows) {
@@ -108,7 +114,11 @@ public final class TakesRepository {
                     if (t.id > max) max = t.id;
                 } catch (Exception ignored) {}
             }
-            IDS.set(max + 1);
+            for (Take t : pending) {
+                TAKES.add(t);
+                if (t.id > max) max = t.id;
+            }
+            IDS.set(Math.max(IDS.get(), max + 1));
             sortByTimestampDesc();
         }
         CrashLog.breadcrumb(app, "repo rows=" + TAKES.size());
@@ -126,6 +136,19 @@ public final class TakesRepository {
             CrashLog.breadcrumb(app, "reconcile FAILED: " + e);
         }
         lastReconcile = rr;
+        // Interrupted background conversions resume from their sidecars;
+        // crash garbage (orphan parts) is swept here, before any capture.
+        // Every resurrected job is (re)started: the worker serialises them,
+        // so starting only the first would strand the rest until the next
+        // process start that happens to resweep.
+        try {
+            List<ConversionJob> resume = ConversionJobs.sweep(app);
+            for (ConversionJob job : resume) {
+                ConversionService.startJob(app, job.jobId);
+            }
+        } catch (Exception e) {
+            CrashLog.breadcrumb(app, "conversion sweep FAILED: " + e);
+        }
         synchronized (TakesRepository.class) {
             ready = true;
             queued = new ArrayList<>(READY_QUEUE);
@@ -176,6 +199,37 @@ public final class TakesRepository {
         sortByTimestampDesc();
         persistAsync(t);
         return t;
+    }
+
+    /**
+     * Edit-replace mutation shared by the studio fast path and the
+     * background worker (BUG-02): deletes the original take and inserts the
+     * re-saved file under the original title. A negative
+     * {@code originalId} means the source was still converting when the edit
+     * began — its job is cancelled and a take that finished mid-edit is
+     * resolved the same way the studio dialog does.
+     */
+    public static synchronized Take replaceRecording(long originalId,
+                                                     File saved,
+                                                     long durationMs,
+                                                     String title,
+                                                     String format) {
+        long targetId = originalId;
+        if (targetId < 0) {
+            ConversionJob srcJob = ConversionJobs.forTakeId(targetId);
+            String srcRaw = srcJob != null ? srcJob.rawPath
+                    : ConversionJobs.rawForTakeId(targetId);
+            ConversionJobs.cancelByTakeId(targetId, true);
+            Long finished = srcRaw != null
+                    ? ConversionJobs.completedTakeIdForRaw(srcRaw) : null;
+            if (finished != null) targetId = finished;
+        }
+        if (targetId >= 0) {
+            Set<Long> ids = new HashSet<>();
+            ids.add(targetId);
+            deleteMany(ids);
+        }
+        return addRecording(saved, durationMs, title, format);
     }
 
     private static Take buildTake(File file, long durationMs,
@@ -270,8 +324,12 @@ public final class TakesRepository {
             // Bring the audio back too when it went through the trash.
             if (i < op.trashPaths.size() && op.trashPaths.get(i) != null
                     && t.filePath != null) {
-                Dsp.restoreFromTrash(new File(op.trashPaths.get(i)),
-                        new File(t.filePath));
+                // A4-09: the restored file may land on a uniquified name, so
+                // follow it and persist the real path, otherwise the row
+                // points at a file that is not there.
+                File back = Dsp.restoreFromTrash(
+                        new File(op.trashPaths.get(i)), new File(t.filePath));
+                if (back != null) t.filePath = back.getAbsolutePath();
             }
             TAKES.add(pos, t);
             rows.add(TakeEntity.fromTake(t));
@@ -438,8 +496,15 @@ public final class TakesRepository {
 
         Set<String> pendingStems = new HashSet<>();
         for (File f : files) {
-            if (f.getName().endsWith(".pending")) {
-                pendingStems.add(stemOf(f.getName().replaceFirst("\\.pending$", "")));
+            // NEW-03 fix: a stem with an interrupted conversion sidecar must
+            // be left alone (sweep resumes it); otherwise the raw leftover
+            // cleaner or the orphan adopter races the worker.
+            if (f.getName().endsWith(".pending")
+                    || f.getName().endsWith(".conv.json")) {
+                String n = f.getName()
+                        .replaceFirst("\\.pending$", "")
+                        .replaceFirst("\\.conv\\.json$", "");
+                pendingStems.add(stemOf(n));
             }
         }
 
@@ -473,7 +538,8 @@ public final class TakesRepository {
         }
 
         // 2) Finalized raw leftovers: a float32 .wav sharing a stem with a
-        // finished conversion (and no .pending) is a crashed-save remnant.
+        // finished conversion (and no .pending / .conv.json) is a
+        // crashed-save remnant.
         Map<String, List<File>> byStem = new HashMap<>();
         for (File f : files) {
             if (!f.isFile() || !isAudioFile(f.getName())) continue;
@@ -551,22 +617,11 @@ public final class TakesRepository {
         return false;
     }
 
+    /** NEW-07 fix: use {@link Dsp#parseWavHeader(java.io.RandomAccessFile)}. */
     private static boolean isFloat32Wav(File f) {
-        try {
-            java.io.RandomAccessFile r = new java.io.RandomAccessFile(f, "r");
-            try {
-                if (r.length() < 44) return false;
-                byte[] h = new byte[44];
-                r.readFully(h);
-                java.nio.ByteBuffer b = java.nio.ByteBuffer.wrap(h)
-                        .order(java.nio.ByteOrder.LITTLE_ENDIAN);
-                return (b.getShort(20) & 0xFFFF) == 3
-                        && (b.getShort(34) & 0xFFFF) == 32;
-            } finally {
-                try {
-                    r.close();
-                } catch (Exception ignored) {}
-            }
+        try (java.io.RandomAccessFile r = new java.io.RandomAccessFile(f, "r")) {
+            Dsp.WavHeader h = Dsp.parseWavHeader(r);
+            return h.audioFormat == 3 && h.bits == 32;
         } catch (Exception e) {
             return false;
         }
@@ -596,7 +651,7 @@ public final class TakesRepository {
                 case "m4a": badge = "M4A"; break;
                 case "3gp": badge = "AMR"; break;
                 case "flac": badge = "FLAC"; break;
-                case "webm": badge = "WEBM"; break;
+                case "webm": badge = "OPUS"; break;
                 case "mp3": badge = "MP3"; break;
                 default: badge = ext.toUpperCase(Locale.US); break;
             }

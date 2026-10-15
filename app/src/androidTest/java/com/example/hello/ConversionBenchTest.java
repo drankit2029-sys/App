@@ -51,7 +51,7 @@ public class ConversionBenchTest {
                     buf[i * 2 + 1] = v * 0.9f;
                     phase += 2 * Math.PI * 220 / SR;
                 }
-                for (int i = 0; i < n * CH; i++) w.writeFloat(buf[i]);
+                Dsp.writeFloatsLE(w, buf, 0, n * CH);
             }
         } finally {
             w.close();

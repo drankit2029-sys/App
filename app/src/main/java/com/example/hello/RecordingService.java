@@ -17,7 +17,6 @@ import android.os.SystemClock;
 import android.widget.Toast;
 
 import java.io.File;
-import java.util.Locale;
 
 /**
  * Foreground host for an ongoing take: keeps capture alive when the app is
@@ -197,6 +196,10 @@ public class RecordingService extends Service {
                 captureStartedAt = now;
                 e.resumeCapture(getApplicationContext(),
                         RecordPreset.load(this).audioSource);
+                try {
+                    e.beginStreaming(getApplicationContext(),
+                            RecordPreset.load(this), SaveFormat.load(this));
+                } catch (Exception ignored) {}
             } else {
                 return;
             }
@@ -223,15 +226,45 @@ public class RecordingService extends Service {
             String msg;
             String title = e.takeName != null ? e.takeName : "";
             try {
+                Context appCtx = getApplicationContext();
                 RecordPreset preset = RecordPreset.load(this);
                 SaveFormat save = SaveFormat.load(this);
-                TakeSaver.Result r = TakeSaver.finalizeAndConvert(
-                        getApplicationContext(), preset, save, this::setPct);
-                TakesRepository.addRecording(
-                        r.file, r.durationMs, r.title, r.label);
-                e.clearSession();
-                ok = true;
-                msg = getString(R.string.convert_done_msg, r.title, r.label);
+                // NEW-06 fix: honour and clear stashed EditLink when saving
+                // an edited take from the notification action.
+                String rawPath = e.rawFile != null
+                        ? e.rawFile.getAbsolutePath() : null;
+                long replaceId = -1;
+                String replaceTitle = null;
+                if (EditLink.matches(appCtx, rawPath)) {
+                    replaceId = EditLink.id(appCtx);
+                    replaceTitle = EditLink.title(appCtx);
+                }
+                ConversionJobs.SaveResult r = ConversionJobs.dispatchSave(
+                        appCtx, preset, save, this::setPct,
+                        replaceId, replaceTitle);
+                EditLink.clear(appCtx);
+                if (r.adopted) {
+                    if (replaceId != -1) {
+                        String rt = replaceTitle != null
+                                && !replaceTitle.isEmpty()
+                                ? replaceTitle : r.title;
+                        TakesRepository.replaceRecording(replaceId, r.file,
+                                r.durationMs, rt, r.label);
+                    } else {
+                        TakesRepository.addRecording(r.file, r.durationMs,
+                                r.title, r.label);
+                    }
+                    e.clearSession();
+                    ok = true;
+                    msg = getString(R.string.convert_done_msg, r.title,
+                            r.label);
+                } else {
+                    // Handed to the conversion service; this service is done.
+                    ConversionService.startJob(appCtx, r.job.jobId);
+                    e.clearSession();
+                    ok = true;
+                    msg = getString(R.string.conv_bg_toast);
+                }
             } catch (Exception ex) {
                 ok = false;
                 msg = getString(R.string.convert_failed_msg, title);
@@ -242,6 +275,8 @@ public class RecordingService extends Service {
             handler.post(() -> {
                 try {
                     toast(text);
+                    convertingPct = -1;
+                    refreshNotif();
                     Intent b = new Intent(BROADCAST_DONE);
                 b.putExtra(EXTRA_OK, done);
                 b.putExtra(EXTRA_KIND, "save");
@@ -278,6 +313,7 @@ public class RecordingService extends Service {
             RecordingEngine e = RecordingEngine.get();
             String title = e.takeName != null ? e.takeName : "";
             boolean ok = e.abortAndDelete();
+            EditLink.clear(getApplicationContext());
             final String text = ok
                     ? getString(R.string.delete_success_one, title)
                     : getString(R.string.delete_failed_msg);

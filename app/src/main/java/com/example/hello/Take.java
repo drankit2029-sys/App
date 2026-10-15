@@ -21,6 +21,19 @@ public class Take {
     public long lastPositionMs;
     /** Phase-2 marker payload (JSON), reserved so the schema never migrates. */
     public String markersJson;
+    /**
+     * Transient background-conversion state. Never persisted: converting
+     * takes live only in the library list while their job runs.
+     */
+    public boolean converting;
+    /** 0..100 conversion progress for {@link #converting} takes. */
+    public int convProgress;
+    /** Target container label (e.g. "M4A") for converting takes. */
+    public String convFormat = "";
+    /** Conversion job id for converting takes. */
+    public String convJobId = "";
+    /** Raw 32-bit float source kept until conversion finishes. */
+    public String convRawPath = "";
 
     public Take(long id, String title, long durationMs, long timestamp,
                 String sizeLabel, String format, boolean favorite, String filePath) {

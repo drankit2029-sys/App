@@ -193,6 +193,47 @@ public class TeleprompterScrollBoundsTest {
         }
     }
 
+    /**
+     * The reading centre must sit in the middle of the *visible* area: the
+     * control chrome overlays the top of the panel, so the view shifts its
+     * centre down by half the chrome height.
+     */
+    @Test
+    public void readingCentreAccountsForOverlaidChrome() throws Exception {
+        android.content.Context ctx =
+                InstrumentationRegistry.getInstrumentation().getTargetContext();
+        RecordingEngine engine = RecordingEngine.get();
+        engine.abortAndDelete();
+        engine.startNewSession(ctx, "Instrumentation", 2);
+        try {
+            Activity a = launch();
+            View fab = a.findViewById(R.id.fabWrap);
+            if (fab != null) {
+                a.runOnUiThread(fab::performClick);
+                InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+            }
+            final TeleprompterView tele =
+                    (TeleprompterView) a.findViewById(R.id.teleView);
+            assertTrue("prompter not found", tele != null);
+            final View chrome = a.findViewById(R.id.teleChrome);
+            assertTrue("chrome overlay missing", chrome != null);
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+            android.os.SystemClock.sleep(300);
+
+            java.lang.reflect.Field f = TeleprompterView.class
+                    .getDeclaredField("centerShiftPx");
+            f.setAccessible(true);
+            float shift = (Float) f.get(tele);
+            float expect = chrome.getHeight() / 2f;
+            assertEquals("reading centre does not account for the chrome",
+                    expect, shift, 2f);
+            assertTrue("chrome has no height to account for",
+                    chrome.getHeight() > 0);
+        } finally {
+            engine.abortAndDelete();
+        }
+    }
+
     /** Walks up the tree so a collapsed ancestor is obvious. */
     static String describe(android.view.View v0) {
         StringBuilder sb = new StringBuilder("chain: ");

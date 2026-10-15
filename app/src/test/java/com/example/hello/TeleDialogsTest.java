@@ -28,33 +28,40 @@ public class TeleDialogsTest {
     }
 
     @Test
-    public void tunerOpensAndEveryControlBinds() {
-        final TeleSettings s = new TeleSettings();
-        final boolean[] tuned = {false};
-        TeleDialogs.showTuner(activity(), s, 900, 60f, () -> tuned[0] = true);
-        assertTrue("tuner never reported an initial tune", tuned[0]);
-        s.save(activity());
-    }
-
-    @Test
-    public void tunerSurvivesSliderSweepAndToggles() {
-        TeleSettings s = new TeleSettings();
-        TeleDialogs.showTuner(activity(), s, 600, 48f, () -> { });
-        // Drive the live settings the way the sliders would, including the
-        // extreme ends, to be sure nothing clamps badly or throws.
+    public void inlineSettingsSurviveFullRangeSweep() {
+        // The dead tuner sheet is gone; its replacement is the inline
+        // TeleValue controls, which commit through these setters. Sweep the
+        // full ranges the way a scrub would, including the extreme ends.
+        android.app.Activity a = activity();
         for (int wpm = TeleSettings.MIN_WPM; wpm <= TeleSettings.MAX_WPM;
                 wpm += 40) {
-            s.wordsPerMinute = wpm;
+            TeleSettings.setWordsPerMinute(a, wpm);
         }
         for (int sp = TeleMath.MIN_TEXT_SP; sp <= TeleMath.MAX_TEXT_SP;
                 sp += 4) {
-            s.textSizeSp = sp;
+            TeleSettings.setTextSize(a, sp);
         }
-        for (int wpl = 2; wpl <= 14; wpl++) {
-            s.wordsPerLine = wpl;
+        for (int wpl = TeleMath.MIN_WORDS_PER_LINE;
+                wpl <= TeleMath.MAX_WORDS_PER_LINE; wpl++) {
+            TeleSettings.setWordsPerLine(a, wpl);
         }
-        s.autoScroll = !s.autoScroll;
-        s.mirror = !s.mirror;
+        TeleSettings got = TeleSettings.load(a);
+        assertEquals(TeleSettings.MAX_WPM, got.wordsPerMinute);
+        assertEquals(TeleMath.MAX_TEXT_SP, got.textSizeSp);
+        assertEquals(TeleMath.MAX_WORDS_PER_LINE, got.wordsPerLine);
+    }
+
+    @Test
+    public void wplControlSpansFullRangeLive() {
+        TeleValue tv = new TeleValue(activity());
+        tv.configure(TeleMath.MIN_WORDS_PER_LINE,
+                TeleMath.MAX_WORDS_PER_LINE, 1, 5, "");
+        final int[] seen = {-1};
+        tv.setOnValueChanged(v -> seen[0] = v);
+        tv.setValue(TeleMath.MAX_WORDS_PER_LINE, true);
+        assertEquals(TeleMath.MAX_WORDS_PER_LINE, seen[0]);
+        tv.setValue(TeleMath.MIN_WORDS_PER_LINE, true);
+        assertEquals(TeleMath.MIN_WORDS_PER_LINE, seen[0]);
     }
 
     @Test
@@ -82,12 +89,21 @@ public class TeleDialogsTest {
     }
 
     @Test
-    public void editorRefusesToSaveEmptyScript() {
+    public void editorSavesEmptyScriptOnceToClear() {
+        // A4-10: an empty script is a legitimate state — it clears the
+        // prompter. The old code refused to commit it, so a script could
+        // never be cleared once set.
         final String[] saved = {null};
+        final int[] calls = {0};
         android.app.Dialog d = TeleDialogs.showEditor(activity(), "   ", 120,
-                text -> saved[0] = text, null);
+                text -> {
+                    if (calls[0] == 0) saved[0] = text;
+                    calls[0]++;
+                }, null);
         d.findViewById(R.id.teleSaveBtn).performClick();
-        assertTrue("blank script must not commit", saved[0] == null);
+        org.robolectric.shadows.ShadowLooper.idleMainLooper();
+        assertEquals("empty script must commit", 1, calls[0]);
+        assertEquals("", saved[0]);
     }
 
     @Test

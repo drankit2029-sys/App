@@ -91,22 +91,17 @@ public final class FormatConverter {
     public static WavInfo readFloatWav(File src) throws Exception {
         RandomAccessFile r = new RandomAccessFile(src, "r");
         try {
-            if (r.length() < 44) throw new IllegalStateException("too small");
-            byte[] h = new byte[44];
-            r.readFully(h);
-            ByteBuffer b = ByteBuffer.wrap(h).order(ByteOrder.LITTLE_ENDIAN);
-            int audioFormat = b.getShort(20) & 0xFFFF;
-            int ch = b.getShort(22) & 0xFFFF;
-            int sr = b.getInt(24);
-            int bits = b.getShort(34) & 0xFFFF;
-            long dataBytes = b.getInt(40) & 0xFFFFFFFFL;
-            long onDisk = Math.max(0, r.length() - 44);
+            Dsp.WavHeader h = Dsp.parseWavHeader(r);
+            long onDisk = Math.max(0, r.length() - h.dataStart);
+            long dataBytes = h.dataBytes;
             // Crash-safe: trust the bytes actually on disk over the header.
             if (dataBytes <= 0 || dataBytes > onDisk) dataBytes = onDisk;
-            if (audioFormat != 3 || bits != 32 || ch < 1 || sr <= 0) {
+            if (h.audioFormat != 3 || h.bits != 32 || h.channels < 1
+                    || h.sampleRate <= 0) {
                 throw new IllegalStateException("not 32-bit float wav");
             }
-            return new WavInfo(ch, sr, dataBytes, 44);
+            return new WavInfo(h.channels, h.sampleRate, dataBytes,
+                    h.dataStart);
         } finally {
             try {
                 r.close();
@@ -429,13 +424,28 @@ public final class FormatConverter {
                             || (head[3] & 0xFF) != 0xA3) {
                         throw new IllegalStateException("not a webm container");
                     }
-                    break;
-                case FLAC:
-                    if (head[0] != 'f' || head[1] != 'L'
-                            || head[2] != 'a' || head[3] != 'C') {
-                        throw new IllegalStateException("not a flac container");
+                    // The EBML magic is written before any audio is muxed, so
+                    // it alone would accept a truncated file with zero
+                    // clusters. Require at least one Cluster element.
+                    if (!containsBox(r, new byte[]{0x1F, 0x43,
+                            (byte) 0xB6, 0x75})) {
+                        throw new IllegalStateException(
+                                "webm has no clusters (truncated)");
                     }
                     break;
+                case FLAC: {
+                    // Magic alone is not enough: a wrong metadata block type
+                    // (0x90) or a 0 Hz sample rate produces a file every
+                    // player rejects.
+                    byte[] fh = new byte[42];
+                    r.seek(0);
+                    r.readFully(fh);
+                    if (!FlacHeader.validHead(fh)) {
+                        throw new IllegalStateException(
+                                "flac streaminfo invalid");
+                    }
+                    break;
+                }
                 case WAV16:
                 case WAV24:
                     // RIFF/WAVE; wavDurationMs() re-reads the header and
@@ -445,6 +455,11 @@ public final class FormatConverter {
                             || head[8] != 'W' || head[9] != 'A'
                             || head[10] != 'V' || head[11] != 'E') {
                         throw new IllegalStateException("not a wav container");
+                    }
+                    // A header with a zero data size is a conversion that
+                    // died before writing any payload.
+                    if (Dsp.wavDurationMs(dst) <= 0) {
+                        throw new IllegalStateException("wav has no audio");
                     }
                     break;
             }
@@ -481,197 +496,322 @@ public final class FormatConverter {
      * AMR-NB (8 kHz) or AMR-WB (16 kHz) in a .3gp container. The 48 kHz float
      * capture is mixed to mono and properly decimated through a windowed-sinc
      * lowpass (no naive downsampling, so no aliasing whistle).
+     *
+     * <p>Fully streaming: a bounded chunk plus the decimator's ~17k-sample
+     * window is all that is ever retained, so takes of any length convert
+     * with constant memory and no duration cap.
      */
     public static void toAmr(File src, File dst, boolean wideband, Progress cb)
             throws Exception {
         WavInfo info = readFloatWav(src);
         final int outRate = wideband ? 16000 : 8000;
-        final int decim = RecordingEngine.SAMPLE_RATE / outRate;
-        final double cutoff = (wideband ? 7000.0 : 3400.0) / RecordingEngine.SAMPLE_RATE;
+        final int decim = Math.max(1, info.sampleRate / outRate);
+        final double cutoff = (wideband ? 7000.0 : 3400.0) / info.sampleRate;
         final int taps = wideband ? 48 : 64;
+        Dsp.FirDecimator decimator =
+                new Dsp.FirDecimator(decim, Dsp.firLowpass(cutoff, taps));
 
-        // 1) Load + mono mix (progress 0..35).
-        long totalSamples = info.dataBytes / 4;
-        long totalFrames = totalSamples / Math.max(1, info.channels);
-        if (totalFrames > 20_000_000L) throw new IllegalStateException("too long");
-        float[] mono = new float[(int) totalFrames];
+        final int ch = info.channels;
+        final long totalFrames = info.dataBytes / 4 / Math.max(1, ch);
+        final long expectOut = totalFrames / decim;
         RandomAccessFile r = new RandomAccessFile(src, "r");
         try {
             r.seek(info.dataStart);
-            int ch = info.channels;
+            String mime = wideband ? "audio/amr-wb" : "audio/3gpp";
+            int bitrate = wideband ? 23850 : 12200;
+            MediaFormat fmt = MediaFormat.createAudioFormat(mime, outRate, 1);
+            fmt.setInteger(MediaFormat.KEY_BIT_RATE, bitrate);
+            fmt.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 32768);
+            MediaCodec enc = MediaCodec.createEncoderByType(mime);
+            enc.configure(fmt, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
+            enc.start();
+            MediaMuxer muxer = new MediaMuxer(
+                    dst.getAbsolutePath(),
+                    MediaMuxer.OutputFormat.MUXER_OUTPUT_3GPP);
+            boolean muxStarted = false;
+            int samplesWritten = 0;
+            int track = -1;
+            MediaCodec.BufferInfo bi = new MediaCodec.BufferInfo();
             byte[] in = new byte[CONV_CHUNK * ch * 4];
             java.nio.FloatBuffer fb = ByteBuffer.wrap(in)
                     .order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer();
-            long done = 0;
+            float[] mono = new float[CONV_CHUNK];
+            // NEW-08 fix: removed unused `short[] decOut` allocation.
+            // Encoder backlog: decimated shorts awaiting codec room.
+            short[] pend = new short[32768];
+            int pendLen = 0;
+            long readFrames = 0;
+            long fed = 0;
+            boolean tailFlushed = false;
+            boolean inEos = false;
+            boolean outEos = false;
             int lastPct = -1;
-            int pos = 0;
-            while (done < totalFrames) {
-                int want = (int) Math.min(CONV_CHUNK, totalFrames - done);
-                r.readFully(in, 0, want * ch * 4);
-                if (ch > 1) {
-                    for (int f = 0; f < want; f++) {
-                        float s0 = fb.get(f * 2);
-                        float s1 = fb.get(f * 2 + 1);
-                        mono[pos++] = (s0 + s1) * 0.5f;
+            long drainDeadline = 0;
+            try {
+                while (!outEos) {
+                    if (!inEos) {
+                        // 1) Produce more decimated samples while the backlog
+                        // has room and the file has frames.
+                        if (pendLen < pend.length / 2
+                                && readFrames < totalFrames) {
+                            int want = (int) Math.min(CONV_CHUNK,
+                                    totalFrames - readFrames);
+                            r.readFully(in, 0, want * ch * 4);
+                            fb.clear();
+                            fb.limit(want * ch);
+                            if (ch > 1) {
+                                for (int f = 0; f < want; f++) {
+                                    mono[f] = (fb.get(f * 2)
+                                            + fb.get(f * 2 + 1)) * 0.5f;
+                                }
+                            } else {
+                                for (int f = 0; f < want; f++) {
+                                    mono[f] = fb.get(f);
+                                }
+                            }
+                            int need = pendLen + want / decim + taps + 16;
+                            if (need > pend.length) {
+                                short[] bigger = new short[Math.max(
+                                        pend.length * 2, need)];
+                                System.arraycopy(pend, 0, bigger, 0, pendLen);
+                                pend = bigger;
+                            }
+                            pendLen += decimator.push(mono, want, pend,
+                                    pendLen);
+                            readFrames += want;
+                        } else if (readFrames >= totalFrames
+                                && !tailFlushed) {
+                            int need = pendLen + taps + 16;
+                            if (need > pend.length) {
+                                short[] bigger = new short[Math.max(
+                                        pend.length * 2, need)];
+                                System.arraycopy(pend, 0, bigger, 0, pendLen);
+                                pend = bigger;
+                            }
+                            pendLen += decimator.flush(totalFrames, pend,
+                                    pendLen);
+                            tailFlushed = true;
+                        }
+                        // 2) Feed the encoder from the backlog.
+                        int idx = enc.dequeueInputBuffer(5000);
+                        if (idx >= 0) {
+                            if (pendLen > 0) {
+                                ByteBuffer dstBuf = enc.getInputBuffer(idx);
+                                dstBuf.clear();
+                                int room = dstBuf.remaining() / 2;
+                                int want = Math.min(room, pendLen);
+                                if (want <= 0) {
+                                    enc.queueInputBuffer(idx, 0, 0, 0, 0);
+                                } else {
+                                    java.nio.ShortBuffer sb = dstBuf
+                                            .order(ByteOrder.LITTLE_ENDIAN)
+                                            .asShortBuffer();
+                                    sb.put(pend, 0, want);
+                                    dstBuf.position(0);
+                                    dstBuf.limit(want * 2);
+                                    long pts = fed * 1_000_000L / outRate;
+                                    enc.queueInputBuffer(idx, 0, want * 2,
+                                            pts, 0);
+                                    fed += want;
+                                    System.arraycopy(pend, want, pend, 0,
+                                            pendLen - want);
+                                    pendLen -= want;
+                                    if (cb != null) {
+                                        int pct = (int) (fed * 100 / Math.max(
+                                                1, expectOut));
+                                        if (pct != lastPct) {
+                                            lastPct = pct;
+                                            cb.onProgress(
+                                                    Math.min(100, pct));
+                                        }
+                                    }
+                                }
+                            } else if (tailFlushed) {
+                                enc.queueInputBuffer(idx, 0, 0, 0,
+                                        MediaCodec.BUFFER_FLAG_END_OF_STREAM);
+                                inEos = true;
+                                // Progress is already 100%; bound the drain.
+                                drainDeadline = SystemClock.elapsedRealtime()
+                                        + DRAIN_TIMEOUT_MS;
+                            }
+                            // Else: backlog momentarily empty but more file
+                            // remains — loop back to produce more.
+                        }
                     }
-                } else {
-                    for (int f = 0; f < want; f++) {
-                        mono[pos++] = fb.get(f);
+                    int oidx = enc.dequeueOutputBuffer(bi, 5000);
+                    if (oidx == MediaCodec.INFO_TRY_AGAIN_LATER) {
+                        if (inEos && SystemClock.elapsedRealtime()
+                                > drainDeadline) {
+                            throw new IllegalStateException(
+                                    "encoder never finished");
+                        }
+                    } else if (oidx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                        track = muxer.addTrack(enc.getOutputFormat());
+                        muxer.start();
+                        muxStarted = true;
+                    } else if (oidx >= 0) {
+                        ByteBuffer ob = enc.getOutputBuffer(oidx);
+                        if ((bi.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0
+                                && bi.size > 0 && muxStarted) {
+                            ob.position(bi.offset);
+                            ob.limit(bi.offset + bi.size);
+                            muxer.writeSampleData(track, ob, bi);
+                            samplesWritten++;
+                        }
+                        enc.releaseOutputBuffer(oidx, false);
+                        if ((bi.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                            outEos = true;
+                        }
                     }
                 }
-                done += want;
-                if (cb != null) {
-                    int pct = (int) (done * 35 / Math.max(1, totalFrames));
-                    if (pct != lastPct) {
-                        lastPct = pct;
-                        cb.onProgress(pct);
-                    }
-                }
+                if (cb != null) cb.onProgress(100);
+            } finally {
+                try {
+                    enc.stop();
+                } catch (Exception ignored) {}
+                try {
+                    enc.release();
+                } catch (Exception ignored) {}
+                try {
+                    if (muxStarted && samplesWritten > 0) muxer.stop();
+                } catch (Exception ignored) {}
+                try {
+                    muxer.release();
+                } catch (Exception ignored) {}
+            }
+            if (dst.length() < 512) {
+                // noinspection ResultOfMethodCallIgnored
+                dst.delete();
+                throw new IllegalStateException("amr encode failed");
             }
         } finally {
             try {
                 r.close();
             } catch (Exception ignored) {}
         }
-
-        // 2) Lowpass + decimate to 16-bit narrow/wideband PCM (progress 35..55).
-        float[] fir = firLowpass(cutoff, taps);
-        int delay = taps / 2;
-        int outLen = (int) (totalFrames / decim);
-        short[] pcm = new short[outLen];
-        int n = mono.length;
-        // The window is symmetric (firLowpass guarantees it), so each tap
-        // pair is one multiply-add instead of two: half the MACs of the
-        // straightforward loop, which is the costliest part of an AMR save.
-        int half = taps / 2;
-        for (int o = 0; o < outLen; o++) {
-            float acc = 0f;
-            int center = o * decim - delay;
-            for (int k = 0; k < half; k++) {
-                int i1 = center + k;
-                int i2 = center + taps - 1 - k;
-                float s1 = (i1 >= 0 && i1 < n) ? mono[i1] : 0f;
-                float s2 = (i2 >= 0 && i2 < n) ? mono[i2] : 0f;
-                acc += s1 * fir[k] + s2 * fir[taps - 1 - k];
-            }
-            if (acc > 1f) acc = 1f;
-            else if (acc < -1f) acc = -1f;
-            pcm[o] = (short) (acc * 32767f);
-            if (cb != null && (o & 0x3FFF) == 0) {
-                cb.onProgress(35 + (int) (o * 20L / Math.max(1, outLen)));
-            }
-        }
-        mono = null; // release before encoding
-
-        // 3) Encode + mux (progress 55..100).
-        String mime = wideband ? "audio/amr-wb" : "audio/3gpp";
-        int bitrate = wideband ? 23850 : 12200;
-        MediaFormat fmt = MediaFormat.createAudioFormat(mime, outRate, 1);
-        fmt.setInteger(MediaFormat.KEY_BIT_RATE, bitrate);
-        fmt.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 32768);
-        MediaCodec enc = MediaCodec.createEncoderByType(mime);
-        enc.configure(fmt, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
-        enc.start();
-        MediaMuxer muxer = new MediaMuxer(
-                dst.getAbsolutePath(), MediaMuxer.OutputFormat.MUXER_OUTPUT_3GPP);
-        boolean muxStarted = false;
-        int samplesWritten = 0;
-        int track = -1;
-        MediaCodec.BufferInfo bi = new MediaCodec.BufferInfo();
-        try {
-            boolean inEos = false;
-            boolean outEos = false;
-            int lastPct = 55;
-            long drainDeadline = 0;
-            long fed = 0;
-            while (!outEos) {
-                if (!inEos) {
-                    int idx = enc.dequeueInputBuffer(5000);
-                    if (idx >= 0) {
-                        ByteBuffer dstBuf = enc.getInputBuffer(idx);
-                        dstBuf.clear();
-                        int room = dstBuf.remaining() / 2;
-                        int left = pcm.length - (int) fed;
-                        int want = Math.min(room, left);
-                        if (want <= 0) {
-                            enc.queueInputBuffer(idx, 0, 0, 0,
-                                    MediaCodec.BUFFER_FLAG_END_OF_STREAM);
-                            inEos = true;
-                            // Progress is already 100%; bound the drain.
-                            drainDeadline = SystemClock.elapsedRealtime()
-                                    + DRAIN_TIMEOUT_MS;
-                        } else {
-                            java.nio.ShortBuffer sb = dstBuf
-                                    .order(ByteOrder.LITTLE_ENDIAN)
-                                    .asShortBuffer();
-                            sb.put(pcm, (int) fed, want);
-                            dstBuf.position(0);
-                            dstBuf.limit(want * 2);
-                            long pts = fed * 1_000_000L / outRate;
-                            enc.queueInputBuffer(idx, 0, want * 2, pts, 0);
-                            fed += want;
-                            if (cb != null) {
-                                int pct = 55 + (int) (fed * 45L
-                                        / Math.max(1, pcm.length));
-                                if (pct != lastPct) {
-                                    lastPct = pct;
-                                    cb.onProgress(pct);
-                                }
-                            }
-                        }
-                    }
-                }
-                int oidx = enc.dequeueOutputBuffer(bi, 5000);
-                if (oidx == MediaCodec.INFO_TRY_AGAIN_LATER) {
-                    if (inEos && SystemClock.elapsedRealtime()
-                            > drainDeadline) {
-                        throw new IllegalStateException(
-                                "encoder never finished");
-                    }
-                } else if (oidx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                    track = muxer.addTrack(enc.getOutputFormat());
-                    muxer.start();
-                    muxStarted = true;
-                } else if (oidx >= 0) {
-                    ByteBuffer ob = enc.getOutputBuffer(oidx);
-                    if ((bi.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0
-                            && bi.size > 0 && muxStarted) {
-                        ob.position(bi.offset);
-                        ob.limit(bi.offset + bi.size);
-                        muxer.writeSampleData(track, ob, bi);
-                        samplesWritten++;
-                    }
-                    enc.releaseOutputBuffer(oidx, false);
-                    if ((bi.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
-                        outEos = true;
-                    }
-                }
-            }
-            if (cb != null) cb.onProgress(100);
-        } finally {
-            try {
-                enc.stop();
-            } catch (Exception ignored) {}
-            try {
-                enc.release();
-            } catch (Exception ignored) {}
-            try {
-                if (muxStarted && samplesWritten > 0) muxer.stop();
-            } catch (Exception ignored) {}
-            try {
-                muxer.release();
-            } catch (Exception ignored) {}
-        }
-        if (dst.length() < 512) {
-            // noinspection ResultOfMethodCallIgnored
-            dst.delete();
-            throw new IllegalStateException("amr encode failed");
-        }
     }
 
-    /** Hamming-windowed sinc lowpass; pure math lives in {@link Dsp}. */
-    private static float[] firLowpass(double cutoffNorm, int taps) {
-        return Dsp.firLowpass(cutoffNorm, taps);
+    /**
+     * FLAC stream-header writer, shared by the batch converter and the
+     * incremental encoder so the two can never disagree on the layout.
+     *
+     * <p>Three defects lived here before: the metadata block header byte was
+     * written as {@code 0x90} (type 16 = reserved, which makes Android's
+     * FLACExtractor reject every saved file); the encoder's csd-0 buffer was
+     * copied from offset 0 even though Android's FLAC encoder prefixes
+     * STREAMINFO with {@code "fLaC"} and a block header, so the payload
+     * contained a duplicated magic and a 0 Hz sample rate; and
+     * {@code total_samples} stayed 0, breaking duration probing.
+     */
+    public static final class FlacHeader {
+
+        public static final int STREAMINFO_LEN = 34;
+        /** Byte offset of the 20-bit sample rate inside STREAMINFO. */
+        private static final int SI_SAMPLE_RATE = 10;
+        /** First byte of the 36-bit total-samples field (spans 13..17). */
+        private static final int SI_TOTAL_SAMPLES = 13;
+
+        private FlacHeader() {}
+
+        /**
+         * Pulls the 34-byte STREAMINFO out of an encoder csd-0 buffer,
+         * tolerating the three shapes Android ships: bare STREAMINFO,
+         * block-header-prefixed, or {@code "fLaC"}+block-header-prefixed.
+         *
+         * @return the 34 bytes, or null when the buffer holds none.
+         */
+        public static byte[] streamInfoFromCsd(ByteBuffer csd) {
+            if (csd == null || csd.remaining() < STREAMINFO_LEN) return null;
+            int start = csd.position();
+            int skip = 0;
+            if (csd.remaining() >= 42) {
+                int p = csd.position();
+                if (csd.get(p) == 'f' && csd.get(p + 1) == 'L'
+                        && csd.get(p + 2) == 'a' && csd.get(p + 3) == 'C') {
+                    // "fLaC" + [0x80 0x00 0x00 0x22] + STREAMINFO
+                    skip = 8;
+                }
+            }
+            if (skip == 0 && csd.remaining() >= 38
+                    && (csd.get(csd.position()) & 0x7F) == 0
+                    && csd.get(csd.position() + 1) == 0
+                    && csd.get(csd.position() + 2) == 0
+                    && (csd.get(csd.position() + 3) & 0xFF)
+                    == STREAMINFO_LEN) {
+                // block header + STREAMINFO
+                skip = 4;
+            }
+            if (csd.remaining() - skip < STREAMINFO_LEN) return null;
+            byte[] si = new byte[STREAMINFO_LEN];
+            ByteBuffer view = csd.duplicate();
+            view.position(view.position() + skip);
+            view.get(si);
+            csd.position(start);
+            return si;
+        }
+
+        /** Writes {@code fLaC} + the last-STREAMINFO block header + payload. */
+        public static void write(java.io.OutputStream out, byte[] si)
+                throws Exception {
+            out.write(new byte[]{'f', 'L', 'a', 'C'});
+            // bit 7 = last-metadata-block, bits 6..0 = type 0 (STREAMINFO).
+            out.write(0x80);
+            out.write(0x00);
+            out.write(0x00);
+            out.write(STREAMINFO_LEN);
+            out.write(si);
+        }
+
+        /**
+         * Patches the 36-bit total-samples field so players can report a
+         * duration. The encoder streams, so it leaves this at 0.
+         *
+         * <p>Layout: low 4 bits of STREAMINFO byte 13, then bytes 14..17.
+         */
+        public static void patchTotalSamples(RandomAccessFile r,
+                                              long totalSamples)
+                throws Exception {
+            if (totalSamples <= 0 || totalSamples >= (1L << 36)) return;
+            byte[] si = new byte[STREAMINFO_LEN];
+            r.seek(8 + SI_TOTAL_SAMPLES - 1); // byte 12: keep its high bits
+            r.readFully(si, SI_TOTAL_SAMPLES - 1, 5);
+            si[SI_TOTAL_SAMPLES] = (byte) ((si[SI_TOTAL_SAMPLES] & 0xF0)
+                    | ((totalSamples >>> 32) & 0x0F));
+            si[SI_TOTAL_SAMPLES + 1] = (byte) (totalSamples >>> 24);
+            si[SI_TOTAL_SAMPLES + 2] = (byte) (totalSamples >>> 16);
+            si[SI_TOTAL_SAMPLES + 3] = (byte) (totalSamples >>> 8);
+            si[SI_TOTAL_SAMPLES + 4] = (byte) totalSamples;
+            r.seek(8 + SI_TOTAL_SAMPLES - 1);
+            r.write(si, SI_TOTAL_SAMPLES - 1, 5);
+        }
+
+        /** Sample rate in Hz from a 34-byte STREAMINFO. */
+        public static int sampleRate(byte[] si) {
+            if (si == null || si.length < 21) return 0;
+            return ((si[SI_SAMPLE_RATE] & 0xFF) << 12)
+                    | ((si[SI_SAMPLE_RATE + 1] & 0xFF) << 4)
+                    | ((si[SI_SAMPLE_RATE + 2] & 0xF0) >>> 4);
+        }
+
+        /**
+         * Structural check on the first 42 bytes of a FLAC file: magic,
+         * a STREAMINFO last-block header with the right length, no nested
+         * magic, and a non-zero sample rate.
+         */
+        public static boolean validHead(byte[] head) {
+            if (head == null || head.length < 42) return false;
+            if (head[0] != 'f' || head[1] != 'L' || head[2] != 'a'
+                    || head[3] != 'C') return false;
+            if ((head[4] & 0x7F) != 0) return false;   // type must be 0
+            if ((head[5] & 0xFF) != 0 || (head[6] & 0xFF) != 0
+                    || (head[7] & 0xFF) != STREAMINFO_LEN) return false;
+            if (head[8] == 'f' && head[9] == 'L' && head[10] == 'a'
+                    && head[11] == 'C') return false;   // duplicated magic
+            int rate = ((head[8 + SI_SAMPLE_RATE] & 0xFF) << 12)
+                    | ((head[8 + SI_SAMPLE_RATE + 1] & 0xFF) << 4)
+                    | ((head[8 + SI_SAMPLE_RATE + 2] & 0xF0) >>> 4);
+            return rate > 0;
+        }
     }
 
     /**
@@ -693,7 +833,8 @@ public final class FormatConverter {
         java.io.FileOutputStream out = new java.io.FileOutputStream(dst);
         boolean ok = false;
         try {
-            out.write(new byte[]{'f', 'L', 'a', 'C'});
+            // No magic here: FlacHeader.write() emits "fLaC" with the
+            // STREAMINFO block once the encoder publishes its config.
             boolean wroteInfo = false;
             // Frames can precede the format change; hold them until the
             // STREAMINFO header is written so no audio is lost.
@@ -756,19 +897,16 @@ public final class FormatConverter {
                     } else if (oidx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                         try {
                             MediaFormat of = enc.getOutputFormat();
-                            ByteBuffer csd = of.getByteBuffer("csd-0");
-                            if (csd != null && csd.remaining() >= 34 && !wroteInfo) {
-                                byte[] si = new byte[34];
-                                csd.get(si);
-                                out.write(0x90); // last-metadata-block + STREAMINFO
-                                out.write(0);
-                                out.write(0);
-                                out.write(34);
-                                out.write(si);
-                                wroteInfo = true;
-                                if (pending.size() > 0) {
-                                    pending.writeTo(out);
-                                    pending.reset();
+                            if (!wroteInfo) {
+                                byte[] si = FlacHeader.streamInfoFromCsd(
+                                        of.getByteBuffer("csd-0"));
+                                if (si != null) {
+                                    FlacHeader.write(out, si);
+                                    wroteInfo = true;
+                                    if (pending.size() > 0) {
+                                        pending.writeTo(out);
+                                        pending.reset();
+                                    }
                                 }
                             }
                         } catch (Exception ignored) {}
@@ -806,6 +944,16 @@ public final class FormatConverter {
                 } catch (Exception ignored) {}
             }
             out.flush();
+            // The encoder streams, so STREAMINFO's total_samples is 0; patch
+            // it now that the frame count is known.
+            try {
+                RandomAccessFile rr = new RandomAccessFile(dst, "rw");
+                try {
+                    FlacHeader.patchTotalSamples(rr, totalFrames);
+                } finally {
+                    rr.close();
+                }
+            } catch (Exception ignored) {}
             ok = wroteInfo && dst.length() > 1024;
             if (cb != null) cb.onProgress(100);
         } finally {

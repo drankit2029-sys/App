@@ -40,9 +40,11 @@ public class EncodeFormatsTest {
         try {
             w.setLength(0);
             w.write(hdr);
+            float[] buf03 = new float[frames * 2];
             for (int i = 0; i < frames * 2; i++) {
-                w.writeFloat((float) Math.sin(i * 0.03) * 0.5f);
+                buf03[i] = (float) Math.sin(i * 0.03) * 0.5f;
             }
+            Dsp.writeFloatsLE(w, buf03, 0, buf03.length);
         } finally {
             w.close();
         }
@@ -129,9 +131,11 @@ public class EncodeFormatsTest {
         RandomAccessFile w = new RandomAccessFile(raw, "rw");
         try {
             w.seek(w.length());
+            float[] buf05 = new float[frames * 2];
             for (int i = 0; i < frames * 2; i++) {
-                w.writeFloat((float) Math.sin(i * 0.05) * 0.4f);
+                buf05[i] = (float) Math.sin(i * 0.05) * 0.4f;
             }
+            Dsp.writeFloatsLE(w, buf05, 0, buf05.length);
         } finally {
             w.close();
         }
@@ -175,9 +179,11 @@ public class EncodeFormatsTest {
         RandomAccessFile w = new RandomAccessFile(raw, "rw");
         try {
             w.seek(w.length());
+            float[] buf05 = new float[frames * 2];
             for (int i = 0; i < frames * 2; i++) {
-                w.writeFloat((float) Math.sin(i * 0.05) * 0.4f);
+                buf05[i] = (float) Math.sin(i * 0.05) * 0.4f;
             }
+            Dsp.writeFloatsLE(w, buf05, 0, buf05.length);
         } finally {
             w.close();
         }

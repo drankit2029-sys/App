@@ -41,14 +41,18 @@ public class TeleprompterView extends View {
 
     private String script = "";
     private float textSizePx = 44f;
-    private boolean previewingSize;
-    private float previewSizePx = 44f;
     private int wordsPerLine = TeleMath.MIN_WORDS_PER_LINE;
     private int textColor = 0xFFF2F4F7;
     private boolean mirror;
 
     private float fadePx = 0f;
-    private float solidBand = 0.20f;
+
+    /**
+     * Downward shift of the reading centre, in pixels. The control chrome
+     * overlays the top of the panel, so the brightest line must sit at the
+     * middle of the *visible* area — not the middle of the view.
+     */
+    private float centerShiftPx = 0f;
 
     private float scrollOffset = 0f;
     private float maxScroll = 0f;
@@ -90,7 +94,6 @@ public class TeleprompterView extends View {
 
     public void setScript(String text) {
         script = text == null ? "" : text;
-        previewingSize = false;
         // A new script always starts at the top; preserving an old fractional
         // line across unrelated content would show an arbitrary position.
         scrollOffset = 0f;
@@ -104,7 +107,6 @@ public class TeleprompterView extends View {
     }
 
     public void setTextSizePx(float px) {
-        previewingSize = false;
         if (px > 0f && Math.abs(px - textSizePx) > 0.5f) {
             float linePosition = linePosition();
             textSizePx = px;
@@ -114,28 +116,26 @@ public class TeleprompterView extends View {
         }
     }
 
-    /**
-     * Live size preview while a value control is being scrubbed. Unlike
-     * {@link #setTextSizePx(float)}, this changes only the rendered size and
-     * never re-splits the script, so the visible words do not snap to new
-     * lines until the caller commits the value.
-     */
-    public void previewTextSizePx(float px) {
-        if (px > 0f && Math.abs(px - renderedTextSizePx()) > 0.01f) {
-            previewingSize = true;
-            previewSizePx = px;
-            recomputeMaxScroll();
-            invalidate();
-        }
-    }
-
     public float getTextSizePx() {
         return textSizePx;
     }
 
-    /** Size actually being drawn, including an uncommitted scrub preview. */
+    /** Size actually being drawn. Kept while live scrubbing commits go through
+     * {@link #setTextSizePx(float)} on every move. */
     public float renderedTextSizePx() {
-        return previewingSize ? previewSizePx : textSizePx;
+        return textSizePx;
+    }
+
+    /**
+     * Shifts the reading centre down so the focused line lands in the middle
+     * of the visible area when chrome overlays the top of the panel.
+     */
+    public void setCenterShiftPx(float px) {
+        float clamped = Math.max(0f, px);
+        if (Math.abs(clamped - centerShiftPx) > 0.5f) {
+            centerShiftPx = clamped;
+            invalidate();
+        }
     }
 
     public void setWordsPerLine(int wpl) {
@@ -337,16 +337,38 @@ public class TeleprompterView extends View {
      * Baseline for the beginning of the visible window.
      *
      * <p>The absolute baseline of segment {@code absoluteIndex} is always
-     * {@code viewHeight / 2 - scrollOffset + absoluteIndex * lineHeight}. When
+     * {@code centreY - scrollOffset + absoluteIndex * lineHeight}. When
      * only the visible window is drawn, its first segment is therefore not at
      * the nominal first baseline: the window start must retain
      * {@code firstSegment * lineHeight}. Omitting that term is what used to
      * make every line snap upward by one full line each time scrolling crossed
      * a line boundary.
      */
-    static float windowStartBaseline(float viewHeight, float scrollOffset,
+    static float windowStartBaseline(float centreY, float scrollOffset,
                                      int firstSegment, float lineHeight) {
-        return viewHeight / 2f - scrollOffset + firstSegment * lineHeight;
+        return centreY - scrollOffset + firstSegment * lineHeight;
+    }
+
+    /**
+     * First segment to draw for a scroll position: one line above the top
+     * edge, so the uppermost line slides smoothly out of the panel instead
+     * of popping out of existence while still well inside it.
+     */
+    static int drawStartForScroll(float centreY, float scrollOffset,
+                                  float lineHeight) {
+        return (int) Math.floor((scrollOffset - centreY) / lineHeight) - 1;
+    }
+
+    /**
+     * How many segments to draw starting at {@code drawFrom} (whose baseline
+     * is {@code drawBaseline}) so the window reaches past the bottom edge
+     * with one line of margin.
+     */
+    static int drawCountForScroll(float drawBaseline, float lineHeight,
+                                  int viewHeight) {
+        int n = (int) Math.ceil(
+                (viewHeight + lineHeight - drawBaseline) / lineHeight) + 1;
+        return Math.max(0, n);
     }
 
     /**
@@ -376,25 +398,32 @@ public class TeleprompterView extends View {
         float lh = lineHeight();
         int count = visibleLineCount();
 
-        // Short script: park it in the middle of the panel and do not scroll.
-        float centreY = h / 2f;
-        float firstBaseline;
-        int fromIndex;
+        // Reading centre: the middle of the visible area, pushed down when
+        // chrome overlays the top of the panel.
+        float centreY = h / 2f + centerShiftPx;
+        int drawFrom;
+        float drawBaseline;
+        int drawCount;
         if (segments.isEmpty()) {
             return;
         }
         if (totalLinesFits(count)) {
-            firstBaseline = centreY
-                    - (segments.size() - 1) * lh / 2f + lh * 0.36f;
-            fromIndex = 0;
+            drawFrom = 0;
+            drawBaseline = centreY - (segments.size() - 1) * lh / 2f
+                    + lh * 0.36f;
+            drawCount = segments.size();
         } else {
-            fromIndex = (int) Math.floor(scrollOffset / lh);
-            firstBaseline = windowStartBaseline(h, scrollOffset, fromIndex, lh);
+            // The window starts at the top edge — not one line above the
+            // reading centre. Starting at the scroll position only drew a
+            // single line above the centre, so every line vanished abruptly
+            // a couple of lines above the middle instead of travelling up
+            // to the top of the panel.
+            drawFrom = drawStartForScroll(centreY, scrollOffset, lh);
+            drawBaseline = windowStartBaseline(centreY, scrollOffset,
+                    drawFrom, lh);
+            drawCount = drawCountForScroll(drawBaseline, lh, h);
         }
-
-        // Window of exactly `count` segments, padded with empty segments so a
-        // partially-scrolled script never indexes out of bounds.
-        String[] window = windowForScroll(segments, count, fromIndex);
+        String[] window = windowForScroll(segments, drawCount, drawFrom);
 
         int save = canvas.save();
         if (mirror) {
@@ -410,10 +439,12 @@ public class TeleprompterView extends View {
         textPaint.setXfermode(null);
 
         float centreX = w / 2f;
-        float baseline = firstBaseline;
+        float baseline = drawBaseline;
         float baselineAlphaFloor = 0.30f;
         for (String line : window) {
-            float a = TeleMath.fadeAlpha(baseline, h, fadePx);
+            // Fade is symmetric about the reading centre, not the view
+            // centre, so the brightest line is always the middle one.
+            float a = TeleMath.fadeAlpha(baseline - centerShiftPx, h, fadePx);
             if (!line.isEmpty() && a > 0.01f) {
                 textPaint.setAlpha(Math.round(255f
                         * Math.max(baselineAlphaFloor, a)));
@@ -423,10 +454,23 @@ public class TeleprompterView extends View {
         }
         textPaint.setAlpha(255);
 
+        // Faint reading tick on the centre line: the eye's anchor. Kept to
+        // the middle third so it never reads as edge-to-edge chrome.
+        textPaint.setColor(0xFFFFFFFF);
+        textPaint.setAlpha(28);
+        textPaint.setStrokeWidth(Math.max(1f,
+                getResources().getDisplayMetrics().density));
+        canvas.drawLine(w * 0.32f, centreY, w * 0.68f, centreY, textPaint);
+        textPaint.setAlpha(255);
+
         maskPaint.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.DST_IN));
+        // Opaque band follows the reading centre: 30% of the height each
+        // side, clamped into the view.
+        float opaqueTop = Math.max(0f, (centreY - h * 0.30f) / h);
+        float opaqueBottom = Math.min(1f, (centreY + h * 0.30f) / h);
         maskPaint.setShader(new LinearGradient(0, 0, 0, h,
                 new int[]{0x00000000, 0xFF000000, 0xFF000000, 0x00000000},
-                new float[]{0f, solidBand, 1f - solidBand, 1f},
+                new float[]{0f, opaqueTop, opaqueBottom, 1f},
                 Shader.TileMode.CLAMP));
         canvas.drawRect(0, 0, w, h, maskPaint);
         maskPaint.setShader(null);
@@ -445,6 +489,7 @@ public class TeleprompterView extends View {
 
     // ---- dragging the script by hand ----
 
+    private float downX;
     private float downY;
     private float lastTouchY;
     private int activePointer = -1;
@@ -459,6 +504,7 @@ public class TeleprompterView extends View {
         switch (event.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
                 activePointer = event.getPointerId(0);
+                downX = event.getX();
                 downY = event.getY();
                 lastTouchY = event.getY();
                 dragging = false;
@@ -471,9 +517,17 @@ public class TeleprompterView extends View {
                 if (idx < 0) return true;
                 float y = event.getY(idx);
                 float dy = y - lastTouchY;
+                // A4-11: the horizontal term used event.getX() - event.getX(0),
+                // which is always 0, so any horizontal swipe with a little
+                // vertical movement started a scroll. Compare against the
+                // recorded downX instead.
                 if (!dragging && Math.abs(y - downY) > touchSlopPx()
-                        && Math.abs(y - downY) > Math.abs(event.getX() - event.getX(0))) {
+                        && Math.abs(y - downY)
+                        > Math.abs(event.getX(idx) - downX)) {
                     dragging = true;
+                    // Re-anchor so the first frames of travel do not jump by
+                    // the slop that was just crossed.
+                    lastTouchY = y;
                 }
                 if (dragging) {
                     // Drag down moves the text down, i.e. back through the script.
