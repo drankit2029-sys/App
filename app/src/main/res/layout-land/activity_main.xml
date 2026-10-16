@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg"
+    android:fitsSystemWindows="true">
+
+    <FrameLayout
+        android:id="@+id/container"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- Right-docked vertical transport rail in landscape -->
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="end|center_vertical"
+        android:layout_marginEnd="14dp"
+        android:gravity="center"
+        android:orientation="vertical">
+
+        <FrameLayout
+            android:id="@+id/fabStopWrap"
+            android:layout_width="56dp"
+            android:layout_height="56dp"
+            android:layout_marginBottom="12dp"
+            android:background="@drawable/bg_round_btn"
+            android:clickable="true"
+            android:contentDescription="@string/action_stop"
+            android:focusable="true"
+            android:visibility="gone">
+
+            <ImageView
+                android:id="@+id/fabStopIcon"
+                android:layout_width="24dp"
+                android:layout_height="24dp"
+                android:layout_gravity="center"
+                android:src="@drawable/ic_circle_stop" />
+        </FrameLayout>
+
+        <FrameLayout
+            android:id="@+id/fabWrap"
+            android:layout_width="76dp"
+            android:layout_height="76dp"
+            android:clickable="true"
+            android:contentDescription="@string/cd_mic"
+            android:focusable="true">
+
+            <View
+                android:id="@+id/fabHalo"
+                android:layout_width="76dp"
+                android:layout_height="76dp"
+                android:layout_gravity="center"
+                android:background="@drawable/fab_halo" />
+
+            <FrameLayout
+                android:id="@+id/fabCore"
+                android:layout_width="58dp"
+                android:layout_height="58dp"
+                android:layout_gravity="center"
+                android:background="@drawable/fab_core"
+                android:elevation="6dp">
+
+                <ImageView
+                    android:id="@+id/fabIcon"
+                    android:layout_width="26dp"
+                    android:layout_height="26dp"
+                    android:layout_gravity="center"
+                    android:src="@drawable/ic_mic" />
+            </FrameLayout>
+        </FrameLayout>
+    </LinearLayout>
+
+</FrameLayout>

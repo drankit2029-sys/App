@@ -1,0 +1,530 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg"
+    android:orientation="vertical"
+    android:paddingBottom="6dp">
+
+    <!-- Compact single-row landscape top bar (38dp) -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="38dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingLeft="8dp"
+        android:paddingRight="14dp">
+
+        <ImageView
+            android:id="@+id/backBtn"
+            android:layout_width="40dp"
+            android:layout_height="34dp"
+            android:contentDescription="@string/cd_back"
+            android:padding="8dp"
+            android:src="@drawable/ic_arrow_left" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:fontFamily="sans-serif-medium"
+            android:text="@string/studio_title"
+            android:textColor="@color/text_primary"
+            android:textSize="16sp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:layout_marginEnd="8dp"
+            android:text="•"
+            android:textColor="@color/text_hint"
+            android:textSize="13sp" />
+
+        <TextView
+            android:id="@+id/statusText"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:clickable="true"
+            android:ellipsize="end"
+            android:focusable="true"
+            android:maxLines="1"
+            android:text="@string/studio_ready"
+            android:textColor="@color/text_secondary"
+            android:textSize="13sp" />
+
+        <View
+            android:id="@+id/statusDot"
+            android:layout_width="8dp"
+            android:layout_height="8dp"
+            android:layout_marginEnd="6dp"
+            android:background="@drawable/bg_round_btn" />
+
+        <TextView
+            android:id="@+id/stateLabel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="8dp"
+            android:letterSpacing="0.1"
+            android:text="@string/studio_ready"
+            android:textColor="@color/text_secondary"
+            android:textSize="11sp" />
+
+        <TextView
+            android:id="@+id/draftBadge"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="8dp"
+            android:background="@drawable/bg_badge"
+            android:paddingLeft="8dp"
+            android:paddingTop="2dp"
+            android:paddingRight="8dp"
+            android:paddingBottom="2dp"
+            android:text="@string/studio_streaming"
+            android:textColor="@color/record"
+            android:textSize="10sp"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/formatBadge"
+            android:layout_width="wrap_content"
+            android:layout_height="24dp"
+            android:background="@drawable/bg_badge"
+            android:gravity="center"
+            android:paddingLeft="10dp"
+            android:paddingRight="10dp"
+            android:text="@string/preset_memo"
+            android:textColor="@color/text_secondary"
+            android:textSize="10sp" />
+    </LinearLayout>
+
+    <!-- Main 2-Pane Workspace: Left = Teleprompter, Right = DAW Console -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:orientation="horizontal"
+        android:paddingLeft="12dp"
+        android:paddingRight="100dp">
+
+        <!-- Left Pane: Teleprompter (expands to full height; hides cleanly when toggled off) -->
+        <FrameLayout
+            android:id="@+id/telePanel"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_marginEnd="10dp"
+            android:layout_weight="1.15"
+            android:background="@drawable/bg_search"
+            android:clipChildren="true">
+
+            <com.example.hello.TeleprompterView
+                android:id="@+id/teleView"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
+
+            <LinearLayout
+                android:id="@+id/teleChrome"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="@drawable/bg_tele_chrome"
+                android:orientation="vertical"
+                android:paddingBottom="4dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:paddingLeft="10dp"
+                    android:paddingRight="6dp">
+
+                    <TextView
+                        android:id="@+id/teleTitle"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:ellipsize="end"
+                        android:letterSpacing="0.1"
+                        android:maxLines="1"
+                        android:text="@string/teleprompter"
+                        android:textColor="@color/text_hint"
+                        android:textSize="10sp" />
+
+                    <TextView
+                        android:id="@+id/teleEditBtn"
+                        android:layout_width="wrap_content"
+                        android:layout_height="26dp"
+                        android:background="@drawable/bg_round_btn"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:gravity="center"
+                        android:paddingLeft="10dp"
+                        android:paddingRight="10dp"
+                        android:text="@string/tele_edit"
+                        android:textColor="@color/text_primary"
+                        android:textSize="10sp" />
+
+                    <TextView
+                        android:id="@+id/teleHideBtn"
+                        android:layout_width="wrap_content"
+                        android:layout_height="26dp"
+                        android:layout_marginStart="4dp"
+                        android:background="@drawable/bg_round_btn"
+                        android:clickable="true"
+                        android:contentDescription="@string/tele_hide"
+                        android:focusable="true"
+                        android:gravity="center"
+                        android:paddingLeft="10dp"
+                        android:paddingRight="10dp"
+                        android:text="@string/tele_hide_short"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="10sp" />
+
+                    <TextView
+                        android:id="@+id/telePauseBtn"
+                        android:layout_width="wrap_content"
+                        android:layout_height="26dp"
+                        android:layout_marginStart="4dp"
+                        android:background="@drawable/bg_round_btn"
+                        android:clickable="true"
+                        android:contentDescription="@string/tele_pause"
+                        android:focusable="true"
+                        android:gravity="center"
+                        android:paddingLeft="10dp"
+                        android:paddingRight="10dp"
+                        android:text="@string/tele_resume_short"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="10sp" />
+
+                    <TextView
+                        android:id="@+id/teleMirrorBtn"
+                        android:layout_width="wrap_content"
+                        android:layout_height="26dp"
+                        android:layout_marginStart="4dp"
+                        android:background="@drawable/bg_round_btn"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:gravity="center"
+                        android:paddingLeft="8dp"
+                        android:paddingRight="8dp"
+                        android:text="@string/tele_mirror_short"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="10sp" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/teleControls"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:paddingLeft="10dp"
+                    android:paddingRight="10dp">
+
+                    <com.example.hello.TeleValue
+                        android:id="@+id/teleSizeValue"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginEnd="4dp"
+                        android:layout_weight="1" />
+
+                    <com.example.hello.TeleValue
+                        android:id="@+id/teleSpeedValue"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginEnd="4dp"
+                        android:layout_weight="1" />
+
+                    <com.example.hello.TeleValue
+                        android:id="@+id/teleWplValue"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1" />
+                </LinearLayout>
+            </LinearLayout>
+        </FrameLayout>
+
+        <!-- Right Pane: DAW Console (dB Meter | Waveform + Editor Strip + Timer + Pills) -->
+        <LinearLayout
+            android:id="@+id/recStrip"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <com.example.hello.DbMeterView
+                android:id="@+id/dbMeter"
+                android:layout_width="8dp"
+                android:layout_height="match_parent"
+                android:layout_marginTop="4dp"
+                android:layout_marginBottom="4dp" />
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_marginStart="10dp"
+                android:layout_weight="1"
+                android:gravity="center_vertical"
+                android:orientation="vertical">
+
+                <!-- Waveform + Zoom Rail -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <com.example.hello.WaveformView
+                        android:id="@+id/waveform"
+                        android:layout_width="0dp"
+                        android:layout_height="match_parent"
+                        android:layout_weight="1" />
+
+                    <LinearLayout
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="6dp"
+                        android:gravity="center"
+                        android:orientation="vertical">
+
+                        <com.example.hello.TeleValue
+                            android:id="@+id/zoomValue"
+                            android:layout_width="40dp"
+                            android:layout_height="wrap_content" />
+                    </LinearLayout>
+                </LinearLayout>
+
+                <!-- Non-Linear Editor & FX Strip -->
+                <HorizontalScrollView
+                    android:id="@+id/editorStrip"
+                    android:layout_width="match_parent"
+                    android:layout_height="34dp"
+                    android:layout_marginTop="4dp"
+                    android:scrollbars="none"
+                    android:visibility="gone">
+
+                    <LinearLayout
+                        android:layout_width="wrap_content"
+                        android:layout_height="match_parent"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:id="@+id/btnPreviewPlay"
+                            android:layout_width="wrap_content"
+                            android:layout_height="30dp"
+                            android:background="@drawable/bg_chip"
+                            android:gravity="center"
+                            android:paddingLeft="10dp"
+                            android:paddingRight="10dp"
+                            android:text="▶ Preview"
+                            android:textColor="@color/text_primary"
+                            android:textSize="11sp" />
+
+                        <TextView
+                            android:id="@+id/btnSelectRange"
+                            android:layout_width="wrap_content"
+                            android:layout_height="30dp"
+                            android:layout_marginStart="6dp"
+                            android:background="@drawable/bg_chip"
+                            android:gravity="center"
+                            android:paddingLeft="10dp"
+                            android:paddingRight="10dp"
+                            android:text="[ ] Select"
+                            android:textColor="@color/text_secondary"
+                            android:textSize="11sp" />
+
+                        <TextView
+                            android:id="@+id/btnTrimCrop"
+                            android:layout_width="wrap_content"
+                            android:layout_height="30dp"
+                            android:layout_marginStart="6dp"
+                            android:background="@drawable/bg_chip"
+                            android:gravity="center"
+                            android:paddingLeft="10dp"
+                            android:paddingRight="10dp"
+                            android:text="Trim"
+                            android:textColor="@color/text_secondary"
+                            android:textSize="11sp" />
+
+                        <TextView
+                            android:id="@+id/btnCutDelete"
+                            android:layout_width="wrap_content"
+                            android:layout_height="30dp"
+                            android:layout_marginStart="6dp"
+                            android:background="@drawable/bg_chip"
+                            android:gravity="center"
+                            android:paddingLeft="10dp"
+                            android:paddingRight="10dp"
+                            android:text="Cut"
+                            android:textColor="@color/text_secondary"
+                            android:textSize="11sp" />
+
+                        <TextView
+                            android:id="@+id/btnDspFx"
+                            android:layout_width="wrap_content"
+                            android:layout_height="30dp"
+                            android:layout_marginStart="6dp"
+                            android:background="@drawable/bg_chip"
+                            android:gravity="center"
+                            android:paddingLeft="10dp"
+                            android:paddingRight="10dp"
+                            android:text="FX Off"
+                            android:textColor="@color/text_secondary"
+                            android:textSize="11sp" />
+
+                        <TextView
+                            android:id="@+id/btnEditUndo"
+                            android:layout_width="wrap_content"
+                            android:layout_height="30dp"
+                            android:layout_marginStart="6dp"
+                            android:background="@drawable/bg_chip"
+                            android:gravity="center"
+                            android:paddingLeft="10dp"
+                            android:paddingRight="10dp"
+                            android:text="Undo"
+                            android:textColor="@color/text_hint"
+                            android:textSize="11sp" />
+                    </LinearLayout>
+                </HorizontalScrollView>
+
+                <!-- Timer + Preset/Teleprompter Pills -->
+                <TextView
+                    android:id="@+id/timerText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:fontFamily="sans-serif-light"
+                    android:gravity="center"
+                    android:text="00:00.00"
+                    android:textColor="@color/text_primary"
+                    android:textSize="28sp" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:orientation="horizontal">
+
+                    <LinearLayout
+                        android:id="@+id/settingsRow"
+                        android:layout_width="0dp"
+                        android:layout_height="36dp"
+                        android:layout_marginEnd="3dp"
+                        android:layout_weight="1"
+                        android:background="@drawable/bg_search"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:paddingLeft="8dp"
+                        android:paddingRight="6dp">
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:id="@+id/settingsName"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:ellipsize="end"
+                                android:fontFamily="sans-serif-medium"
+                                android:maxLines="1"
+                                android:text="@string/preset_memo"
+                                android:textColor="@color/text_primary"
+                                android:textSize="11sp" />
+
+                            <TextView
+                                android:id="@+id/settingsSub"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:ellipsize="end"
+                                android:maxLines="1"
+                                android:textColor="@color/text_secondary"
+                                android:textSize="9sp" />
+                        </LinearLayout>
+
+                        <ImageView
+                            android:layout_width="14dp"
+                            android:layout_height="14dp"
+                            android:alpha="0.6"
+                            android:src="@drawable/ic_chevron" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:id="@+id/teleToggle"
+                        android:layout_width="0dp"
+                        android:layout_height="36dp"
+                        android:layout_marginStart="3dp"
+                        android:layout_weight="1"
+                        android:background="@drawable/bg_search"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:paddingLeft="8dp"
+                        android:paddingRight="8dp">
+
+                        <ImageView
+                            android:id="@+id/teleToggleIcon"
+                            android:layout_width="14dp"
+                            android:layout_height="14dp"
+                            android:alpha="0.75"
+                            android:src="@drawable/ic_pencil" />
+
+                        <TextView
+                            android:id="@+id/teleState"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="6dp"
+                            android:layout_weight="1"
+                            android:ellipsize="end"
+                            android:fontFamily="sans-serif-medium"
+                            android:maxLines="1"
+                            android:text="@string/tele_show"
+                            android:textColor="@color/text_primary"
+                            android:textSize="11sp" />
+                    </LinearLayout>
+                </LinearLayout>
+
+                <!-- Bottom Take Name + Hint Row -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:id="@+id/takeName"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:clickable="true"
+                        android:ellipsize="end"
+                        android:focusable="true"
+                        android:gravity="center"
+                        android:maxLines="1"
+                        android:textColor="@color/text_hint"
+                        android:textSize="10sp" />
+
+                    <TextView
+                        android:id="@+id/hintText"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="6dp"
+                        android:layout_weight="1"
+                        android:ellipsize="end"
+                        android:gravity="center"
+                        android:maxLines="1"
+                        android:textColor="@color/text_hint"
+                        android:textSize="10sp" />
+                </LinearLayout>
+            </LinearLayout>
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>
