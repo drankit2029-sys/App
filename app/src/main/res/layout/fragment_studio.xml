@@ -194,7 +194,7 @@
                 android:gravity="center"
                 android:paddingLeft="12dp"
                 android:paddingRight="12dp"
-                android:text="@string/tele_pause_short"
+                android:text="@string/tele_resume_short"
                 android:textColor="@color/text_secondary"
                 android:textSize="11sp" />
             <TextView

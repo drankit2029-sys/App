@@ -672,7 +672,7 @@ public class ConversionService extends Service {
                 new androidx.core.app.NotificationCompat.Builder(this, CHANNEL);
         b.setSmallIcon(R.drawable.ic_wave);
         b.setColor(0xFFFF3B30);
-        b.setColorized(true);
+        b.setColorized(false);
         if (badge != null) b.setSubText(badge);
         b.setContentTitle(title);
         b.setContentText(text);
@@ -755,6 +755,12 @@ public class ConversionService extends Service {
             b.setPackage(getPackageName());
             sendBroadcast(b);
         } catch (Exception ignored) {}
+        if (!ok && "cancelled".equals(message)) {
+            // The user cancelled this conversion on purpose: the Library
+            // already treats it as a non-failure, so stay silent instead of
+            // flashing "Something went wrong".
+            return;
+        }
         try {
             handler.post(() -> {
                 try {

@@ -577,8 +577,7 @@ public final class RecordingEngine {
                     float[] buf = new float[framesPerRead * actualChannels];
                     int n = ar.read(buf, 0, buf.length, AudioRecord.READ_BLOCKING);
                     if (n <= 0) {
-                        if (n == AudioRecord.ERROR_INVALID_OPERATION
-                                || n == AudioRecord.ERROR_BAD_VALUE) break;
+                        if (n < 0) break;
                         continue;
                     }
                     frames = n / actualChannels;
@@ -599,8 +598,7 @@ public final class RecordingEngine {
                     short[] buf = new short[framesPerRead * actualChannels];
                     int n = ar.read(buf, 0, buf.length, AudioRecord.READ_BLOCKING);
                     if (n <= 0) {
-                        if (n == AudioRecord.ERROR_INVALID_OPERATION
-                                || n == AudioRecord.ERROR_BAD_VALUE) break;
+                        if (n < 0) break;
                         continue;
                     }
                     frames = n / actualChannels;
@@ -642,8 +640,34 @@ public final class RecordingEngine {
             }
         } catch (Exception ignored) {
         } finally {
+            boolean unexpectedExit = false;
+            AudioRecord deadRec = null;
             synchronized (lock) {
                 patchHeaderLocked();
+                if (capRun) {
+                    // Exited due to hardware disconnect, call preemption, or
+                    // I/O error rather than pauseCapture()/finalizeRaw().
+                    capRun = false;
+                    unexpectedExit = true;
+                    deadRec = recorder;
+                    recorder = null;
+                    capThread = null;
+                    closeRafLocked();
+                    state = State.PAUSED;
+                    level = 0f;
+                }
+            }
+            if (deadRec != null) {
+                try {
+                    deadRec.stop();
+                } catch (Exception ignored) {}
+                try {
+                    deadRec.release();
+                } catch (Exception ignored) {}
+            }
+            if (unexpectedExit) {
+                ConversionService.onRecordingStateChanged();
+                RecordingService.onRecordingStateChanged();
             }
         }
     }

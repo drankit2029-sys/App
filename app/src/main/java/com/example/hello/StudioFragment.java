@@ -77,7 +77,8 @@ public class StudioFragment extends Fragment {
     private TeleValue teleSpeedValue;
     private TeleValue teleWplValue;
     private TeleValue zoomValue;
-    private boolean telePaused;
+    private boolean telePaused = true;
+    private long initialSessionBytes = 0L;
     private TeleSettings tele;
     /** Manual scroll override: auto-scroll stays off briefly after a drag. */
     private long teleManualUntil;
@@ -257,6 +258,12 @@ public class StudioFragment extends Fragment {
             attached = true;
         }
         restoreWaveformForAttachedSession();
+
+        // Snapshot the attached session size so backing out of an untouched
+        // edit can skip the save nag, and park the prompter unless capture
+        // is actively running.
+        initialSessionBytes = engine.hasSession() ? engine.dataBytes : 0L;
+        setTelePaused(engine.state != RecordingEngine.State.RECORDING);
 
         paint();
         handler.post(tick);
@@ -696,6 +703,11 @@ public class StudioFragment extends Fragment {
             lastTeleAdvanceMs = now;
             return;
         }
+        if (teleView.maxScroll() > 0f
+                && teleView.scrollOffset() >= teleView.maxScroll() - 0.5f) {
+            setTelePaused(true);
+            return;
+        }
         float dt = lastTeleAdvanceMs > 0
                 ? Math.max(0f, (now - lastTeleAdvanceMs) / 1000f)
                 : 0.05f;
@@ -708,23 +720,27 @@ public class StudioFragment extends Fragment {
         teleView.scrollBy(px * dt);
     }
 
-    private void toggleTelePaused() {
-        telePaused = !telePaused;
+    private void setTelePaused(boolean paused) {
+        telePaused = paused;
         lastTeleAdvanceMs = 0L;
-        // If the user presses Play when the script is already at the bottom,
-        // rewind to the top so they can preview it again immediately.
-        if (!telePaused && teleView != null && teleView.maxScroll() > 0f
-                && teleView.scrollOffset() >= teleView.maxScroll() - 1f) {
-            teleView.rewind();
-        }
+        if (!telePaused) teleManualUntil = 0L;
         if (telePauseBtn != null) {
             telePauseBtn.setText(telePaused
                     ? R.string.tele_resume_short : R.string.tele_pause_short);
             telePauseBtn.setSelected(telePaused);
+        }
+    }
+
+    private void toggleTelePaused() {
+        boolean nextPaused = !telePaused;
+        if (!nextPaused && teleView != null && teleView.maxScroll() > 0f
+                && teleView.scrollOffset() >= teleView.maxScroll() - 1f) {
+            teleView.rewind();
+        }
+        setTelePaused(nextPaused);
+        if (telePauseBtn != null) {
             PressAnim.nudge(telePauseBtn, 1.12f);
         }
-        // Resuming hands control back to the auto-scroll clock immediately.
-        if (!telePaused) teleManualUntil = 0L;
     }
 
     private void paintTeleMirror() {
@@ -869,12 +885,11 @@ public class StudioFragment extends Fragment {
     /** Called when capture starts so the script begins from the top. */
     private void teleprompterArmForTake() {
         if (teleView != null) teleView.rewind();
-        teleManualUntil = 0L;
-        lastTeleAdvanceMs = 0L;
+        teleCountdownUntil = 0L;
+        setTelePaused(false);
         // The prompter starts with the recording. A countdown is a head start
         // for the performer, not a delay before the script moves — holding
         // the text still for N seconds desynchronised the take.
-        teleCountdownUntil = 0L;
     }
 
     // ---- waveform zoom (time shown per unit length) ----
@@ -918,6 +933,7 @@ public class StudioFragment extends Fragment {
         if (!engine.hasSession()) return;
         if (engine.state == RecordingEngine.State.RECORDING) {
             engine.pauseCapture();
+            setTelePaused(true);
             paint();
             activity().syncFabWithEngine();
         }
@@ -935,7 +951,23 @@ public class StudioFragment extends Fragment {
 
     /** Back: idle -> exit; active -> background-or-stop choice. */
     public boolean onBackPressed() {
+        if (saving) return true;
         if (!engine.hasSession()) {
+            activity().exitStudio();
+            return true;
+        }
+        // If this is an edit session and the user hasn't recorded any new
+        // audio yet, backing out cancels the edit immediately without nagging.
+        if (editSourceId != -1
+                && engine.state == RecordingEngine.State.IDLE
+                && engine.dataBytes <= initialSessionBytes) {
+            final Context appCtx = requireContext().getApplicationContext();
+            editSourceId = -1;
+            editSourceTitle = null;
+            new Thread(() -> {
+                engine.abortAndDelete();
+                EditLink.clear(appCtx);
+            }).start();
             activity().exitStudio();
             return true;
         }
@@ -1055,11 +1087,7 @@ public class StudioFragment extends Fragment {
                 if (!wasPaused && !isEditOrRecovery) {
                     teleprompterArmForTake();
                 } else {
-                    // Resuming from pause or punching in: unpause without
-                    // wiping the user's current position in the script.
-                    if (telePaused) toggleTelePaused();
-                    teleManualUntil = 0L;
-                    lastTeleAdvanceMs = 0L;
+                    setTelePaused(false);
                 }
             }
             RecordingService.start(requireContext(), preset.id);
@@ -1080,6 +1108,7 @@ public class StudioFragment extends Fragment {
     private void pauseTake(boolean fromInterruption) {
         if (engine.state != RecordingEngine.State.RECORDING) return;
         engine.pauseCapture();
+        setTelePaused(true);
         if (fromInterruption) {
             try {
                 Context c = getContext();
@@ -1286,17 +1315,24 @@ public class StudioFragment extends Fragment {
         if (saving) return;
         saving = true;
         final Context appCtx = requireContext().getApplicationContext();
+        final boolean wasEdit = (editSourceId != -1);
         new Thread(() -> {
             String title = engine.takeName != null ? engine.takeName : "";
             boolean ok = engine.abortAndDelete();
-            // Discarding an edit leaves the original library take untouched.
             editSourceId = -1;
+            editSourceTitle = null;
             EditLink.clear(appCtx);
             handler.post(() -> {
                 saving = false;
                 if (!isAdded()) return;
                 RecordingService.stopService(requireContext());
                 activity().syncFabWithEngine();
+                if (wasEdit) {
+                    // Discarding an edit leaves the original take untouched;
+                    // do not claim the original take was deleted.
+                    activity().exitStudio();
+                    return;
+                }
                 OptionsSheet.showResult(requireContext(), ok,
                         ok ? getString(R.string.delete_success_title)
                                 : getString(R.string.delete_failed_title),

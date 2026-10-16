@@ -60,6 +60,16 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
     private android.media.AudioManager playAudioManager;
     private android.media.AudioFocusRequest playFocusRequest;
 
+    private final android.media.AudioManager.OnAudioFocusChangeListener
+            playFocusListener = focus -> {
+        if (focus == android.media.AudioManager.AUDIOFOCUS_LOSS
+                || focus == android.media.AudioManager.AUDIOFOCUS_LOSS_TRANSIENT
+                || focus == android.media.AudioManager
+                        .AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK) {
+            handler.post(this::pausePlayback);
+        }
+    };
+
     private static final int PLAY_FOCUS =
             android.media.AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK;
 
@@ -92,13 +102,16 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                                 .setContentType(android.media.AudioAttributes
                                         .CONTENT_TYPE_SPEECH)
                                 .build())
+                        .setOnAudioFocusChangeListener(playFocusListener,
+                                handler)
                         .build();
                 return playAudioManager.requestAudioFocus(playFocusRequest)
                         == android.media.AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
             }
             //noinspection deprecation
-            return playAudioManager.requestAudioFocus(null, PLAY_FOCUS,
-                    android.media.AudioManager.AUDIOFOCUS_REQUEST_GRANTED)
+            return playAudioManager.requestAudioFocus(playFocusListener,
+                    android.media.AudioManager.STREAM_MUSIC,
+                    android.media.AudioManager.AUDIOFOCUS_GAIN)
                     == android.media.AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
         } catch (Exception e) {
             return true;
@@ -116,7 +129,7 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                 playFocusRequest = null;
             } else {
                 //noinspection deprecation
-                playAudioManager.abandonAudioFocus(null);
+                playAudioManager.abandonAudioFocus(playFocusListener);
             }
         } catch (Exception ignored) {}
     }
@@ -1518,21 +1531,36 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         // already written a session file.
         final android.content.Context appCtx =
                 requireContext().getApplicationContext();
+        // A converting take's raw is already a 48 kHz 32-bit float WAV, so
+        // preparing the edit session is a fast byte copy: no "Converting to
+        // 32-bit float" dialog is needed for those.
+        final boolean alreadyFloat = AudioImporter.isNativeFloatWav(src);
         // Decode a copy to 32-bit float and punch in from its end. The
         // original stays in the library until the user picks replace/new.
-        Dialog progress = showDeterminateProgress(
-                getString(R.string.importing_title),
-                getString(R.string.importing_msg, 0));
+        final Dialog progress;
         final ProgressBar bar;
         final TextView msg;
-        try {
-            bar = progress.findViewById(R.id.progressBar);
-            msg = progress.findViewById(R.id.progressMessage);
-        } catch (Exception e) {
+        if (!alreadyFloat) {
+            progress = showDeterminateProgress(
+                    getString(R.string.importing_title),
+                    getString(R.string.importing_msg, 0));
+            ProgressBar b;
+            TextView m;
             try {
-                progress.dismiss();
-            } catch (Exception ignored) {}
-            return;
+                b = progress.findViewById(R.id.progressBar);
+                m = progress.findViewById(R.id.progressMessage);
+            } catch (Exception e) {
+                try {
+                    progress.dismiss();
+                } catch (Exception ignored) {}
+                return;
+            }
+            bar = b;
+            msg = m;
+        } else {
+            progress = null;
+            bar = null;
+            msg = null;
         }
         new Thread(() -> {
             File session = null;
@@ -1543,11 +1571,13 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                 ConversionJobs.beginRawRead(src.getAbsolutePath());
                 session = AudioImporter.takeToFloatWav(src,
                         RecordingEngine.takesDir(appCtx),
-                        RecordingEngine.sanitize(sourceTitle), pct -> handler.post(() -> {
+                        RecordingEngine.sanitize(sourceTitle),
+                        alreadyFloat ? null : pct -> handler.post(() -> {
                             try {
                                 if (bar != null) bar.setProgress(pct);
                                 if (msg != null) {
-                                    msg.setText(getString(R.string.importing_msg, pct));
+                                    msg.setText(getString(
+                                            R.string.importing_msg, pct));
                                 }
                             } catch (Exception ignored) {}
                         }));
@@ -1567,9 +1597,11 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             final File done = session;
             final String failure = fail;
             handler.post(() -> {
-                try {
-                    progress.dismiss();
-                } catch (Exception ignored) {}
+                if (progress != null) {
+                    try {
+                        progress.dismiss();
+                    } catch (Exception ignored) {}
+                }
                 if (!isAdded()) return;
                 if (done != null && failure == null) {
                     try {

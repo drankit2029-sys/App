@@ -104,11 +104,11 @@ public class StudioFlowTest {
         Activity a = openStudio();
         try {
             TextView pause = a.findViewById(R.id.telePauseBtn);
-            assertEquals("Pause", pause.getText().toString());
-            uiTap(a, pause);
             assertEquals("Play", pause.getText().toString());
             uiTap(a, pause);
             assertEquals("Pause", pause.getText().toString());
+            uiTap(a, pause);
+            assertEquals("Play", pause.getText().toString());
         } finally {
             RecordingEngine.get().abortAndDelete();
         }

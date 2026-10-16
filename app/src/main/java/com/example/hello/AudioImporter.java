@@ -26,6 +26,24 @@ public final class AudioImporter {
     private AudioImporter() {}
 
     /**
+     * True when {@code src} is already a 48 kHz 32-bit IEEE float mono/stereo
+     * WAV, so preparing an edit session is a straight byte copy rather than a
+     * format conversion.
+     */
+    public static boolean isNativeFloatWav(File src) {
+        if (src == null || !src.exists()) return false;
+        try (RandomAccessFile r = new RandomAccessFile(src, "r")) {
+            Dsp.WavHeader h = Dsp.parseWavHeader(r);
+            return h.audioFormat == 3 && h.bits == 32
+                    && h.sampleRate == RecordingEngine.SAMPLE_RATE
+                    && (h.channels == 1 || h.channels == 2)
+                    && Math.max(0, r.length() - h.dataStart) > 0;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
      * @param dstParent   directory for the new session file (takes dir).
      * @param baseName    sanitized take title used for the session file name.
      * @return the new float WAV session file (without a pending marker —
@@ -115,6 +133,33 @@ public final class AudioImporter {
             if (dataBytes <= 0 || dataBytes > onDisk) dataBytes = onDisk;
             long totalSrcFrames = dataBytes / bytesPerSample / ch;
             if (totalSrcFrames <= 0) throw new IllegalStateException("empty wav");
+            // Fast path: source is already 48 kHz 32-bit IEEE float WAV.
+            // Copy raw payload bytes directly without unpacking floats or
+            // running Dsp.Resampler.
+            if (h.audioFormat == 3 && h.bits == 32
+                    && sr == RecordingEngine.SAMPLE_RATE) {
+                long payloadBytes = totalSrcFrames * ch * 4L;
+                try (RandomAccessFile w = new RandomAccessFile(dst, "rw")) {
+                    w.setLength(0);
+                    w.write(RecordingEngine.wavHeader(ch, payloadBytes));
+                    r.seek(h.dataStart);
+                    byte[] buf = new byte[65536];
+                    long left = payloadBytes;
+                    while (left > 0) {
+                        int n = r.read(buf, 0,
+                                (int) Math.min(buf.length, left));
+                        if (n <= 0) break;
+                        w.write(buf, 0, n);
+                        left -= n;
+                    }
+                    long actual = Math.max(0L, w.length() - 44L);
+                    if (actual != payloadBytes) {
+                        w.seek(0);
+                        w.write(RecordingEngine.wavHeader(ch, actual));
+                    }
+                }
+                return;
+            }
             // Mono stays mono; foreign rates are resampled to the session
             // rate instead of being stamped with a lying header.
             Dsp.Resampler resampler =

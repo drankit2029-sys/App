@@ -459,6 +459,31 @@ public class TeleValue extends LinearLayout {
 
     // ---- vertical scrolling list ----
 
+    private String captionTitle() {
+        CharSequence cap = caption != null ? caption.getText() : null;
+        if (cap != null && cap.length() > 0) {
+            return cap.toString();
+        }
+        return getContext().getString(R.string.tele_value_picker);
+    }
+
+    private static void styleModalWindow(Dialog dialog) {
+        Window w = dialog.getWindow();
+        if (w == null) return;
+        w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+        w.setDimAmount(0.62f);
+        WindowManager.LayoutParams lp = w.getAttributes();
+        lp.width = WindowManager.LayoutParams.MATCH_PARENT;
+        lp.height = WindowManager.LayoutParams.WRAP_CONTENT;
+        lp.gravity = Gravity.CENTER;
+        w.setAttributes(lp);
+        View decor = w.getDecorView();
+        if (decor != null) {
+            int m = dp(dialog.getContext(), 28);
+            decor.setPadding(m, 0, m, 0);
+        }
+    }
+
     private void openPicker() {
         showValuePicker();
     }
@@ -484,52 +509,68 @@ public class TeleValue extends LinearLayout {
             np.setDisplayedValues(labels);
             np.setValue(initialIdx);
             np.setWrapSelectorWheel(false);
+
             final Dialog d = new Dialog(ctx, R.style.TakeOneCenterDialog);
             d.requestWindowFeature(Window.FEATURE_NO_TITLE);
             LinearLayout box = new LinearLayout(ctx);
             box.setOrientation(LinearLayout.VERTICAL);
             box.setBackgroundResource(R.drawable.bg_modal);
-            int pad = dp(ctx, 18);
+            if (android.os.Build.VERSION.SDK_INT >= 21) {
+                box.setElevation(dp(ctx, 16));
+            }
+            int pad = dp(ctx, 20);
             box.setPadding(pad, pad, pad, pad);
+
+            final String baseTitle = captionTitle();
             TextView title = new TextView(ctx);
-            title.setText(label != null ? label.getText().toString() : "");
+            String curLabel = label != null
+                    ? label.getText().toString() : formatValueText(value);
+            title.setText(baseTitle + " • " + curLabel);
             title.setGravity(Gravity.CENTER);
             title.setTextColor(0xFFF2F4F7);
-            title.setTextSize(15);
-            title.setPadding(0, 0, 0, dp(ctx, 8));
+            title.setTextSize(18);
+            title.setTypeface(android.graphics.Typeface.create(
+                    "sans-serif-medium", android.graphics.Typeface.NORMAL));
             box.addView(title, new LayoutParams(LayoutParams.MATCH_PARENT,
                     LayoutParams.WRAP_CONTENT));
-            box.addView(np, new LayoutParams(LayoutParams.MATCH_PARENT,
-                    LayoutParams.WRAP_CONTENT));
+
+            LinearLayout pickerWrap = new LinearLayout(ctx);
+            pickerWrap.setOrientation(LinearLayout.VERTICAL);
+            pickerWrap.setGravity(Gravity.CENTER);
+            pickerWrap.setBackgroundResource(R.drawable.bg_search);
+            LayoutParams wrapLp = new LayoutParams(
+                    LayoutParams.MATCH_PARENT, dp(ctx, 180));
+            wrapLp.topMargin = dp(ctx, 14);
+            pickerWrap.addView(np, new LayoutParams(
+                    LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
+            box.addView(pickerWrap, wrapLp);
+
             TextView ok = new TextView(ctx);
             ok.setText(R.string.settings_done);
             ok.setTextSize(14);
+            ok.setTypeface(android.graphics.Typeface.create(
+                    "sans-serif-medium", android.graphics.Typeface.NORMAL));
             ok.setGravity(Gravity.CENTER);
             ok.setTextColor(0xFFFFFFFF);
             ok.setBackgroundResource(R.drawable.bg_btn_primary);
-            ok.setPadding(0, dp(ctx, 10), 0, dp(ctx, 10));
-            LinearLayout.LayoutParams okp = new LayoutParams(
-                    LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT);
-            okp.topMargin = dp(ctx, 10);
+            LayoutParams okp = new LayoutParams(
+                    LayoutParams.MATCH_PARENT, dp(ctx, 48));
+            okp.topMargin = dp(ctx, 14);
             box.addView(ok, okp);
+            PressAnim.apply(ok);
+
             d.setContentView(box);
             np.setOnValueChangedListener((p, oldIdx, newIdx) -> {
                 if (newIdx >= 0 && newIdx < vals.length) {
                     setValue(vals[newIdx], true);
-                    title.setText(label != null
-                            ? label.getText().toString() : "");
+                    String nowLbl = label != null
+                            ? label.getText().toString()
+                            : formatValueText(value);
+                    title.setText(baseTitle + " • " + nowLbl);
                 }
             });
             ok.setOnClickListener(v -> d.dismiss());
-            Window w = d.getWindow();
-            if (w != null) {
-                w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
-                w.setDimAmount(0.62f);
-                WindowManager.LayoutParams lp = w.getAttributes();
-                lp.width = WindowManager.LayoutParams.WRAP_CONTENT;
-                lp.gravity = Gravity.CENTER;
-                w.setAttributes(lp);
-            }
+            styleModalWindow(d);
             d.show();
         } catch (Exception ignored) {
         }
@@ -546,53 +587,100 @@ public class TeleValue extends LinearLayout {
         final Context ctx = getContext();
         if (ctx == null) return;
         try {
+            final Dialog d = new Dialog(ctx, R.style.TakeOneCenterDialog);
+            d.requestWindowFeature(Window.FEATURE_NO_TITLE);
+
+            int pad = dp(ctx, 20);
+            LinearLayout box = new LinearLayout(ctx);
+            box.setOrientation(LinearLayout.VERTICAL);
+            box.setBackgroundResource(R.drawable.bg_modal);
+            if (android.os.Build.VERSION.SDK_INT >= 21) {
+                box.setElevation(dp(ctx, 16));
+            }
+            box.setPadding(pad, pad, pad, pad);
+
+            TextView title = new TextView(ctx);
+            title.setText(captionTitle());
+            title.setGravity(Gravity.CENTER);
+            title.setTextColor(0xFFF2F4F7);
+            title.setTextSize(18);
+            title.setTypeface(android.graphics.Typeface.create(
+                    "sans-serif-medium", android.graphics.Typeface.NORMAL));
+            box.addView(title, new LayoutParams(LayoutParams.MATCH_PARENT,
+                    LayoutParams.WRAP_CONTENT));
+
+            TextView sub = new TextView(ctx);
+            sub.setText(formatValueText(min) + " – " + formatValueText(max));
+            sub.setGravity(Gravity.CENTER);
+            sub.setTextColor(0xFF9AA3AF);
+            sub.setTextSize(12);
+            LayoutParams subLp = new LayoutParams(LayoutParams.MATCH_PARENT,
+                    LayoutParams.WRAP_CONTENT);
+            subLp.topMargin = dp(ctx, 4);
+            box.addView(sub, subLp);
+
+            LinearLayout inputBox = new LinearLayout(ctx);
+            inputBox.setOrientation(LinearLayout.VERTICAL);
+            inputBox.setBackgroundResource(R.drawable.bg_search);
+            inputBox.setPadding(dp(ctx, 14), dp(ctx, 2),
+                    dp(ctx, 14), dp(ctx, 2));
+            LayoutParams ibLp = new LayoutParams(LayoutParams.MATCH_PARENT,
+                    LayoutParams.WRAP_CONTENT);
+            ibLp.topMargin = dp(ctx, 16);
+
             final EditText input = new EditText(ctx);
+            input.setBackground(null);
+            input.setGravity(Gravity.CENTER);
+            input.setTextColor(0xFFF2F4F7);
+            input.setHintTextColor(0xFF5D6672);
+            input.setTextSize(16);
+            input.setSingleLine(true);
+            input.setMaxLines(1);
             input.setInputType(valueScale > 1
                     ? (InputType.TYPE_CLASS_NUMBER
                             | InputType.TYPE_NUMBER_FLAG_DECIMAL)
                     : InputType.TYPE_CLASS_NUMBER);
             input.setText(formatNumberPart(value));
             input.setSelectAllOnFocus(true);
-            int pad = dp(ctx, 20);
-            LinearLayout box = new LinearLayout(ctx);
-            box.setOrientation(LinearLayout.VERTICAL);
-            box.setBackgroundResource(R.drawable.bg_modal);
-            box.setPadding(pad, pad, pad, pad);
-            box.addView(input, new LayoutParams(LayoutParams.MATCH_PARENT,
-                    LayoutParams.WRAP_CONTENT));
-            // A4-14: an explicit row. Without it the only ways out were the
-            // back gesture (which silently committed) and nothing to confirm.
+            inputBox.addView(input, new LayoutParams(
+                    LayoutParams.MATCH_PARENT, dp(ctx, 50)));
+            box.addView(inputBox, ibLp);
+
             LinearLayout row = new LinearLayout(ctx);
             row.setOrientation(LinearLayout.HORIZONTAL);
+            LayoutParams rowLp = new LayoutParams(LayoutParams.MATCH_PARENT,
+                    LayoutParams.WRAP_CONTENT);
+            rowLp.topMargin = dp(ctx, 14);
+
             TextView cancelBtn = new TextView(ctx);
             cancelBtn.setText(ctx.getString(R.string.cancel));
             cancelBtn.setTextSize(14);
+            cancelBtn.setTypeface(android.graphics.Typeface.create(
+                    "sans-serif-medium", android.graphics.Typeface.NORMAL));
             cancelBtn.setGravity(Gravity.CENTER);
-            cancelBtn.setTextColor(0xFFF2F4F7);
+            cancelBtn.setTextColor(0xFF9AA3AF);
             cancelBtn.setBackgroundResource(R.drawable.bg_btn_ghost);
+
             TextView okBtn = new TextView(ctx);
             okBtn.setText(ctx.getString(R.string.settings_done));
             okBtn.setTextSize(14);
+            okBtn.setTypeface(android.graphics.Typeface.create(
+                    "sans-serif-medium", android.graphics.Typeface.NORMAL));
             okBtn.setGravity(Gravity.CENTER);
             okBtn.setTextColor(0xFFFFFFFF);
             okBtn.setBackgroundResource(R.drawable.bg_btn_primary);
-            LayoutParams half = new LayoutParams(0,
-                    LayoutParams.WRAP_CONTENT, 1f);
-            half.topMargin = dp(ctx, 10);
-            LayoutParams half2 = new LayoutParams(0,
-                    LayoutParams.WRAP_CONTENT, 1f);
-            half2.topMargin = dp(ctx, 10);
-            half2.leftMargin = dp(ctx, 8);
+
+            LayoutParams half = new LayoutParams(0, dp(ctx, 48), 1f);
+            half.rightMargin = dp(ctx, 6);
+            LayoutParams half2 = new LayoutParams(0, dp(ctx, 48), 1f);
+            half2.leftMargin = dp(ctx, 6);
             row.addView(cancelBtn, half);
             row.addView(okBtn, half2);
-            box.addView(row, new LayoutParams(LayoutParams.MATCH_PARENT,
-                    LayoutParams.WRAP_CONTENT));
+            box.addView(row, rowLp);
+            PressAnim.apply(cancelBtn);
+            PressAnim.apply(okBtn);
 
-            final Dialog d = new Dialog(ctx, R.style.TakeOneCenterDialog);
-            d.requestWindowFeature(Window.FEATURE_NO_TITLE);
             d.setContentView(box);
-            // A4-14: the numeric keyboard has no action key, so Done on the
-            // IME is the other confirm path.
             input.setImeOptions(android.view.inputmethod.EditorInfo
                     .IME_ACTION_DONE);
             input.setOnEditorActionListener((v2, actionId, ev) -> {
@@ -604,24 +692,17 @@ public class TeleValue extends LinearLayout {
                 }
                 return false;
             });
-            cancelBtn.setOnClickListener(v -> {
-                d.setOnDismissListener(null);
-                d.dismiss();
-            });
+            cancelBtn.setOnClickListener(v -> d.dismiss());
             okBtn.setOnClickListener(v -> {
                 commitTyped(input);
                 d.dismiss();
             });
+            styleModalWindow(d);
             Window w = d.getWindow();
             if (w != null) {
-                w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
-                w.setDimAmount(0.62f);
                 w.setSoftInputMode(WindowManager.LayoutParams
-                        .SOFT_INPUT_STATE_VISIBLE);
-                WindowManager.LayoutParams lp = w.getAttributes();
-                lp.width = WindowManager.LayoutParams.MATCH_PARENT;
-                lp.gravity = Gravity.CENTER;
-                w.setAttributes(lp);
+                        .SOFT_INPUT_STATE_VISIBLE
+                        | WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
             }
             d.setOnShowListener(dd -> input.requestFocus());
             d.show();
@@ -635,7 +716,8 @@ public class TeleValue extends LinearLayout {
                                     .SHOW_IMPLICIT);
                 }
             });
-            d.setOnDismissListener(dd -> commitTyped(input));
+            // Back / outside-tap dismisses WITHOUT committing: cancelling
+            // must never mutate the value.
         } catch (Exception ignored) {
         }
     }

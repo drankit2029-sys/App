@@ -29,6 +29,7 @@ public class MainActivity extends AppCompatActivity {
     private boolean recoveryChecked;
     private long lastFabPress;
     private long lastStopPress;
+    private OnBackPressedCallback backCallback;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -75,7 +76,8 @@ public class MainActivity extends AppCompatActivity {
             if (st != null) st.onStopPressed();
         });
 
-        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+        getOnBackPressedDispatcher().addCallback(this, backCallback =
+                new OnBackPressedCallback(true) {
             @Override
             public void handleOnBackPressed() {
                 if (inStudio) {
@@ -90,8 +92,7 @@ public class MainActivity extends AppCompatActivity {
                     boolean consumed = f instanceof LibraryFragment
                             && ((LibraryFragment) f).onBackPressed();
                     if (!consumed) {
-                        setEnabled(false);
-                        getOnBackPressedDispatcher().onBackPressed();
+                        finish();
                     }
                 }
             }
@@ -237,6 +238,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        if (backCallback != null) backCallback.setEnabled(true);
         syncFabWithEngine();
     }
 

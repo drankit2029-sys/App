@@ -175,26 +175,34 @@ public class RecordingService extends Service {
 
     private void registerFocus() {
         try {
-            if (focusListener != null || audioManager == null) return;
-            focusListener = focus -> {
-                if (focus == AudioManager.AUDIOFOCUS_LOSS
-                        || focus == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) {
-                    // Spurious callbacks fire right after our own request on
-                    // some devices; only honor losses outside the grace window.
-                    if (SystemClock.elapsedRealtime() - captureStartedAt
-                            < FOCUS_GRACE_MS) {
-                        return;
-                    }
-                    handler.post(() -> {
-                        RecordingEngine e = RecordingEngine.get();
-                        if (e.state == RecordingEngine.State.RECORDING) {
-                            e.pauseCapture();
-                            toast(getString(R.string.msg_paused_call));
-                            refreshNotif();
+            if (audioManager == null) {
+                audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+            }
+            if (audioManager == null) return;
+            if (focusListener == null) {
+                focusListener = focus -> {
+                    if (focus == AudioManager.AUDIOFOCUS_LOSS
+                            || focus == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) {
+                        // Spurious callbacks fire right after our own request on
+                        // some devices; only honor losses outside the grace window.
+                        if (SystemClock.elapsedRealtime() - captureStartedAt
+                                < FOCUS_GRACE_MS) {
+                            return;
                         }
-                    });
-                }
-            };
+                        handler.post(() -> {
+                            RecordingEngine e = RecordingEngine.get();
+                            if (e.state == RecordingEngine.State.RECORDING) {
+                                e.pauseCapture();
+                                abandonFocus();
+                                toast(getString(R.string.msg_paused_call));
+                                refreshNotif(true);
+                            }
+                        });
+                    }
+                };
+            }
+            // Always re-request: after an AUDIOFOCUS_LOSS the platform evicts
+            // the listener, so a stale non-null instance must not skip this.
             audioManager.requestAudioFocus(focusListener,
                     AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN);
         } catch (Exception ignored) {}
@@ -220,8 +228,10 @@ public class RecordingService extends Service {
         try {
             if (e.state == RecordingEngine.State.RECORDING) {
                 e.pauseCapture();
+                abandonFocus();
             } else if (e.state == RecordingEngine.State.PAUSED) {
                 captureStartedAt = now;
+                registerFocus();
                 e.resumeCapture(getApplicationContext(),
                         RecordPreset.load(this).audioSource);
                 try {
@@ -231,11 +241,16 @@ public class RecordingService extends Service {
             } else {
                 return;
             }
+        } catch (SecurityException se) {
+            toast(getString(R.string.msg_need_mic));
+            refreshNotif(true);
+            return;
         } catch (Exception ex) {
             toast(getString(R.string.couldnt_save));
+            refreshNotif(true);
             return;
         }
-        refreshNotif();
+        refreshNotif(true);
     }
 
     private void doSave() {
@@ -518,9 +533,10 @@ public class RecordingService extends Service {
         b.setSmallIcon(R.drawable.ic_mic);
         // Match TakeOne brand colors: record red (#FF3B30) when active,
         // amber (#FF9F0A) when paused.
+        // Tint only the icon badge and action buttons (never flood-fill the
+        // card background with setColorized(true)).
         b.setColor(paused ? 0xFFFF9F0A : 0xFFFF3B30);
-        b.setColorized(true);
-        b.setSubText(saveLabel);
+        b.setColorized(false);
         b.setContentTitle(title);
         b.setContentText(text);
         b.setCategory(androidx.core.app.NotificationCompat.CATEGORY_SERVICE);
