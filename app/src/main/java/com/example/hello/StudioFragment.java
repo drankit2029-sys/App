@@ -62,10 +62,16 @@ public class StudioFragment extends Fragment {
     private View editorStrip;
     private TextView btnPreviewPlay;
     private TextView btnSelectRange;
+    private TextView btnReplaceSeg;
     private TextView btnTrimCrop;
     private TextView btnCutDelete;
     private TextView btnDspFx;
     private TextView btnEditUndo;
+    private android.widget.ProgressBar editProgressBar;
+    private TextView editTimeStart;
+    private TextView editTimeEnd;
+    private boolean replacingSelectionActive = false;
+    private File replaceSavedTailFile = null;
     private RawFloatPlayer studioPreviewPlayer;
     private DspChain.Config dspConfig = new DspChain.Config();
     private DspChain livePreviewDsp;
@@ -218,13 +224,22 @@ public class StudioFragment extends Fragment {
         editorStrip = v.findViewById(R.id.editorStrip);
         btnPreviewPlay = v.findViewById(R.id.btnPreviewPlay);
         btnSelectRange = v.findViewById(R.id.btnSelectRange);
+        btnReplaceSeg = v.findViewById(R.id.btnReplaceSeg);
         btnTrimCrop = v.findViewById(R.id.btnTrimCrop);
         btnCutDelete = v.findViewById(R.id.btnCutDelete);
         btnDspFx = v.findViewById(R.id.btnDspFx);
         btnEditUndo = v.findViewById(R.id.btnEditUndo);
+        editProgressBar = v.findViewById(R.id.editProgressBar);
+        editTimeStart = v.findViewById(R.id.editTimeStart);
+        editTimeEnd = v.findViewById(R.id.editTimeEnd);
 
         dspConfig = DspChain.Config.load(requireContext());
         undoJournal = new EditEngine.UndoJournal(RecordingEngine.takesDir(requireContext()));
+
+        // Cut button is retired in favor of Trim + Select & Replace; keep view GONE
+        if (btnCutDelete != null) {
+            btnCutDelete.setVisibility(View.GONE);
+        }
 
         if (btnPreviewPlay != null) {
             PressAnim.applySoft(btnPreviewPlay, 0.95f);
@@ -237,13 +252,13 @@ public class StudioFragment extends Fragment {
                 paintEditorStrip();
             });
         }
+        if (btnReplaceSeg != null) {
+            PressAnim.applySoft(btnReplaceSeg, 0.95f);
+            btnReplaceSeg.setOnClickListener(view -> startSelectAndReplaceRecording());
+        }
         if (btnTrimCrop != null) {
             PressAnim.applySoft(btnTrimCrop, 0.95f);
             btnTrimCrop.setOnClickListener(view -> runEditOperation(true));
-        }
-        if (btnCutDelete != null) {
-            PressAnim.applySoft(btnCutDelete, 0.95f);
-            btnCutDelete.setOnClickListener(view -> runEditOperation(false));
         }
         if (btnDspFx != null) {
             PressAnim.applySoft(btnDspFx, 0.95f);
@@ -262,6 +277,7 @@ public class StudioFragment extends Fragment {
                 long targetFrame = Math.round(fraction * totalFrames);
                 engine.seekCursorFrame(targetFrame);
                 timerText.setText(formatTimer(engine.cursorMs()));
+                paintEditorStrip();
             }
 
             @Override
@@ -1128,33 +1144,122 @@ public class StudioFragment extends Fragment {
         startOrResumeCapture();
     }
 
+    /**
+     * Dedicated Select & Replace: allows the user to select `[selStart, selEnd]`
+     * on the red waveform and record a new replacement of ANY length (shorter
+     * or longer than the selected part). The post-selection tail `[selEnd, end)`
+     * is preserved and automatically crossfaded back when the user pauses/stops!
+     */
+    private void startSelectAndReplaceRecording() {
+        if (!isAdded() || saving) return;
+        stopStudioPreview();
+        if (engine.state == RecordingEngine.State.RECORDING) return;
+        if (!engine.hasSession() || engine.dataBytes <= 0 || waveform == null) return;
+        if (!waveform.hasSelection()) {
+            waveform.toggleSelectionAtPlayhead();
+            paintEditorStrip();
+            Toast.makeText(requireContext(),
+                    "Drag [ ] handles to select segment, then tap Replace",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (RecordingService.isCallActive(requireContext())) {
+            Toast.makeText(requireContext(), R.string.msg_call_active,
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        try {
+            File raw = engine.rawFile;
+            long totalFrames = engine.totalFrames();
+            float sFrac = waveform.selectionStartFraction();
+            float eFrac = waveform.selectionEndFraction();
+            long startF = Math.round(sFrac * totalFrames);
+            long endF = Math.round(eFrac * totalFrames);
+            if (endF <= startF) return;
+
+            if (undoJournal != null) {
+                undoJournal.recordSnapshot(raw);
+            }
+            // Save the surviving tail [endF, totalFrames) so replacement can be
+            // shorter OR longer than [startF, endF]!
+            replaceSavedTailFile = new File(raw.getParentFile(),
+                    raw.getName() + ".reptail");
+            EditEngine.saveTailFrom(raw, endF, replaceSavedTailFile);
+            replacingSelectionActive = true;
+
+            // Position cursor at startF (open-ended, truncating old bytes past startF)
+            engine.seekCursorFrame(startF);
+            waveform.clearSelection();
+            waveform.truncateToFraction(sFrac);
+            ensurePermissionThenStart();
+        } catch (Exception e) {
+            replacingSelectionActive = false;
+            if (replaceSavedTailFile != null) {
+                // noinspection ResultOfMethodCallIgnored
+                replaceSavedTailFile.delete();
+                replaceSavedTailFile = null;
+            }
+            Toast.makeText(requireContext(), "Could not start replace",
+                    Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    /** If a variable-length Select & Replace was active, splices the saved tail back. */
+    private void finishSelectAndReplaceIfNeeded() {
+        if (!replacingSelectionActive) return;
+        replacingSelectionActive = false;
+        File tail = replaceSavedTailFile;
+        replaceSavedTailFile = null;
+        File raw = engine.rawFile;
+        if (raw == null || !raw.exists() || tail == null || !tail.exists()) return;
+        try {
+            long replaceEndFrame = engine.cursorFrames();
+            long newBytes = EditEngine.spliceTailAfterReplace(
+                    raw, replaceEndFrame, tail);
+            engine.abortStreaming();
+            engine.dataBytes = newBytes;
+            long newTotal = engine.totalFrames();
+            engine.seekCursorFrame(Math.min(replaceEndFrame, newTotal));
+            reloadWaveformPreservingPlayhead(
+                    newTotal > 0 ? (replaceEndFrame / (float) newTotal) : 1f);
+        } catch (Exception ignored) {
+            // noinspection ResultOfMethodCallIgnored
+            tail.delete();
+        }
+    }
+
     private void startOrResumeCapture() {
         if (!isAdded() || saving) return;
         stopStudioPreview();
+        // Block capture if a phone/VoIP call is active so the mic never records
+        // silent 0.0f samples during a call!
+        if (RecordingService.isCallActive(requireContext())) {
+            Toast.makeText(requireContext(), R.string.msg_call_active,
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        // If a selection is active on the red waveform and the user taps the
+        // main Record/Resume FAB, route directly into variable-length Select & Replace!
+        if (!replacingSelectionActive && engine.hasSession()
+                && engine.dataBytes > 0 && waveform != null
+                && waveform.hasSelection()) {
+            startSelectAndReplaceRecording();
+            return;
+        }
         boolean wasPaused = (engine.state == RecordingEngine.State.PAUSED);
         boolean isEditOrRecovery = (editSourceId != -1 || engine.dataBytes > 0);
         try {
-            // If a selection range is active (or the playhead was scrubbed back
-            // into existing audio), arm a click-free punch-in and record an
-            // undo snapshot before overwriting!
-            if (engine.hasSession() && engine.dataBytes > 0 && waveform != null) {
+            if (!replacingSelectionActive && engine.hasSession()
+                    && engine.dataBytes > 0 && waveform != null) {
                 long totalFrames = engine.totalFrames();
-                if (waveform.hasSelection()) {
-                    long startF = Math.round(
-                            waveform.selectionStartFraction() * totalFrames);
-                    long endF = Math.round(
-                            waveform.selectionEndFraction() * totalFrames);
-                    if (endF > startF) {
-                        if (undoJournal != null) {
-                            undoJournal.recordSnapshot(engine.rawFile);
-                        }
-                        engine.armPunchRange(startF, endF);
-                        waveform.clearSelection();
-                    }
-                } else if (engine.cursorFrames() < totalFrames - 1200) {
+                long curFrames = engine.cursorFrames();
+                if (curFrames < totalFrames - 1200) {
+                    // Immediate playhead replacement for accidental misspells:
+                    // snapshot for Undo and truncate the red waveform to the playhead!
                     if (undoJournal != null) {
                         undoJournal.recordSnapshot(engine.rawFile);
                     }
+                    waveform.truncateToPlayhead();
                 }
             }
             if (wasPaused) {
@@ -1180,7 +1285,7 @@ public class StudioFragment extends Fragment {
             }
             RecordingService.start(requireContext(), preset.id);
         } catch (Exception e) {
-            Toast.makeText(requireContext(), "Could not start recording",
+            Toast.makeText(requireContext(), R.string.msg_speaker_engaged,
                     Toast.LENGTH_SHORT).show();
             return;
         }
@@ -1197,16 +1302,29 @@ public class StudioFragment extends Fragment {
         if (engine.state != RecordingEngine.State.RECORDING) return;
         engine.pauseCapture();
         setTelePaused(true);
-        // Sync cursor to end of take on pause and reload high-density peaks
-        // so even a sub-second take has plenty of buckets for [ ] Select.
-        engine.seekCursorFrame(engine.totalFrames());
-        reloadWaveformCleanly();
+        if (replacingSelectionActive) {
+            finishSelectAndReplaceIfNeeded();
+        } else {
+            // Keep the red waveform in place! Only sync cursor to end if not already
+            // positioned, and if this was a very short take (< 15 buckets), load
+            // high-res peaks without switching waveform style.
+            engine.seekCursorFrame(engine.totalFrames());
+            if (waveform != null) {
+                if (waveform.historyCount() < 16) {
+                    reloadWaveformPreservingPlayhead(1f);
+                } else {
+                    waveform.setPlayheadFraction(1f);
+                }
+            }
+        }
         if (fromInterruption) {
             try {
                 Context c = getContext();
                 if (c != null) {
-                    Toast.makeText(c, R.string.msg_paused_call,
-                            Toast.LENGTH_LONG).show();
+                    boolean call = RecordingService.isCallActive(c);
+                    Toast.makeText(c,
+                            call ? R.string.msg_paused_call : R.string.msg_speaker_engaged,
+                            Toast.LENGTH_SHORT).show();
                 }
             } catch (Exception ignored) {}
         }
@@ -1215,6 +1333,25 @@ public class StudioFragment extends Fragment {
                 paint();
                 activity().syncFabWithEngine();
             }
+        } catch (Exception ignored) {}
+    }
+
+    /** Reloads peak buckets from disk after Trim / Undo / Splice while keeping playheadFrac. */
+    private void reloadWaveformPreservingPlayhead(final float playheadFrac) {
+        try {
+            if (waveform == null || !engine.hasSession()) return;
+            File raw = engine.rawFile;
+            if (raw == null || !raw.exists()) return;
+            if (RecordingEngine.payloadBytesOf(raw) <= 0) return;
+            waveform.clear();
+            waveform.loadFromFloatWav(raw, () -> {
+                if (isAdded() && getView() != null) {
+                    waveform.setPlayheadFraction(
+                            Math.max(0f, Math.min(1f, playheadFrac)));
+                    refreshZoomValue();
+                    paintEditorStrip();
+                }
+            });
         } catch (Exception ignored) {}
     }
 
@@ -1247,6 +1384,12 @@ public class StudioFragment extends Fragment {
 
     private void doSaveSequence() {
         if (saving || !engine.hasSession()) return;
+        // A Stop tap while a Select & Replace take is paused must splice the
+        // saved tail back before dispatching, or the save ships a truncated take.
+        if (replacingSelectionActive
+                && engine.state != RecordingEngine.State.RECORDING) {
+            finishSelectAndReplaceIfNeeded();
+        }
         final long editId = editSourceId;
         final String editTitle = editSourceTitle;
         if (editId != -1) {
@@ -1428,6 +1571,14 @@ public class StudioFragment extends Fragment {
     private void doDiscardSequence() {
         if (saving) return;
         saving = true;
+        // Discarding abandons any in-flight Select & Replace: drop the flag
+        // and its orphan tail file so nothing leaks or resurrects later.
+        replacingSelectionActive = false;
+        if (replaceSavedTailFile != null) {
+            // noinspection ResultOfMethodCallIgnored
+            replaceSavedTailFile.delete();
+            replaceSavedTailFile = null;
+        }
         final Context appCtx = requireContext().getApplicationContext();
         final boolean wasEdit = (editSourceId != -1);
         new Thread(() -> {
@@ -1582,6 +1733,11 @@ public class StudioFragment extends Fragment {
             return;
         }
         if (engine.state == RecordingEngine.State.RECORDING) return;
+        if (RecordingService.isCallActive(requireContext())) {
+            Toast.makeText(requireContext(), R.string.msg_speaker_engaged_play,
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
         File raw = engine.rawFile;
         if (raw == null || !raw.exists() || waveform == null) return;
         try {
@@ -1593,6 +1749,15 @@ public class StudioFragment extends Fragment {
             final RawFloatPlayer[] slot = new RawFloatPlayer[1];
             slot[0] = new RawFloatPlayer(raw, completed -> handler.post(() -> {
                 if (studioPreviewPlayer == slot[0]) {
+                    if (completed && engine.hasSession()) {
+                        long endF = waveform != null && waveform.hasSelection()
+                                ? Math.round(waveform.selectionEndFraction() * engine.totalFrames())
+                                : engine.totalFrames();
+                        engine.seekCursorFrame(endF);
+                        if (waveform != null && engine.totalFrames() > 0) {
+                            waveform.setPlayheadFraction(endF / (float) engine.totalFrames());
+                        }
+                    }
                     stopStudioPreview();
                     paintEditorStrip();
                 }
@@ -1607,9 +1772,21 @@ public class StudioFragment extends Fragment {
                         waveform.selectionEndFraction() * totalFrames);
                 player.playRange(start, end);
             } else {
-                player.play();
+                // Play from the current playhead position! If parked at the very
+                // end of the take (within 25ms), rewind to 0 so Preview plays the take.
+                long start = engine.cursorFrames();
+                if (start >= totalFrames - 1200) {
+                    start = 0;
+                    engine.seekCursorFrame(0);
+                    waveform.setPlayheadFraction(0f);
+                }
+                player.playFrom(start);
             }
-            if (btnPreviewPlay != null) btnPreviewPlay.setText("■ Stop");
+            if (btnPreviewPlay != null) {
+                btnPreviewPlay.setText("■ Stop");
+                btnPreviewPlay.setBackgroundResource(R.drawable.bg_chip_selected);
+                btnPreviewPlay.setTextColor(0xFFFFFFFF);
+            }
         } catch (Exception e) {
             stopStudioPreview();
         }
@@ -1620,11 +1797,20 @@ public class StudioFragment extends Fragment {
         RawFloatPlayer player = studioPreviewPlayer;
         studioPreviewPlayer = null;
         if (player != null) {
+            long lastFrame = player.positionFrames();
             try {
                 player.stop();
             } catch (Exception ignored) {}
+            if (engine.hasSession() && engine.state != RecordingEngine.State.RECORDING) {
+                engine.seekCursorFrame(lastFrame);
+            }
         }
-        if (btnPreviewPlay != null) btnPreviewPlay.setText("▶ Preview");
+        if (btnPreviewPlay != null) {
+            boolean hasSel = waveform != null && waveform.hasSelection();
+            btnPreviewPlay.setText(hasSel ? "▶ Sel" : "▶ Preview");
+            btnPreviewPlay.setBackgroundResource(R.drawable.bg_chip);
+            btnPreviewPlay.setTextColor(0xFFF2F4F7);
+        }
     }
 
     private void paintEditorStrip() {
@@ -1632,24 +1818,59 @@ public class StudioFragment extends Fragment {
         boolean show = engine.hasSession()
                 && engine.dataBytes > 0
                 && engine.state != RecordingEngine.State.RECORDING;
-        editorStrip.setVisibility(show ? View.VISIBLE : View.GONE);
-        if (!show) {
+        if (show && editorStrip.getVisibility() != View.VISIBLE) {
+            editorStrip.setVisibility(View.VISIBLE);
+            editorStrip.setAlpha(0f);
+            editorStrip.setTranslationY(-8f);
+            editorStrip.animate().cancel();
+            editorStrip.animate()
+                    .alpha(1f).translationY(0f)
+                    .setDuration(220)
+                    .setInterpolator(new android.view.animation.DecelerateInterpolator(1.4f))
+                    .start();
+        } else if (!show && editorStrip.getVisibility() == View.VISIBLE) {
+            editorStrip.setVisibility(View.GONE);
             stopStudioPreview();
             return;
         }
+        if (!show) return;
+
         boolean hasSel = waveform != null && waveform.hasSelection();
+        long durMs = Math.max(1L, engine.durationMs());
+        long curMs = studioPreviewPlayer != null
+                ? studioPreviewPlayer.positionMs() : engine.cursorMs();
+
+        if (editProgressBar != null) {
+            int prog = (int) Math.max(0, Math.min(1000, curMs * 1000L / durMs));
+            editProgressBar.setProgress(prog);
+        }
+        if (editTimeStart != null) {
+            editTimeStart.setText(hasSel
+                    ? formatTimer(Math.round(waveform.selectionStartFraction() * durMs))
+                    : formatTimer(curMs));
+        }
+        if (editTimeEnd != null) {
+            editTimeEnd.setText(hasSel
+                    ? formatTimer(Math.round(waveform.selectionEndFraction() * durMs))
+                    : formatTimer(durMs));
+        }
+
         if (btnSelectRange != null) {
             btnSelectRange.setText(hasSel ? "[✓] Selected" : "[ ] Select");
             btnSelectRange.setBackgroundResource(hasSel
                     ? R.drawable.bg_chip_selected : R.drawable.bg_chip);
             btnSelectRange.setTextColor(hasSel ? 0xFFFFFFFF : 0xFF9AA3AF);
-            btnSelectRange.setAlpha(1f);
+        }
+        if (btnReplaceSeg != null) {
+            btnReplaceSeg.setText(hasSel ? "● Replace Sel" : "● Replace");
+            btnReplaceSeg.setBackgroundResource(hasSel
+                    ? R.drawable.bg_btn_danger : R.drawable.bg_chip);
+            btnReplaceSeg.setTextColor(hasSel ? 0xFFFF453A : 0xFF9AA3AF);
+            btnReplaceSeg.setAlpha(hasSel ? 1f : 0.75f);
         }
         if (btnTrimCrop != null) {
             btnTrimCrop.setAlpha(hasSel ? 1f : 0.65f);
-        }
-        if (btnCutDelete != null) {
-            btnCutDelete.setAlpha(hasSel ? 1f : 0.65f);
+            btnTrimCrop.setTextColor(hasSel ? 0xFFF2F4F7 : 0xFF9AA3AF);
         }
         if (btnDspFx != null) {
             boolean fxOn = dspConfig != null && dspConfig.isActive();
@@ -1661,20 +1882,26 @@ public class StudioFragment extends Fragment {
         if (btnEditUndo != null) {
             boolean canUndo = undoJournal != null && undoJournal.canUndo();
             btnEditUndo.setAlpha(canUndo ? 1f : 0.40f);
+            btnEditUndo.setTextColor(canUndo ? 0xFFF2F4F7 : 0xFF5D6672);
         }
-        if (btnPreviewPlay != null && studioPreviewPlayer == null) {
-            btnPreviewPlay.setText(hasSel ? "▶ Sel" : "▶ Preview");
+        if (btnPreviewPlay != null) {
+            boolean playing = (studioPreviewPlayer != null);
+            btnPreviewPlay.setText(playing ? "■ Stop" : (hasSel ? "▶ Sel" : "▶ Preview"));
+            btnPreviewPlay.setBackgroundResource(playing
+                    ? R.drawable.bg_chip_selected : R.drawable.bg_chip);
+            btnPreviewPlay.setTextColor(playing ? 0xFFFFFFFF : 0xFFF2F4F7);
         }
         if (hintText != null) {
             if (hasSel) {
-                long durMs = engine.durationMs();
                 long sMs = Math.round(waveform.selectionStartFraction() * durMs);
                 long eMs = Math.round(waveform.selectionEndFraction() * durMs);
                 hintText.setText(formatTimer(sMs) + " – " + formatTimer(eMs)
-                        + " • Drag [ ] handles");
+                        + " • Tap Replace or Trim");
             } else if (engine.cursorFrames() < engine.totalFrames() - 1200) {
                 hintText.setText("Playhead " + formatTimer(engine.cursorMs())
-                        + " • Tap mic to punch in");
+                        + " • Resume replaces from here");
+            } else {
+                hintText.setText("Scroll red waveform to scrub or tap [ ] Select");
             }
         }
     }
@@ -1789,9 +2016,15 @@ public class StudioFragment extends Fragment {
             // pre-FX bytes (same hazard as trim/cut/undo).
             engine.abortStreaming();
             engine.dataBytes = RecordingEngine.payloadBytesOf(raw);
+            // Reset dspConfig after baking into raw so subsequent previews
+            // do not double-apply the effects on top of the processed audio!
+            dspConfig = new DspChain.Config();
+            dspConfig.save(requireContext());
+            if (livePreviewDsp != null) livePreviewDsp.updateConfig(dspConfig);
+            float keepFrac = waveform.playheadFraction();
             waveform.clearSelection();
-            reloadWaveformCleanly();
-            Toast.makeText(requireContext(), "FX applied",
+            reloadWaveformPreservingPlayhead(keepFrac);
+            Toast.makeText(requireContext(), "FX applied (Undo available)",
                     Toast.LENGTH_SHORT).show();
         } catch (Exception e) {
             Toast.makeText(requireContext(), "FX failed",
@@ -1808,11 +2041,18 @@ public class StudioFragment extends Fragment {
         android.app.Dialog d = new android.app.Dialog(ctx, R.style.TakeOneCenterDialog);
         d.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE);
 
-        int pad = Math.round(20 * getResources().getDisplayMetrics().density);
+        float density = getResources().getDisplayMetrics().density;
+        int pad = Math.round(18 * density);
+        int gap = Math.round(8 * density);
+
+        android.widget.ScrollView scroll = new android.widget.ScrollView(ctx);
         android.widget.LinearLayout root = new android.widget.LinearLayout(ctx);
         root.setOrientation(android.widget.LinearLayout.VERTICAL);
         root.setBackgroundResource(R.drawable.bg_modal);
         root.setPadding(pad, pad, pad, pad);
+        scroll.addView(root, new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
 
         TextView title = new TextView(ctx);
         title.setText("Mastering & Voice FX");
@@ -1823,132 +2063,347 @@ public class StudioFragment extends Fragment {
                 "sans-serif-medium", android.graphics.Typeface.NORMAL));
         root.addView(title);
 
-        // 1-Tap Preset Row: Off | Voice Polish | Custom
+        TextView sub = new TextView(ctx);
+        sub.setText(waveform != null && waveform.hasSelection()
+                ? "Live preview active • Applies to selected range"
+                : "Live preview active • Applies to entire take");
+        sub.setTextSize(11.5f);
+        sub.setTextColor(0xFF9AA3AF);
+        sub.setGravity(android.view.Gravity.CENTER);
+        android.widget.LinearLayout.LayoutParams subLp =
+                new android.widget.LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT);
+        subLp.topMargin = Math.round(3 * density);
+        root.addView(sub, subLp);
+
+        // 1) Aligned 3-Way Segmented Mode Selector: Off | Voice Polish | Custom
         android.widget.LinearLayout presetRow = new android.widget.LinearLayout(ctx);
         presetRow.setOrientation(android.widget.LinearLayout.HORIZONTAL);
-        int mTop = Math.round(12 * getResources().getDisplayMetrics().density);
+        presetRow.setBackgroundResource(R.drawable.bg_search);
+        int segPad = Math.round(4 * density);
+        presetRow.setPadding(segPad, segPad, segPad, segPad);
         android.widget.LinearLayout.LayoutParams prLp =
                 new android.widget.LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT);
-        prLp.topMargin = mTop;
+        prLp.topMargin = Math.round(12 * density);
         root.addView(presetRow, prLp);
 
+        TextView btnBypass = new TextView(ctx);
+        TextView btnPolish = new TextView(ctx);
+        TextView btnCustom = new TextView(ctx);
+        TextView[] modeBtns = {btnBypass, btnPolish, btnCustom};
+        String[] modeNames = {"FX Off", "Voice Polish", "Custom"};
+        for (int i = 0; i < 3; i++) {
+            TextView b = modeBtns[i];
+            b.setText(modeNames[i]);
+            b.setTextSize(11.5f);
+            b.setGravity(android.view.Gravity.CENTER);
+            b.setSingleLine(true);
+            b.setTypeface(android.graphics.Typeface.create(
+                    "sans-serif-medium", android.graphics.Typeface.NORMAL));
+            int vP = Math.round(8 * density);
+            b.setPadding(segPad, vP, segPad, vP);
+            android.widget.LinearLayout.LayoutParams lp =
+                    new android.widget.LinearLayout.LayoutParams(
+                            0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+            if (i > 0) lp.leftMargin = segPad;
+            presetRow.addView(b, lp);
+            PressAnim.applySoft(b, 0.96f);
+        }
+
+        // 2) Effect Cards with aligned header, status dot, progress bar, and TeleValue
         TeleValue noiseCtl = new TeleValue(ctx);
-        noiseCtl.setCaption("Noise Suppression");
         noiseCtl.configure(0, 100, 5, dspConfig.noisePct, "%");
+        android.widget.ProgressBar noiseBar = new android.widget.ProgressBar(
+                ctx, null, android.R.attr.progressBarStyleHorizontal);
+        TextView noiseState = new TextView(ctx);
+        View noiseCard = buildFxSliderCard(ctx, "Noise Suppression",
+                "3-band adaptive floor gate", noiseCtl, noiseBar, noiseState);
+        root.addView(noiseCard, prLp);
 
         TeleValue deEssCtl = new TeleValue(ctx);
-        deEssCtl.setCaption("De-Esser (4.5–9.5 kHz)");
         deEssCtl.configure(0, 100, 5, dspConfig.deEssPct, "%");
+        android.widget.ProgressBar deEssBar = new android.widget.ProgressBar(
+                ctx, null, android.R.attr.progressBarStyleHorizontal);
+        TextView deEssState = new TextView(ctx);
+        View deEssCard = buildFxSliderCard(ctx, "De-Esser (4.5–9.5 kHz)",
+                "Split-band sibilance control", deEssCtl, deEssBar, deEssState);
+        root.addView(deEssCard, prLp);
 
         TeleValue compCtl = new TeleValue(ctx);
-        compCtl.setCaption("Compressor & Limiter");
         compCtl.configure(0, 100, 5, dspConfig.compPct, "%");
+        android.widget.ProgressBar compBar = new android.widget.ProgressBar(
+                ctx, null, android.R.attr.progressBarStyleHorizontal);
+        TextView compState = new TextView(ctx);
+        View compCard = buildFxSliderCard(ctx, "Compressor & Limiter",
+                "Soft-knee vocal leveler + brickwall ceiling", compCtl, compBar, compState);
+        root.addView(compCard, prLp);
 
-        TextView hpfBtn = new TextView(ctx);
-        hpfBtn.setText(dspConfig.hpfEnabled
-                ? "80 Hz Rumble Cut: ON" : "80 Hz Rumble Cut: OFF");
-        hpfBtn.setGravity(android.view.Gravity.CENTER);
-        hpfBtn.setTextSize(12);
-        hpfBtn.setTextColor(0xFFF2F4F7);
-        hpfBtn.setBackgroundResource(dspConfig.hpfEnabled
-                ? R.drawable.bg_chip_selected : R.drawable.bg_chip);
-        int hPad = Math.round(10 * getResources().getDisplayMetrics().density);
-        hpfBtn.setPadding(hPad, hPad, hPad, hPad);
+        // 3) Aligned 80 Hz Low-Cut Toggle Row (matches card width & padding)
+        android.widget.LinearLayout hpfCard = new android.widget.LinearLayout(ctx);
+        hpfCard.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+        hpfCard.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        hpfCard.setBackgroundResource(R.drawable.bg_search);
+        int cPad = Math.round(12 * density);
+        hpfCard.setPadding(cPad, cPad, cPad, cPad);
+        hpfCard.setClickable(true);
+        hpfCard.setFocusable(true);
 
-        Runnable syncLiveDsp = () -> {
+        View hpfDot = new View(ctx);
+        int dotSz = Math.round(8 * density);
+        android.widget.LinearLayout.LayoutParams dotLp =
+                new android.widget.LinearLayout.LayoutParams(dotSz, dotSz);
+        dotLp.rightMargin = Math.round(10 * density);
+        hpfCard.addView(hpfDot, dotLp);
+
+        android.widget.LinearLayout hpfTextCol = new android.widget.LinearLayout(ctx);
+        hpfTextCol.setOrientation(android.widget.LinearLayout.VERTICAL);
+        TextView hpfTitle = new TextView(ctx);
+        hpfTitle.setText("80 Hz Low-Cut Filter");
+        hpfTitle.setTextSize(13f);
+        hpfTitle.setTextColor(0xFFF2F4F7);
+        hpfTitle.setTypeface(android.graphics.Typeface.create(
+                "sans-serif-medium", android.graphics.Typeface.NORMAL));
+        TextView hpfSub = new TextView(ctx);
+        hpfSub.setText("Removes mic rumble & plosive thumps");
+        hpfSub.setTextSize(10.5f);
+        hpfSub.setTextColor(0xFF8A93A0);
+        hpfTextCol.addView(hpfTitle);
+        hpfTextCol.addView(hpfSub);
+        hpfCard.addView(hpfTextCol, new android.widget.LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView hpfPill = new TextView(ctx);
+        hpfPill.setTextSize(11.5f);
+        hpfPill.setGravity(android.view.Gravity.CENTER);
+        hpfPill.setTypeface(android.graphics.Typeface.create(
+                "sans-serif-medium", android.graphics.Typeface.NORMAL));
+        int pH = Math.round(14 * density);
+        int pV = Math.round(6 * density);
+        hpfPill.setPadding(pH, pV, pH, pV);
+        hpfCard.addView(hpfPill);
+        PressAnim.applySoft(hpfCard, 0.98f);
+        root.addView(hpfCard, prLp);
+
+        TextView btnApply = new TextView(ctx);
+
+        // Central state painter: clearly indicates selected mode & each active toggle
+        Runnable syncUiAndLiveDsp = () -> {
             dspConfig.noisePct = noiseCtl.getValue();
             dspConfig.deEssPct = deEssCtl.getValue();
             dspConfig.compPct = compCtl.getValue();
             dspConfig.save(ctx);
             if (livePreviewDsp != null) livePreviewDsp.updateConfig(dspConfig);
+
+            boolean isOff = !dspConfig.isActive();
+            boolean isPolish = dspConfig.hpfEnabled
+                    && dspConfig.noisePct == 50
+                    && dspConfig.deEssPct == 45
+                    && dspConfig.compPct == 40;
+            boolean isCustom = !isOff && !isPolish;
+
+            styleModePill(btnBypass, "FX Off", isOff);
+            styleModePill(btnPolish, "Voice Polish", isPolish);
+            styleModePill(btnCustom, "Custom", isCustom);
+
+            updateFxCardState(noiseCard, noiseBar, noiseState, dspConfig.noisePct);
+            updateFxCardState(deEssCard, deEssBar, deEssState, dspConfig.deEssPct);
+            updateFxCardState(compCard, compBar, compState, dspConfig.compPct);
+
+            boolean hpfOn = dspConfig.hpfEnabled;
+            hpfCard.setBackgroundResource(hpfOn
+                    ? R.drawable.bg_pill_option_selected : R.drawable.bg_search);
+            hpfDot.setBackgroundResource(hpfOn
+                    ? R.drawable.dot_live : R.drawable.bg_round_btn);
+            hpfDot.setAlpha(hpfOn ? 1f : 0.4f);
+            hpfPill.setText(hpfOn ? "ON" : "OFF");
+            hpfPill.setTextColor(hpfOn ? 0xFFFFFFFF : 0xFF9AA3AF);
+            hpfPill.setBackgroundResource(hpfOn
+                    ? R.drawable.bg_chip_selected : R.drawable.bg_chip);
+
+            boolean anyOn = dspConfig.isActive();
+            btnApply.setAlpha(anyOn ? 1f : 0.45f);
+            btnApply.setBackgroundResource(anyOn
+                    ? R.drawable.bg_btn_primary : R.drawable.bg_btn_ghost);
             paintEditorStrip();
         };
 
-        noiseCtl.setOnValueChanged(v -> syncLiveDsp.run());
-        deEssCtl.setOnValueChanged(v -> syncLiveDsp.run());
-        compCtl.setOnValueChanged(v -> syncLiveDsp.run());
-        hpfBtn.setOnClickListener(v -> {
+        TeleValue.OnScrubListener liveScrub = new TeleValue.OnScrubListener() {
+            @Override public void onScrubValueChanged(int value) { syncUiAndLiveDsp.run(); }
+            @Override public void onScrubFinished(int value) { syncUiAndLiveDsp.run(); }
+        };
+        noiseCtl.setOnValueChanged(v -> syncUiAndLiveDsp.run());
+        noiseCtl.setOnScrubListener(liveScrub);
+        deEssCtl.setOnValueChanged(v -> syncUiAndLiveDsp.run());
+        deEssCtl.setOnScrubListener(liveScrub);
+        compCtl.setOnValueChanged(v -> syncUiAndLiveDsp.run());
+        compCtl.setOnScrubListener(liveScrub);
+
+        hpfCard.setOnClickListener(v -> {
             dspConfig.hpfEnabled = !dspConfig.hpfEnabled;
-            hpfBtn.setText(dspConfig.hpfEnabled
-                    ? "80 Hz Rumble Cut: ON" : "80 Hz Rumble Cut: OFF");
-            hpfBtn.setBackgroundResource(dspConfig.hpfEnabled
-                    ? R.drawable.bg_chip_selected : R.drawable.bg_chip);
-            syncLiveDsp.run();
+            syncUiAndLiveDsp.run();
         });
 
-        TextView btnPolish = new TextView(ctx);
-        btnPolish.setText("Voice Polish");
-        btnPolish.setGravity(android.view.Gravity.CENTER);
-        btnPolish.setTextColor(0xFFFFFFFF);
-        btnPolish.setBackgroundResource(R.drawable.bg_chip_selected);
-        btnPolish.setPadding(hPad, hPad / 2, hPad, hPad / 2);
-        btnPolish.setOnClickListener(v -> {
-            dspConfig = DspChain.Config.voicePolish();
-            noiseCtl.setValue(dspConfig.noisePct, false);
-            deEssCtl.setValue(dspConfig.deEssPct, false);
-            compCtl.setValue(dspConfig.compPct, false);
-            hpfBtn.setText("80 Hz Rumble Cut: ON");
-            hpfBtn.setBackgroundResource(R.drawable.bg_chip_selected);
-            syncLiveDsp.run();
-        });
-
-        TextView btnBypass = new TextView(ctx);
-        btnBypass.setText("Reset Off");
-        btnBypass.setGravity(android.view.Gravity.CENTER);
-        btnBypass.setTextColor(0xFF9AA3AF);
-        btnBypass.setBackgroundResource(R.drawable.bg_chip);
-        btnBypass.setPadding(hPad, hPad / 2, hPad, hPad / 2);
         btnBypass.setOnClickListener(v -> {
             dspConfig = new DspChain.Config();
             noiseCtl.setValue(0, false);
             deEssCtl.setValue(0, false);
             compCtl.setValue(0, false);
-            hpfBtn.setText("80 Hz Rumble Cut: OFF");
-            hpfBtn.setBackgroundResource(R.drawable.bg_chip);
-            syncLiveDsp.run();
+            syncUiAndLiveDsp.run();
+        });
+        btnPolish.setOnClickListener(v -> {
+            dspConfig = DspChain.Config.voicePolish();
+            noiseCtl.setValue(dspConfig.noisePct, false);
+            deEssCtl.setValue(dspConfig.deEssPct, false);
+            compCtl.setValue(dspConfig.compPct, false);
+            syncUiAndLiveDsp.run();
+        });
+        btnCustom.setOnClickListener(v -> {
+            if (!dspConfig.isActive()) {
+                dspConfig = new DspChain.Config(true, 25, 25, 25);
+                noiseCtl.setValue(25, false);
+                deEssCtl.setValue(25, false);
+                compCtl.setValue(25, false);
+            }
+            syncUiAndLiveDsp.run();
         });
 
-        android.widget.LinearLayout.LayoutParams halfLp =
-                new android.widget.LinearLayout.LayoutParams(0,
-                        ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        halfLp.rightMargin = hPad / 2;
-        presetRow.addView(btnPolish, halfLp);
-        presetRow.addView(btnBypass, halfLp);
+        // 4) Bottom Action Row: Preview FX | Apply FX | Done
+        android.widget.LinearLayout actRow = new android.widget.LinearLayout(ctx);
+        actRow.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+        TextView btnPreviewModal = new TextView(ctx);
+        btnPreviewModal.setText(studioPreviewPlayer != null ? "■ Stop Preview" : "▶ Preview FX");
+        btnPreviewModal.setTextSize(13f);
+        btnPreviewModal.setGravity(android.view.Gravity.CENTER);
+        btnPreviewModal.setTextColor(0xFFF2F4F7);
+        btnPreviewModal.setBackgroundResource(R.drawable.bg_btn_ghost);
+        int bPad = Math.round(11 * density);
+        btnPreviewModal.setPadding(bPad, bPad, bPad, bPad);
+        btnPreviewModal.setOnClickListener(v -> {
+            toggleStudioPreview();
+            btnPreviewModal.setText(studioPreviewPlayer != null
+                    ? "■ Stop Preview" : "▶ Preview FX");
+        });
 
-        root.addView(noiseCtl, prLp);
-        root.addView(deEssCtl, prLp);
-        root.addView(compCtl, prLp);
-        root.addView(hpfBtn, prLp);
-
-        TextView btnApply = new TextView(ctx);
         boolean hasSel = waveform != null && waveform.hasSelection();
-        btnApply.setText(hasSel
-                ? "Apply FX to Selection" : "Apply FX to Entire Take");
+        btnApply.setText(hasSel ? "Apply to Selection" : "Apply to Take");
+        btnApply.setTextSize(13f);
         btnApply.setGravity(android.view.Gravity.CENTER);
         btnApply.setTextColor(0xFFFFFFFF);
-        boolean fxOn = dspConfig != null && dspConfig.isActive();
-        btnApply.setBackgroundResource(fxOn
-                ? R.drawable.bg_btn_primary : R.drawable.bg_chip);
-        btnApply.setPadding(hPad, hPad, hPad, hPad);
+        btnApply.setTypeface(android.graphics.Typeface.create(
+                "sans-serif-medium", android.graphics.Typeface.NORMAL));
+        btnApply.setPadding(bPad, bPad, bPad, bPad);
         btnApply.setOnClickListener(v -> {
             if (commitDspFx()) d.dismiss();
         });
-        root.addView(btnApply, prLp);
+
+        android.widget.LinearLayout.LayoutParams leftLp =
+                new android.widget.LinearLayout.LayoutParams(0,
+                        ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        leftLp.rightMargin = gap / 2;
+        android.widget.LinearLayout.LayoutParams rightLp =
+                new android.widget.LinearLayout.LayoutParams(0,
+                        ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        rightLp.leftMargin = gap / 2;
+        actRow.addView(btnPreviewModal, leftLp);
+        actRow.addView(btnApply, rightLp);
+        root.addView(actRow, prLp);
 
         TextView doneBtn = new TextView(ctx);
         doneBtn.setText(R.string.settings_done);
         doneBtn.setGravity(android.view.Gravity.CENTER);
-        doneBtn.setTextColor(0xFFFFFFFF);
-        doneBtn.setTextSize(14);
-        doneBtn.setBackgroundResource(R.drawable.bg_btn_primary);
-        doneBtn.setPadding(hPad, hPad, hPad, hPad);
+        doneBtn.setTextColor(0xFF9AA3AF);
+        doneBtn.setTextSize(13.5f);
+        doneBtn.setBackgroundResource(R.drawable.bg_btn_ghost);
+        doneBtn.setPadding(bPad, bPad, bPad, bPad);
         doneBtn.setOnClickListener(v -> d.dismiss());
         root.addView(doneBtn, prLp);
 
-        d.setContentView(root);
+        syncUiAndLiveDsp.run();
+        d.setContentView(scroll);
+        android.view.Window w = d.getWindow();
+        if (w != null) {
+            w.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(
+                    android.graphics.Color.TRANSPARENT));
+            w.setLayout(ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT);
+        }
         d.show();
+    }
+
+    private void styleModePill(TextView tv, String baseLabel, boolean selected) {
+        tv.setText(selected ? ("✓ " + baseLabel) : baseLabel);
+        tv.setBackgroundResource(selected
+                ? R.drawable.bg_chip_selected : R.drawable.bg_chip);
+        tv.setTextColor(selected ? 0xFFFFFFFF : 0xFF9AA3AF);
+    }
+
+    private View buildFxSliderCard(Context ctx, String titleText, String subText,
+                                   TeleValue ctl, android.widget.ProgressBar bar,
+                                   TextView badge) {
+        float density = getResources().getDisplayMetrics().density;
+        int pad = Math.round(10 * density);
+        android.widget.LinearLayout card = new android.widget.LinearLayout(ctx);
+        card.setOrientation(android.widget.LinearLayout.VERTICAL);
+        card.setBackgroundResource(R.drawable.bg_search);
+        card.setPadding(pad, pad, pad, pad);
+
+        android.widget.LinearLayout head = new android.widget.LinearLayout(ctx);
+        head.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+        head.setGravity(android.view.Gravity.CENTER_VERTICAL);
+
+        android.widget.LinearLayout titles = new android.widget.LinearLayout(ctx);
+        titles.setOrientation(android.widget.LinearLayout.VERTICAL);
+        TextView t = new TextView(ctx);
+        t.setText(titleText);
+        t.setTextSize(12.5f);
+        t.setTextColor(0xFFF2F4F7);
+        t.setTypeface(android.graphics.Typeface.create(
+                "sans-serif-medium", android.graphics.Typeface.NORMAL));
+        TextView s = new TextView(ctx);
+        s.setText(subText);
+        s.setTextSize(10f);
+        s.setTextColor(0xFF8A93A0);
+        titles.addView(t);
+        titles.addView(s);
+        head.addView(titles, new android.widget.LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        badge.setTextSize(10.5f);
+        int bH = Math.round(8 * density);
+        int bV = Math.round(2 * density);
+        badge.setPadding(bH, bV, bH, bV);
+        head.addView(badge);
+        card.addView(head);
+
+        bar.setMax(100);
+        bar.setProgressTintList(android.content.res.ColorStateList.valueOf(0xFFFF3B30));
+        bar.setProgressBackgroundTintList(
+                android.content.res.ColorStateList.valueOf(0xFF262C35));
+        android.widget.LinearLayout.LayoutParams barLp =
+                new android.widget.LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        Math.round(5 * density));
+        barLp.topMargin = Math.round(6 * density);
+        barLp.bottomMargin = Math.round(4 * density);
+        card.addView(bar, barLp);
+        card.addView(ctl, new android.widget.LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+        return card;
+    }
+
+    private void updateFxCardState(View card, android.widget.ProgressBar bar,
+                                   TextView badge, int pct) {
+        boolean active = pct > 0;
+        bar.setProgress(pct);
+        badge.setText(active ? ("ACTIVE • " + pct + "%") : "BYPASSED");
+        badge.setTextColor(active ? 0xFFFF453A : 0xFF5D6672);
+        badge.setBackgroundResource(active ? R.drawable.bg_badge : 0);
+        card.setBackgroundResource(active
+                ? R.drawable.bg_pill_option_selected : R.drawable.bg_search);
     }
 
     private void paint() {

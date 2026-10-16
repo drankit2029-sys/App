@@ -78,6 +78,7 @@ public final class RecordingEngine {
     private long cursorFrame = 0;
     private long punchOutFrame = -1;
     private boolean cursorExplicit = false;
+    private boolean truncateTailOnWrite = false;
     private float[] punchInFadeBuf;
     private float[] punchOutFadeBuf;
 
@@ -152,7 +153,7 @@ public final class RecordingEngine {
 
     /**
      * Positions the recording head at `frame` while IDLE or PAUSED so the next
-     * resumeCapture()/startCapture() punches in seamlessly at that point.
+     * resumeCapture()/startCapture() replaces from that point onward.
      */
     public void seekCursorFrame(long frame) {
         synchronized (lock) {
@@ -161,6 +162,7 @@ public final class RecordingEngine {
             cursorFrame = Math.max(0L, Math.min(total, frame));
             punchOutFrame = -1L;
             cursorExplicit = true;
+            truncateTailOnWrite = (cursorFrame < total);
         }
     }
 
@@ -176,6 +178,7 @@ public final class RecordingEngine {
             punchOutFrame = (endFrame > cursorFrame)
                     ? Math.min(total, endFrame) : -1L;
             cursorExplicit = true;
+            truncateTailOnWrite = false;
         }
     }
 
@@ -400,6 +403,7 @@ public final class RecordingEngine {
                 long totalFrames = dataBytes / (ch * 4L);
                 if (!cursorExplicit || cursorFrame > totalFrames) {
                     cursorFrame = totalFrames;
+                    truncateTailOnWrite = false;
                 }
                 cursorExplicit = false;
                 punchInFadeBuf = null;
@@ -428,6 +432,12 @@ public final class RecordingEngine {
                             ByteBuffer.wrap(tmp).order(ByteOrder.LITTLE_ENDIAN)
                                     .asFloatBuffer().get(punchOutFadeBuf);
                         }
+                    } else if (truncateTailOnWrite) {
+                        // Immediate playhead replacement (or variable-length replace
+                        // where post-selection tail was saved separately): truncate
+                        // old trailing bytes from cursorFrame forward!
+                        dataBytes = cursorFrame * ch * 4L;
+                        raf.setLength(44L + dataBytes);
                     }
                     // If StreamingEncoder already encoded past cursorFrame, abort it
                     // so save re-encodes the overwritten span cleanly.
@@ -511,6 +521,7 @@ public final class RecordingEngine {
                 long totalFrames = dataBytes / (ch * 4L);
                 if (!cursorExplicit || cursorFrame > totalFrames) {
                     cursorFrame = totalFrames;
+                    truncateTailOnWrite = false;
                 }
                 cursorExplicit = false;
                 punchInFadeBuf = null;
@@ -539,6 +550,12 @@ public final class RecordingEngine {
                             ByteBuffer.wrap(tmp).order(ByteOrder.LITTLE_ENDIAN)
                                     .asFloatBuffer().get(punchOutFadeBuf);
                         }
+                    } else if (truncateTailOnWrite) {
+                        // Immediate playhead replacement (or variable-length replace
+                        // where post-selection tail was saved separately): truncate
+                        // old trailing bytes from cursorFrame forward!
+                        dataBytes = cursorFrame * ch * 4L;
+                        raf.setLength(44L + dataBytes);
                     }
                     // If StreamingEncoder already encoded past cursorFrame, abort it
                     // so save re-encodes the overwritten span cleanly.

@@ -11,8 +11,9 @@ import java.util.Deque;
 
 /**
  * Low-memory, click-free non-linear editing operations on 48 kHz 32-bit float
- * WAV session files. Uses a single 64 KB buffer and a bounded delta journal
- * so low-end devices never allocate large heap arrays or copy entire files.
+ * WAV session files. Supports Trim/Crop, Delete Selection, Variable-Length
+ * Select & Replace (where replacement audio can be shorter or longer than the
+ * selected segment), DSP Range Commit, and 3-step Undo.
  */
 public final class EditEngine {
 
@@ -87,6 +88,114 @@ public final class EditEngine {
                 // noinspection ResultOfMethodCallIgnored
                 stack.pollFirst().delete();
             }
+        }
+    }
+
+    /**
+     * Saves the post-selection tail `[tailStartFrame, totalFrames)` of `raw`
+     * into `tailOut` before a variable-length Select & Replace recording starts.
+     * That way the user can record a replacement of ANY length (shorter or
+     * longer than `[selStart, selEnd)`), and when they pause/stop,
+     * {@link #spliceTailAfterReplace(File, long, File)} crossfades and appends
+     * the saved tail right after the new recording!
+     */
+    public static long saveTailFrom(File raw, long tailStartFrame, File tailOut)
+            throws Exception {
+        FormatConverter.WavInfo info = FormatConverter.readFloatWav(raw);
+        int ch = info.channels;
+        long totalFrames = info.dataBytes / 4 / ch;
+        try (RandomAccessFile raf = new RandomAccessFile(raw, "r")) {
+            tailStartFrame = Dsp.snapToZeroCrossing(raf, info.dataStart, ch,
+                    tailStartFrame, totalFrames, Dsp.CROSSFADE_FRAMES);
+            long tailFrames = Math.max(0, totalFrames - tailStartFrame);
+            long frameBytes = ch * 4L;
+            long tailBytes = tailFrames * frameBytes;
+            try (RandomAccessFile w = new RandomAccessFile(tailOut, "rw")) {
+                w.setLength(0);
+                w.write(Dsp.wavFloatHeader(ch, info.sampleRate, tailBytes));
+                if (tailBytes > 0) {
+                    raf.seek(info.dataStart + tailStartFrame * frameBytes);
+                    byte[] buf = new byte[CHUNK_BYTES];
+                    long left = tailBytes;
+                    while (left > 0) {
+                        int want = (int) Math.min(buf.length, left);
+                        int n = raf.read(buf, 0, want);
+                        if (n <= 0) break;
+                        w.write(buf, 0, n);
+                        left -= n;
+                    }
+                }
+            }
+            return tailFrames;
+        }
+    }
+
+    /**
+     * Completes a variable-length Select & Replace by crossfading the end of
+     * the newly recorded replacement (`replaceEndFrame` in `raw`) with the
+     * beginning of `savedTail` (240 frames = 5 ms raised-cosine bridge) and
+     * appending the remainder of `savedTail` in 64 KB chunks.
+     *
+     * @return the new total payload bytes of `raw`.
+     */
+    public static long spliceTailAfterReplace(File raw, long replaceEndFrame,
+                                              File savedTail) throws Exception {
+        if (savedTail == null || !savedTail.exists()) {
+            return RecordingEngine.payloadBytesOf(raw);
+        }
+        FormatConverter.WavInfo rawInfo = FormatConverter.readFloatWav(raw);
+        FormatConverter.WavInfo tailInfo = FormatConverter.readFloatWav(savedTail);
+        int ch = rawInfo.channels;
+        long frameBytes = ch * 4L;
+        long rawTotalFrames = rawInfo.dataBytes / frameBytes;
+        long tailTotalFrames = tailInfo.dataBytes / frameBytes;
+        replaceEndFrame = Math.max(0, Math.min(rawTotalFrames, replaceEndFrame));
+
+        if (tailTotalFrames <= 0) {
+            try (RandomAccessFile raf = new RandomAccessFile(raw, "rw")) {
+                long newBytes = replaceEndFrame * frameBytes;
+                raf.setLength(rawInfo.dataStart + newBytes);
+                raf.seek(0);
+                raf.write(Dsp.wavFloatHeader(ch, rawInfo.sampleRate, newBytes));
+                return newBytes;
+            }
+        }
+
+        try (RandomAccessFile raf = new RandomAccessFile(raw, "rw");
+             RandomAccessFile traf = new RandomAccessFile(savedTail, "r")) {
+            int fade = (int) Math.min(Dsp.CROSSFADE_FRAMES,
+                    Math.min(replaceEndFrame, tailTotalFrames));
+            long writePos = rawInfo.dataStart + (replaceEndFrame - fade) * frameBytes;
+            if (fade > 0) {
+                float[] pre = readFloatFrames(raf, writePos, fade, ch);
+                float[] post = readFloatFrames(traf, tailInfo.dataStart, fade, ch);
+                float[] blended = new float[fade * ch];
+                Dsp.crossfadeFrames(pre, 0, post, 0, blended, 0, fade, ch);
+                raf.seek(writePos);
+                Dsp.writeFloatsLE(raf, blended, 0, blended.length);
+                writePos += fade * frameBytes;
+            }
+            long remTailFrames = Math.max(0, tailTotalFrames - fade);
+            long remTailBytes = remTailFrames * frameBytes;
+            traf.seek(tailInfo.dataStart + fade * frameBytes);
+            raf.seek(writePos);
+            byte[] buf = new byte[CHUNK_BYTES];
+            long moved = 0;
+            while (moved < remTailBytes) {
+                int want = (int) Math.min(buf.length, remTailBytes - moved);
+                int n = traf.read(buf, 0, want);
+                if (n <= 0) break;
+                raf.write(buf, 0, n);
+                moved += n;
+            }
+            long newPayloadBytes = (writePos - rawInfo.dataStart) + moved;
+            raf.setLength(rawInfo.dataStart + newPayloadBytes);
+            raf.seek(0);
+            raf.write(Dsp.wavFloatHeader(ch, rawInfo.sampleRate, newPayloadBytes));
+            return newPayloadBytes;
+        } finally {
+            // noinspection ResultOfMethodCallIgnored
+            savedTail.delete();
         }
     }
 

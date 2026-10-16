@@ -179,6 +179,44 @@ public class EditEngineTest {
     }
 
     @Test
+    public void variableLengthSelectAndReplaceHandlesShorterAndLongerSegments()
+            throws Exception {
+        // 1) Create 48,000-frame take (1.0s @ 48 kHz mono)
+        File raw = dcRaw("replace_var.wav", 48000);
+        File tail = new File(tmp.getRoot(), "replace_var.reptail");
+        EditEngine.UndoJournal undo = new EditEngine.UndoJournal(tmp.getRoot());
+        undo.recordSnapshot(raw);
+
+        // Save tail [30000, 48000) (18,000 frames) for replacing [10000, 30000)
+        long savedTailFrames = EditEngine.saveTailFrom(raw, 30000, tail);
+        assertEquals(18000L, savedTailFrames);
+
+        // Case A: Shorter replacement — user records 5,000 frames starting at 10,000
+        // (so replaceEndFrame = 15,000 instead of 30,000)
+        long newBytesShort = EditEngine.spliceTailAfterReplace(raw, 15000, tail);
+        long expectedFramesShort = 15000L + 18000L - Dsp.CROSSFADE_FRAMES;
+        assertEquals(expectedFramesShort * 4L, newBytesShort);
+
+        // Restore via Undo and test Case B: Longer replacement (35,000 frames
+        // recorded from 10,000 -> replaceEndFrame = 45,000)
+        assertTrue(undo.undo(raw));
+        EditEngine.saveTailFrom(raw, 30000, tail);
+        try (RandomAccessFile raf = new RandomAccessFile(raw, "rw")) {
+            raf.seek(44L + 10000L * 4L);
+            float[] longerRec = new float[35000];
+            java.util.Arrays.fill(longerRec, 0.75f);
+            Dsp.writeFloatsLE(raf, longerRec, 0, longerRec.length);
+            raf.seek(0);
+            raf.write(Dsp.wavFloatHeader(1, 48000, 45000L * 4L));
+        }
+        long newBytesLong = EditEngine.spliceTailAfterReplace(raw, 45000, tail);
+        long expectedFramesLong = 45000L + 18000L - Dsp.CROSSFADE_FRAMES;
+        assertEquals(expectedFramesLong * 4L, newBytesLong);
+        assertEquals(0.75f, sampleAt(raw, 25000), 0.01f);
+        assertEquals(0.5f, sampleAt(raw, (int) expectedFramesLong - 1000), 0.01f);
+    }
+
+    @Test
     public void applyDspChangesOnlyTheCommittedRange() throws Exception {
         // 440 Hz sine: voice polish must audibly reshape it, but only
         // inside the committed range — the rest stays bit-identical.

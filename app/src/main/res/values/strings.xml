@@ -230,7 +230,7 @@
     <string name="conv_preview_hint">Previewing stored raw • final %1$s lands here when done</string>
     <string name="conv_saved_bg">Saved “%1$s” as %2$s</string>
     <string name="conv_failed_bg">Couldn’t save “%1$s” — raw kept for retry</string>
-    <string name="playback_busy">Stop the recording to play this take</string>
+    <string name="playback_busy">Can\'t play — speaker is engaged</string>
     <string name="conv_bg_toast">Saving in the background — watch Library for progress</string>
     <string name="recovered_title">Recordings recovered</string>
     <string name="recovered_msg">%1$d file(s) found on storage were added back to your library.</string>
@@ -260,5 +260,8 @@
     <string name="notif_cancel">Cancel</string>
     <string name="notif_resume">Resume</string>
     <string name="notif_pause">Pause</string>
-    <string name="msg_paused_call">Paused — interruption (e.g. call). Resume manually when ready.</string>
+    <string name="msg_speaker_engaged_play">Can\'t play — speaker is engaged</string>
+    <string name="msg_speaker_engaged">Can\'t record — speaker is engaged</string>
+    <string name="msg_call_active">Can\'t record — call in progress</string>
+    <string name="msg_paused_call">Paused — call in progress</string>
 </resources>

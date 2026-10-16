@@ -67,6 +67,7 @@ public final class RawFloatPlayer {
         stopLocked();
         stop = false;
         paused = false;
+        stopAtFrame = -1;
         framePos = Math.max(0, Math.min(totalFrames, frame));
         generation++;
         thread = new Thread(this::run, "takeone-raw-preview");

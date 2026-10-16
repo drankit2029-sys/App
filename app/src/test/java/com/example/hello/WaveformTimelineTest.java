@@ -111,7 +111,7 @@ public class WaveformTimelineTest {
     }
 
     @Test
-    public void horizontalDragScrubsPlayheadWhenSelectionOff() {
+    public void horizontalDragScrollsRedWaveformWhenSelectionOff() {
         WaveformView wv = loaded(activity(), 200);
         final float[] lastFrac = {-1f};
         wv.setTimelineListener(new WaveformView.TimelineListener() {
@@ -124,32 +124,43 @@ public class WaveformTimelineTest {
             public void onSelectionChanged(boolean active, float s, float e) {
             }
         });
-        wv.onTouchEvent(ev(MotionEvent.ACTION_DOWN, 350f, 50f));
-        for (float x = 330f; x >= 100f; x -= 20f) {
+        // Drag right moves earlier audio to the center playhead (200 -> ~100).
+        wv.onTouchEvent(ev(MotionEvent.ACTION_DOWN, 100f, 50f));
+        for (float x = 120f; x <= 300f; x += 20f) {
             wv.onTouchEvent(ev(MotionEvent.ACTION_MOVE, x, 50f));
         }
-        wv.onTouchEvent(ev(MotionEvent.ACTION_UP, 100f, 50f));
-        assertTrue("scrub did not fire: " + lastFrac[0],
-                lastFrac[0] >= 0.15f && lastFrac[0] <= 0.35f);
+        wv.onTouchEvent(ev(MotionEvent.ACTION_UP, 300f, 50f));
+        assertTrue("scroll did not fire: " + lastFrac[0],
+                lastFrac[0] >= 0.4f && lastFrac[0] <= 0.6f);
+        assertEquals(lastFrac[0], wv.playheadFraction(), 0.001f);
     }
 
     @Test
-    public void horizontalDragSweepsSelectionWhenSelectionActive() {
+    public void handleDragMovesSelectionStartOnRedWaveform() {
         WaveformView wv = loaded(activity(), 200);
         wv.toggleSelectionAtPlayhead();
         assertTrue(wv.hasSelection());
-        // Touch away from handles and drag horizontally from x=80 to x=280
-        wv.onTouchEvent(ev(MotionEvent.ACTION_DOWN, 80f, 50f));
-        for (float x = 100f; x <= 280f; x += 20f) {
+        float before = wv.selectionStartFraction();
+        // Grab the '[' handle (near x=103 for a 400px view) and drag it right.
+        wv.onTouchEvent(ev(MotionEvent.ACTION_DOWN, 103f, 50f));
+        for (float x = 120f; x <= 200f; x += 20f) {
             wv.onTouchEvent(ev(MotionEvent.ACTION_MOVE, x, 50f));
         }
-        wv.onTouchEvent(ev(MotionEvent.ACTION_UP, 280f, 50f));
+        wv.onTouchEvent(ev(MotionEvent.ACTION_UP, 200f, 50f));
         assertTrue(wv.hasSelection());
-        assertTrue("start=" + wv.selectionStartFraction(),
-                wv.selectionStartFraction() > 0.10f
-                        && wv.selectionStartFraction() < 0.30f);
-        assertTrue("end=" + wv.selectionEndFraction(),
-                wv.selectionEndFraction() > 0.60f
-                        && wv.selectionEndFraction() < 0.80f);
+        assertTrue("start did not move right: " + wv.selectionStartFraction(),
+                wv.selectionStartFraction() > before + 0.05f);
+        assertEquals(1.0f, wv.selectionEndFraction(), 0.001f);
+    }
+
+    @Test
+    public void redWaveformScrollsAndTruncatesToPlayhead() {
+        WaveformView wv = loaded(activity(), 200);
+        wv.setLive(false);
+        wv.setPlayheadFraction(0.5f);
+        assertEquals(0.5f, wv.playheadFraction(), 0.02f);
+        wv.truncateToPlayhead();
+        assertEquals(100, wv.historyCount());
+        assertEquals(1.0f, wv.playheadFraction(), 0.01f);
     }
 }

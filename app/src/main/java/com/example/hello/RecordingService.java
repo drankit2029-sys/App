@@ -173,18 +173,54 @@ public class RecordingService extends Service {
 
     // ---- audio focus: interruptions pause, never auto-resume ----
 
-    private void registerFocus() {
+    private android.media.AudioFocusRequest focusReq26;
+
+    /**
+     * True when a cellular or VoIP call (ringing, dialing, or in-call) is active.
+     * Prevents resuming AudioRecord while Android's telephony policy mutes the mic.
+     */
+    public static boolean isCallActive(Context ctx) {
+        if (ctx == null) return false;
         try {
+            AudioManager am = (AudioManager) ctx.getSystemService(Context.AUDIO_SERVICE);
+            if (am != null) {
+                int mode = am.getMode();
+                if (mode == AudioManager.MODE_IN_CALL
+                        || mode == AudioManager.MODE_IN_COMMUNICATION
+                        || mode == AudioManager.MODE_RINGTONE) {
+                    return true;
+                }
+            }
+            android.telephony.TelephonyManager tm =
+                    (android.telephony.TelephonyManager) ctx.getSystemService(
+                            Context.TELEPHONY_SERVICE);
+            if (tm != null) {
+                int callState = tm.getCallState();
+                if (callState == android.telephony.TelephonyManager.CALL_STATE_RINGING
+                        || callState == android.telephony.TelephonyManager.CALL_STATE_OFFHOOK) {
+                    return true;
+                }
+            }
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+    /**
+     * Requests audio focus and returns true only if granted.
+     * If a call or exclusive speaker session rejects focus, returns false.
+     */
+    private boolean registerFocus() {
+        try {
+            if (isCallActive(this)) return false;
             if (audioManager == null) {
                 audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
             }
-            if (audioManager == null) return;
+            if (audioManager == null) return true;
             if (focusListener == null) {
                 focusListener = focus -> {
                     if (focus == AudioManager.AUDIOFOCUS_LOSS
-                            || focus == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) {
-                        // Spurious callbacks fire right after our own request on
-                        // some devices; only honor losses outside the grace window.
+                            || focus == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT
+                            || focus == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK) {
                         if (SystemClock.elapsedRealtime() - captureStartedAt
                                 < FOCUS_GRACE_MS) {
                             return;
@@ -194,24 +230,48 @@ public class RecordingService extends Service {
                             if (e.state == RecordingEngine.State.RECORDING) {
                                 e.pauseCapture();
                                 abandonFocus();
-                                toast(getString(R.string.msg_paused_call));
+                                boolean call = isCallActive(RecordingService.this);
+                                toast(getString(call
+                                        ? R.string.msg_paused_call
+                                        : R.string.msg_speaker_engaged));
                                 refreshNotif(true);
                             }
                         });
                     }
                 };
             }
-            // Always re-request: after an AUDIOFOCUS_LOSS the platform evicts
-            // the listener, so a stale non-null instance must not skip this.
-            audioManager.requestAudioFocus(focusListener,
-                    AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN);
-        } catch (Exception ignored) {}
+            int res;
+            if (Build.VERSION.SDK_INT >= 26) {
+                focusReq26 = new android.media.AudioFocusRequest.Builder(
+                        AudioManager.AUDIOFOCUS_GAIN)
+                        .setAudioAttributes(new android.media.AudioAttributes.Builder()
+                                .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
+                                .build())
+                        .setOnAudioFocusChangeListener(focusListener, handler)
+                        .build();
+                res = audioManager.requestAudioFocus(focusReq26);
+            } else {
+                //noinspection deprecation
+                res = audioManager.requestAudioFocus(focusListener,
+                        AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN);
+            }
+            return res == AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
+        } catch (Exception ignored) {
+            return true;
+        }
     }
 
     private void abandonFocus() {
         try {
-            if (audioManager != null && focusListener != null) {
-                audioManager.abandonAudioFocus(focusListener);
+            if (audioManager != null) {
+                if (Build.VERSION.SDK_INT >= 26 && focusReq26 != null) {
+                    audioManager.abandonAudioFocusRequest(focusReq26);
+                    focusReq26 = null;
+                } else if (focusListener != null) {
+                    //noinspection deprecation
+                    audioManager.abandonAudioFocus(focusListener);
+                }
             }
         } catch (Exception ignored) {}
         focusListener = null;
@@ -230,8 +290,17 @@ public class RecordingService extends Service {
                 e.pauseCapture();
                 abandonFocus();
             } else if (e.state == RecordingEngine.State.PAUSED) {
+                if (isCallActive(this)) {
+                    toast(getString(R.string.msg_call_active));
+                    refreshNotif(true);
+                    return;
+                }
                 captureStartedAt = now;
-                registerFocus();
+                if (!registerFocus()) {
+                    toast(getString(R.string.msg_speaker_engaged));
+                    refreshNotif(true);
+                    return;
+                }
                 e.resumeCapture(getApplicationContext(),
                         RecordPreset.load(this).audioSource);
                 try {
