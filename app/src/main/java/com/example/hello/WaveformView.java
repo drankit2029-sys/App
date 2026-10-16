@@ -84,6 +84,93 @@ public class WaveformView extends View {
         zoomListener = l;
     }
 
+    public interface TimelineListener {
+        void onPlayheadScrubbed(int bucketIndex, float fraction);
+        void onSelectionChanged(boolean active, float startFrac, float endFrac);
+    }
+
+    private TimelineListener timelineListener;
+    /** Playhead bucket index (0 .. count). Defaults to count (end of take). */
+    private int playheadIndex = 0;
+    private boolean selectionActive = false;
+    private int selStartIdx = 0;
+    private int selEndIdx = 0;
+
+    private static final int DRAG_NONE = 0;
+    private static final int DRAG_ZOOM = 1;
+    private static final int DRAG_SCRUB = 2;
+    private static final int DRAG_SEL_START = 3;
+    private static final int DRAG_SEL_END = 4;
+    private int dragMode = DRAG_NONE;
+    private float downX, lastTouchX;
+
+    public void setTimelineListener(TimelineListener l) {
+        this.timelineListener = l;
+    }
+
+    public synchronized float playheadFraction() {
+        if (count <= 0) return 1f;
+        return Math.max(0f, Math.min(1f, playheadIndex / (float) count));
+    }
+
+    public synchronized void setPlayheadFraction(float frac) {
+        playheadIndex = Math.round(Math.max(0f, Math.min(1f, frac)) * count);
+        postInvalidateOnAnimation();
+    }
+
+    public synchronized boolean hasSelection() {
+        return selectionActive && selEndIdx > selStartIdx && count > 0;
+    }
+
+    public synchronized float selectionStartFraction() {
+        return count <= 0 ? 0f : Math.max(0f, Math.min(1f, selStartIdx / (float) count));
+    }
+
+    public synchronized float selectionEndFraction() {
+        return count <= 0 ? 1f : Math.max(0f, Math.min(1f, selEndIdx / (float) count));
+    }
+
+    public synchronized void toggleSelectionAtPlayhead() {
+        if (count <= 4) return;
+        selectionActive = !selectionActive;
+        if (selectionActive) {
+            int span = Math.max(4, count / 6);
+            int center = Math.min(count, Math.max(0, playheadIndex));
+            selStartIdx = Math.max(0, center - span / 2);
+            selEndIdx = Math.min(count, selStartIdx + span);
+            if (selEndIdx - selStartIdx < 2) {
+                selStartIdx = 0;
+                selEndIdx = count;
+            }
+        }
+        invalidate();
+        if (timelineListener != null) {
+            timelineListener.onSelectionChanged(selectionActive,
+                    selectionStartFraction(), selectionEndFraction());
+        }
+    }
+
+    public synchronized void clearSelection() {
+        selectionActive = false;
+        invalidate();
+        if (timelineListener != null) {
+            timelineListener.onSelectionChanged(false, 0f, 1f);
+        }
+    }
+
+    /** Updates an existing bucket in-place during a mid-file punch-in overwrite. */
+    public synchronized void pushOrOverwrite(float v, float cursorFrac, boolean appending) {
+        if (appending || count == 0) {
+            push(v);
+            playheadIndex = count;
+        } else {
+            int idx = Math.min(count - 1, Math.max(0, Math.round(cursorFrac * count)));
+            history[idx] = Math.max(0f, Math.min(1f, v));
+            playheadIndex = idx + 1;
+            postInvalidateOnAnimation();
+        }
+    }
+
     /**
      * Smallest zoom allowed for the current history length: the level at which
      * every retained sample fits to the left of the red centre line.

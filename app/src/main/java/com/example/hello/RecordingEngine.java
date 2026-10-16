@@ -75,6 +75,10 @@ public final class RecordingEngine {
     private boolean floatNative;
     private int actualChannels;
     private long lastHeaderPatch;
+    private long cursorFrame = 0;
+    private long punchOutFrame = -1;
+    private float[] punchInFadeBuf;
+    private float[] punchOutFadeBuf;
 
     /**
      * Incremental encoder following the raw file while capture runs. Null
@@ -120,6 +124,55 @@ public final class RecordingEngine {
         synchronized (lock) {
             int ch = Math.max(1, channels);
             return dataBytes * 1000L / ((long) SAMPLE_RATE * ch * 4L);
+        }
+    }
+
+    /** Current recording/playhead cursor in frames. */
+    public long cursorFrames() {
+        synchronized (lock) {
+            return cursorFrame;
+        }
+    }
+
+    /** Current cursor position in milliseconds. */
+    public long cursorMs() {
+        synchronized (lock) {
+            return cursorFrame * 1000L / SAMPLE_RATE;
+        }
+    }
+
+    /** Total frames currently stored in the session WAV. */
+    public long totalFrames() {
+        synchronized (lock) {
+            int ch = Math.max(1, channels);
+            return dataBytes / (ch * 4L);
+        }
+    }
+
+    /**
+     * Positions the recording head at `frame` while IDLE or PAUSED so the next
+     * resumeCapture()/startCapture() punches in seamlessly at that point.
+     */
+    public void seekCursorFrame(long frame) {
+        synchronized (lock) {
+            if (state == State.RECORDING) return;
+            long total = totalFrames();
+            cursorFrame = Math.max(0L, Math.min(total, frame));
+            punchOutFrame = -1L;
+        }
+    }
+
+    /**
+     * Arms a bounded punch-in overwrite across `[startFrame, endFrame)`.
+     * Capture automatically pauses with a 5 ms crossfade when `endFrame` is reached.
+     */
+    public void armPunchRange(long startFrame, long endFrame) {
+        synchronized (lock) {
+            if (state == State.RECORDING) return;
+            long total = totalFrames();
+            cursorFrame = Math.max(0L, Math.min(total, startFrame));
+            punchOutFrame = (endFrame > cursorFrame)
+                    ? Math.min(total, endFrame) : -1L;
         }
     }
 
@@ -315,7 +368,49 @@ public final class RecordingEngine {
             // stop it (pauseCapture only acts in State.RECORDING).
             raf = new RandomAccessFile(rawFile, "rw");
             try {
-                raf.seek(raf.length());
+                // Cursor-aware seek: punch in mid-take with a 240-frame
+                // crossfade pre-read instead of blindly appending.
+                dataBytes = payloadBytesOf(rawFile);
+                int ch = Math.max(1, channels);
+                long totalFrames = dataBytes / (ch * 4L);
+                if (cursorFrame <= 0 || cursorFrame > totalFrames) {
+                    // Default to appending at the end unless explicitly scrubbed back
+                    if (cursorFrame > totalFrames) cursorFrame = totalFrames;
+                }
+                punchInFadeBuf = null;
+                punchOutFadeBuf = null;
+                if (cursorFrame < totalFrames) {
+                    // Punching in mid-take: pre-read 240 frames (5ms) at punch-in
+                    // point for a click-free crossfade from existing audio.
+                    int fadeInN = (int) Math.min(Dsp.CROSSFADE_FRAMES,
+                            totalFrames - cursorFrame);
+                    if (fadeInN > 0) {
+                        punchInFadeBuf = new float[fadeInN * ch];
+                        byte[] tmp = new byte[fadeInN * ch * 4];
+                        raf.seek(44L + cursorFrame * ch * 4L);
+                        raf.readFully(tmp);
+                        ByteBuffer.wrap(tmp).order(ByteOrder.LITTLE_ENDIAN)
+                                .asFloatBuffer().get(punchInFadeBuf);
+                    }
+                    if (punchOutFrame > cursorFrame && punchOutFrame <= totalFrames) {
+                        int fadeOutN = (int) Math.min(Dsp.CROSSFADE_FRAMES,
+                                punchOutFrame - cursorFrame);
+                        if (fadeOutN > 0) {
+                            punchOutFadeBuf = new float[fadeOutN * ch];
+                            byte[] tmp = new byte[fadeOutN * ch * 4];
+                            raf.seek(44L + (punchOutFrame - fadeOutN) * ch * 4L);
+                            raf.readFully(tmp);
+                            ByteBuffer.wrap(tmp).order(ByteOrder.LITTLE_ENDIAN)
+                                    .asFloatBuffer().get(punchOutFadeBuf);
+                        }
+                    }
+                    // If StreamingEncoder already encoded past cursorFrame, abort it
+                    // so save re-encodes the overwritten span cleanly.
+                    if (streaming != null && cursorFrame < streaming.framesEncoded()) {
+                        endStreamingAbortLocked();
+                    }
+                }
+                raf.seek(44L + cursorFrame * ch * 4L);
             } catch (Exception | Error e) {
                 try {
                     raf.close();
@@ -384,7 +479,49 @@ public final class RecordingEngine {
             // open before the microphone starts.
             raf = new RandomAccessFile(rawFile, "rw");
             try {
-                raf.seek(raf.length());
+                // Cursor-aware seek: punch in mid-take with a 240-frame
+                // crossfade pre-read instead of blindly appending.
+                dataBytes = payloadBytesOf(rawFile);
+                int ch = Math.max(1, channels);
+                long totalFrames = dataBytes / (ch * 4L);
+                if (cursorFrame <= 0 || cursorFrame > totalFrames) {
+                    // Default to appending at the end unless explicitly scrubbed back
+                    if (cursorFrame > totalFrames) cursorFrame = totalFrames;
+                }
+                punchInFadeBuf = null;
+                punchOutFadeBuf = null;
+                if (cursorFrame < totalFrames) {
+                    // Punching in mid-take: pre-read 240 frames (5ms) at punch-in
+                    // point for a click-free crossfade from existing audio.
+                    int fadeInN = (int) Math.min(Dsp.CROSSFADE_FRAMES,
+                            totalFrames - cursorFrame);
+                    if (fadeInN > 0) {
+                        punchInFadeBuf = new float[fadeInN * ch];
+                        byte[] tmp = new byte[fadeInN * ch * 4];
+                        raf.seek(44L + cursorFrame * ch * 4L);
+                        raf.readFully(tmp);
+                        ByteBuffer.wrap(tmp).order(ByteOrder.LITTLE_ENDIAN)
+                                .asFloatBuffer().get(punchInFadeBuf);
+                    }
+                    if (punchOutFrame > cursorFrame && punchOutFrame <= totalFrames) {
+                        int fadeOutN = (int) Math.min(Dsp.CROSSFADE_FRAMES,
+                                punchOutFrame - cursorFrame);
+                        if (fadeOutN > 0) {
+                            punchOutFadeBuf = new float[fadeOutN * ch];
+                            byte[] tmp = new byte[fadeOutN * ch * 4];
+                            raf.seek(44L + (punchOutFrame - fadeOutN) * ch * 4L);
+                            raf.readFully(tmp);
+                            ByteBuffer.wrap(tmp).order(ByteOrder.LITTLE_ENDIAN)
+                                    .asFloatBuffer().get(punchOutFadeBuf);
+                        }
+                    }
+                    // If StreamingEncoder already encoded past cursorFrame, abort it
+                    // so save re-encodes the overwritten span cleanly.
+                    if (streaming != null && cursorFrame < streaming.framesEncoded()) {
+                        endStreamingAbortLocked();
+                    }
+                }
+                raf.seek(44L + cursorFrame * ch * 4L);
             } catch (Exception | Error e) {
                 try {
                     raf.close();
@@ -671,18 +808,65 @@ public final class RecordingEngine {
                         if (a > peak) peak = a;
                     }
                 }
+                boolean reachedPunchOut = false;
+                synchronized (lock) {
+                    if (punchOutFrame > 0 && cursorFrame + frames >= punchOutFrame) {
+                        frames = (int) Math.max(0, punchOutFrame - cursorFrame);
+                        reachedPunchOut = true;
+                    }
+                }
+                if (frames <= 0) break;
+
+                // Blend first 240 frames on mid-file punch-in
+                if (punchInFadeBuf != null) {
+                    int fadeN = Math.min(punchInFadeBuf.length / outCh, frames);
+                    java.nio.FloatBuffer fb = bb.asFloatBuffer();
+                    for (int f = 0; f < fadeN; f++) {
+                        float wIn = (f + 0.5f) / fadeN;
+                        float wOut = 1.0f - wIn;
+                        for (int c = 0; c < outCh; c++) {
+                            int idx = f * outCh + c;
+                            fb.put(idx, punchInFadeBuf[idx] * wOut + fb.get(idx) * wIn);
+                        }
+                    }
+                    punchInFadeBuf = null;
+                }
+                // Blend last 240 frames on range punch-out
+                if (reachedPunchOut && punchOutFadeBuf != null) {
+                    int fadeN = Math.min(punchOutFadeBuf.length / outCh, frames);
+                    int startF = frames - fadeN;
+                    java.nio.FloatBuffer fb = bb.asFloatBuffer();
+                    for (int f = 0; f < fadeN; f++) {
+                        float wOut = (f + 0.5f) / fadeN; // fade back to original tail
+                        float wIn = 1.0f - wOut;
+                        for (int c = 0; c < outCh; c++) {
+                            int bIdx = (startF + f) * outCh + c;
+                            int fIdx = f * outCh + c;
+                            fb.put(bIdx, fb.get(bIdx) * wIn + punchOutFadeBuf[fIdx] * wOut);
+                        }
+                    }
+                    punchOutFadeBuf = null;
+                }
+
                 int bytes = frames * outCh * 4;
                 synchronized (lock) {
                     if (raf != null && capRun) {
                         try {
                             raf.write(out, 0, bytes);
-                            dataBytes += bytes;
+                            cursorFrame += frames;
+                            long endBytes = cursorFrame * outCh * 4L;
+                            if (endBytes > dataBytes) dataBytes = endBytes;
                         } catch (Exception e) {
                             break;
                         }
                     } else {
                         break;
                     }
+                }
+                if (reachedPunchOut) {
+                    // Auto-stop at end of selected punch-in range:
+                    // capLoop's finally block transitions state to PAUSED.
+                    break;
                 }
                 level = Math.max(0f, Math.min(1f, peak));
                 if (++sincePatch >= 60) {

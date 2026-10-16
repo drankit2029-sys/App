@@ -35,6 +35,12 @@ public final class RawFloatPlayer {
     private volatile long framePos;
     private volatile AudioTrack activeTrack;
     private volatile long generation;
+    private volatile DspChain dspChain;
+    private volatile long stopAtFrame = -1;
+
+    public void setDspChain(DspChain chain) {
+        this.dspChain = chain;
+    }
 
     public RawFloatPlayer(File file, Listener listener) throws Exception {
         FormatConverter.WavInfo info = FormatConverter.readFloatWav(file);
@@ -62,6 +68,19 @@ public final class RawFloatPlayer {
         stop = false;
         paused = false;
         framePos = Math.max(0, Math.min(totalFrames, frame));
+        generation++;
+        thread = new Thread(this::run, "takeone-raw-preview");
+        thread.start();
+    }
+
+    /** Play a specific frame range `[startFrame, endFrame)` (e.g. selection preview). */
+    public synchronized void playRange(long startFrame, long endFrame) {
+        stopLocked();
+        stop = false;
+        paused = false;
+        framePos = Math.max(0, Math.min(totalFrames, startFrame));
+        stopAtFrame = (endFrame > framePos && endFrame <= totalFrames)
+                ? endFrame : -1;
         generation++;
         thread = new Thread(this::run, "takeone-raw-preview");
         thread.start();
@@ -158,13 +177,19 @@ public final class RawFloatPlayer {
                     .order(java.nio.ByteOrder.LITTLE_ENDIAN).asFloatBuffer();
             track.play();
             activeTrack = track;
-            while (!stop && framePos < totalFrames) {
-                int want = (int) Math.min(4096, totalFrames - framePos);
+            long limitFrame = (stopAtFrame > 0 && stopAtFrame <= totalFrames)
+                    ? stopAtFrame : totalFrames;
+            while (!stop && framePos < limitFrame) {
+                int want = (int) Math.min(4096, limitFrame - framePos);
                 r.seek(dataStart + framePos * channels * 4L);
                 r.readFully(raw, 0, want * channels * 4);
                 fb.clear();
                 fb.limit(want * channels);
                 fb.get(buf, 0, want * channels);
+                DspChain chain = this.dspChain;
+                if (chain != null && chain.isActive()) {
+                    chain.processInPlace(buf, want);
+                }
                 int written = 0;
                 while (written < want * channels && !stop) {
                     int n = track.write(buf, written,
@@ -175,7 +200,7 @@ public final class RawFloatPlayer {
                 }
                 framePos += want;
             }
-            completed = !stop && framePos >= totalFrames;
+            completed = !stop && framePos >= limitFrame;
         } catch (Exception ignored) {
         } finally {
             activeTrack = null;
