@@ -320,13 +320,15 @@ public class TeleValue extends LinearLayout {
             // horizontal strip, which would crush a vertical stack to 2px.
             // High-resolution labels ("0.92%") also need a slightly more
             // compact text size to fit cleanly inside the 40dp rail.
+            // Plus sits on top, minus at the bottom, matching the drag
+            // direction (up increases, down decreases).
             label.setTextSize(10.5f);
             controlRow.setLayoutParams(new LayoutParams(
                     LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
-            controlRow.addView(minus, new LayoutParams(button, height));
+            controlRow.addView(plus, new LayoutParams(button, height));
             controlRow.addView(label, new LayoutParams(
                     LayoutParams.MATCH_PARENT, dp(getContext(), 20)));
-            controlRow.addView(plus, new LayoutParams(button, height));
+            controlRow.addView(minus, new LayoutParams(button, height));
         } else {
             label.setTextSize(12f);
             controlRow.setLayoutParams(new LayoutParams(
