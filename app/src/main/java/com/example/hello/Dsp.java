@@ -260,6 +260,104 @@ public final class Dsp {
         }
     }
 
+    /** 240 frames @ 48 kHz = 5.0 ms raised-cosine crossfade window. */
+    public static final int CROSSFADE_FRAMES = 240;
+    private static final float[] COS_FADE_IN = new float[CROSSFADE_FRAMES];
+    static {
+        for (int i = 0; i < CROSSFADE_FRAMES; i++) {
+            COS_FADE_IN[i] = 0.5f * (1.0f - (float) Math.cos(
+                    Math.PI * (i + 0.5) / CROSSFADE_FRAMES));
+        }
+    }
+
+    /**
+     * Blends `frames` of `outgoing` (fading 1 -> 0) with `incoming` (fading 0 -> 1)
+     * into `dst`. Uses precomputed LUT when frames == CROSSFADE_FRAMES for zero
+     * runtime trig overhead on low-end CPUs.
+     */
+    public static void crossfadeFrames(float[] outgoing, int outFrameOff,
+                                       float[] incoming, int inFrameOff,
+                                       float[] dst, int dstFrameOff,
+                                       int frames, int ch) {
+        if (frames <= 0 || ch < 1) return;
+        boolean useLut = (frames == CROSSFADE_FRAMES);
+        for (int f = 0; f < frames; f++) {
+            float wIn = useLut ? COS_FADE_IN[f]
+                    : 0.5f * (1.0f - (float) Math.cos(Math.PI * (f + 0.5) / frames));
+            float wOut = 1.0f - wIn;
+            int oIdx = (outFrameOff + f) * ch;
+            int iIdx = (inFrameOff + f) * ch;
+            int dIdx = (dstFrameOff + f) * ch;
+            for (int c = 0; c < ch; c++) {
+                dst[dIdx + c] = outgoing[oIdx + c] * wOut
+                        + incoming[iIdx + c] * wIn;
+            }
+        }
+    }
+
+    /**
+     * Applies a short raised-cosine fade-in or fade-out in-place to `buf`
+     * (interleaved `frames * ch` floats).
+     */
+    public static void applyFadeInPlace(float[] buf, int frameOff,
+                                        int frames, int ch, boolean fadeIn) {
+        if (frames <= 0 || ch < 1) return;
+        boolean useLut = (frames == CROSSFADE_FRAMES);
+        for (int f = 0; f < frames; f++) {
+            float w = useLut ? COS_FADE_IN[f]
+                    : 0.5f * (1.0f - (float) Math.cos(Math.PI * (f + 0.5) / frames));
+            if (!fadeIn) w = 1.0f - w;
+            int idx = (frameOff + f) * ch;
+            for (int c = 0; c < ch; c++) {
+                buf[idx + c] *= w;
+            }
+        }
+    }
+
+    /**
+     * Scans within +/- `radiusFrames` (default 240 = +/- 5ms) around `targetFrame`
+     * in a 32-bit float WAV to find the frame with minimum absolute energy
+     * (preferring rising zero-crossings on channel 0), eliminating splice clicks.
+     */
+    public static long snapToZeroCrossing(RandomAccessFile r, long dataStart,
+                                          int ch, long targetFrame,
+                                          long totalFrames, int radiusFrames) {
+        if (totalFrames <= 0 || targetFrame <= 0) return 0;
+        if (targetFrame >= totalFrames) return totalFrames;
+        long lo = Math.max(0, targetFrame - radiusFrames);
+        long hi = Math.min(totalFrames - 1, targetFrame + radiusFrames);
+        int span = (int) (hi - lo + 1);
+        if (span <= 1) return targetFrame;
+        try {
+            byte[] raw = new byte[span * ch * 4];
+            r.seek(dataStart + lo * ch * 4L);
+            r.readFully(raw);
+            java.nio.FloatBuffer fb = ByteBuffer.wrap(raw)
+                    .order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer();
+            long bestFrame = targetFrame;
+            float bestScore = Float.MAX_VALUE;
+            float prev0 = fb.get(0);
+            for (int f = 1; f < span; f++) {
+                float s0 = fb.get(f * ch);
+                float energy = Math.abs(s0);
+                if (ch > 1) energy += Math.abs(fb.get(f * ch + 1));
+                boolean zeroCross = (prev0 <= 0f && s0 >= 0f)
+                        || (prev0 >= 0f && s0 <= 0f);
+                // Bias strongly toward true zero crossings near targetFrame.
+                float distPenalty = Math.abs((lo + f) - targetFrame) * 0.0002f;
+                float score = (zeroCross ? energy * 0.1f : energy) + distPenalty;
+                if (score < bestScore) {
+                    bestScore = score;
+                    bestFrame = lo + f;
+                }
+                prev0 = s0;
+            }
+            return bestFrame;
+        } catch (Exception e) {
+            return targetFrame;
+        }
+    }
+
     /**
      * Peak envelope of a 32-bit float WAV for waveform display: at most
      * {@code maxBuckets} columns, each the max absolute sample across all
