@@ -1750,6 +1750,58 @@ public class StudioFragment extends Fragment {
         paint();
     }
 
+    private boolean commitDspFx() {
+        if (!isAdded()) return false;
+        stopStudioPreview();
+        if (dspConfig == null || !dspConfig.isActive()) {
+            Toast.makeText(requireContext(), "Turn on an effect first",
+                    Toast.LENGTH_SHORT).show();
+            return false;
+        }
+        if (engine.state == RecordingEngine.State.RECORDING) {
+            Toast.makeText(requireContext(), "Stop recording first",
+                    Toast.LENGTH_SHORT).show();
+            return false;
+        }
+        File raw = engine.rawFile;
+        if (raw == null || !raw.exists() || waveform == null) return false;
+        try {
+            FormatConverter.WavInfo info = FormatConverter.readFloatWav(raw);
+            long totalFrames = info.dataBytes / 4 / Math.max(1, info.channels);
+            if (totalFrames <= 0) return false;
+            long start = 0;
+            long end = totalFrames;
+            if (waveform.hasSelection()) {
+                start = Math.round(
+                        waveform.selectionStartFraction() * totalFrames);
+                end = Math.round(
+                        waveform.selectionEndFraction() * totalFrames);
+            }
+            if (end <= start) {
+                Toast.makeText(requireContext(), "Nothing to process",
+                        Toast.LENGTH_SHORT).show();
+                return false;
+            }
+            DspChain chain = new DspChain(info.channels, dspConfig);
+            EditEngine.applyDspToRange(raw, start, end, chain, undoJournal);
+            // DSP rewrites samples in place: drop any incremental .part so
+            // save re-encodes the processed audio instead of adopting stale
+            // pre-FX bytes (same hazard as trim/cut/undo).
+            engine.abortStreaming();
+            engine.dataBytes = RecordingEngine.payloadBytesOf(raw);
+            waveform.clearSelection();
+            reloadWaveformCleanly();
+            Toast.makeText(requireContext(), "FX applied",
+                    Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            Toast.makeText(requireContext(), "FX failed",
+                    Toast.LENGTH_SHORT).show();
+            return false;
+        }
+        paint();
+        return true;
+    }
+
     private void showDspFxDialog() {
         if (!isAdded()) return;
         Context ctx = requireContext();
@@ -1869,6 +1921,21 @@ public class StudioFragment extends Fragment {
         root.addView(deEssCtl, prLp);
         root.addView(compCtl, prLp);
         root.addView(hpfBtn, prLp);
+
+        TextView btnApply = new TextView(ctx);
+        boolean hasSel = waveform != null && waveform.hasSelection();
+        btnApply.setText(hasSel
+                ? "Apply FX to Selection" : "Apply FX to Entire Take");
+        btnApply.setGravity(android.view.Gravity.CENTER);
+        btnApply.setTextColor(0xFFFFFFFF);
+        boolean fxOn = dspConfig != null && dspConfig.isActive();
+        btnApply.setBackgroundResource(fxOn
+                ? R.drawable.bg_btn_primary : R.drawable.bg_chip);
+        btnApply.setPadding(hPad, hPad, hPad, hPad);
+        btnApply.setOnClickListener(v -> {
+            if (commitDspFx()) d.dismiss();
+        });
+        root.addView(btnApply, prLp);
 
         TextView doneBtn = new TextView(ctx);
         doneBtn.setText(R.string.settings_done);

@@ -177,4 +177,41 @@ public class EditEngineTest {
         assertTrue("non-finite " + mid, Float.isFinite(mid));
         assertTrue("unbounded " + mid, Math.abs(mid) <= 1.0f);
     }
+
+    @Test
+    public void applyDspChangesOnlyTheCommittedRange() throws Exception {
+        // 440 Hz sine: voice polish must audibly reshape it, but only
+        // inside the committed range — the rest stays bit-identical.
+        File f = new File(tmp.getRoot(), "sine.wav");
+        int frames = 48000;
+        RandomAccessFile w = new RandomAccessFile(f, "rw");
+        try {
+            w.setLength(0);
+            w.write(Dsp.wavFloatHeader(1, 48000, (long) frames * 4));
+            float[] buf = new float[frames];
+            for (int i = 0; i < frames; i++) {
+                buf[i] = (float) Math.sin(
+                        i * 2 * Math.PI * 440 / 48000) * 0.7f;
+            }
+            Dsp.writeFloatsLE(w, buf, 0, buf.length);
+        } finally {
+            w.close();
+        }
+        byte[] before = bytesOf(f);
+        EditEngine.UndoJournal undo =
+                new EditEngine.UndoJournal(tmp.getRoot());
+        EditEngine.applyDspToRange(f, 0, 4800,
+                new DspChain(1, DspChain.Config.voicePolish()), undo);
+        byte[] after = bytesOf(f);
+        assertEquals(before.length, after.length);
+        assertTrue(undo.canUndo());
+        int changed = 0;
+        for (int i = 44; i < 44 + 4800 * 4; i++) {
+            if (before[i] != after[i]) changed++;
+        }
+        assertTrue("FX changed nothing in range", changed > 4800);
+        for (int i = 44 + 4800 * 4; i < after.length; i++) {
+            if (before[i] != after[i]) fail("touched outside range at " + i);
+        }
+    }
 }
