@@ -90,15 +90,38 @@ public class DspSpliceTest {
     }
 
     @Test
-    public void snapFindsSilence() throws Exception {
+    public void snapHoldsPositionInSilence() throws Exception {
         int frames = 4800;
         File f = loudWithGap(frames, 2000, 2800);
         RandomAccessFile r = new RandomAccessFile(f, "r");
         try {
+            // Target inside the silent gap: every candidate has zero energy,
+            // so the closest frame to the target must win.
+            assertEquals(2400L,
+                    Dsp.snapToZeroCrossing(r, 44L, 1, 2400L, frames, 240));
+        } finally {
+            r.close();
+        }
+    }
+
+    @Test
+    public void snapPrefersNearbyZeroCrossing() throws Exception {
+        int frames = 4800;
+        File f = loudWithGap(frames, 2000, 2800);
+        RandomAccessFile r = new RandomAccessFile(f, "r");
+        try {
+            // Target just outside the gap: a true zero crossing 4 frames
+            // away must beat the silent gap 100 frames away.
             long snapped = Dsp.snapToZeroCrossing(r, 44L, 1, 1900L,
                     frames, 240);
             assertTrue("snapped=" + snapped,
-                    snapped >= 1990 && snapped <= 2150);
+                    snapped >= 1660 && snapped <= 2140);
+            r.seek(44L + snapped * 4);
+            byte[] b = new byte[4];
+            r.readFully(b);
+            float v = java.nio.ByteBuffer.wrap(b)
+                    .order(java.nio.ByteOrder.LITTLE_ENDIAN).getFloat();
+            assertTrue("energy=" + v, Math.abs(v) < 0.1f);
         } finally {
             r.close();
         }
