@@ -1531,13 +1531,14 @@ public class StudioFragment extends Fragment {
             long totalFrames = info.dataBytes / 4 / info.channels;
             if (totalFrames <= 0) return;
             livePreviewDsp = new DspChain(info.channels, dspConfig);
-            final RawFloatPlayer player =
-                    new RawFloatPlayer(raw, completed -> handler.post(() -> {
-                        if (studioPreviewPlayer == player) {
-                            stopStudioPreview();
-                            paintEditorStrip();
-                        }
-                    }));
+            final RawFloatPlayer[] slot = new RawFloatPlayer[1];
+            slot[0] = new RawFloatPlayer(raw, completed -> handler.post(() -> {
+                if (studioPreviewPlayer == slot[0]) {
+                    stopStudioPreview();
+                    paintEditorStrip();
+                }
+            }));
+            RawFloatPlayer player = slot[0];
             player.setDspChain(livePreviewDsp);
             studioPreviewPlayer = player;
             if (waveform.hasSelection()) {
