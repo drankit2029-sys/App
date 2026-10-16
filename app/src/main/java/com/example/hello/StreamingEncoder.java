@@ -270,6 +270,14 @@ public final class StreamingEncoder {
 
     /** Frames currently immutable in the raw file (past the WAV header). */
     private long availableFrames() {
+        if (!rawFile.exists()) {
+            // The raw was renamed or deleted under this encoder (e.g. a
+            // Studio rename moves the file but the pump still points at the
+            // old path). Fail loudly so healthy() goes false and an orphaned
+            // encoder can never be adopted inline.
+            fail("raw file moved or deleted");
+            return 0;
+        }
         long len = rawFile.length();
         if (len <= dataStart) return 0;
         return (len - dataStart) / 4 / Math.max(1, channels);
@@ -372,11 +380,29 @@ public final class StreamingEncoder {
             } catch (Exception ignored) {}
             throw e;
         }
-        MediaMuxer muxer = new MediaMuxer(partFile.getAbsolutePath(),
-                muxerFormat);
-        MuxState mux = new MuxState(muxer);
+        MediaMuxer muxer = null;
+        MuxState mux = null;
         MediaCodec.BufferInfo bi = new MediaCodec.BufferInfo();
-        RandomAccessFile r = new RandomAccessFile(rawFile, "r");
+        RandomAccessFile r = null;
+        try {
+            muxer = new MediaMuxer(partFile.getAbsolutePath(),
+                    muxerFormat);
+            mux = new MuxState(muxer);
+            r = new RandomAccessFile(rawFile, "r");
+        } catch (Exception | Error e) {
+            // Setup threw after enc started: release it here, the main
+            // try/finally below never runs.
+            try {
+                enc.release();
+            } catch (Exception ignored) {}
+            try {
+                if (r != null) r.close();
+            } catch (Exception ignored) {}
+            try {
+                if (muxer != null) muxer.release();
+            } catch (Exception ignored) {}
+            throw e;
+        }
         byte[] in = new byte[PUMP_FRAMES * channels * 4];
         java.nio.FloatBuffer fb = ByteBuffer.wrap(in)
                 .order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer();
@@ -533,8 +559,18 @@ public final class StreamingEncoder {
             } catch (Exception ignored) {}
             throw e;
         }
-        FileOutputStream out = new FileOutputStream(partFile);
+        FileOutputStream out = null;
         boolean ok = false;
+        try {
+            out = new FileOutputStream(partFile);
+        } catch (Exception | Error e) {
+            // Setup threw after enc started: release it here, the main
+            // try/finally below never runs.
+            try {
+                enc.release();
+            } catch (Exception ignored) {}
+            throw e;
+        }
         try {
             // No magic here: FlacHeader.write() emits "fLaC" together with
             // the STREAMINFO block once the encoder publishes its config.
@@ -733,13 +769,30 @@ public final class StreamingEncoder {
             } catch (Exception ignored) {}
             throw e;
         }
-        MediaMuxer muxer = new MediaMuxer(partFile.getAbsolutePath(),
-                MediaMuxer.OutputFormat.MUXER_OUTPUT_3GPP);
+        MediaMuxer muxer = null;
+        RandomAccessFile r = null;
+        try {
+            muxer = new MediaMuxer(partFile.getAbsolutePath(),
+                    MediaMuxer.OutputFormat.MUXER_OUTPUT_3GPP);
+            r = new RandomAccessFile(rawFile, "r");
+        } catch (Exception | Error e) {
+            // Setup threw after enc started: release it here, the main
+            // try/finally below never runs.
+            try {
+                enc.release();
+            } catch (Exception ignored) {}
+            try {
+                if (r != null) r.close();
+            } catch (Exception ignored) {}
+            try {
+                if (muxer != null) muxer.release();
+            } catch (Exception ignored) {}
+            throw e;
+        }
         boolean muxStarted = false;
         int samplesWritten = 0;
         int track = -1;
         MediaCodec.BufferInfo bi = new MediaCodec.BufferInfo();
-        RandomAccessFile r = new RandomAccessFile(rawFile, "r");
         byte[] in = new byte[PUMP_FRAMES * channels * 4];
         java.nio.FloatBuffer fb = ByteBuffer.wrap(in)
                 .order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer();

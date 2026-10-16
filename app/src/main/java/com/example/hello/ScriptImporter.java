@@ -103,8 +103,7 @@ public final class ScriptImporter {
     private static Result readDocx(InputStream in) {
         // ZipInputStream cannot rewind, so buffer the entry we need to a file.
         File tmp = null;
-        try {
-            ZipInputStream zip = new ZipInputStream(in);
+        try (ZipInputStream zip = new ZipInputStream(in)) {
             ZipEntry entry;
             byte[] buf = new byte[8192];
             while ((entry = zip.getNextEntry()) != null) {
@@ -158,16 +157,19 @@ public final class ScriptImporter {
 
     private static String parseWith(XmlPullParser p) throws Exception {
         StringBuilder out = new StringBuilder();
+        boolean firstPara = true;
         int event;
         while ((event = p.next()) != XmlPullParser.END_DOCUMENT) {
             if (event == XmlPullParser.START_TAG) {
                 String tag = p.getName();
                 if ("p".equals(tag)) {
-                    // Paragraph start: guarantee a break even for empty ones,
-                    // so blank lines in the script survive the round trip.
-                    if (out.length() > 0 && out.charAt(out.length() - 1) != '\n') {
+                    // Every paragraph after the first starts a new line,
+                    // unconditionally: empty paragraphs (<w:p/>) then
+                    // survive as blank lines instead of collapsing.
+                    if (!firstPara) {
                         out.append('\n');
                     }
+                    firstPara = false;
                 } else if ("t".equals(tag)) {
                     // Text run begins; content arrives as TEXT events.
                     if (p.next() == XmlPullParser.TEXT) {

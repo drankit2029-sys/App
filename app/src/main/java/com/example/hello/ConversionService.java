@@ -55,6 +55,19 @@ public class ConversionService extends Service {
     private final Deque<String> queue = new ConcurrentLinkedDeque<>();
     private Thread worker;
     private volatile boolean workerAlive;
+    /**
+     * Set when the platform enforces the foreground-service time budget
+     * (onTimeout). The worker parks instead of cancelling so every job
+     * survives for the next launch. Reset whenever a worker starts.
+     */
+    private volatile boolean serviceTimedOut;
+
+    /** Thrown from the progress callback to park the job on timeout. */
+    private static final class PausedForTimeoutException extends RuntimeException {
+        PausedForTimeoutException() {
+            super("service time budget expired");
+        }
+    }
     private volatile ConversionJob current;
     /** Set when a startForegroundService() start still owes a foreground. */
     private volatile boolean pendingFg;
@@ -140,7 +153,11 @@ public class ConversionService extends Service {
                     ConversionJobs.cancel(id, false);
                 }
             }
-            if (queue.isEmpty() && current == null) stopSelf();
+            if (queue.isEmpty() && current == null) {
+                stopSelf();
+            } else {
+                refreshNotif();
+            }
             return START_REDELIVER_INTENT;
         }
         // Started via startForegroundService(): the platform is now watching
@@ -186,6 +203,7 @@ public class ConversionService extends Service {
             return;
         }
         workerAlive = true;
+        serviceTimedOut = false;
         startFg(resolveCurrent());
         worker = new Thread(this::workLoop, "takeone-conv");
         worker.start();
@@ -194,13 +212,15 @@ public class ConversionService extends Service {
     /** Android 15 dataSync budget expiry: stop cleanly instead of being killed. */
     @Override
     public void onTimeout(int startId, int fgsType) {
-        try {
-            handler.post(() -> {
-                ConversionJob job = current;
-                if (job != null) job.cancelled = true;
-                queue.clear();
-            });
-        } catch (Exception ignored) {}
+        // Pause, don't destroy: cancelling the job here would delete its
+        // sidecar and .part, and clearing the queue would strand the other
+        // QUEUED jobs with no worker. Flag the timeout and wake any parked
+        // worker; the progress callback parks the current job as QUEUED so
+        // the next launch resumes everything intact.
+        serviceTimedOut = true;
+        synchronized (REC_PAUSE_LOCK) {
+            REC_PAUSE_LOCK.notifyAll();
+        }
         try {
             stopForeground(true);
         } catch (Exception ignored) {}
@@ -299,6 +319,7 @@ public class ConversionService extends Service {
                 current = job;
                 runJob(job);
                 current = null;
+                if (serviceTimedOut) break;
             }
         } finally {
             synchronized (this) {
@@ -332,6 +353,7 @@ public class ConversionService extends Service {
             if (!raw.exists()) throw new IllegalStateException("raw gone");
             if (job.cancelled) throw new CancellationException();
             TakeSaver.Progress cb = pct -> {
+                if (serviceTimedOut) throw new PausedForTimeoutException();
                 if (job.cancelled) throw new CancellationException();
                 // Yields between chunks too: the encoder must not hold the
                 // codec while the user is capturing a new take.
@@ -391,20 +413,24 @@ public class ConversionService extends Service {
                 TakesRepository.rename(take.id, lateRename);
             }
             // STU-03: an Edit on the converting card decodes this same raw.
-            // Keep the file while a reader holds it instead of deleting it
-            // out from under AudioImporter.
-            if (ConversionJobs.rawIsBeingRead(job.rawPath)) {
-                java.util.logging.Logger.getLogger("TakeOne").fine(
-                        "raw still in use by an edit; keeping");
-            } else {
-                // noinspection ResultOfMethodCallIgnored
-                raw.delete();
-            }
+            // Delete now, or defer until its last reader finishes: dropping
+            // the file here would corrupt the reader, and skipping the
+            // delete would leak the raw into reconcile() as a duplicate.
+            ConversionJobs.deleteOrDeferRaw(job.rawPath);
             // noinspection ResultOfMethodCallIgnored
             new File(job.rawPath + ".pending").delete();
             ConversionJobs.markDone(job);
             doneNotif(true, job.title, r.label, null);
             broadcast(true, job, r.label, null);
+        } catch (PausedForTimeoutException paused) {
+            // The platform reclaimed our foreground time mid-job. Park the
+            // job as QUEUED with its sidecar and valid .part intact — never
+            // delete — so the next launch resumes it. Tell the user why
+            // progress stopped.
+            job.state = ConversionJob.QUEUED;
+            job.updatedAt = System.currentTimeMillis();
+            job.write();
+            timeoutPausedNotif(job);
         } catch (CancellationException cancelled) {
             if (job.superseded) {
                 // Replaced by an edit while converting: the replacement job
@@ -479,9 +505,10 @@ public class ConversionService extends Service {
             throws Exception {
         SaveFormat eff = format.effective(preset);
         boolean w24 = eff == SaveFormat.WAV24;
-        int frameBytes = Math.max(1, job.channels) * (w24 ? 3 : 2);
         FormatConverter.WavInfo info = FormatConverter.readFloatWav(raw);
-        long totalFrames = info.dataBytes / 4 / Math.max(1, info.channels);
+        int ch = Math.max(1, info.channels);
+        int frameBytes = ch * (w24 ? 3 : 2);
+        long totalFrames = info.dataBytes / 4 / ch;
         long expectLen = 44 + job.framesDone * frameBytes;
         if (part.length() != expectLen) {
             // AUDIT-3-02 fix: `job.framesDone` is only a 5%-rounded estimate
@@ -490,7 +517,8 @@ public class ConversionService extends Service {
             // instead of throwing away a perfectly good partial.
             long diskPayload = part.length() - 44;
             if (diskPayload > 0 && (diskPayload % frameBytes) == 0
-                    && isWavHeaderValid(part)
+                    && isWavHeaderValid(part, ch, info.sampleRate,
+                    w24 ? 24 : 16)
                     && (diskPayload / frameBytes) <= totalFrames) {
                 job.framesDone = diskPayload / frameBytes;
             } else {
@@ -501,15 +529,17 @@ public class ConversionService extends Service {
                         format, cb);
             }
         }
-        if (job.framesDone >= totalFrames) {
-            patchWavHeader(part, info.channels, info.sampleRate, w24,
-                    totalFrames);
-            FormatConverter.validateFinal(part, eff);
-            return finishResumed(app, raw, part, job, eff, preset);
-        }
-        java.io.RandomAccessFile r = new java.io.RandomAccessFile(raw, "r");
-        java.io.RandomAccessFile w = new java.io.RandomAccessFile(part, "rw");
         try {
+            if (job.framesDone >= totalFrames) {
+                patchWavHeader(part, info.channels, info.sampleRate, w24,
+                        totalFrames);
+                FormatConverter.validateFinal(part, eff);
+                return finishResumed(app, raw, part, job, eff, preset);
+            }
+        java.io.RandomAccessFile r = new java.io.RandomAccessFile(raw, "r");
+        java.io.RandomAccessFile w = null;
+        try {
+            w = new java.io.RandomAccessFile(part, "rw");
             long totalSamples = info.dataBytes / 4;
             long doneSamples = job.framesDone * info.channels;
             w.seek(w.length());
@@ -555,12 +585,26 @@ public class ConversionService extends Service {
             try {
                 r.close();
             } catch (Exception ignored) {}
-            try {
-                w.close();
-            } catch (Exception ignored) {}
+            if (w != null) {
+                try {
+                    w.close();
+                } catch (Exception ignored) {}
+            }
         }
         FormatConverter.validateFinal(part, eff);
         return finishResumed(app, raw, part, job, eff, preset);
+        } catch (Throwable t) {
+            // A failed resume must not leave its part behind: the job's
+            // sidecar is deleted on failure, so nothing could ever resume
+            // this part again.
+            try {
+                // noinspection ResultOfMethodCallIgnored
+                part.delete();
+            } catch (Exception ignored) {}
+            if (t instanceof Error) throw (Error) t;
+            if (t instanceof Exception) throw (Exception) t;
+            throw new IllegalStateException(t);
+        }
     }
 
     private static TakeSaver.Result finishResumed(Context app, File raw,
@@ -590,13 +634,31 @@ public class ConversionService extends Service {
     /** True when the partial carries a real RIFF/WAVE header. */
     private static boolean isWavHeaderValid(File part) {
         try (java.io.RandomAccessFile r =
-                     new java.io.RandomAccessFile(part, "r")) {
+                      new java.io.RandomAccessFile(part, "r")) {
             if (r.length() < 44) return false;
             byte[] h = new byte[12];
             r.readFully(h);
             return h[0] == 'R' && h[1] == 'I' && h[2] == 'F' && h[3] == 'F'
                     && h[8] == 'W' && h[9] == 'A' && h[10] == 'V'
                     && h[11] == 'E';
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * True when the partial is a real RIFF/WAVE file with exactly the geometry
+     * a resume would append: integer PCM, expected channels, rate and depth. A
+     * stale part from a different bit depth or channel count whose byte size
+     * happens to divide evenly must never be adopted.
+     */
+    private static boolean isWavHeaderValid(File part, int expectedCh,
+                                            int expectedSr, int expectedBits) {
+        try (java.io.RandomAccessFile r =
+                     new java.io.RandomAccessFile(part, "r")) {
+            Dsp.WavHeader h = Dsp.parseWavHeader(r);
+            return h.audioFormat == 1 && h.channels == expectedCh
+                    && h.sampleRate == expectedSr && h.bits == expectedBits;
         } catch (Exception e) {
             return false;
         }
@@ -703,6 +765,31 @@ public class ConversionService extends Service {
         } catch (Exception ex) {
             return new Notification();
         }
+    }
+
+    /**
+     * Tells the user the platform paused background conversion (time budget),
+     * and that it resumes on next launch. Informational only: no take state
+     * changes and no worker action.
+     */
+    private void timeoutPausedNotif(ConversionJob job) {
+        try {
+            NotificationManager nm = (NotificationManager)
+                    getSystemService(NOTIFICATION_SERVICE);
+            if (nm == null) return;
+            androidx.core.app.NotificationCompat.Builder b =
+                    new androidx.core.app.NotificationCompat.Builder(this,
+                            CHANNEL);
+            b.setSmallIcon(R.drawable.ic_wave);
+            b.setColor(0xFFFF9F0A);
+            b.setContentTitle(getString(R.string.conv_timeout_title));
+            b.setContentText(getString(R.string.conv_timeout_msg,
+                    job.title != null ? job.title : ""));
+            b.setVisibility(androidx.core.app.NotificationCompat.VISIBILITY_PUBLIC);
+            b.setAutoCancel(true);
+            nm.notify(DONE_NOTIF_ID + (int) (System.currentTimeMillis() % 1000),
+                    b.build());
+        } catch (Exception ignored) {}
     }
 
     private void doneNotif(boolean ok, String title, String label, String msg) {

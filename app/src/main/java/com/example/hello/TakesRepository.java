@@ -107,16 +107,35 @@ public final class TakesRepository {
             List<Take> pending = new ArrayList<>(TAKES);
             TAKES.clear();
             long max = 99;
+            Set<Long> seenIds = new HashSet<>();
             for (TakeEntity e : rows) {
                 try {
                     Take t = e.toTake();
                     TAKES.add(t);
+                    seenIds.add(t.id);
                     if (t.id > max) max = t.id;
                 } catch (Exception ignored) {}
             }
             for (Take t : pending) {
-                TAKES.add(t);
-                if (t.id > max) max = t.id;
+                if (seenIds.contains(t.id)) {
+                    // A save raced the load and reused an id the database
+                    // already owns. Re-id the in-memory copy so the adapter's
+                    // stable ids stay unique and the write-through inserts a
+                    // distinct row instead of replacing the existing one.
+                    Take copy = new Take(++max, t.title, t.durationMs,
+                            t.timestamp, t.sizeLabel, t.format, t.favorite,
+                            t.filePath);
+                    copy.origin = t.origin;
+                    copy.lastPositionMs = t.lastPositionMs;
+                    copy.markersJson = t.markersJson;
+                    TAKES.add(copy);
+                    seenIds.add(copy.id);
+                    persistAsync(copy);
+                } else {
+                    TAKES.add(t);
+                    seenIds.add(t.id);
+                    if (t.id > max) max = t.id;
+                }
             }
             IDS.set(Math.max(IDS.get(), max + 1));
             sortByTimestampDesc();
@@ -454,7 +473,12 @@ public final class TakesRepository {
 
     private static String stemOf(String name) {
         int dot = name.lastIndexOf('.');
-        return dot > 0 ? name.substring(0, dot) : name;
+        String stem = dot > 0 ? name.substring(0, dot) : name;
+        // WAV saves land as "<base> (2).wav" because the raw "<base>.wav"
+        // still exists when uniqueFinal() runs. Strip the uniquifier so a
+        // finished conversion groups with its leftover raw instead of
+        // orphaning it into a duplicate take.
+        return stem.replaceFirst("\\s*\\(\\d+\\)$", "");
     }
 
     /**

@@ -170,7 +170,11 @@ public enum SaveFormat {
      */
     public SaveFormat effective(RecordPreset preset) {
         if (this != AUTO) return this;
-        if (preset != null && preset.autoSavesLossless) return FLAC;
+        if (preset != null && preset.autoSavesLossless
+                && FLAC.available(null)) {
+            return FLAC;
+        }
+        if (preset != null && preset.autoSavesLossless) return WAV24;
         return M4A;
     }
 
@@ -178,15 +182,18 @@ public enum SaveFormat {
      * One rung down the reliability ladder after this encoder kills a save
      * on the device. Exotic/voice codecs fall back to platform AAC; AAC
      * itself falls back to WAV16, which is our own pure-Java writer and
-     * cannot die natively. Null when already at the bottom.
+     * cannot die natively. Null when already at the bottom. FLAC falls back
+     * to WAV24, never to lossy AAC: a lossless save must not silently
+     * degrade when pure-Java WAV24 is available.
      */
     public SaveFormat fallbackAfterCrash() {
         switch (this) {
             case OPUS:
-            case FLAC:
             case AMR_NB:
             case AMR_WB:
                 return M4A;
+            case FLAC:
+                return WAV24;
             case M4A:
             case AUTO:
                 return WAV16;

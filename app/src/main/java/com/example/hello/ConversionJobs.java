@@ -287,17 +287,57 @@ public final class ConversionJobs {
 
     public static void endRawRead(String rawPath) {
         if (rawPath == null) return;
+        boolean lastReader;
         synchronized (ConversionJobs.class) {
             Integer n = RAW_READERS.get(rawPath);
             if (n == null) return;
-            if (n <= 1) RAW_READERS.remove(rawPath);
-            else RAW_READERS.put(rawPath, n - 1);
+            if (n <= 1) {
+                RAW_READERS.remove(rawPath);
+                lastReader = true;
+            } else {
+                RAW_READERS.put(rawPath, n - 1);
+                lastReader = false;
+            }
+            if (lastReader && DEFERRED_RAW_DELETES.remove(rawPath)
+                    && forRaw(rawPath) == null) {
+                // The worker finished while this reader held the file and
+                // deferred its deletion: no job owns the raw anymore, so
+                // remove it now instead of leaking it into reconcile().
+                try {
+                    // noinspection ResultOfMethodCallIgnored
+                    new File(rawPath).delete();
+                } catch (Exception ignored) {}
+            }
         }
     }
+
+    /** Raws whose deletion was deferred until their last reader finishes. */
+    private static final java.util.Set<String> DEFERRED_RAW_DELETES =
+            new java.util.HashSet<>();
 
     /** True while some thread is decoding this raw. */
     public static synchronized boolean rawIsBeingRead(String rawPath) {
         return RAW_READERS.containsKey(rawPath);
+    }
+
+    /**
+     * Deletes a finished conversion's raw immediately, unless a reader
+     * (preview playback or edit import) still holds it open — then the
+     * deletion is deferred to {@link #endRawRead} so the file can neither be
+     * pulled out from under the reader nor leaked into reconcile().
+     */
+    public static void deleteOrDeferRaw(String rawPath) {
+        if (rawPath == null) return;
+        synchronized (ConversionJobs.class) {
+            if (RAW_READERS.containsKey(rawPath)) {
+                DEFERRED_RAW_DELETES.add(rawPath);
+                return;
+            }
+        }
+        try {
+            // noinspection ResultOfMethodCallIgnored
+            new File(rawPath).delete();
+        } catch (Exception ignored) {}
     }
 
     /**
@@ -619,6 +659,16 @@ public final class ConversionJobs {
                 }
                 if (sess.finishedOk()) {
                     File part = sess.partFile();
+                    // Same guard as the background path: a pass-through FLAC
+                    // encoder hands back a near-full-size file under a
+                    // lossless label. Fall through to the worker, which
+                    // re-encodes as WAV24.
+                    if (eff == SaveFormat.FLAC
+                            && TakeSaver.flacLooksIneffective(part.length(),
+                            raw.length())) {
+                        throw new IllegalStateException(
+                                "flac ineffective; fallback to worker");
+                    }
                     FormatConverter.validateFinal(part, eff);
                     File fin = TakeSaver.uniqueFinal(raw,
                             eff.extension());

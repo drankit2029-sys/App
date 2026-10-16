@@ -769,7 +769,8 @@ public class StudioFragment extends Fragment {
             return 2000;                  // 100%..400%: 20% steps
         });
         teleSizeValue.configure(12, 56, 1, tele.textSizeSp, "");
-        teleSpeedValue.configure(40, 400, 5, tele.wordsPerMinute, "");
+        teleSpeedValue.configure(TeleSettings.MIN_WPM, TeleSettings.MAX_WPM,
+                5, tele.wordsPerMinute, "");
         teleWplValue.configure(TeleMath.MIN_WORDS_PER_LINE,
                 TeleMath.MAX_WORDS_PER_LINE, 1, tele.wordsPerLine, "");
 
@@ -1131,11 +1132,6 @@ public class StudioFragment extends Fragment {
         startOrResumeCapture();
     }
 
-    /** Service-owned focus loss funnels here (interruption: pause, no resume). */
-    public void onInterruptionPause() {
-        handler.post(() -> pauseTake(true));
-    }
-
     // ---- stop: save (convert) or discard ----
 
     private void doSaveSequence() {
@@ -1190,8 +1186,13 @@ public class StudioFragment extends Fragment {
         final SaveFormat s = saveFormat;
         // A4-02: resolve the application context while still attached; the
         // worker thread must not call requireContext() (and get detached
-        // mid-save) to finish the save.
+        // mid-save) to finish the save. Snapshot the title and raw too: the
+        // failure path below must not read them off a cleared engine.
         final Context appCtx = requireContext().getApplicationContext();
+        final String takeTitle =
+                engine.takeName != null ? engine.takeName : "";
+        final File saveRaw = engine.rawFile;
+        final int saveChannels = engine.channels;
         new Thread(() -> {
             ConversionJobs.SaveResult r = null;
             String fail = null;
@@ -1208,37 +1209,46 @@ public class StudioFragment extends Fragment {
             handler.post(() -> {
                 try {
                     saving = false;
-                    // A4-02: the save already happened. Tearing down the
-                    // service, clearing the session and clearing the edit
-                    // lineage must happen whether or not the fragment is
-                    // still attached — otherwise a rotation/back-out mid-save
-                    // leaves a live service and a stale EditLink behind.
-                    try {
-                        RecordingService.stopService(appCtx);
-                        engine.clearSession();
-                        if (res == null || !res.adopted) {
-                            editSourceId = -1;
-                            editSourceTitle = null;
-                            try {
-                                EditLink.clear(appCtx);
-                            } catch (Exception ignored) {}
-                        }
-                    } catch (Exception ignored) {}
+                    if (res == null) {
+                        // Dispatch failed: keep the session attached and
+                        // recoverable. finalizeRaw() already stopped capture
+                        // and dropped the .pending marker, so restore the
+                        // marker instead of wiping the session (which would
+                        // also blank the take name in the error dialog).
+                        try {
+                            if (saveRaw != null && saveRaw.exists()) {
+                                RecordingEngine.writePendingMarker(saveRaw,
+                                        takeTitle, saveChannels);
+                            }
+                        } catch (Exception ignored) {}
+                    } else {
+                        // A4-02: the save already happened. Tearing down the
+                        // service, clearing the session and clearing the edit
+                        // lineage must happen whether or not the fragment is
+                        // still attached — otherwise a rotation/back-out mid-save
+                        // leaves a live service and a stale EditLink behind.
+                        try {
+                            RecordingService.stopService(appCtx);
+                            engine.clearSession();
+                            if (!res.adopted) {
+                                editSourceId = -1;
+                                editSourceTitle = null;
+                                try {
+                                    EditLink.clear(appCtx);
+                                } catch (Exception ignored) {}
+                            }
+                        } catch (Exception ignored) {}
+                    }
                     if (!isAdded()) return;
                     activity().syncFabWithEngine();
                     if (res != null && res.adopted) {
                         onSaveAdopted(res, replacing ? editId : -1,
                                 replacing ? replaceTitle : null);
                     } else if (res != null) {
-                        // Background job running: leave the studio now and
-                        // let the Library + notification carry the progress.
+                        // Background job running: the worker owns the take
+                        // now. Hand off before anything else so a rotation
+                        // can't strand the job without its service.
                         ConversionService.startJob(appCtx, res.job.jobId);
-                        engine.clearSession();
-                        editSourceId = -1;
-                        editSourceTitle = null;
-                        try {
-                            EditLink.clear(appCtx);
-                        } catch (Exception ignored) {}
                         Toast.makeText(requireContext(),
                                 R.string.conv_bg_toast, Toast.LENGTH_LONG)
                                 .show();
@@ -1250,8 +1260,7 @@ public class StudioFragment extends Fragment {
                         OptionsSheet.showResult(requireContext(), false,
                                 getString(R.string.convert_failed_title),
                                 getString(R.string.convert_failed_msg,
-                                        engine.takeName != null
-                                                ? engine.takeName : ""));
+                                        takeTitle));
                     }
                     if (failure != null && res == null) {
                         CrashLog.breadcrumb(getContext(),
@@ -1270,12 +1279,29 @@ public class StudioFragment extends Fragment {
     /** Incremental output adopted: the take is saved, synchronously. */
     private void onSaveAdopted(ConversionJobs.SaveResult res, long editId,
                                String editTitle) {
-        if (!isAdded()) return;
+        // The file is already converted: record it even if a rotation
+        // detached the fragment mid-save. UI feedback below still needs an
+        // attached fragment.
+        String target = null;
+        boolean replaceFailed = false;
         if (editId == -1) {
             TakesRepository.addRecording(res.file, res.durationMs, res.title,
                     res.label);
+        } else {
+            // Replace was chosen up front: apply it directly, no second
+            // prompt. The background path applies the same mutation in the
+            // worker via the job's replace lineage.
+            target = editTitle != null && !editTitle.isEmpty()
+                    ? editTitle : res.title;
+            try {
+                TakesRepository.replaceRecording(editId, res.file,
+                        res.durationMs, target, res.label);
+            } catch (Exception e) {
+                replaceFailed = true;
+            }
         }
         engine.clearSession();
+        if (!isAdded()) return;
         if (editId == -1) {
             OptionsSheet.showResult(requireContext(), true,
                     getString(R.string.convert_done_title),
@@ -1284,15 +1310,7 @@ public class StudioFragment extends Fragment {
                         if (isAdded()) activity().exitStudio();
                     });
         } else {
-            // Replace was chosen up front: apply it directly, no second
-            // prompt. The background path applies the same mutation in the
-            // worker via the job's replace lineage.
-            String target = editTitle != null && !editTitle.isEmpty()
-                    ? editTitle : res.title;
-            try {
-                TakesRepository.replaceRecording(editId, res.file,
-                        res.durationMs, target, res.label);
-            } catch (Exception e) {
+            if (replaceFailed) {
                 OptionsSheet.showResult(requireContext(), false,
                         getString(R.string.convert_failed_title),
                         getString(R.string.couldnt_save));
@@ -1447,6 +1465,16 @@ public class StudioFragment extends Fragment {
 
     private void paint() {
         if (getView() == null || !isAdded()) return;
+        // A capture paused outside the studio (call, notification, mic
+        // disconnect) must park the prompter too — and a resume must
+        // release it — even though no studio button was involved.
+        if (lastPaintedState == RecordingEngine.State.RECORDING
+                && engine.state != RecordingEngine.State.RECORDING) {
+            setTelePaused(true);
+        } else if (lastPaintedState == RecordingEngine.State.PAUSED
+                && engine.state == RecordingEngine.State.RECORDING) {
+            setTelePaused(false);
+        }
         lastPaintedState = engine.state;
         lastPaintedName = String.valueOf(displayName());
         boolean hasSession = engine.hasSession();

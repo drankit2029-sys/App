@@ -28,19 +28,24 @@ public final class TeleDialogs {
 
     /**
      * Views of the currently open editor, so a file picked while the dialog
-     * is up can drop the text straight in. Cleared when the editor closes.
+     * is up can drop the text straight in. Weak references: a static strong
+     * reference would leak the whole destroyed Activity if it rotates while
+     * the dialog is open. Cleared when the editor closes.
      */
-    private static android.widget.EditText openInput;
-    private static TextView openMeta;
+    private static java.lang.ref.WeakReference<android.widget.EditText> openInput;
+    private static java.lang.ref.WeakReference<TextView> openMeta;
 
     /** Replaces the open editor's contents with imported text. */
     public static void applyImported(Context ctx, String text, String name,
                                      int wpm) {
-        if (openInput == null || text == null) return;
-        openInput.setText(text);
-        openInput.setSelection(openInput.getText().length());
-        if (openMeta != null) {
-            openMeta.setText(ctx.getString(R.string.tele_imported, name,
+        android.widget.EditText input =
+                openInput != null ? openInput.get() : null;
+        TextView meta = openMeta != null ? openMeta.get() : null;
+        if (input == null || text == null) return;
+        input.setText(text);
+        input.setSelection(input.getText().length());
+        if (meta != null) {
+            meta.setText(ctx.getString(R.string.tele_imported, name,
                     TeleMath.wordCount(text)));
         }
     }
@@ -119,33 +124,26 @@ public final class TeleDialogs {
             if (onImport != null) onImport.onRequestImport();
         });
 
-        // Explicit Save, so committing the script is never a guess. Closing
-        // the dialog still commits, which keeps "tap away to keep" working.
-        // A4-10: `committed` stops the dismiss listener from firing a second
-        // onScript() for the same edit (it used to run on every Save tap).
-        final boolean[] committed = {false};
+        // Explicit Save is the only commit path: Back, tap-outside and
+        // rotation dismissals must never overwrite the saved script.
         PressAnim.apply(saveBtn);
         saveBtn.setOnClickListener(v -> {
             String text = input.getText().toString().trim();
-            committed[0] = true;
             // An empty script is a legitimate state: it clears the prompter
             // instead of being permanently un-saveable.
             if (onSave != null) onSave.onScript(text);
             d.dismiss();
         });
 
-        openInput = input;
-        openMeta = meta;
+        openInput = new java.lang.ref.WeakReference<>(input);
+        openMeta = new java.lang.ref.WeakReference<>(meta);
         style(d);
         d.show();
-        // Saving is the positive action, delivered via the IME/done affordance
-        // on the multiline field plus a tap-outside commit.
+        // Only an explicit Save commits. Back, tap-outside and rotation
+        // dismissals must never overwrite the saved script.
         d.setOnDismissListener(dd -> {
             openInput = null;
             openMeta = null;
-            if (committed[0]) return;
-            String s = input.getText().toString().trim();
-            if (onSave != null) onSave.onScript(s);
         });
         return d;
     }

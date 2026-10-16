@@ -133,11 +133,24 @@ public final class RecordingEngine {
             takeName = sanitize(name);
             channels = outChannels == 1 ? 1 : 2;
             File dir = takesDir(ctx);
-            rawFile = uniqueRaw(dir, takeName);
+            // Stage the file first and only publish rawFile once the header
+            // and marker both exist: if either write throws (storage full,
+            // permissions), the engine must not be left pointing at a
+            // missing or 0-byte file that blocks every later session.
+            File candidate = uniqueRaw(dir, takeName);
+            try {
+                writeHeaderNew(candidate, channels, 0);
+                writePending(candidate, takeName, channels);
+            } catch (Exception | Error e) {
+                try {
+                    // noinspection ResultOfMethodCallIgnored
+                    candidate.delete();
+                } catch (Exception ignored) {}
+                throw e;
+            }
+            rawFile = candidate;
             dataBytes = 0;
             fellBackToMono = false;
-            writeHeaderNew(rawFile, channels, 0);
-            writePending(rawFile, takeName, channels);
             state = State.IDLE;
             level = 0f;
         }
@@ -184,6 +197,11 @@ public final class RecordingEngine {
                     oldPending.renameTo(pendingFor(dest));
                 }
                 writePending(rawFile, clean, channels);
+                // The incremental encoder points at the OLD path (and its
+                // part file). Drop it so resume/save re-attach to the renamed
+                // raw instead of encoding nothing and adopting a truncated
+                // part on save.
+                endStreamingAbortLocked();
             }
             takeName = clean;
         }
@@ -292,9 +310,28 @@ public final class RecordingEngine {
         synchronized (lock) {
             if (rawFile == null) throw new IllegalStateException("no session");
             if (state == State.RECORDING) return;
-            openRecorderLocked(requestedSource, channels);
+            // Open and seek the file BEFORE starting the microphone: if this
+            // throws, no recorder is left capturing with no session able to
+            // stop it (pauseCapture only acts in State.RECORDING).
             raf = new RandomAccessFile(rawFile, "rw");
-            raf.seek(raf.length());
+            try {
+                raf.seek(raf.length());
+            } catch (Exception | Error e) {
+                try {
+                    raf.close();
+                } catch (Exception ignored) {}
+                raf = null;
+                throw e;
+            }
+            try {
+                openRecorderLocked(requestedSource, channels);
+            } catch (Exception | Error e) {
+                try {
+                    raf.close();
+                } catch (Exception ignored) {}
+                raf = null;
+                throw e;
+            }
             // Reconcile byte count with what is actually on disk.
             dataBytes = payloadBytesOf(rawFile);
             capRun = true;
@@ -343,9 +380,27 @@ public final class RecordingEngine {
     public void resumeCapture(Context ctx, int requestedSource) throws Exception {
         synchronized (lock) {
             if (state != State.PAUSED) return;
-            openRecorderLocked(requestedSource, channels);
+            // Same ordering guarantee as startCapture(): the file must be
+            // open before the microphone starts.
             raf = new RandomAccessFile(rawFile, "rw");
-            raf.seek(raf.length());
+            try {
+                raf.seek(raf.length());
+            } catch (Exception | Error e) {
+                try {
+                    raf.close();
+                } catch (Exception ignored) {}
+                raf = null;
+                throw e;
+            }
+            try {
+                openRecorderLocked(requestedSource, channels);
+            } catch (Exception | Error e) {
+                try {
+                    raf.close();
+                } catch (Exception ignored) {}
+                raf = null;
+                throw e;
+            }
             dataBytes = payloadBytesOf(rawFile);
             capRun = true;
             capThread = new Thread(this::capLoop, "takeone-cap");

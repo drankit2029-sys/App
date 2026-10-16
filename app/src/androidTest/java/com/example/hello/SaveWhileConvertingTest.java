@@ -34,9 +34,33 @@ public class SaveWhileConvertingTest {
             androidx.test.rule.GrantPermissionRule.grant(
                     android.Manifest.permission.RECORD_AUDIO);
 
+    /**
+     * The studio capture path gates on POST_NOTIFICATIONS (SDK 33+): without
+     * it the fab opens a rationale instead of recording. Granted once per
+     * class so these tests verify recording instead of skipping.
+     */
+    @org.junit.BeforeClass
+    public static void grantNotifForUiRecording() {
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            try {
+                androidx.test.platform.app.InstrumentationRegistry
+                        .getInstrumentation().getUiAutomation()
+                        .executeShellCommand("pm grant "
+                                + androidx.test.platform.app
+                                        .InstrumentationRegistry
+                                        .getInstrumentation()
+                                        .getTargetContext().getPackageName()
+                                + " android.permission.POST_NOTIFICATIONS");
+            } catch (Exception ignored) {}
+        }
+    }
+
     private void pump(long ms) {
+        // One clock only: elapsedRealtime() and uptimeMillis() diverge by
+        // the device's accumulated sleep time, which would stretch this
+        // wait by that whole offset.
         long end = android.os.SystemClock.elapsedRealtime() + ms;
-        while (android.os.SystemClock.uptimeMillis() < end) {
+        while (android.os.SystemClock.elapsedRealtime() < end) {
             InstrumentationRegistry.getInstrumentation().waitForIdleSync();
             try {
                 Thread.sleep(200);

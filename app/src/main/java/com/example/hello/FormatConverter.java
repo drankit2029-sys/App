@@ -114,8 +114,9 @@ public final class FormatConverter {
         WavInfo info = readFloatWav(src);
         long totalSamples = info.dataBytes / 4;
         RandomAccessFile r = new RandomAccessFile(src, "r");
-        RandomAccessFile w = new RandomAccessFile(dst, "rw");
+        RandomAccessFile w = null;
         try {
+            w = new RandomAccessFile(dst, "rw");
             w.setLength(0);
             w.write(wav16Header(info.channels, info.sampleRate, 0));
             r.seek(info.dataStart);
@@ -148,9 +149,11 @@ public final class FormatConverter {
             try {
                 r.close();
             } catch (Exception ignored) {}
-            try {
-                w.close();
-            } catch (Exception ignored) {}
+            if (w != null) {
+                try {
+                    w.close();
+                } catch (Exception ignored) {}
+            }
         }
         if (cb != null) cb.onProgress(100);
     }
@@ -182,8 +185,9 @@ public final class FormatConverter {
         WavInfo info = readFloatWav(src);
         long totalSamples = info.dataBytes / 4;
         RandomAccessFile r = new RandomAccessFile(src, "r");
-        RandomAccessFile w = new RandomAccessFile(dst, "rw");
+        RandomAccessFile w = null;
         try {
+            w = new RandomAccessFile(dst, "rw");
             w.setLength(0);
             w.write(Dsp.wav24Header(info.channels, info.sampleRate, 0));
             r.seek(info.dataStart);
@@ -222,9 +226,11 @@ public final class FormatConverter {
             try {
                 r.close();
             } catch (Exception ignored) {}
-            try {
-                w.close();
-            } catch (Exception ignored) {}
+            if (w != null) {
+                try {
+                    w.close();
+                } catch (Exception ignored) {}
+            }
         }
         if (cb != null) cb.onProgress(100);
     }
@@ -256,17 +262,19 @@ public final class FormatConverter {
         }
         fmt.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 262144);
 
-        MediaCodec enc = MediaCodec.createEncoderByType(mime);
-        enc.configure(fmt, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
-        enc.start();
-        MediaMuxer muxer = new MediaMuxer(dst.getAbsolutePath(), muxerFormat);
+        MediaCodec enc = null;
+        MediaMuxer muxer = null;
         boolean muxStarted = false;
         int samplesWritten = 0;
         int track = -1;
         MediaCodec.BufferInfo bi = new MediaCodec.BufferInfo();
-
-        RandomAccessFile r = new RandomAccessFile(src, "r");
+        RandomAccessFile r = null;
         try {
+            enc = MediaCodec.createEncoderByType(mime);
+            enc.configure(fmt, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
+            enc.start();
+            muxer = new MediaMuxer(dst.getAbsolutePath(), muxerFormat);
+            r = new RandomAccessFile(src, "r");
             r.seek(info.dataStart);
             byte[] in = new byte[16384 * 4 * 2];
             java.nio.FloatBuffer fb = ByteBuffer.wrap(in)
@@ -361,23 +369,29 @@ public final class FormatConverter {
             }
             if (cb != null) cb.onProgress(100);
         } finally {
-            try {
-                r.close();
-            } catch (Exception ignored) {}
-            try {
-                enc.stop();
-            } catch (Exception ignored) {}
-            try {
-                enc.release();
-            } catch (Exception ignored) {}
-            try {
-                // stop() with an empty track is undefined in the native
-                // muxer; only finalize it when samples actually landed.
-                if (muxStarted && samplesWritten > 0) muxer.stop();
-            } catch (Exception ignored) {}
-            try {
-                muxer.release();
-            } catch (Exception ignored) {}
+            if (r != null) {
+                try {
+                    r.close();
+                } catch (Exception ignored) {}
+            }
+            if (enc != null) {
+                try {
+                    enc.stop();
+                } catch (Exception ignored) {}
+                try {
+                    enc.release();
+                } catch (Exception ignored) {}
+            }
+            if (muxer != null) {
+                try {
+                    // stop() with an empty track is undefined in the native
+                    // muxer; only finalize it when samples actually landed.
+                    if (muxStarted && samplesWritten > 0) muxer.stop();
+                } catch (Exception ignored) {}
+                try {
+                    muxer.release();
+                } catch (Exception ignored) {}
+            }
         }
         if (dst.length() < 1024) {
             // noinspection ResultOfMethodCallIgnored
@@ -827,12 +841,14 @@ public final class FormatConverter {
 
         MediaFormat fmt = MediaFormat.createAudioFormat("audio/flac", sr, ch);
         fmt.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 262144);
-        MediaCodec enc = MediaCodec.createEncoderByType("audio/flac");
-        enc.configure(fmt, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
-        enc.start();
-        java.io.FileOutputStream out = new java.io.FileOutputStream(dst);
+        MediaCodec enc = null;
+        java.io.FileOutputStream out = null;
         boolean ok = false;
         try {
+            enc = MediaCodec.createEncoderByType("audio/flac");
+            enc.configure(fmt, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
+            enc.start();
+            out = new java.io.FileOutputStream(dst);
             // No magic here: FlacHeader.write() emits "fLaC" with the
             // STREAMINFO block once the encoder publishes its config.
             boolean wroteInfo = false;
@@ -957,15 +973,19 @@ public final class FormatConverter {
             ok = wroteInfo && dst.length() > 1024;
             if (cb != null) cb.onProgress(100);
         } finally {
-            try {
-                out.close();
-            } catch (Exception ignored) {}
-            try {
-                enc.stop();
-            } catch (Exception ignored) {}
-            try {
-                enc.release();
-            } catch (Exception ignored) {}
+            if (out != null) {
+                try {
+                    out.close();
+                } catch (Exception ignored) {}
+            }
+            if (enc != null) {
+                try {
+                    enc.stop();
+                } catch (Exception ignored) {}
+                try {
+                    enc.release();
+                } catch (Exception ignored) {}
+            }
             if (!ok) {
                 // noinspection ResultOfMethodCallIgnored
                 dst.delete();

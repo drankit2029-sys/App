@@ -138,6 +138,7 @@ jobs:
           emulator-options: -no-window -no-snapshot -gpu swiftshader_indirect -no-boot-anim -camera-back none
           script: |
             adb emu avd hostmicon
+            adb emu avd rewindaudio || true
             adb shell settings put global stay_on_while_plugged_in 3
             adb shell input keyevent 82 || true
             ./gradlew :app:connectedDebugAndroidTest --stacktrace

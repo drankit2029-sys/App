@@ -1,7 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Auto Backup (Android 6+): library metadata + prefs travel, bulky
-     device-local audio never does. Users re-add recordings via export. -->
+     device-local audio never does. Users re-add recordings via export.
+     Crash breadcrumbs stay on-device too: restoring a stale crash report
+     or unterminated breadcrumb would fire a false crash dialog or encoder
+     downgrade on the new device. -->
 <full-backup-content>
     <exclude domain="external" path="takes" />
     <exclude domain="file" path="takes" />
+    <exclude domain="file" path="takeone-crash.txt" />
+    <exclude domain="file" path="takeone-breadcrumbs.txt" />
 </full-backup-content>

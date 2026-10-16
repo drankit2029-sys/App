@@ -85,7 +85,7 @@ public final class RawFloatPlayer {
         return framePos * 1000L / RecordingEngine.SAMPLE_RATE;
     }
 
-    public void seekToMs(long ms) {
+    public synchronized void seekToMs(long ms) {
         long f = ms * RecordingEngine.SAMPLE_RATE / 1000L;
         boolean wasPlaying = thread != null && !paused;
         stopLocked();
@@ -93,12 +93,16 @@ public final class RawFloatPlayer {
         if (wasPlaying) {
             stop = false;
             paused = false;
+            generation++;
             thread = new Thread(this::run, "takeone-raw-preview");
             thread.start();
         }
     }
 
     private synchronized void stopLocked() {
+        // Retire the running generation FIRST so its finally block cannot
+        // fire listener.onDone(false) into a pause/seek/stop caller.
+        generation++;
         stop = true;
         paused = true;
         // Unblock a writer parked in WRITE_BLOCKING so join() below cannot

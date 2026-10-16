@@ -143,11 +143,16 @@ public final class TakeSaver {
             // Validate the finished .part container before exposing it under a
             // real audio extension in takes/.
             FormatConverter.validateFinal(part, eff);
+            // Report 100% BEFORE the rename: post() can throw
+            // CancellationException (via awaitRecordingIdle), and past this
+            // point fin exists on disk — a cancel here must not leave a
+            // converted file behind that reconcile() would later adopt.
+            post(cb, 100);
             fin = uniqueFinal(raw, eff.extension());
             if (!part.renameTo(fin)) {
                 throw new IllegalStateException("adopt part failed");
             }
-        } catch (Exception ex) {
+        } catch (Throwable t) {
             if (part.exists()) {
                 // noinspection ResultOfMethodCallIgnored
                 part.delete();
@@ -159,12 +164,15 @@ public final class TakeSaver {
             // A4-01: close the stage even on failure/cancel. Without this an
             // unterminated "convert start" makes maybeHealCrashedEncoder()
             // blame a native codec crash on the next launch and downgrade
-            // the save format for no reason.
+            // the save format for no reason. Catch Throwable, not Exception:
+            // native codec failures throw Error, which must not bypass the
+            // cleanup and breadcrumb below.
             CrashLog.breadcrumb(ctx, "convert end " + eff.id + " (failed)");
-            throw ex;
+            if (t instanceof Error) throw (Error) t;
+            if (t instanceof Exception) throw (Exception) t;
+            throw new IllegalStateException(t);
         }
         CrashLog.breadcrumb(ctx, "convert end " + eff.id);
-        post(cb, 100);
         return new Result(fin, eff.badge, dur, title);
     }
 

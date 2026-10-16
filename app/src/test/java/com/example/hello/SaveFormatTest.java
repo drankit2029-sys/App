@@ -33,8 +33,11 @@ public class SaveFormatTest {
                 SaveFormat.AUTO.effective(RecordPreset.PODCAST));
         // Music: an unprocessed stereo master, so Auto stays lossless — but
         // compressed, because the next step is loading this into an editor.
-        assertEquals(SaveFormat.FLAC,
-                SaveFormat.AUTO.effective(RecordPreset.MUSIC));
+        // Either lossless outcome is correct: FLAC when the device has an
+        // encoder, pure-Java WAV24 when it does not.
+        SaveFormat musicEff = SaveFormat.AUTO.effective(RecordPreset.MUSIC);
+        assertTrue("expected lossless, got " + musicEff,
+                musicEff == SaveFormat.FLAC || musicEff == SaveFormat.WAV24);
         // An explicit choice always wins.
         assertEquals(SaveFormat.M4A,
                 SaveFormat.M4A.effective(RecordPreset.MUSIC));
@@ -170,7 +173,9 @@ public class SaveFormatTest {
     @Test
     public void fallbackLadder() {
         assertEquals(SaveFormat.M4A, SaveFormat.OPUS.fallbackAfterCrash());
-        assertEquals(SaveFormat.M4A, SaveFormat.FLAC.fallbackAfterCrash());
+        // FLAC must never silently degrade to lossy AAC when pure-Java WAV24
+        // is available.
+        assertEquals(SaveFormat.WAV24, SaveFormat.FLAC.fallbackAfterCrash());
         assertEquals(SaveFormat.M4A, SaveFormat.AMR_NB.fallbackAfterCrash());
         assertEquals(SaveFormat.M4A, SaveFormat.AMR_WB.fallbackAfterCrash());
         assertEquals(SaveFormat.WAV16, SaveFormat.M4A.fallbackAfterCrash());

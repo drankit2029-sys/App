@@ -107,7 +107,7 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             if (playAudioManager == null) return true;
             if (android.os.Build.VERSION.SDK_INT >= 26) {
                 playFocusRequest = new android.media.AudioFocusRequest.Builder(
-                        android.media.AudioManager.AUDIOFOCUS_GAIN)
+                        PLAY_FOCUS)
                         .setAudioAttributes(new android.media.AudioAttributes
                                 .Builder()
                                 .setUsage(android.media.AudioAttributes
@@ -443,6 +443,8 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                             ConversionService.EXTRA_LABEL);
                     String jobId = intent.getStringExtra(
                             ConversionService.EXTRA_JOB_ID);
+                    String msg = intent.getStringExtra(
+                            ConversionService.EXTRA_MESSAGE);
                     handler.post(() -> {
                         if (!isAdded()) return;
                         // A finished raw preview must stop: its file is gone.
@@ -451,10 +453,12 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                         if (ok) {
                             snackText(getString(R.string.conv_saved_bg, title,
                                     label != null ? label : ""));
-                        } else if (jobId != null
-                                && cancelledJobs.remove(jobId)) {
-                            // The user cancelled this one; it is not a
-                            // failure and must not claim the raw was kept.
+                        } else if ("cancelled".equals(msg)
+                                || (jobId != null
+                                        && cancelledJobs.remove(jobId))) {
+                            // The user cancelled this one (in-app or from the
+                            // notification shade); it is not a failure and
+                            // must not claim the raw was kept.
                         } else {
                             snackText(getString(R.string.conv_failed_bg,
                                     title != null ? title : ""));
@@ -641,35 +645,14 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         // helper take the process down.
         if (adapter == null || getView() == null) return;
         long now = System.currentTimeMillis();
-        List<Take> out = new ArrayList<>();
         List<Take> converting = convertingCards();
-        out.addAll(converting);
+        List<Take> shownConverting = new ArrayList<>();
+        for (Take t : converting) {
+            if (passesFilter(t, now)) shownConverting.add(t);
+        }
+        List<Take> out = new ArrayList<>(shownConverting);
         for (Take t : TakesRepository.all()) {
-            switch (filter) {
-                case FAV: if (!t.favorite) continue; break;
-                case DAY: if (now - t.timestamp > 24L * 3600_000L) continue; break;
-                case WEEK: if (now - t.timestamp > 7L * 24 * 3600_000L) continue; break;
-                case SHORT: if (t.durationMs >= 5L * 60_000L) continue; break;
-                case WAV:
-                    if (t.format == null
-                            || !t.format.toUpperCase(Locale.US)
-                            .startsWith("WAV")) continue;
-                    break;
-                case FLAC:
-                    if (!"FLAC".equalsIgnoreCase(t.format)) continue;
-                    break;
-                case OPUS:
-                    if (!"OPUS".equalsIgnoreCase(t.format)) continue;
-                    break;
-                case AMR:
-                    if (t.format == null
-                            || !t.format.toUpperCase(Locale.US)
-                            .startsWith("AMR")) continue;
-                    break;
-                case M4A: if (!"M4A".equalsIgnoreCase(t.format)) continue; break;
-                default: break;
-            }
-            if (!query.isEmpty() && !t.title.toLowerCase().contains(query)) continue;
+            if (!passesFilter(t, now)) continue;
             out.add(t);
         }
         Comparator<Take> cmp;
@@ -682,10 +665,10 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         }
         // Active conversions pin to the top in job order; the library sort
         // applies to finished takes only.
-        List<Take> finished = new ArrayList<>(out.subList(converting.size(),
+        List<Take> finished = new ArrayList<>(out.subList(shownConverting.size(),
                 out.size()));
         Collections.sort(finished, cmp);
-        out = new ArrayList<>(converting);
+        out = new ArrayList<>(shownConverting);
         out.addAll(finished);
         visible = out;
 
@@ -709,7 +692,7 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
 
         int total = TakesRepository.all().size();
         boolean scoped = !query.isEmpty() || filter != Filter.ALL;
-        int conv = converting.size();
+        int conv = shownConverting.size();
         // A4-12: converting cards are synthetic rows that live outside the
         // Room set, so counting them made "3 of 2 takes" appear.
         String base = scoped
@@ -767,6 +750,42 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         }
         lastStructuralMs = now;
         refresh();
+    }
+
+    /**
+     * Whether a row (finished take or converting card) survives the active
+     * filter chip and search query. Converting cards carry the job title in
+     * {@code title} and the target container in {@code format}, so the same
+     * predicate applies to both.
+     */
+    private boolean passesFilter(Take t, long now) {
+        switch (filter) {
+            case FAV: if (!t.favorite) return false; break;
+            case DAY: if (now - t.timestamp > 24L * 3600_000L) return false; break;
+            case WEEK: if (now - t.timestamp > 7L * 24 * 3600_000L) return false; break;
+            case SHORT: if (t.durationMs >= 5L * 60_000L) return false; break;
+            case WAV:
+                if (t.format == null
+                        || !t.format.toUpperCase(Locale.US)
+                        .startsWith("WAV")) return false;
+                break;
+            case FLAC:
+                if (!"FLAC".equalsIgnoreCase(t.format)) return false;
+                break;
+            case OPUS:
+                if (!"OPUS".equalsIgnoreCase(t.format)) return false;
+                break;
+            case AMR:
+                if (t.format == null
+                        || !t.format.toUpperCase(Locale.US)
+                        .startsWith("AMR")) return false;
+                break;
+            case M4A: if (!"M4A".equalsIgnoreCase(t.format)) return false; break;
+            default: break;
+        }
+        if (!query.isEmpty() && (t.title == null
+                || !t.title.toLowerCase().contains(query))) return false;
+        return true;
     }
 
     /**
@@ -923,12 +942,10 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             toggleSelection(take);
             return;
         }
-        // A4-12: only the first start asks for focus; the toggle branches
-        // below are pause/resume of an already-focused player.
-        if (playingId != take.id && !acquirePlaybackFocus()) {
-            snackText(getString(R.string.playback_busy));
-            return;
-        }
+        // Focus is acquired inside startRawPreview()/startPlayback(), AFTER
+        // stopPlayback(): acquiring here and then stopping releases the focus
+        // before the new player ever starts. The toggle branches below are
+        // pause/resume of an already-focused player.
         if (take.converting) {
             startRawPreview(take);
             return;
@@ -956,6 +973,10 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             return;
         }
         stopPlayback();
+        if (!acquirePlaybackFocus()) {
+            snackText(getString(R.string.playback_busy));
+            return;
+        }
         File raw = new File(take.convRawPath);
         if (!raw.exists()) {
             snackText(getString(R.string.edit_no_audio));
@@ -964,6 +985,9 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         try {
             final long id = take.id;
             rawPlayer = new RawFloatPlayer(raw, completed -> handler.post(() -> {
+                // Pause/seek completions report completed=false: only a real
+                // end-of-stream should snap the scrubber and tear down.
+                if (!completed) return;
                 if (playingId == id && rawMode) {
                     Take t = findVisible(id);
                     if (t != null) {
@@ -1000,6 +1024,10 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
     private void startPlayback(Take take, long startPos) {
         stopPlayback();
         if (take.hasFile()) {
+            if (!acquirePlaybackFocus()) {
+                snackText(getString(R.string.playback_busy));
+                return;
+            }
             try {
                 player = new MediaPlayer();
                 player.setDataSource(take.filePath);
@@ -1066,6 +1094,10 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
 
     private void resumePlayback() {
         if (playingId == -1 || !playPaused) return;
+        if (!simMode && !acquirePlaybackFocus()) {
+            snackText(getString(R.string.playback_busy));
+            return;
+        }
         if (rawMode && rawPlayer != null) {
             try {
                 rawPlayer.play();
@@ -1598,6 +1630,12 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                         appCtx, session,
                         sourceTitle, sessionChannels(session),
                         RecordingEngine.payloadBytesOf(session));
+                // Stash the lineage here on the worker thread: if the
+                // fragment detaches before the UI post below runs, the
+                // session must still carry its edit link or all later edits
+                // and recordings are blocked.
+                EditLink.save(appCtx, sourceId, sourceTitle,
+                        session.getAbsolutePath());
             } catch (Exception e) {
                 fail = e.getMessage();
                 if (session != null && session.exists()) {
@@ -1618,8 +1656,6 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                 if (!isAdded()) return;
                 if (done != null && failure == null) {
                     try {
-                        EditLink.save(appCtx, sourceId, sourceTitle,
-                                done.getAbsolutePath());
                         ((MainActivity) requireActivity())
                                 .openStudioWithEdit(done, sourceId, sourceTitle);
                     } catch (Exception e) {
@@ -1692,7 +1728,18 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                             ConversionService.cancelJob(requireContext()
                                     .getApplicationContext(), job.jobId);
                         } catch (Exception ignored) {}
-                        ConversionJobs.cancel(job.jobId, true);
+                        if (!ConversionJobs.cancel(job.jobId, true)) {
+                            // The conversion finished while this dialog was
+                            // open: cancel() found nothing to cancel, so
+                            // delete the finished take instead of orphaning it
+                            // under a "cancelled" message.
+                            Long doneId =
+                                    ConversionJobs.completedTakeIdForRaw(
+                                            take.convRawPath);
+                            if (doneId != null) {
+                                TakesRepository.delete(doneId);
+                            }
+                        }
                         if (job.jobId != null) {
                             // Stop the done-broadcast from painting a false
                             // "couldn't save" over the confirmed cancel.
@@ -1947,7 +1994,12 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
     }
 
     private String uniqueDocName(DocumentFile dir, String wanted) {
-        if (dir.findFile(wanted) == null) return wanted;
+        // Some providers append ".mp4" to an .m4a name behind our back, so a
+        // bare findFile(wanted) misses the file that is actually on disk.
+        if (dir.findFile(wanted) == null
+                && dir.findFile(wanted + ".mp4") == null) {
+            return wanted;
+        }
         String base = wanted;
         String ext = "";
         int dot = wanted.lastIndexOf('.');
@@ -1958,7 +2010,10 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         int i = 2;
         while (true) {
             String candidate = base + " (" + i + ")" + ext;
-            if (dir.findFile(candidate) == null) return candidate;
+            if (dir.findFile(candidate) == null
+                    && dir.findFile(candidate + ".mp4") == null) {
+                return candidate;
+            }
             i++;
         }
     }
@@ -1966,7 +2021,10 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
     private String mimeFor(String name) {
         String lower = name.toLowerCase();
         if (lower.endsWith(".wav")) return "audio/wav";
-        if (lower.endsWith(".m4a") || lower.endsWith(".mp4")) return "audio/mp4";
+        // "audio/mp4" makes the provider append ".mp4" to .m4a names
+        // ("Take.m4a.mp4"); mp4a-latm resolves to ".m4a" instead.
+        if (lower.endsWith(".m4a")) return "audio/mp4a-latm";
+        if (lower.endsWith(".mp4")) return "audio/mp4";
         if (lower.endsWith(".mp3")) return "audio/mpeg";
         if (lower.endsWith(".ogg")) return "audio/ogg";
         if (lower.endsWith(".flac")) return "audio/flac";

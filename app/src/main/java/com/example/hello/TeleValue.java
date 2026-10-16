@@ -805,7 +805,10 @@ public class TeleValue extends LinearLayout {
                     } else if (verticalScrubEnabled) {
                         verticalScrubbing = true;
                         dragStartValue = value;
-                        dragStartPos = downY;
+                        // Anchor at the current position like horizontal
+                        // scrub does: anchoring at the touch-down point
+                        // makes the value jump by the slop distance.
+                        dragStartPos = y;
                         if (getParent() != null) {
                             getParent().requestDisallowInterceptTouchEvent(true);
                         }
@@ -817,16 +820,12 @@ public class TeleValue extends LinearLayout {
                     // Drag up increases, mirroring the waveform's own gesture.
                     int delta = (int) Math.round((dragStartPos - y)
                             / dp(getContext(), 7));
-                    int s = effectiveStep(dragStartValue, delta >= 0 ? 1 : -1);
-                    setLiveValue(dragStartValue + delta * s);
+                    scrubTo(dragStartValue, delta);
                     return true;
                 }
                 int delta = (int) Math.round((x - dragStartPos)
                         / dp(getContext(), 7));
-                {
-                    int s = effectiveStep(dragStartValue, delta >= 0 ? 1 : -1);
-                    setLiveValue(dragStartValue + delta * s);
-                }
+                scrubTo(dragStartValue, delta);
                 return true;
             }
             case MotionEvent.ACTION_POINTER_UP: {
@@ -894,6 +893,30 @@ public class TeleValue extends LinearLayout {
         if (value != before && scrubListener != null) {
             scrubListener.onScrubValueChanged(value);
         }
+    }
+
+    /**
+     * Applies a scrub delta measured in 7dp ticks. Without a step rule this
+     * is one fixed step per tick; with a piecewise rule (e.g. zoom) each
+     * tick steps from the running value so bracket boundaries are honored
+     * instead of extrapolating a single step across the whole drag.
+     */
+    private void scrubTo(int startValue, int delta) {
+        if (delta == 0) {
+            setLiveValue(startValue);
+            return;
+        }
+        if (stepRule == null) {
+            int s = effectiveStep(startValue, delta >= 0 ? 1 : -1);
+            setLiveValue(startValue + delta * s);
+            return;
+        }
+        int dir = delta >= 0 ? 1 : -1;
+        int v = startValue;
+        for (int i = 0; i < Math.abs(delta); i++) {
+            v += effectiveStep(v, dir);
+        }
+        setLiveValue(v);
     }
 
     @Override

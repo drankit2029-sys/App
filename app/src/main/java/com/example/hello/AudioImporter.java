@@ -467,13 +467,16 @@ public final class AudioImporter {
                 try {
                     w.close();
                 } catch (Exception ignored) {}
+                // Stop/release the decoder HERE, not after this block: any
+                // throw inside the loop above must not skip them and leak
+                // the native MediaCodec instance.
+                try {
+                    dec.stop();
+                } catch (Exception ignored) {}
+                try {
+                    dec.release();
+                } catch (Exception ignored) {}
             }
-            try {
-                dec.stop();
-            } catch (Exception ignored) {}
-            try {
-                dec.release();
-            } catch (Exception ignored) {}
         } finally {
             try {
                 ex.release();

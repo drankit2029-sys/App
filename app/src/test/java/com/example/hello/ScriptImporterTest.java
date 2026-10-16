@@ -110,8 +110,31 @@ public class ScriptImporterTest {
     }
 
     @Test
-    public void zipWithoutDocumentFailsGracefully() throws Exception {
-        File f = new File(ctx().getCacheDir(), "empty.docx");
+    public void blankDocxParagraphsSurviveAsBlankLines() throws Exception {
+        File f = new File(ctx().getCacheDir(), "blanks.docx");
+        ZipOutputStream zip = new ZipOutputStream(new FileOutputStream(f));
+        try {
+            zip.putNextEntry(new ZipEntry("word/document.xml"));
+            String xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+                    + "<document><body>"
+                    + "<p><r><t>First</t></r></p>"
+                    + "<p></p>"
+                    + "<p><r><t>Third</t></r></p>"
+                    + "</body></document>";
+            zip.write(xml.getBytes("UTF-8"));
+            zip.closeEntry();
+        } finally {
+            zip.close();
+        }
+        ScriptImporter.Result r =
+                ScriptImporter.read(ctx(), Uri.fromFile(f));
+        assertTrue("ok=" + r.error, r.ok());
+        assertTrue("blank paragraph collapsed: " + r.text,
+                r.text.contains("First\n\nThird"));
+    }
+
+    @Test
+    public void zipWithoutDocumentFailsGracefully() throws Exception {        File f = new File(ctx().getCacheDir(), "empty.docx");
         ZipOutputStream zip = new ZipOutputStream(new FileOutputStream(f));
         try {
             zip.putNextEntry(new ZipEntry("other.txt"));
