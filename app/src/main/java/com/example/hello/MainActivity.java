@@ -240,6 +240,11 @@ public class MainActivity extends AppCompatActivity {
         super.onResume();
         if (backCallback != null) backCallback.setEnabled(true);
         syncFabWithEngine();
+        for (ConversionJob j : ConversionJobs.active()) {
+            if (ConversionJob.QUEUED.equals(j.state)) {
+                ConversionService.startJob(this, j.jobId);
+            }
+        }
     }
 
     @Override

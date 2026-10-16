@@ -536,12 +536,8 @@ public final class FormatConverter {
             MediaFormat fmt = MediaFormat.createAudioFormat(mime, outRate, 1);
             fmt.setInteger(MediaFormat.KEY_BIT_RATE, bitrate);
             fmt.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 32768);
-            MediaCodec enc = MediaCodec.createEncoderByType(mime);
-            enc.configure(fmt, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
-            enc.start();
-            MediaMuxer muxer = new MediaMuxer(
-                    dst.getAbsolutePath(),
-                    MediaMuxer.OutputFormat.MUXER_OUTPUT_3GPP);
+            MediaCodec enc = null;
+            MediaMuxer muxer = null;
             boolean muxStarted = false;
             int samplesWritten = 0;
             int track = -1;
@@ -562,6 +558,12 @@ public final class FormatConverter {
             int lastPct = -1;
             long drainDeadline = 0;
             try {
+                enc = MediaCodec.createEncoderByType(mime);
+                enc.configure(fmt, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
+                enc.start();
+                muxer = new MediaMuxer(
+                        dst.getAbsolutePath(),
+                        MediaMuxer.OutputFormat.MUXER_OUTPUT_3GPP);
                 while (!outEos) {
                     if (!inEos) {
                         // 1) Produce more decimated samples while the backlog
@@ -680,18 +682,16 @@ public final class FormatConverter {
                 }
                 if (cb != null) cb.onProgress(100);
             } finally {
-                try {
-                    enc.stop();
-                } catch (Exception ignored) {}
-                try {
-                    enc.release();
-                } catch (Exception ignored) {}
-                try {
-                    if (muxStarted && samplesWritten > 0) muxer.stop();
-                } catch (Exception ignored) {}
-                try {
-                    muxer.release();
-                } catch (Exception ignored) {}
+                if (enc != null) {
+                    try { enc.stop(); } catch (Exception ignored) {}
+                    try { enc.release(); } catch (Exception ignored) {}
+                }
+                if (muxer != null) {
+                    try {
+                        if (muxStarted && samplesWritten > 0) muxer.stop();
+                    } catch (Exception ignored) {}
+                    try { muxer.release(); } catch (Exception ignored) {}
+                }
             }
             if (dst.length() < 512) {
                 // noinspection ResultOfMethodCallIgnored

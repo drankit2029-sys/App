@@ -1210,11 +1210,6 @@ public class StudioFragment extends Fragment {
                 try {
                     saving = false;
                     if (res == null) {
-                        // Dispatch failed: keep the session attached and
-                        // recoverable. finalizeRaw() already stopped capture
-                        // and dropped the .pending marker, so restore the
-                        // marker instead of wiping the session (which would
-                        // also blank the take name in the error dialog).
                         try {
                             if (saveRaw != null && saveRaw.exists()) {
                                 RecordingEngine.writePendingMarker(saveRaw,
@@ -1222,40 +1217,30 @@ public class StudioFragment extends Fragment {
                             }
                         } catch (Exception ignored) {}
                     } else {
-                        // A4-02: the save already happened. Tearing down the
-                        // service, clearing the session and clearing the edit
-                        // lineage must happen whether or not the fragment is
-                        // still attached — otherwise a rotation/back-out mid-save
-                        // leaves a live service and a stale EditLink behind.
                         try {
                             RecordingService.stopService(appCtx);
                             engine.clearSession();
+                            editSourceId = -1;
+                            editSourceTitle = null;
+                            EditLink.clear(appCtx);
                             if (!res.adopted) {
-                                editSourceId = -1;
-                                editSourceTitle = null;
-                                try {
-                                    EditLink.clear(appCtx);
-                                } catch (Exception ignored) {}
+                                ConversionService.startJob(appCtx, res.job.jobId);
                             }
                         } catch (Exception ignored) {}
                     }
-                    if (!isAdded()) return;
-                    activity().syncFabWithEngine();
                     if (res != null && res.adopted) {
                         onSaveAdopted(res, replacing ? editId : -1,
                                 replacing ? replaceTitle : null);
-                    } else if (res != null) {
-                        // Background job running: the worker owns the take
-                        // now. Hand off before anything else so a rotation
-                        // can't strand the job without its service.
-                        ConversionService.startJob(appCtx, res.job.jobId);
+                        return;
+                    }
+                    if (!isAdded()) return;
+                    activity().syncFabWithEngine();
+                    if (res != null) {
                         Toast.makeText(requireContext(),
                                 R.string.conv_bg_toast, Toast.LENGTH_LONG)
                                 .show();
                         activity().exitStudio();
                     } else {
-                        // Dispatch itself failed: the raw is kept so the user
-                        // can retry or discard.
                         paint();
                         OptionsSheet.showResult(requireContext(), false,
                                 getString(R.string.convert_failed_title),

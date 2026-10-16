@@ -153,7 +153,11 @@ public final class TakeSaver {
                 throw new IllegalStateException("adopt part failed");
             }
         } catch (Throwable t) {
-            if (part.exists()) {
+            // Preserve the .part on an Android 15 FGS timeout for resumable
+            // WAV formats so the restarted job can pick up where it stopped.
+            boolean keepWavPart = t.getClass().getSimpleName().contains("Timeout")
+                    && (eff == SaveFormat.WAV16 || eff == SaveFormat.WAV24);
+            if (!keepWavPart && part.exists()) {
                 // noinspection ResultOfMethodCallIgnored
                 part.delete();
             }

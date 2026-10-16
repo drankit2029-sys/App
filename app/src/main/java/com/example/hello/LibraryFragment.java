@@ -124,7 +124,7 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             //noinspection deprecation
             return playAudioManager.requestAudioFocus(playFocusListener(),
                     android.media.AudioManager.STREAM_MUSIC,
-                    android.media.AudioManager.AUDIOFOCUS_GAIN)
+                    PLAY_FOCUS)
                     == android.media.AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
         } catch (Exception e) {
             return true;
@@ -979,6 +979,7 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         }
         File raw = new File(take.convRawPath);
         if (!raw.exists()) {
+            releasePlaybackFocus();
             snackText(getString(R.string.edit_no_audio));
             return;
         }
@@ -999,6 +1000,7 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             }));
         } catch (Exception e) {
             rawPlayer = null;
+            releasePlaybackFocus();
             snackText(getString(R.string.edit_no_audio));
             return;
         }

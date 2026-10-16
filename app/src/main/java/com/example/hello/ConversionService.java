@@ -280,7 +280,7 @@ public class ConversionService extends Service {
         if (!shouldPauseWorker(job)) return;
         handler.post(this::refreshNotif);
         synchronized (REC_PAUSE_LOCK) {
-            while (workerAlive && shouldPauseWorker(job)
+            while (workerAlive && !serviceTimedOut && shouldPauseWorker(job)
                     && (job == null || !job.cancelled)) {
                 try {
                     REC_PAUSE_LOCK.wait(250L);
@@ -510,6 +510,11 @@ public class ConversionService extends Service {
         int frameBytes = ch * (w24 ? 3 : 2);
         long totalFrames = info.dataBytes / 4 / ch;
         long expectLen = 44 + job.framesDone * frameBytes;
+        if (!isWavHeaderValid(part, ch, info.sampleRate, w24 ? 24 : 16)) {
+            // noinspection ResultOfMethodCallIgnored
+            part.delete();
+            return TakeSaver.convertRaw(app, raw, job.title, preset, format, cb);
+        }
         if (part.length() != expectLen) {
             // AUDIT-3-02 fix: `job.framesDone` is only a 5%-rounded estimate
             // while converting, so it almost never lines up with the chunked
@@ -596,11 +601,16 @@ public class ConversionService extends Service {
         } catch (Throwable t) {
             // A failed resume must not leave its part behind: the job's
             // sidecar is deleted on failure, so nothing could ever resume
-            // this part again.
-            try {
-                // noinspection ResultOfMethodCallIgnored
-                part.delete();
-            } catch (Exception ignored) {}
+            // this part again. Exception: an Android 15 FGS timeout leaves
+            // a byte-valid resumable WAV part behind on purpose.
+            boolean keepWavPart = t.getClass().getSimpleName().contains("Timeout")
+                    && (eff == SaveFormat.WAV16 || eff == SaveFormat.WAV24);
+            if (!keepWavPart) {
+                try {
+                    // noinspection ResultOfMethodCallIgnored
+                    part.delete();
+                } catch (Exception ignored) {}
+            }
             if (t instanceof Error) throw (Error) t;
             if (t instanceof Exception) throw (Exception) t;
             throw new IllegalStateException(t);
