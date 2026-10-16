@@ -819,10 +819,13 @@ public class TeleValue extends LinearLayout {
                     }
                 }
                 if (verticalScrubbing) {
-                    // Drag up increases, mirroring the waveform's own gesture.
-                    int delta = (int) Math.round((dragStartPos - y)
+                    // Drag down increases the value, drag up decreases it, so
+                    // dragging away from the starting point increases and
+                    // dragging back toward it decreases.
+                    int delta = (int) Math.round((y - dragStartPos)
                             / dp(getContext(), 7));
-                    scrubTo(dragStartValue, delta);
+                    int s = effectiveStep(dragStartValue, delta >= 0 ? 1 : -1);
+                    setLiveValue(dragStartValue + delta * s);
                     return true;
                 }
                 int delta = (int) Math.round((x - dragStartPos)
