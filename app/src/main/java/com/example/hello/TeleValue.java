@@ -819,10 +819,10 @@ public class TeleValue extends LinearLayout {
                     }
                 }
                 if (verticalScrubbing) {
-                    // Drag down increases the value, drag up decreases it, so
-                    // dragging away from the starting point increases and
-                    // dragging back toward it decreases.
-                    int delta = (int) Math.round((y - dragStartPos)
+                    // Drag upward increases the value, drag downward decreases it,
+                    // matching the direction the finger moves away from the
+                    // starting point.
+                    int delta = (int) Math.round((dragStartPos - y)
                             / dp(getContext(), 7));
                     int s = effectiveStep(dragStartValue, delta >= 0 ? 1 : -1);
                     setLiveValue(dragStartValue + delta * s);
