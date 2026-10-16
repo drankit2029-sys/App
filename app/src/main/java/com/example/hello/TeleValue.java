@@ -55,12 +55,73 @@ public class TeleValue extends LinearLayout {
     private static final int DOUBLE_TAP_MS = 280;
     private static final int PICKER_DELAY_MS = 280;
 
-    private int min;
+        private int min;
     private int max = 100;
     private int step = 1;
     private int value;
     private String unit = "";
-    private OnValueChanged listener;
+
+    public interface StepRule {
+        int stepFor(int currentValue, int direction);
+    }
+
+    private int valueScale = 1;
+    private StepRule stepRule;
+
+    /**
+     * Fixed-point divisor for high-resolution controls (e.g. 100 for basis
+     * points where 10000 = 100% and 92 = 0.92%). Default is 1 (integer).
+     */
+    public void setValueScale(int scale) {
+        this.valueScale = Math.max(1, scale);
+        if (label != null) {
+            label.setText(formatValueText(value));
+        }
+    }
+
+    public int getValueScale() {
+        return valueScale;
+    }
+
+    public void setStepRule(StepRule rule) {
+        this.stepRule = rule;
+    }
+
+    private int effectiveStep(int fromValue, int dir) {
+        if (stepRule != null) {
+            return Math.max(1, stepRule.stepFor(fromValue, dir));
+        }
+        return Math.max(1, step);
+    }
+
+    private String formatNumberPart(int v) {
+        if (valueScale <= 1) {
+            return String.valueOf(v);
+        }
+        if (v % valueScale == 0) {
+            return String.valueOf(v / valueScale);
+        }
+        double d = v / (double) valueScale;
+        if (v >= 10 * valueScale) {
+            String s = String.format(Locale.US, "%.1f", d);
+            if (s.endsWith(".0")) s = s.substring(0, s.length() - 2);
+            return s;
+        }
+        String s = String.format(Locale.US, "%.2f", d);
+        while (s.contains(".") && (s.endsWith("0") || s.endsWith("."))) {
+            if (s.endsWith(".")) {
+                s = s.substring(0, s.length() - 1);
+                break;
+            }
+            s = s.substring(0, s.length() - 1);
+        }
+        return s;
+    }
+
+    private String formatValueText(int v) {
+        String num = formatNumberPart(v);
+        return unit.isEmpty() ? num : num + unit;
+    }    private OnValueChanged listener;
     private OnScrubListener scrubListener;
 
     private TextView caption;
@@ -150,8 +211,17 @@ public class TeleValue extends LinearLayout {
         addView(row, new LayoutParams(LayoutParams.MATCH_PARENT,
                 dp(ctx, 26)));
 
-        minus.setOnClickListener(v -> setValue(value - step, true));
-        plus.setOnClickListener(v -> setValue(value + step, true));
+        minus.setOnClickListener(v -> {
+            int s = effectiveStep(value, -1);
+            int next = value - s;
+            // If stepping down lands within one step of min, snap to min.
+            if (value > min && next < min) next = min;
+            setValue(next, true);
+        });
+        plus.setOnClickListener(v -> {
+            int s = effectiveStep(value, 1);
+            setValue(value + s, true);
+        });
 
         // Tap once -> picker. Double-tap -> keyboard.
         label.setOnClickListener(v -> {
@@ -248,6 +318,9 @@ public class TeleValue extends LinearLayout {
         if (stacked) {
             // The row must wrap its content: it was built for a single 24dp
             // horizontal strip, which would crush a vertical stack to 2px.
+            // High-resolution labels ("0.92%") also need a slightly more
+            // compact text size to fit cleanly inside the 40dp rail.
+            label.setTextSize(10.5f);
             controlRow.setLayoutParams(new LayoutParams(
                     LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
             controlRow.addView(minus, new LayoutParams(button, height));
@@ -255,6 +328,7 @@ public class TeleValue extends LinearLayout {
                     LayoutParams.MATCH_PARENT, dp(getContext(), 20)));
             controlRow.addView(plus, new LayoutParams(button, height));
         } else {
+            label.setTextSize(12f);
             controlRow.setLayoutParams(new LayoutParams(
                     LayoutParams.MATCH_PARENT, height));
             controlRow.addView(minus, new LayoutParams(button, height));
@@ -266,16 +340,48 @@ public class TeleValue extends LinearLayout {
     }
 
     /** Values the wheel may show when {@code step > 1}, padded to range. */
+    private int[] steppedValues() {
+        java.util.ArrayList<Integer> out = new java.util.ArrayList<>();
+        if (stepRule != null) {
+            int cur = min;
+            out.add(cur);
+            while (cur < max) {
+                int s = Math.max(1, stepRule.stepFor(cur, 1));
+                int next = (cur == min && s > 1)
+                        ? ((cur / s) + 1) * s
+                        : cur + s;
+                if (next <= cur) next = cur + 1;
+                if (next >= max) {
+                    out.add(max);
+                    break;
+                }
+                out.add(next);
+                cur = next;
+            }
+        } else {
+            int first = Math.min(max, ((min + step - 1) / step) * step);
+            if (first > min && valueScale > 1) {
+                out.add(min);
+            }
+            for (int v = first; v <= max; v += step) {
+                out.add(v);
+            }
+            if (out.isEmpty()) {
+                for (int v = min; v <= max; v++) out.add(v);
+            }
+        }
+        int[] arr = new int[out.size()];
+        for (int i = 0; i < out.size(); i++) arr[i] = out.get(i);
+        return arr;
+    }
+
     private String[] steppedLabels() {
-        java.util.ArrayList<String> out = new java.util.ArrayList<>();
-        int first = Math.min(max, ((min + step - 1) / step) * step);
-        for (int v = first; v <= max; v += step) {
-            out.add(unit.isEmpty() ? String.valueOf(v) : v + unit);
+        int[] vals = steppedValues();
+        String[] out = new String[vals.length];
+        for (int i = 0; i < vals.length; i++) {
+            out[i] = formatValueText(vals[i]);
         }
-        if (out.isEmpty()) {
-            for (int v = min; v <= max; v++) out.add(String.valueOf(v));
-        }
-        return out.toArray(new String[0]);
+        return out;
     }
 
     /** Test hook: the wheel labels for the configured step. */
@@ -339,13 +445,14 @@ public class TeleValue extends LinearLayout {
 
     public void setValue(int v, boolean notify) {
         int nv = clamp(v);
-        if (nv == value && label != null && label.getText().length() > 0) {
+        String formatted = formatValueText(nv);
+        if (nv == value && label != null
+                && formatted.contentEquals(label.getText())) {
             return;
         }
         value = nv;
         if (label != null) {
-            label.setText(unit.isEmpty() ? String.valueOf(value)
-                    : value + unit);
+            label.setText(formatted);
         }
         if (notify && listener != null) listener.onValueChanged(value);
     }
@@ -361,18 +468,22 @@ public class TeleValue extends LinearLayout {
         final Context ctx = getContext();
         if (ctx == null) return;
         try {
-            NumberPicker np = new NumberPicker(ctx);
-            np.setMinValue(min);
-            np.setMaxValue(max);
-            np.setValue(value);
-            np.setWrapSelectorWheel(false);
-            // A4-14: honour the step. A step of 5 must offer 40, 45, 50 ...
-            // not every integer, which is what the +/- buttons produce.
-            try {
-                if (step > 1) {
-                    np.setDisplayedValues(steppedLabels());
+            final int[] vals = steppedValues();
+            final String[] labels = new String[vals.length];
+            int initialIdx = 0;
+            for (int i = 0; i < vals.length; i++) {
+                labels[i] = formatValueText(vals[i]);
+                if (Math.abs(vals[i] - value)
+                        < Math.abs(vals[initialIdx] - value)) {
+                    initialIdx = i;
                 }
-            } catch (Exception ignored) {}
+            }
+            NumberPicker np = new NumberPicker(ctx);
+            np.setMinValue(0);
+            np.setMaxValue(Math.max(0, labels.length - 1));
+            np.setDisplayedValues(labels);
+            np.setValue(initialIdx);
+            np.setWrapSelectorWheel(false);
             final Dialog d = new Dialog(ctx, R.style.TakeOneCenterDialog);
             d.requestWindowFeature(Window.FEATURE_NO_TITLE);
             LinearLayout box = new LinearLayout(ctx);
@@ -402,7 +513,13 @@ public class TeleValue extends LinearLayout {
             okp.topMargin = dp(ctx, 10);
             box.addView(ok, okp);
             d.setContentView(box);
-            np.setOnValueChangedListener((p, i, v) -> setValue(v, true));
+            np.setOnValueChangedListener((p, oldIdx, newIdx) -> {
+                if (newIdx >= 0 && newIdx < vals.length) {
+                    setValue(vals[newIdx], true);
+                    title.setText(label != null
+                            ? label.getText().toString() : "");
+                }
+            });
             ok.setOnClickListener(v -> d.dismiss());
             Window w = d.getWindow();
             if (w != null) {
@@ -430,8 +547,11 @@ public class TeleValue extends LinearLayout {
         if (ctx == null) return;
         try {
             final EditText input = new EditText(ctx);
-            input.setInputType(InputType.TYPE_CLASS_NUMBER);
-            input.setText(String.valueOf(value));
+            input.setInputType(valueScale > 1
+                    ? (InputType.TYPE_CLASS_NUMBER
+                            | InputType.TYPE_NUMBER_FLAG_DECIMAL)
+                    : InputType.TYPE_CLASS_NUMBER);
+            input.setText(formatNumberPart(value));
             input.setSelectAllOnFocus(true);
             int pad = dp(ctx, 20);
             LinearLayout box = new LinearLayout(ctx);
@@ -523,7 +643,11 @@ public class TeleValue extends LinearLayout {
     /** Parses and commits the typed value exactly once. */
     private void commitTyped(EditText input) {
         try {
-            int v = Integer.parseInt(input.getText().toString().trim());
+            String raw = input.getText().toString().trim();
+            if (raw.isEmpty()) return;
+            int v = valueScale > 1
+                    ? (int) Math.round(Double.parseDouble(raw) * valueScale)
+                    : Integer.parseInt(raw);
             setValue(v, true);
         } catch (Exception ignored) {
         }
@@ -611,12 +735,16 @@ public class TeleValue extends LinearLayout {
                     // Drag up increases, mirroring the waveform's own gesture.
                     int delta = (int) Math.round((dragStartPos - y)
                             / dp(getContext(), 7));
-                    setLiveValue(dragStartValue + delta * step);
+                    int s = effectiveStep(dragStartValue, delta >= 0 ? 1 : -1);
+                    setLiveValue(dragStartValue + delta * s);
                     return true;
                 }
                 int delta = (int) Math.round((x - dragStartPos)
                         / dp(getContext(), 7));
-                setLiveValue(dragStartValue + delta * step);
+                {
+                    int s = effectiveStep(dragStartValue, delta >= 0 ? 1 : -1);
+                    setLiveValue(dragStartValue + delta * s);
+                }
                 return true;
             }
             case MotionEvent.ACTION_POINTER_UP: {

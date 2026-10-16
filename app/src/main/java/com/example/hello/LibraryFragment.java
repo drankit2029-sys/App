@@ -397,8 +397,16 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             convReceiver = new BroadcastReceiver() {
                 @Override
                 public void onReceive(Context context, Intent intent) {
+                    String action = intent.getAction();
+                    if (RecordingService.BROADCAST_DONE.equals(action)) {
+                        handler.post(() -> {
+                            if (!isAdded()) return;
+                            refreshImmediate();
+                        });
+                        return;
+                    }
                     if (!ConversionService.BROADCAST_CONVERSION_DONE.equals(
-                            intent.getAction())) {
+                            action)) {
                         return;
                     }
                     boolean ok = intent.getBooleanExtra(
@@ -430,6 +438,7 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             };
             IntentFilter f = new IntentFilter(
                     ConversionService.BROADCAST_CONVERSION_DONE);
+            f.addAction(RecordingService.BROADCAST_DONE);
             androidx.core.content.ContextCompat.registerReceiver(
                     requireContext(), convReceiver, f,
                     androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED);

@@ -95,7 +95,7 @@ public class WaveformView extends View {
     public synchronized float minimumZoom() {
         int n = Math.max(count, 1);
         return (float) Math.min(ZOOM_STEPS[0],
-                Math.max(0.02f, COLS / (2f * n)));
+                Math.max(0.005f, COLS / (2f * n)));
     }
 
     public synchronized int historyCount() {
@@ -108,13 +108,27 @@ public class WaveformView extends View {
         return history[i];
     }
 
+    private boolean followMinZoom = false;
+
+    /** True when the user has zoomed all the way out to fit the whole take. */
+    public synchronized boolean isFollowingMinZoom() {
+        return followMinZoom;
+    }
+
     /** Zoom step index into {@link #ZOOM_STEPS}; clamps + invalidates. */
     public void setZoom(float z) {
-        float lo = minimumZoom();
-        float hi = ZOOM_STEPS[ZOOM_STEPS.length - 1];
-        float nz = Math.max(lo, Math.min(hi, z));
-        if (Math.abs(nz - zoom) > 0.001f) {
+        float lo;
+        float nz;
+        boolean changed;
+        synchronized (this) {
+            lo = minimumZoom();
+            float hi = ZOOM_STEPS[ZOOM_STEPS.length - 1];
+            nz = Math.max(lo, Math.min(hi, z));
+            followMinZoom = (count > COLS / 2) && (nz <= lo + 0.0005f);
+            changed = Math.abs(nz - zoom) > 0.0001f;
             zoom = nz;
+        }
+        if (changed) {
             invalidate();
         }
     }
@@ -134,9 +148,15 @@ public class WaveformView extends View {
     }
 
     public synchronized void push(float v) {
+        float prevMin = minimumZoom();
+        boolean wasAtMin = followMinZoom
+                || (count > COLS / 2 && Math.abs(zoom - prevMin) <= 0.0005f);
         if (count == history.length) {
             if (history.length >= MAX_HISTORY) {
                 halveHistory();
+                if (!wasAtMin) {
+                    zoom = Math.min(ZOOM_STEPS[ZOOM_STEPS.length - 1], zoom * 2f);
+                }
             } else {
                 float[] bigger = new float[Math.min(MAX_HISTORY,
                         history.length * 2)];
@@ -145,6 +165,10 @@ public class WaveformView extends View {
             }
         }
         history[count++] = v;
+        if (wasAtMin) {
+            followMinZoom = true;
+            zoom = minimumZoom();
+        }
         postInvalidateOnAnimation();
     }
 
@@ -160,6 +184,7 @@ public class WaveformView extends View {
     public synchronized void clear() {
         Arrays.fill(history, 0f);
         count = 0;
+        followMinZoom = false;
         invalidate();
     }
 
@@ -291,8 +316,10 @@ public class WaveformView extends View {
             synchronized (this) {
                 v = history[i];
             }
-            float x = centerX - (n - 1 - i) * gap + gap / 2f;
-            if (x < -barW || x > w + barW) continue;
+            // Align newest bar (i = n - 1) flush to the left of centerX so
+            // bars never protrude to the right (in front) of the playhead.
+            float x = centerX - (n - 1 - i) * gap - barW / 2f;
+            if (x < -barW || x > centerX) continue;
             float bh = Math.max(2f, v * maxH * 2f);
             // Older bars recede toward the left edge, newest are brightest.
             float vis = Math.min(1f, Math.max(0f, x / Math.max(1f, centerX)));

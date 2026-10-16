@@ -70,6 +70,7 @@ public class RecordingService extends Service {
     private String lastNotifText = "";
     private Boolean lastNotifPaused = null;
     private int lastNotifPct = -2;
+    private long lastChronoBaseMs = 0L;
 
     private AudioManager audioManager;
     private AudioManager.OnAudioFocusChangeListener focusListener;
@@ -424,23 +425,30 @@ public class RecordingService extends Service {
             RecordPreset preset = RecordPreset.load(this);
             String presetTitle = getString(preset.titleRes);
             long durMs = e.durationMs();
-            String timer = Take.formatDuration(durMs);
+            String saveLabel = TakeSaver.labelFor(preset, SaveFormat.load(this));
 
             String title;
             String text;
             if (convertingPct >= 0) {
                 title = getString(R.string.notif_converting, convertingPct);
-                text = getString(R.string.converting_msg, presetTitle, convertingPct);
+                text = getString(R.string.converting_msg, saveLabel, convertingPct);
             } else if (paused) {
                 title = getString(R.string.notif_paused, name);
-                text = presetTitle + " • " + timer;
+                // Chronometer is hidden when paused, so show frozen MM:SS here.
+                text = presetTitle + " → " + saveLabel + " • "
+                        + Take.formatDuration(durMs);
             } else {
                 title = getString(R.string.notif_recording, name);
-                text = presetTitle + " • " + timer;
+                // Native Chronometer in header is the single live timer;
+                // do not duplicate a second text timer in contentText.
+                text = presetTitle + " → " + saveLabel;
             }
 
-            // Skip redundant Binder IPC calls when nothing visible changed.
-            if (!force
+            long expectedBase = System.currentTimeMillis() - Math.max(0L, durMs);
+            boolean baseDrifted = !paused && convertingPct < 0
+                    && Math.abs(expectedBase - lastChronoBaseMs) > 250L;
+
+            if (!force && !baseDrifted
                     && title.equals(lastNotifTitle)
                     && text.equals(lastNotifText)
                     && lastNotifPaused != null && lastNotifPaused == paused
@@ -451,6 +459,9 @@ public class RecordingService extends Service {
             lastNotifText = text;
             lastNotifPaused = paused;
             lastNotifPct = convertingPct;
+            if (!paused && convertingPct < 0) {
+                lastChronoBaseMs = expectedBase;
+            }
 
             NotificationManager nm =
                     (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
@@ -473,19 +484,20 @@ public class RecordingService extends Service {
         RecordPreset preset = RecordPreset.load(this);
         String presetTitle = getString(preset.titleRes);
         long durMs = e.durationMs();
-        String timer = Take.formatDuration(durMs);
+        String saveLabel = TakeSaver.labelFor(preset, SaveFormat.load(this));
 
         String title;
         String text;
         if (convertingPct >= 0) {
             title = getString(R.string.notif_converting, convertingPct);
-            text = getString(R.string.converting_msg, presetTitle, convertingPct);
+            text = getString(R.string.converting_msg, saveLabel, convertingPct);
         } else if (paused) {
             title = getString(R.string.notif_paused, name);
-            text = presetTitle + " • " + timer;
+            text = presetTitle + " → " + saveLabel + " • "
+                    + Take.formatDuration(durMs);
         } else {
             title = getString(R.string.notif_recording, name);
-            text = presetTitle + " • " + timer;
+            text = presetTitle + " → " + saveLabel;
         }
         lastNotifTitle = title;
         lastNotifText = text;
@@ -499,9 +511,20 @@ public class RecordingService extends Service {
         if (cachedContentIntent == null && cachedToggleIntent == null) {
             initPendingIntents();
         }
+        RecordPreset preset = RecordPreset.load(this);
+        String saveLabel = TakeSaver.labelFor(preset, SaveFormat.load(this));
         androidx.core.app.NotificationCompat.Builder b =
                 new androidx.core.app.NotificationCompat.Builder(this, CHANNEL);
         b.setSmallIcon(R.drawable.ic_mic);
+        // Match TakeOne brand colors: record red (#FF3B30) when active,
+        // amber (#FF9F0A) when paused.
+        b.setColor(paused ? 0xFFFF9F0A : 0xFFFF3B30);
+        b.setColorized(true);
+        b.setSubText(saveLabel);
+        b.setContentTitle(title);
+        b.setContentText(text);
+        b.setCategory(androidx.core.app.NotificationCompat.CATEGORY_SERVICE);
+        b.setVisibility(androidx.core.app.NotificationCompat.VISIBILITY_PUBLIC);
         b.setContentTitle(title);
         b.setContentText(text);
         b.setOngoing(true);
@@ -510,7 +533,9 @@ public class RecordingService extends Service {
         // Native SystemUI Chronometer ticks in real time on the system UI
         // thread without requiring sub-second Binder IPC updates.
         if (convertingPct < 0 && !paused) {
-            b.setWhen(System.currentTimeMillis() - Math.max(0L, durMs));
+            long base = System.currentTimeMillis() - Math.max(0L, durMs);
+            lastChronoBaseMs = base;
+            b.setWhen(base);
             b.setShowWhen(true);
             b.setUsesChronometer(true);
         } else {

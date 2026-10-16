@@ -200,6 +200,43 @@ public class ConversionJobsTest {
     }
 
     @Test
+    public void cancelForReplacePositiveIdPassesThrough() {
+        assertEquals(42L, ConversionJobs.cancelForReplace(ctx(), 42L));
+    }
+
+    @Test
+    public void cancelForReplaceUnknownNegativeReturnsMinusOne() {
+        assertEquals(-1L,
+                ConversionJobs.cancelForReplace(ctx(), -987654321L));
+    }
+
+    @Test
+    public void renameActiveJobUpdatesReplaceTitle() throws Exception {
+        RecordingEngine engine = RecordingEngine.get();
+        engine.abortAndDelete();
+        String session = "Rename Replace " + System.nanoTime();
+        engine.startNewSession(ctx(), session, 2);
+        ConversionJob job = null;
+        try {
+            job = ConversionJobs.enqueue(ctx(), engine.rawFile, session,
+                    RecordPreset.MEMO, SaveFormat.M4A, 1000,
+                    4242L, "Original");
+            String applied = ConversionJobs.renameConvertingOrCompleted(
+                    job.jobId, job.takeId(), job.rawPath, "Renamed");
+            assertEquals("Renamed", applied);
+            assertEquals("Renamed", job.title);
+            assertEquals("Renamed", job.replaceTitle);
+            ConversionJob back = ConversionJob.read(job.sidecar());
+            assertNotNull("sidecar unreadable", back);
+            assertEquals("Renamed", back.title);
+            assertEquals("Renamed", back.replaceTitle);
+        } finally {
+            if (job != null) ConversionJobs.cancel(job.jobId, true);
+            engine.abortAndDelete();
+        }
+    }
+
+    @Test
     public void completionMapRoundTrip() {
         ConversionJobs.noteCompletion("/tmp/a.wav", 4242L);
         assertEquals(Long.valueOf(4242L),

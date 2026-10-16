@@ -82,6 +82,8 @@ public class StudioFragment extends Fragment {
     /** Manual scroll override: auto-scroll stays off briefly after a drag. */
     private long teleManualUntil;
     private long teleCountdownUntil;
+    /** True while the "Name this take" modal is up on initial Studio entry. */
+    private boolean namingModalOpen;
     private long lastTeleAdvanceMs;
     private ActivityResultLauncher<String[]> scriptPicker;
 
@@ -195,28 +197,9 @@ public class StudioFragment extends Fragment {
         PressAnim.applySoft(teleMirrorBtn, 0.95f);
         // Vertical drag on the waveform zooms, like a timeline in a DAW.
         waveform.setOnZoomGesture((dir, dy) -> stepZoom(dir > 0 ? 1 : -1));
-        // Touching the script lets the performer scrub it by hand. While the
-        // prompter is paused this is the primary way to reposition the text;
-        // auto-scroll resumes on lift.
-        teleView.setOnTouchListener((v2, ev) -> {
-            if (ev == null) return false;
-            switch (ev.getActionMasked()) {
-                case MotionEvent.ACTION_DOWN:
-                case MotionEvent.ACTION_MOVE:
-                    noteTeleManualOverride();
-                    break;
-                case MotionEvent.ACTION_UP:
-                case MotionEvent.ACTION_CANCEL:
-                    // Bounded either way: an up event can be swallowed if a
-                    // parent steals the gesture, and an unbounded value here
-                    // would freeze auto-scroll permanently.
-                    noteTeleManualOverride();
-                    break;
-                default:
-                    break;
-            }
-            return false;
-        });
+        // Touching the script lets the performer scrub it by hand. The view
+        // itself tracks the active drag (TeleprompterView.isDragging), so a
+        // tap never pauses scrolling and auto-scroll resumes on finger lift.
         initTeleprompter();
         initTeleValueControls();
 
@@ -354,17 +337,19 @@ public class StudioFragment extends Fragment {
     private void askForName() {
         if (!isAdded() || getView() == null) return;
         if (engine.hasSession()) return;
+        namingModalOpen = true;
         OptionsSheet.showInputWithCancel(requireContext(),
                 getString(R.string.name_take_title),
                 nextTakeName(),
                 getString(R.string.name_take_save),
                 text -> {
+                    namingModalOpen = false;
                     pendingName = RecordingEngine.sanitize(text);
                     paint();
                     activity().syncFabWithEngine();
                 },
                 () -> {
-                    // Backed out of naming: nothing to record, leave.
+                    namingModalOpen = false;
                     if (!isAdded()) return;
                     if (!engine.hasSession() && pendingName == null) {
                         activity().exitStudio();
@@ -390,6 +375,11 @@ public class StudioFragment extends Fragment {
                         if (engine.hasSession()) {
                             engine.renameSession(requireContext(), clean);
                             pendingName = engine.takeName;
+                            if (editSourceId != -1 && engine.rawFile != null) {
+                                editSourceTitle = clean;
+                                EditLink.save(requireContext(), editSourceId,
+                                        clean, engine.rawFile.getAbsolutePath());
+                            }
                         } else {
                             pendingName = clean;
                         }
@@ -632,7 +622,7 @@ public class StudioFragment extends Fragment {
             teleToggleIcon.setAlpha(active ? 1f : 0.55f);
         }
         if (teleState != null) {
-            teleState.setText(active ? R.string.tele_show : R.string.tele_hide_short);
+            teleState.setText(active ? R.string.tele_hide_short : R.string.tele_show);
         }
     }
 
@@ -684,20 +674,15 @@ public class StudioFragment extends Fragment {
     }
 
     /**
-     * Drives the prompter: auto-scroll only while actually recording, at the
-     * performer's chosen reading speed, and always yieldable to a manual
-     * drag for a few seconds afterwards.
+     * Drives the prompter: advances whenever not paused (both while recording
+     * AND before recording starts so the user can check the speed), yields
+     * while the user's finger is actively dragging the script, and resumes
+     * immediately on finger lift.
      */
     private void advanceTeleprompter() {
         if (teleView == null || tele == null) return;
         long now = SystemClock.elapsedRealtime();
-        if (!tele.autoScroll) {
-            lastTeleAdvanceMs = 0L;
-            return;
-        }
-        // A pause is sticky: it outranks recording, so the performer can hold
-        // a position mid-take without the script running away from them.
-        if (telePaused) {
+        if (!tele.autoScroll || telePaused || namingModalOpen) {
             lastTeleAdvanceMs = 0L;
             return;
         }
@@ -705,22 +690,15 @@ public class StudioFragment extends Fragment {
             lastTeleAdvanceMs = 0L;
             return;
         }
-        if (now < teleManualUntil) {
-            // Keep the clock current while yielding so auto-scroll resumes
-            // without a catch-up jump when the override expires.
+        if (teleView.isDragging()) {
+            // Yield only while the finger is actively dragging; resume
+            // immediately on lift with zero delay.
             lastTeleAdvanceMs = now;
-            return;
-        }
-        if (engine.state != RecordingEngine.State.RECORDING) {
-            teleCountdownUntil = 0L;
-            lastTeleAdvanceMs = 0L;
             return;
         }
         float dt = lastTeleAdvanceMs > 0
                 ? Math.max(0f, (now - lastTeleAdvanceMs) / 1000f)
                 : 0.05f;
-        // A long UI stall must not turn into one large jump when the tick
-        // resumes. Cap one frame at a quarter-second of reading.
         dt = Math.min(dt, 0.25f);
         lastTeleAdvanceMs = now;
         float px = TeleMath.scrollPxPerSecond(tele.wordsPerMinute,
@@ -730,24 +708,20 @@ public class StudioFragment extends Fragment {
         teleView.scrollBy(px * dt);
     }
 
-    private void noteTeleManualOverride() {
-        long now = SystemClock.elapsedRealtime();
-        teleManualUntil = now + 1500L;
-        lastTeleAdvanceMs = now;
-    }
-
     private void toggleTelePaused() {
         telePaused = !telePaused;
         lastTeleAdvanceMs = 0L;
+        // If the user presses Play when the script is already at the bottom,
+        // rewind to the top so they can preview it again immediately.
+        if (!telePaused && teleView != null && teleView.maxScroll() > 0f
+                && teleView.scrollOffset() >= teleView.maxScroll() - 1f) {
+            teleView.rewind();
+        }
         if (telePauseBtn != null) {
             telePauseBtn.setText(telePaused
                     ? R.string.tele_resume_short : R.string.tele_pause_short);
             telePauseBtn.setSelected(telePaused);
             PressAnim.nudge(telePauseBtn, 1.12f);
-        }
-        if (teleState != null) {
-            teleState.setText(telePaused
-                    ? R.string.tele_paused_label : R.string.tele_scrolling_label);
         }
         // Resuming hands control back to the auto-scroll clock immediately.
         if (!telePaused) teleManualUntil = 0L;
@@ -769,6 +743,15 @@ public class StudioFragment extends Fragment {
         zoomValue.setStacked(true);
         // A vertical pass over the zoom rail zooms, like the waveform itself.
         zoomValue.setVerticalScrub(true);
+        zoomValue.setValueScale(100); // 1 unit = 0.01% (10000 = 100%, 92 = 0.92%)
+        zoomValue.setStepRule((cur, dir) -> {
+            int ref = dir < 0 ? cur - 1 : cur;
+            if (ref < 200) return 10;     // < 2%: 0.10% steps
+            if (ref < 1000) return 50;    // 2%..10%: 0.50% steps
+            if (ref < 5000) return 200;   // 10%..50%: 2% steps
+            if (ref < 10000) return 500;  // 50%..100%: 5% steps
+            return 2000;                  // 100%..400%: 20% steps
+        });
         teleSizeValue.configure(12, 56, 1, tele.textSizeSp, "");
         teleSpeedValue.configure(40, 400, 5, tele.wordsPerMinute, "");
         teleWplValue.configure(TeleMath.MIN_WORDS_PER_LINE,
@@ -848,17 +831,33 @@ public class StudioFragment extends Fragment {
         applyTeleSettings();
     }
 
-    private void applyZoomValue(int percent) {
-        waveform.setZoom(percent / 100f);
+    private void applyZoomValue(int bp) {
+        if (waveform == null) return;
+        if (bp <= zoomValue.getMin()) {
+            waveform.setZoom(waveform.minimumZoom());
+        } else {
+            waveform.setZoom(bp / 10000f);
+        }
         paintZoomLabel();
+    }
+
+    private int currentMinZoomBp() {
+        if (waveform == null) return 5000;
+        // Floor to basis points (0.01%) so minBp never exceeds minimumZoom()
+        // and always accommodates 100% of the recording left of the playhead.
+        return Math.max(50, (int) Math.floor(waveform.minimumZoom() * 10000f));
     }
 
     private void refreshZoomValue() {
         if (waveform == null || zoomValue == null) return;
-        float z = waveform.getZoom();
-        int pct = Math.max(1, Math.round(z * 100f));
-        zoomValue.configure(Math.max(1, Math.round(
-                        waveform.minimumZoom() * 100f)), 400, 5, pct, "%");
+        int minBp = currentMinZoomBp();
+        boolean followMin = waveform.isFollowingMinZoom();
+        int curBp = followMin ? minBp
+                : Math.max(minBp, Math.round(waveform.getZoom() * 10000f));
+        zoomValue.configure(minBp, 40000, 10, curBp, "%");
+        if (followMin) {
+            waveform.setZoom(waveform.minimumZoom());
+        }
         paintZoomLabel();
     }
 
@@ -881,11 +880,17 @@ public class StudioFragment extends Fragment {
     // ---- waveform zoom (time shown per unit length) ----
 
     private void stepZoom(int dir) {
-        // Gesture zoom works on the same percentage scale as the control, so
-        // the two never disagree about where the zoom currently sits.
-        int pct = Math.max(1, Math.round(waveform.getZoom() * 100f));
-        int step = pct < 100 ? 5 : (pct < 200 ? 20 : 50);
-        int next = Math.max(1, Math.min(400, pct + dir * step));
+        if (waveform == null || zoomValue == null) return;
+        int minBp = currentMinZoomBp();
+        int curBp = Math.max(minBp, Math.round(waveform.getZoom() * 10000f));
+        int stepBp;
+        int ref = dir < 0 ? curBp - 1 : curBp;
+        if (ref < 200) stepBp = 10;
+        else if (ref < 1000) stepBp = 50;
+        else if (ref < 5000) stepBp = 200;
+        else if (ref < 10000) stepBp = 500;
+        else stepBp = 2000;
+        int next = Math.max(minBp, Math.min(40000, curBp + dir * stepBp));
         zoomValue.setValue(next, true);
     }
 
@@ -1025,8 +1030,10 @@ public class StudioFragment extends Fragment {
 
     private void startOrResumeCapture() {
         if (!isAdded() || saving) return;
+        boolean wasPaused = (engine.state == RecordingEngine.State.PAUSED);
+        boolean isEditOrRecovery = (editSourceId != -1 || engine.dataBytes > 0);
         try {
-            if (engine.state == RecordingEngine.State.PAUSED) {
+            if (wasPaused) {
                 engine.resumeCapture(requireContext(), preset.audioSource);
             } else if (engine.state != RecordingEngine.State.RECORDING) {
                 engine.startCapture(requireContext(), preset.audioSource);
@@ -1045,7 +1052,15 @@ public class StudioFragment extends Fragment {
             // Fresh capture: rewind the prompter and start its countdown so
             // the performer is not thrown straight into mid-script.
             if (engine.state == RecordingEngine.State.RECORDING) {
-                teleprompterArmForTake();
+                if (!wasPaused && !isEditOrRecovery) {
+                    teleprompterArmForTake();
+                } else {
+                    // Resuming from pause or punching in: unpause without
+                    // wiping the user's current position in the script.
+                    if (telePaused) toggleTelePaused();
+                    teleManualUntil = 0L;
+                    lastTeleAdvanceMs = 0L;
+                }
             }
             RecordingService.start(requireContext(), preset.id);
         } catch (Exception e) {
@@ -1357,8 +1372,7 @@ public class StudioFragment extends Fragment {
                 // The zoom floor sinks as the timeline grows; keep the rail
                 // in sync while recording so its full range stays reachable.
                 if (live && zoomValue != null) {
-                    int floor = Math.max(1, Math.round(
-                            waveform.minimumZoom() * 100f));
+                    int floor = currentMinZoomBp();
                     if (floor != zoomValue.getMin()) refreshZoomValue();
                 }
                 // Prompter advances at the performer's reading speed while

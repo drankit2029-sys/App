@@ -454,15 +454,6 @@ public class TeleprompterView extends View {
         }
         textPaint.setAlpha(255);
 
-        // Faint reading tick on the centre line: the eye's anchor. Kept to
-        // the middle third so it never reads as edge-to-edge chrome.
-        textPaint.setColor(0xFFFFFFFF);
-        textPaint.setAlpha(28);
-        textPaint.setStrokeWidth(Math.max(1f,
-                getResources().getDisplayMetrics().density));
-        canvas.drawLine(w * 0.32f, centreY, w * 0.68f, centreY, textPaint);
-        textPaint.setAlpha(255);
-
         maskPaint.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.DST_IN));
         // Opaque band follows the reading centre: 30% of the height each
         // side, clamped into the view.
@@ -494,6 +485,18 @@ public class TeleprompterView extends View {
     private float lastTouchY;
     private int activePointer = -1;
     private boolean dragging;
+
+    /** True only while the user's finger is actively dragging the script. */
+    public boolean isDragging() {
+        return dragging;
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        dragging = false;
+        activePointer = -1;
+        super.onDetachedFromWindow();
+    }
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {

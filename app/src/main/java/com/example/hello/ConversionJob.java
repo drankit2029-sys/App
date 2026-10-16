@@ -52,6 +52,11 @@ public final class ConversionJob {
     public volatile long replaceTakeId = -1;
     /** Original title to restore when replacing (null = keep job title). */
     public volatile String replaceTitle = null;
+    /**
+     * True when this conversion job was superseded by an Edit -> Replace save,
+     * so the worker aborts it silently and deletes its raw file.
+     */
+    public volatile boolean superseded;
 
     public ConversionJob(String jobId, String title, String rawPath,
                          String partPath, String presetId, String formatId,

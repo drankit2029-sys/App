@@ -234,14 +234,33 @@ public class ConversionService extends Service {
     }
 
     /**
+     * True while this job must not make progress: while the mic is capturing,
+     * or while the take is open for editing (an edit session holds its raw
+     * open, so finishing the original conversion now would only waste the
+     * work when the user taps Replace).
+     */
+    private boolean shouldPauseWorker(ConversionJob job) {
+        if (recordingInProgress()) return true;
+        if (job == null) return false;
+        if (ConversionJobs.rawIsBeingRead(job.rawPath)) return true;
+        try {
+            if (RecordingEngine.get().hasSession()
+                    && EditLink.id(getApplicationContext()) == job.takeId()) {
+                return true;
+            }
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+    /**
      * Parks the worker (polling, so a missed notify cannot wedge it) while
      * the user is recording.
      */
     private void awaitRecordingIdle(ConversionJob job) {
-        if (!recordingInProgress()) return;
+        if (!shouldPauseWorker(job)) return;
         handler.post(this::refreshNotif);
         synchronized (REC_PAUSE_LOCK) {
-            while (workerAlive && recordingInProgress()
+            while (workerAlive && shouldPauseWorker(job)
                     && (job == null || !job.cancelled)) {
                 try {
                     REC_PAUSE_LOCK.wait(250L);
@@ -285,8 +304,14 @@ public class ConversionService extends Service {
             synchronized (this) {
                 workerAlive = false;
                 if (queue.isEmpty()) {
+                    handler.removeCallbacksAndMessages(null);
                     try {
                         stopForeground(true);
+                    } catch (Exception ignored) {}
+                    try {
+                        NotificationManager nm = (NotificationManager)
+                                getSystemService(NOTIFICATION_SERVICE);
+                        if (nm != null) nm.cancel(NOTIF_ID);
                     } catch (Exception ignored) {}
                     stopSelf();
                 } else {
@@ -381,6 +406,14 @@ public class ConversionService extends Service {
             doneNotif(true, job.title, r.label, null);
             broadcast(true, job, r.label, null);
         } catch (CancellationException cancelled) {
+            if (job.superseded) {
+                // Replaced by an edit while converting: the replacement job
+                // owns the take now. Abort silently — no failure notification,
+                // no toast, no .pending marker — and drop the raw the
+                // replacement no longer needs.
+                ConversionJobs.cancel(job.jobId, true);
+                return;
+            }
             ConversionJobs.cancel(job.jobId, false);
             doneNotif(false, job.title, null,
                     getString(R.string.conv_cancelled_msg, job.title));
@@ -391,6 +424,12 @@ public class ConversionService extends Service {
             // stuck in RUNNING forever - the library card never resolved and
             // the service never stopped.
             if (job.cancelled) {
+                // A superseded job whose raw vanished mid-encode lands here
+                // instead of the CancellationException branch: still silent.
+                if (job.superseded) {
+                    ConversionJobs.cancel(job.jobId, true);
+                    return;
+                }
                 // Lost a race with an explicit cancel (e.g. the raw was
                 // deleted under us): the canceller owns the UX, stay quiet.
                 ConversionJobs.cancel(job.jobId, false);
@@ -598,22 +637,26 @@ public class ConversionService extends Service {
 
     private void refreshNotif() {
         try {
+            if (!workerAlive) return;
+            ConversionJob job = resolveCurrent();
+            if (job == null && queue.isEmpty()) return;
             NotificationManager nm = (NotificationManager)
                     getSystemService(NOTIFICATION_SERVICE);
-            if (nm != null) nm.notify(NOTIF_ID, buildNotif(resolveCurrent()));
+            if (nm != null) nm.notify(NOTIF_ID, buildNotif(job));
         } catch (Exception ignored) {}
     }
 
     private Notification buildNotif(ConversionJob job) {
         String title;
         String text;
+        String badge = null;
         int pct = -1;
         if (job != null) {
             pct = Math.max(0, Math.min(100, job.progress));
+            badge = TakeSaver.labelFor(RecordPreset.of(job.presetId),
+                    SaveFormat.of(job.formatId));
             title = getString(R.string.conv_notif_title, pct);
-            text = getString(R.string.conv_notif_text, job.title,
-                    TakeSaver.labelFor(RecordPreset.of(job.presetId),
-                            SaveFormat.of(job.formatId)));
+            text = getString(R.string.conv_notif_text, job.title, badge);
         } else {
             title = getString(R.string.conv_notif_idle_title);
             text = getString(R.string.conv_notif_idle_text);
@@ -628,10 +671,17 @@ public class ConversionService extends Service {
         androidx.core.app.NotificationCompat.Builder b =
                 new androidx.core.app.NotificationCompat.Builder(this, CHANNEL);
         b.setSmallIcon(R.drawable.ic_wave);
+        b.setColor(0xFFFF3B30);
+        b.setColorized(true);
+        if (badge != null) b.setSubText(badge);
         b.setContentTitle(title);
         b.setContentText(text);
+        b.setCategory(androidx.core.app.NotificationCompat.CATEGORY_PROGRESS);
+        b.setVisibility(androidx.core.app.NotificationCompat.VISIBILITY_PUBLIC);
         b.setOngoing(true);
         b.setOnlyAlertOnce(true);
+        b.setSilent(true);
+        b.setShowWhen(false);
         if (content != null) b.setContentIntent(content);
         if (pct >= 0) b.setProgress(100, pct, false);
         if (job != null) {
@@ -667,21 +717,30 @@ public class ConversionService extends Service {
                         PendingIntent.FLAG_UPDATE_CURRENT
                                 | PendingIntent.FLAG_IMMUTABLE);
             } catch (Exception ignored) {}
+            boolean isCancel = "cancelled".equals(msg)
+                    || (msg != null && msg.contains("cancelled"));
             androidx.core.app.NotificationCompat.Builder b =
                     new androidx.core.app.NotificationCompat.Builder(this,
                             CHANNEL);
-            b.setSmallIcon(R.drawable.ic_wave);
+            b.setSmallIcon(ok ? R.drawable.ic_check : R.drawable.ic_wave);
+            b.setColor(ok ? 0xFF34C759 : 0xFFFF3B30);
+            if (label != null && !label.isEmpty()) b.setSubText(label);
             b.setContentTitle(ok ? getString(R.string.convert_done_title)
-                    : getString(R.string.convert_failed_title));
+                    : (isCancel ? getString(R.string.conv_cancelled)
+                            : getString(R.string.convert_failed_title)));
             b.setContentText(ok
                     ? getString(R.string.convert_done_msg, title, label)
                     : (msg != null ? msg : ""));
+            b.setVisibility(androidx.core.app.NotificationCompat.VISIBILITY_PUBLIC);
             b.setAutoCancel(true);
             if (content != null) b.setContentIntent(content);
             nm.notify(DONE_NOTIF_ID + (int) (System.currentTimeMillis() % 1000),
                     b.build());
         } catch (Exception ignored) {}
-        handler.post(this::refreshNotif);
+        // NOTE: Do NOT call handler.post(this::refreshNotif) here!
+        // Posting refreshNotif after the final job finishes races with
+        // stopForeground(true) and leaves a permanent "Conversion ready"
+        // notification stuck in the notification shade.
     }
 
     private void broadcast(boolean ok, ConversionJob job, String label,

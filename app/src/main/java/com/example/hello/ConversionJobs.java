@@ -406,6 +406,46 @@ public final class ConversionJobs {
         return job != null && cancel(job.jobId, deleteRaw);
     }
 
+    /**
+     * Resolves or cancels the source of an Edit -> Replace save BEFORE the
+     * edited take is converted or adopted.
+     *
+     * <ul>
+     *   <li>If {@code replaceTakeId < 0} and the original conversion job is
+     *       still queued or running, cancels it immediately (marking it
+     *       {@code superseded} and deleting its raw + part + sidecar) so the
+     *       worker never wastes time finishing the obsolete original file,
+     *       and returns {@code -1} because no finished library row exists to
+     *       replace.</li>
+     *   <li>If {@code replaceTakeId < 0} and the original conversion job
+     *       already finished while the user was editing, returns the positive
+     *       {@code Take.id} of that finished take so the replacement deletes
+     *       it.</li>
+     * </ul>
+     */
+    public static long cancelForReplace(Context ctx, long replaceTakeId) {
+        if (replaceTakeId >= 0) return replaceTakeId;
+        String jobIdToCancel = null;
+        Long finishedId;
+        synchronized (ConversionJobs.class) {
+            ConversionJob srcJob = forTakeId(replaceTakeId);
+            String srcRaw = srcJob != null ? srcJob.rawPath
+                    : NEG_TO_RAW.get(replaceTakeId);
+            if (srcJob != null) {
+                srcJob.superseded = true;
+                srcJob.cancelled = true;
+                jobIdToCancel = srcJob.jobId;
+                cancel(srcJob.jobId, true);
+            }
+            finishedId = (srcRaw != null) ? COMPLETED.get(srcRaw) : null;
+        }
+        if (jobIdToCancel != null && ctx != null) {
+            ConversionService.cancelJob(ctx, jobIdToCancel);
+            ConversionService.onRecordingStateChanged();
+        }
+        return finishedId != null ? finishedId : -1L;
+    }
+
     static synchronized void updateProgress(ConversionJob job, int pct,
                                             long framesDone) {
         job.progress = pct;
@@ -551,6 +591,12 @@ public final class ConversionJobs {
         File raw = e.finalizeRaw();
         if (raw == null || !raw.exists()) {
             throw new IllegalStateException("empty");
+        }
+        // If replacing a take that is still converting (replaceTakeId < 0),
+        // cancel the original conversion job immediately so we never convert
+        // the original file first and then convert the edited file second.
+        if (replaceTakeId < 0) {
+            replaceTakeId = cancelForReplace(ctx, replaceTakeId);
         }
         String title = e.takeName != null ? e.takeName : "";
         long dur = Math.max(e.durationMs(), 1000);

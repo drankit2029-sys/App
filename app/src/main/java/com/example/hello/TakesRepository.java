@@ -216,13 +216,7 @@ public final class TakesRepository {
                                                      String format) {
         long targetId = originalId;
         if (targetId < 0) {
-            ConversionJob srcJob = ConversionJobs.forTakeId(targetId);
-            String srcRaw = srcJob != null ? srcJob.rawPath
-                    : ConversionJobs.rawForTakeId(targetId);
-            ConversionJobs.cancelByTakeId(targetId, true);
-            Long finished = srcRaw != null
-                    ? ConversionJobs.completedTakeIdForRaw(srcRaw) : null;
-            if (finished != null) targetId = finished;
+            targetId = ConversionJobs.cancelForReplace(app, targetId);
         }
         if (targetId >= 0) {
             Set<Long> ids = new HashSet<>();

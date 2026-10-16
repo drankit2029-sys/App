@@ -117,6 +117,31 @@ public class WaveformZoomTest {
         assertTrue("count=" + wv.historyCount(),
                 wv.historyCount() <= 8192);
         assertTrue(wv.minimumZoom() < 0.5f);
-        assertTrue(wv.minimumZoom() >= 0.02f);
+        // The floor covers all of MAX_HISTORY (75/8192 = 0.92%).
+        assertTrue(wv.minimumZoom() >= 0.005f);
+    }
+
+    @Test
+    public void minimumZoomReachesWholeHistory() {
+        WaveformView wv = laidOut();
+        for (int i = 0; i < 8192; i++) wv.push(0.5f);
+        // 75/8192 = 0.92%: the old 2% floor could only fit ~45% of this.
+        assertTrue("min=" + wv.minimumZoom(),
+                wv.minimumZoom() < 0.02f);
+        assertTrue("min=" + wv.minimumZoom(),
+                wv.minimumZoom() >= 0.005f);
+    }
+
+    @Test
+    public void parkedAtMinimumFollowsHistoryGrowth() {
+        WaveformView wv = laidOut();
+        for (int i = 0; i < 4000; i++) wv.push(0.5f);
+        wv.setZoom(wv.minimumZoom());
+        assertTrue(wv.isFollowingMinZoom());
+        float before = wv.getZoom();
+        for (int i = 0; i < 1000; i++) wv.push(0.5f);
+        assertTrue("zoom did not track the sinking floor",
+                wv.getZoom() < before);
+        assertEquals(wv.minimumZoom(), wv.getZoom(), 0.0001f);
     }
 }
