@@ -1130,9 +1130,33 @@ public class StudioFragment extends Fragment {
 
     private void startOrResumeCapture() {
         if (!isAdded() || saving) return;
+        stopStudioPreview();
         boolean wasPaused = (engine.state == RecordingEngine.State.PAUSED);
         boolean isEditOrRecovery = (editSourceId != -1 || engine.dataBytes > 0);
         try {
+            // If a selection range is active (or the playhead was scrubbed back
+            // into existing audio), arm a click-free punch-in and record an
+            // undo snapshot before overwriting!
+            if (engine.hasSession() && engine.dataBytes > 0 && waveform != null) {
+                long totalFrames = engine.totalFrames();
+                if (waveform.hasSelection()) {
+                    long startF = Math.round(
+                            waveform.selectionStartFraction() * totalFrames);
+                    long endF = Math.round(
+                            waveform.selectionEndFraction() * totalFrames);
+                    if (endF > startF) {
+                        if (undoJournal != null) {
+                            undoJournal.recordSnapshot(engine.rawFile);
+                        }
+                        engine.armPunchRange(startF, endF);
+                        waveform.clearSelection();
+                    }
+                } else if (engine.cursorFrames() < totalFrames - 1200) {
+                    if (undoJournal != null) {
+                        undoJournal.recordSnapshot(engine.rawFile);
+                    }
+                }
+            }
             if (wasPaused) {
                 engine.resumeCapture(requireContext(), preset.audioSource);
             } else if (engine.state != RecordingEngine.State.RECORDING) {
@@ -1144,13 +1168,9 @@ public class StudioFragment extends Fragment {
                 Toast.makeText(requireContext(), R.string.mono_fallback_toast,
                         Toast.LENGTH_LONG).show();
             }
-            // Best-effort incremental encode: converts the take while it is
-            // being recorded so saving is instant. Never affects capture.
             try {
                 engine.beginStreaming(requireContext(), preset, saveFormat);
             } catch (Exception ignored) {}
-            // Fresh capture: rewind the prompter and start its countdown so
-            // the performer is not thrown straight into mid-script.
             if (engine.state == RecordingEngine.State.RECORDING) {
                 if (!wasPaused && !isEditOrRecovery) {
                     teleprompterArmForTake();
@@ -1177,6 +1197,10 @@ public class StudioFragment extends Fragment {
         if (engine.state != RecordingEngine.State.RECORDING) return;
         engine.pauseCapture();
         setTelePaused(true);
+        // Sync cursor to end of take on pause and reload high-density peaks
+        // so even a sub-second take has plenty of buckets for [ ] Select.
+        engine.seekCursorFrame(engine.totalFrames());
+        reloadWaveformCleanly();
         if (fromInterruption) {
             try {
                 Context c = getContext();
@@ -1191,6 +1215,26 @@ public class StudioFragment extends Fragment {
                 paint();
                 activity().syncFabWithEngine();
             }
+        } catch (Exception ignored) {}
+    }
+
+    /** Clears existing peaks and reloads high-resolution buckets from disk. */
+    private void reloadWaveformCleanly() {
+        try {
+            if (waveform == null || !engine.hasSession()) return;
+            File raw = engine.rawFile;
+            if (raw == null || !raw.exists()) return;
+            if (RecordingEngine.payloadBytesOf(raw) <= 0) return;
+            waveform.clear();
+            waveform.loadFromFloatWav(raw, () -> {
+                if (isAdded() && getView() != null) {
+                    long total = Math.max(1L, engine.totalFrames());
+                    waveform.setPlayheadFraction(
+                            Math.min(1f, engine.cursorFrames() / (float) total));
+                    refreshZoomValue();
+                    paintEditorStrip();
+                }
+            });
         } catch (Exception ignored) {}
     }
 
@@ -1462,30 +1506,45 @@ public class StudioFragment extends Fragment {
         @Override
         public void run() {
             if (getView() == null || !isAdded()) return;
-            // Always show the loaded duration once a session exists, so
-            // recovery / edit punch-ins open with the correct timer.
-            long ms = engine.hasSession() ? engine.durationMs() : 0;
             try {
-                timerText.setText(formatTimer(ms));
                 boolean live = engine.state == RecordingEngine.State.RECORDING;
                 if (live != lastWaveLive) {
                     lastWaveLive = live;
                     waveform.setLive(live);
+                    if (!live && engine.hasSession()) {
+                        engine.seekCursorFrame(engine.totalFrames());
+                        reloadWaveformCleanly();
+                    }
                 }
                 float lvl = live ? engine.level : 0f;
-                if (live) waveform.setMicLevel(lvl);
+                if (live) {
+                    long total = Math.max(1L, engine.totalFrames());
+                    long cur = engine.cursorFrames();
+                    boolean appending = (cur >= total - 2048);
+                    waveform.pushOrOverwrite(lvl,
+                            Math.min(1f, cur / (float) total), appending);
+                    timerText.setText(formatTimer(engine.cursorMs()));
+                } else if (studioPreviewPlayer != null) {
+                    long posMs = studioPreviewPlayer.positionMs();
+                    timerText.setText(formatTimer(posMs));
+                    long total = Math.max(1L, engine.totalFrames());
+                    waveform.setPlayheadFraction(
+                            Math.min(1f, studioPreviewPlayer.positionFrames()
+                                    / (float) total));
+                } else if (engine.hasSession()) {
+                    long shownMs = engine.cursorFrames() > 0
+                            ? engine.cursorMs() : engine.durationMs();
+                    timerText.setText(formatTimer(shownMs));
+                } else {
+                    timerText.setText(formatTimer(0));
+                }
                 dbMeter.setLevel(lvl);
-                // The zoom floor sinks as the timeline grows; keep the rail
-                // in sync while recording so its full range stays reachable.
                 if (live && zoomValue != null) {
                     int floor = currentMinZoomBp();
                     if (floor != zoomValue.getMin()) refreshZoomValue();
                 }
-                // Prompter advances at the performer's reading speed while
-                // recording, and stops the moment capture stops.
                 advanceTeleprompter();
             } catch (Exception ignored) {}
-            // Repaint on state/name/preset transitions (FAB morph lives in paint).
             if (engine.state != lastPaintedState
                     || !String.valueOf(displayName()).equals(lastPaintedName)) {
                 paint();
@@ -1571,22 +1630,52 @@ public class StudioFragment extends Fragment {
     private void paintEditorStrip() {
         if (editorStrip == null || !isAdded()) return;
         boolean show = engine.hasSession()
+                && engine.dataBytes > 0
                 && engine.state != RecordingEngine.State.RECORDING;
         editorStrip.setVisibility(show ? View.VISIBLE : View.GONE);
         if (!show) {
             stopStudioPreview();
             return;
         }
-        if (btnDspFx != null) btnDspFx.setText(dspConfig.badgeSummary());
+        boolean hasSel = waveform != null && waveform.hasSelection();
+        if (btnSelectRange != null) {
+            btnSelectRange.setText(hasSel ? "[✓] Selected" : "[ ] Select");
+            btnSelectRange.setBackgroundResource(hasSel
+                    ? R.drawable.bg_chip_selected : R.drawable.bg_chip);
+            btnSelectRange.setTextColor(hasSel ? 0xFFFFFFFF : 0xFF9AA3AF);
+            btnSelectRange.setAlpha(1f);
+        }
+        if (btnTrimCrop != null) {
+            btnTrimCrop.setAlpha(hasSel ? 1f : 0.65f);
+        }
+        if (btnCutDelete != null) {
+            btnCutDelete.setAlpha(hasSel ? 1f : 0.65f);
+        }
+        if (btnDspFx != null) {
+            boolean fxOn = dspConfig != null && dspConfig.isActive();
+            btnDspFx.setText(dspConfig != null ? dspConfig.badgeSummary() : "FX Off");
+            btnDspFx.setBackgroundResource(fxOn
+                    ? R.drawable.bg_chip_selected : R.drawable.bg_chip);
+            btnDspFx.setTextColor(fxOn ? 0xFFFFFFFF : 0xFF9AA3AF);
+        }
         if (btnEditUndo != null) {
             boolean canUndo = undoJournal != null && undoJournal.canUndo();
-            btnEditUndo.setAlpha(canUndo ? 1f : 0.45f);
+            btnEditUndo.setAlpha(canUndo ? 1f : 0.40f);
         }
         if (btnPreviewPlay != null && studioPreviewPlayer == null) {
-            btnPreviewPlay.setText("▶ Preview");
+            btnPreviewPlay.setText(hasSel ? "▶ Sel" : "▶ Preview");
         }
-        if (btnSelectRange != null && waveform != null) {
-            btnSelectRange.setAlpha(waveform.hasSelection() ? 1f : 0.6f);
+        if (hintText != null) {
+            if (hasSel) {
+                long durMs = engine.durationMs();
+                long sMs = Math.round(waveform.selectionStartFraction() * durMs);
+                long eMs = Math.round(waveform.selectionEndFraction() * durMs);
+                hintText.setText(formatTimer(sMs) + " – " + formatTimer(eMs)
+                        + " • Drag [ ] handles");
+            } else if (engine.cursorFrames() < engine.totalFrames() - 1200) {
+                hintText.setText("Playhead " + formatTimer(engine.cursorMs())
+                        + " • Tap mic to punch in");
+            }
         }
     }
 
@@ -1597,7 +1686,13 @@ public class StudioFragment extends Fragment {
         File raw = engine.rawFile;
         if (raw == null || !raw.exists() || waveform == null) return;
         if (!waveform.hasSelection()) {
-            Toast.makeText(requireContext(), "Select a range first",
+            // Auto-activate selection on the waveform so the user immediately
+            // sees the red [ ] handles instead of a dead error toast!
+            waveform.toggleSelectionAtPlayhead();
+            paintEditorStrip();
+            Toast.makeText(requireContext(),
+                    "Drag the red [ ] handles on the waveform, then tap "
+                            + (isTrim ? "Trim" : "Cut") + " again",
                     Toast.LENGTH_SHORT).show();
             return;
         }
@@ -1613,11 +1708,19 @@ public class StudioFragment extends Fragment {
             } else {
                 EditEngine.deleteSelection(raw, start, end, undoJournal);
             }
+            // Invalidate any incremental StreamingEncoder so save encodes the
+            // newly edited audio instead of adopting a stale pre-edit .part!
+            engine.abortStreaming();
             engine.dataBytes = RecordingEngine.payloadBytesOf(raw);
-            engine.seekCursorFrame(engine.cursorFrames());
+            long newTotal = engine.totalFrames();
+            long nextCursor = isTrim ? newTotal : Math.min(start, newTotal);
+            engine.seekCursorFrame(nextCursor);
             waveform.clearSelection();
-            waveform.loadFromFloatWav(raw);
+            reloadWaveformCleanly();
             timerText.setText(formatTimer(engine.cursorMs()));
+        } catch (IllegalArgumentException iae) {
+            Toast.makeText(requireContext(), iae.getMessage(),
+                    Toast.LENGTH_SHORT).show();
         } catch (Exception e) {
             Toast.makeText(requireContext(), "Edit failed",
                     Toast.LENGTH_SHORT).show();
@@ -1632,14 +1735,15 @@ public class StudioFragment extends Fragment {
         if (raw == null || undoJournal == null || !undoJournal.canUndo()) return;
         try {
             if (undoJournal.undo(raw)) {
+                engine.abortStreaming();
                 engine.dataBytes = RecordingEngine.payloadBytesOf(raw);
-                engine.seekCursorFrame(engine.cursorFrames());
+                engine.seekCursorFrame(engine.totalFrames());
                 if (waveform != null) {
                     waveform.clearSelection();
-                    waveform.loadFromFloatWav(raw);
+                    reloadWaveformCleanly();
                 }
                 if (timerText != null) {
-                    timerText.setText(formatTimer(engine.cursorMs()));
+                    timerText.setText(formatTimer(engine.durationMs()));
                 }
             }
         } catch (Exception ignored) {}

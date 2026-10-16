@@ -77,6 +77,7 @@ public final class RecordingEngine {
     private long lastHeaderPatch;
     private long cursorFrame = 0;
     private long punchOutFrame = -1;
+    private boolean cursorExplicit = false;
     private float[] punchInFadeBuf;
     private float[] punchOutFadeBuf;
 
@@ -159,6 +160,7 @@ public final class RecordingEngine {
             long total = totalFrames();
             cursorFrame = Math.max(0L, Math.min(total, frame));
             punchOutFrame = -1L;
+            cursorExplicit = true;
         }
     }
 
@@ -173,6 +175,14 @@ public final class RecordingEngine {
             cursorFrame = Math.max(0L, Math.min(total, startFrame));
             punchOutFrame = (endFrame > cursorFrame)
                     ? Math.min(total, endFrame) : -1L;
+            cursorExplicit = true;
+        }
+    }
+
+    /** Aborts any running incremental encoder after an in-place edit/undo/DSP commit. */
+    public void abortStreaming() {
+        synchronized (lock) {
+            endStreamingAbortLocked();
         }
     }
 
@@ -203,6 +213,11 @@ public final class RecordingEngine {
             }
             rawFile = candidate;
             dataBytes = 0;
+            cursorFrame = 0;
+            punchOutFrame = -1;
+            cursorExplicit = false;
+            punchInFadeBuf = null;
+            punchOutFadeBuf = null;
             fellBackToMono = false;
             state = State.IDLE;
             level = 0f;
@@ -228,6 +243,11 @@ public final class RecordingEngine {
             takeName = sanitize(name);
             channels = Math.max(1, ch);
             dataBytes = Math.max(0, bytes);
+            cursorFrame = 0;
+            punchOutFrame = -1;
+            cursorExplicit = false;
+            punchInFadeBuf = null;
+            punchOutFadeBuf = null;
             if (!pendingFor(raw).exists()) writePending(raw, takeName, channels);
             state = State.IDLE;
             level = 0f;
@@ -270,6 +290,11 @@ public final class RecordingEngine {
             rawFile = null;
             channels = 2;
             dataBytes = 0;
+            cursorFrame = 0;
+            punchOutFrame = -1;
+            cursorExplicit = false;
+            punchInFadeBuf = null;
+            punchOutFadeBuf = null;
             level = 0f;
         }
         // Let a parked conversion worker yield/resume immediately.
@@ -373,10 +398,10 @@ public final class RecordingEngine {
                 dataBytes = payloadBytesOf(rawFile);
                 int ch = Math.max(1, channels);
                 long totalFrames = dataBytes / (ch * 4L);
-                if (cursorFrame <= 0 || cursorFrame > totalFrames) {
-                    // Default to appending at the end unless explicitly scrubbed back
-                    if (cursorFrame > totalFrames) cursorFrame = totalFrames;
+                if (!cursorExplicit || cursorFrame > totalFrames) {
+                    cursorFrame = totalFrames;
                 }
+                cursorExplicit = false;
                 punchInFadeBuf = null;
                 punchOutFadeBuf = null;
                 if (cursorFrame < totalFrames) {
@@ -484,10 +509,10 @@ public final class RecordingEngine {
                 dataBytes = payloadBytesOf(rawFile);
                 int ch = Math.max(1, channels);
                 long totalFrames = dataBytes / (ch * 4L);
-                if (cursorFrame <= 0 || cursorFrame > totalFrames) {
-                    // Default to appending at the end unless explicitly scrubbed back
-                    if (cursorFrame > totalFrames) cursorFrame = totalFrames;
+                if (!cursorExplicit || cursorFrame > totalFrames) {
+                    cursorFrame = totalFrames;
                 }
+                cursorExplicit = false;
                 punchInFadeBuf = null;
                 punchOutFadeBuf = null;
                 if (cursorFrame < totalFrames) {
@@ -641,6 +666,11 @@ public final class RecordingEngine {
             takeName = null;
             rawFile = null;
             dataBytes = 0;
+            cursorFrame = 0;
+            punchOutFrame = -1;
+            cursorExplicit = false;
+            punchInFadeBuf = null;
+            punchOutFadeBuf = null;
             level = 0f;
         }
         boolean ok = true;

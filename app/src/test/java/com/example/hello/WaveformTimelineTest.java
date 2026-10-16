@@ -5,6 +5,9 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import android.app.Activity;
+import android.os.SystemClock;
+import android.view.MotionEvent;
+import android.view.View;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -16,8 +19,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Roadmap Phase 4 timeline API: playhead fractions, selection brackets and
- * punch-in bucket overwrites that the editor strip drives.
+ * Roadmap Phase 4 timeline API & touch gestures: playhead fractions,
+ * selection brackets, handle dragging, range sweeping, and punch-in bucket
+ * overwrites.
  */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 34)
@@ -29,8 +33,17 @@ public class WaveformTimelineTest {
 
     private static WaveformView loaded(Activity a, int peaks) {
         WaveformView wv = new WaveformView(a);
+        wv.measure(
+                View.MeasureSpec.makeMeasureSpec(400, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(100, View.MeasureSpec.EXACTLY));
+        wv.layout(0, 0, 400, 100);
         for (int i = 0; i < peaks; i++) wv.push(0.5f);
         return wv;
+    }
+
+    private static MotionEvent ev(int action, float x, float y) {
+        long now = SystemClock.uptimeMillis();
+        return MotionEvent.obtain(now, now, action, x, y, 0);
     }
 
     @Test
@@ -95,5 +108,48 @@ public class WaveformTimelineTest {
         assertEquals(0.51f, wv.playheadFraction(), 0.02f);
         wv.pushOrOverwrite(0.7f, 0f, true);
         assertEquals(101, wv.historyCount());
+    }
+
+    @Test
+    public void horizontalDragScrubsPlayheadWhenSelectionOff() {
+        WaveformView wv = loaded(activity(), 200);
+        final float[] lastFrac = {-1f};
+        wv.setTimelineListener(new WaveformView.TimelineListener() {
+            @Override
+            public void onPlayheadScrubbed(int bucketIndex, float fraction) {
+                lastFrac[0] = fraction;
+            }
+
+            @Override
+            public void onSelectionChanged(boolean active, float s, float e) {
+            }
+        });
+        wv.onTouchEvent(ev(MotionEvent.ACTION_DOWN, 350f, 50f));
+        for (float x = 330f; x >= 100f; x -= 20f) {
+            wv.onTouchEvent(ev(MotionEvent.ACTION_MOVE, x, 50f));
+        }
+        wv.onTouchEvent(ev(MotionEvent.ACTION_UP, 100f, 50f));
+        assertTrue("scrub did not fire: " + lastFrac[0],
+                lastFrac[0] >= 0.15f && lastFrac[0] <= 0.35f);
+    }
+
+    @Test
+    public void horizontalDragSweepsSelectionWhenSelectionActive() {
+        WaveformView wv = loaded(activity(), 200);
+        wv.toggleSelectionAtPlayhead();
+        assertTrue(wv.hasSelection());
+        // Touch away from handles and drag horizontally from x=80 to x=280
+        wv.onTouchEvent(ev(MotionEvent.ACTION_DOWN, 80f, 50f));
+        for (float x = 100f; x <= 280f; x += 20f) {
+            wv.onTouchEvent(ev(MotionEvent.ACTION_MOVE, x, 50f));
+        }
+        wv.onTouchEvent(ev(MotionEvent.ACTION_UP, 280f, 50f));
+        assertTrue(wv.hasSelection());
+        assertTrue("start=" + wv.selectionStartFraction(),
+                wv.selectionStartFraction() > 0.10f
+                        && wv.selectionStartFraction() < 0.30f);
+        assertTrue("end=" + wv.selectionEndFraction(),
+                wv.selectionEndFraction() > 0.60f
+                        && wv.selectionEndFraction() < 0.80f);
     }
 }

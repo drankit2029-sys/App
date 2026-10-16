@@ -181,8 +181,21 @@ public final class EditEngine {
                 Dsp.crossfadeFrames(pre, 0, post, 0, crossfaded, 0, fade, ch);
             }
 
-            // Write crossfaded bridge at (startFrame - fade)
-            long writePos = info.dataStart + (startFrame - fade) * frameBytes;
+            long prefixFrames = Math.max(0, startFrame - fade);
+            long prefixBytes = prefixFrames * frameBytes;
+            if (info.dataStart > 44L && prefixBytes > 0) {
+                byte[] pbuf = new byte[CHUNK_BYTES];
+                long pmoved = 0;
+                while (pmoved < prefixBytes) {
+                    int want = (int) Math.min(pbuf.length, prefixBytes - pmoved);
+                    raf.seek(info.dataStart + pmoved);
+                    raf.readFully(pbuf, 0, want);
+                    raf.seek(44L + pmoved);
+                    raf.write(pbuf, 0, want);
+                    pmoved += want;
+                }
+            }
+            long writePos = 44L + prefixBytes;
             if (crossfaded != null) {
                 raf.seek(writePos);
                 Dsp.writeFloatsLE(raf, crossfaded, 0, crossfaded.length);
