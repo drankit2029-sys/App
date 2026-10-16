@@ -59,16 +59,29 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
     /** A4-12: focus holder for library playback; released in stopPlayback(). */
     private android.media.AudioManager playAudioManager;
     private android.media.AudioFocusRequest playFocusRequest;
+    private android.media.AudioManager.OnAudioFocusChangeListener
+            playFocusListener;
 
-    private final android.media.AudioManager.OnAudioFocusChangeListener
+    /**
+     * Lazily created (so its body can post to {@code handler}, which is
+     * declared later in this class) listener that pauses library playback
+     * when a call or another app takes audio focus.
+     */
+    private android.media.AudioManager.OnAudioFocusChangeListener
+            playFocusListener() {
+        if (playFocusListener == null) {
             playFocusListener = focus -> {
-        if (focus == android.media.AudioManager.AUDIOFOCUS_LOSS
-                || focus == android.media.AudioManager.AUDIOFOCUS_LOSS_TRANSIENT
-                || focus == android.media.AudioManager
-                        .AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK) {
-            handler.post(this::pausePlayback);
+                if (focus == android.media.AudioManager.AUDIOFOCUS_LOSS
+                        || focus == android.media.AudioManager
+                                .AUDIOFOCUS_LOSS_TRANSIENT
+                        || focus == android.media.AudioManager
+                                .AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK) {
+                    handler.post(this::pausePlayback);
+                }
+            };
         }
-    };
+        return playFocusListener;
+    }
 
     private static final int PLAY_FOCUS =
             android.media.AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK;
@@ -102,14 +115,14 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                                 .setContentType(android.media.AudioAttributes
                                         .CONTENT_TYPE_SPEECH)
                                 .build())
-                        .setOnAudioFocusChangeListener(playFocusListener,
+                        .setOnAudioFocusChangeListener(playFocusListener(),
                                 handler)
                         .build();
                 return playAudioManager.requestAudioFocus(playFocusRequest)
                         == android.media.AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
             }
             //noinspection deprecation
-            return playAudioManager.requestAudioFocus(playFocusListener,
+            return playAudioManager.requestAudioFocus(playFocusListener(),
                     android.media.AudioManager.STREAM_MUSIC,
                     android.media.AudioManager.AUDIOFOCUS_GAIN)
                     == android.media.AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
@@ -129,7 +142,7 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                 playFocusRequest = null;
             } else {
                 //noinspection deprecation
-                playAudioManager.abandonAudioFocus(playFocusListener);
+                playAudioManager.abandonAudioFocus(playFocusListener());
             }
         } catch (Exception ignored) {}
     }
