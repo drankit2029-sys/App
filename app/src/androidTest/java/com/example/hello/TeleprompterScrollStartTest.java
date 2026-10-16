@@ -147,9 +147,17 @@ public class TeleprompterScrollStartTest {
         java.lang.reflect.Method arm = StudioFragment.class
                 .getDeclaredMethod("teleprompterArmForTake");
         arm.setAccessible(true);
+        java.lang.reflect.Method park = StudioFragment.class
+                .getDeclaredMethod("setTelePaused", boolean.class);
+        park.setAccessible(true);
         a.runOnUiThread(() -> {
             try {
+                tele.scrollBy(10000f);
                 arm.invoke(frag);
+                // Arming unpauses so the take scrolls; the live tick would
+                // advance the script before the assertion below reads it, so
+                // freeze atomically on the same UI-thread pass.
+                park.invoke(frag, true);
             } catch (Exception ignored) {
             }
         });
