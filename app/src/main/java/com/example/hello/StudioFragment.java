@@ -59,6 +59,17 @@ public class StudioFragment extends Fragment {
     private TextView formatBadge;
     private View statusDot;
     private WaveformView waveform;
+    private View editorStrip;
+    private TextView btnPreviewPlay;
+    private TextView btnSelectRange;
+    private TextView btnTrimCrop;
+    private TextView btnCutDelete;
+    private TextView btnDspFx;
+    private TextView btnEditUndo;
+    private RawFloatPlayer studioPreviewPlayer;
+    private DspChain.Config dspConfig = new DspChain.Config();
+    private DspChain livePreviewDsp;
+    private EditEngine.UndoJournal undoJournal;
     private DbMeterView dbMeter;
     private View settingsRow;
     private TextView settingsName;
@@ -204,6 +215,61 @@ public class StudioFragment extends Fragment {
         initTeleprompter();
         initTeleValueControls();
 
+        editorStrip = v.findViewById(R.id.editorStrip);
+        btnPreviewPlay = v.findViewById(R.id.btnPreviewPlay);
+        btnSelectRange = v.findViewById(R.id.btnSelectRange);
+        btnTrimCrop = v.findViewById(R.id.btnTrimCrop);
+        btnCutDelete = v.findViewById(R.id.btnCutDelete);
+        btnDspFx = v.findViewById(R.id.btnDspFx);
+        btnEditUndo = v.findViewById(R.id.btnEditUndo);
+
+        dspConfig = DspChain.Config.load(requireContext());
+        undoJournal = new EditEngine.UndoJournal(RecordingEngine.takesDir(requireContext()));
+
+        if (btnPreviewPlay != null) {
+            PressAnim.applySoft(btnPreviewPlay, 0.95f);
+            btnPreviewPlay.setOnClickListener(view -> toggleStudioPreview());
+        }
+        if (btnSelectRange != null) {
+            PressAnim.applySoft(btnSelectRange, 0.95f);
+            btnSelectRange.setOnClickListener(view -> {
+                waveform.toggleSelectionAtPlayhead();
+                paintEditorStrip();
+            });
+        }
+        if (btnTrimCrop != null) {
+            PressAnim.applySoft(btnTrimCrop, 0.95f);
+            btnTrimCrop.setOnClickListener(view -> runEditOperation(true));
+        }
+        if (btnCutDelete != null) {
+            PressAnim.applySoft(btnCutDelete, 0.95f);
+            btnCutDelete.setOnClickListener(view -> runEditOperation(false));
+        }
+        if (btnDspFx != null) {
+            PressAnim.applySoft(btnDspFx, 0.95f);
+            btnDspFx.setOnClickListener(view -> showDspFxDialog());
+        }
+        if (btnEditUndo != null) {
+            PressAnim.applySoft(btnEditUndo, 0.95f);
+            btnEditUndo.setOnClickListener(view -> performStudioUndo());
+        }
+
+        waveform.setTimelineListener(new WaveformView.TimelineListener() {
+            @Override
+            public void onPlayheadScrubbed(int bucketIndex, float fraction) {
+                stopStudioPreview();
+                long totalFrames = engine.totalFrames();
+                long targetFrame = Math.round(fraction * totalFrames);
+                engine.seekCursorFrame(targetFrame);
+                timerText.setText(formatTimer(engine.cursorMs()));
+            }
+
+            @Override
+            public void onSelectionChanged(boolean active, float startFrac, float endFrac) {
+                paintEditorStrip();
+            }
+        });
+
         // Recovery (crash prompt / notification tap) or an edit punch-in:
         // a session is already attached — never show the name modal.
         Bundle args = getArguments();
@@ -329,6 +395,7 @@ public class StudioFragment extends Fragment {
     public void onDestroyView() {
         handler.removeCallbacksAndMessages(null);
         stopDotPulse();
+        stopStudioPreview();
         persistTeleScript();
         // Never abort here: the take keeps recording in the background via
         // the foreground service when the user leaves the studio.
@@ -1448,6 +1515,270 @@ public class StudioFragment extends Fragment {
         } catch (Exception ignored) {}
     }
 
+    private void toggleStudioPreview() {
+        if (!isAdded()) return;
+        if (studioPreviewPlayer != null) {
+            stopStudioPreview();
+            paintEditorStrip();
+            return;
+        }
+        if (engine.state == RecordingEngine.State.RECORDING) return;
+        File raw = engine.rawFile;
+        if (raw == null || !raw.exists() || waveform == null) return;
+        try {
+            FormatConverter.WavInfo info = FormatConverter.readFloatWav(raw);
+            if (info.channels < 1 || info.channels > 2) return;
+            long totalFrames = info.dataBytes / 4 / info.channels;
+            if (totalFrames <= 0) return;
+            livePreviewDsp = new DspChain(info.channels, dspConfig);
+            final RawFloatPlayer player =
+                    new RawFloatPlayer(raw, completed -> handler.post(() -> {
+                        if (studioPreviewPlayer == player) {
+                            stopStudioPreview();
+                            paintEditorStrip();
+                        }
+                    }));
+            player.setDspChain(livePreviewDsp);
+            studioPreviewPlayer = player;
+            if (waveform.hasSelection()) {
+                long start = Math.round(
+                        waveform.selectionStartFraction() * totalFrames);
+                long end = Math.round(
+                        waveform.selectionEndFraction() * totalFrames);
+                player.playRange(start, end);
+            } else {
+                player.play();
+            }
+            if (btnPreviewPlay != null) btnPreviewPlay.setText("■ Stop");
+        } catch (Exception e) {
+            stopStudioPreview();
+        }
+        paintEditorStrip();
+    }
+
+    private void stopStudioPreview() {
+        RawFloatPlayer player = studioPreviewPlayer;
+        studioPreviewPlayer = null;
+        if (player != null) {
+            try {
+                player.stop();
+            } catch (Exception ignored) {}
+        }
+        if (btnPreviewPlay != null) btnPreviewPlay.setText("▶ Preview");
+    }
+
+    private void paintEditorStrip() {
+        if (editorStrip == null || !isAdded()) return;
+        boolean show = engine.hasSession()
+                && engine.state != RecordingEngine.State.RECORDING;
+        editorStrip.setVisibility(show ? View.VISIBLE : View.GONE);
+        if (!show) {
+            stopStudioPreview();
+            return;
+        }
+        if (btnDspFx != null) btnDspFx.setText(dspConfig.badgeSummary());
+        if (btnEditUndo != null) {
+            boolean canUndo = undoJournal != null && undoJournal.canUndo();
+            btnEditUndo.setAlpha(canUndo ? 1f : 0.45f);
+        }
+        if (btnPreviewPlay != null && studioPreviewPlayer == null) {
+            btnPreviewPlay.setText("▶ Preview");
+        }
+        if (btnSelectRange != null && waveform != null) {
+            btnSelectRange.setAlpha(waveform.hasSelection() ? 1f : 0.6f);
+        }
+    }
+
+    private void runEditOperation(boolean isTrim) {
+        if (!isAdded()) return;
+        stopStudioPreview();
+        if (engine.state == RecordingEngine.State.RECORDING) return;
+        File raw = engine.rawFile;
+        if (raw == null || !raw.exists() || waveform == null) return;
+        if (!waveform.hasSelection()) {
+            Toast.makeText(requireContext(), "Select a range first",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        try {
+            FormatConverter.WavInfo info = FormatConverter.readFloatWav(raw);
+            long totalFrames = info.dataBytes / 4 / Math.max(1, info.channels);
+            long start = Math.round(
+                    waveform.selectionStartFraction() * totalFrames);
+            long end = Math.round(
+                    waveform.selectionEndFraction() * totalFrames);
+            if (isTrim) {
+                EditEngine.cropToSelection(raw, start, end, undoJournal);
+            } else {
+                EditEngine.deleteSelection(raw, start, end, undoJournal);
+            }
+            engine.dataBytes = RecordingEngine.payloadBytesOf(raw);
+            engine.seekCursorFrame(engine.cursorFrames());
+            waveform.clearSelection();
+            waveform.loadFromFloatWav(raw);
+            timerText.setText(formatTimer(engine.cursorMs()));
+        } catch (Exception e) {
+            Toast.makeText(requireContext(), "Edit failed",
+                    Toast.LENGTH_SHORT).show();
+        }
+        paint();
+    }
+
+    private void performStudioUndo() {
+        if (!isAdded()) return;
+        stopStudioPreview();
+        File raw = engine.rawFile;
+        if (raw == null || undoJournal == null || !undoJournal.canUndo()) return;
+        try {
+            if (undoJournal.undo(raw)) {
+                engine.dataBytes = RecordingEngine.payloadBytesOf(raw);
+                engine.seekCursorFrame(engine.cursorFrames());
+                if (waveform != null) {
+                    waveform.clearSelection();
+                    waveform.loadFromFloatWav(raw);
+                }
+                if (timerText != null) {
+                    timerText.setText(formatTimer(engine.cursorMs()));
+                }
+            }
+        } catch (Exception ignored) {}
+        paint();
+    }
+
+    private void showDspFxDialog() {
+        if (!isAdded()) return;
+        Context ctx = requireContext();
+        android.app.Dialog d = new android.app.Dialog(ctx, R.style.TakeOneCenterDialog);
+        d.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE);
+
+        int pad = Math.round(20 * getResources().getDisplayMetrics().density);
+        android.widget.LinearLayout root = new android.widget.LinearLayout(ctx);
+        root.setOrientation(android.widget.LinearLayout.VERTICAL);
+        root.setBackgroundResource(R.drawable.bg_modal);
+        root.setPadding(pad, pad, pad, pad);
+
+        TextView title = new TextView(ctx);
+        title.setText("Mastering & Voice FX");
+        title.setTextSize(18);
+        title.setTextColor(0xFFF2F4F7);
+        title.setGravity(android.view.Gravity.CENTER);
+        title.setTypeface(android.graphics.Typeface.create(
+                "sans-serif-medium", android.graphics.Typeface.NORMAL));
+        root.addView(title);
+
+        // 1-Tap Preset Row: Off | Voice Polish | Custom
+        android.widget.LinearLayout presetRow = new android.widget.LinearLayout(ctx);
+        presetRow.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+        int mTop = Math.round(12 * getResources().getDisplayMetrics().density);
+        android.widget.LinearLayout.LayoutParams prLp =
+                new android.widget.LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT);
+        prLp.topMargin = mTop;
+        root.addView(presetRow, prLp);
+
+        TeleValue noiseCtl = new TeleValue(ctx);
+        noiseCtl.setCaption("Noise Suppression");
+        noiseCtl.configure(0, 100, 5, dspConfig.noisePct, "%");
+
+        TeleValue deEssCtl = new TeleValue(ctx);
+        deEssCtl.setCaption("De-Esser (4.5–9.5 kHz)");
+        deEssCtl.configure(0, 100, 5, dspConfig.deEssPct, "%");
+
+        TeleValue compCtl = new TeleValue(ctx);
+        compCtl.setCaption("Compressor & Limiter");
+        compCtl.configure(0, 100, 5, dspConfig.compPct, "%");
+
+        TextView hpfBtn = new TextView(ctx);
+        hpfBtn.setText(dspConfig.hpfEnabled
+                ? "80 Hz Rumble Cut: ON" : "80 Hz Rumble Cut: OFF");
+        hpfBtn.setGravity(android.view.Gravity.CENTER);
+        hpfBtn.setTextSize(12);
+        hpfBtn.setTextColor(0xFFF2F4F7);
+        hpfBtn.setBackgroundResource(dspConfig.hpfEnabled
+                ? R.drawable.bg_chip_selected : R.drawable.bg_chip);
+        int hPad = Math.round(10 * getResources().getDisplayMetrics().density);
+        hpfBtn.setPadding(hPad, hPad, hPad, hPad);
+
+        Runnable syncLiveDsp = () -> {
+            dspConfig.noisePct = noiseCtl.getValue();
+            dspConfig.deEssPct = deEssCtl.getValue();
+            dspConfig.compPct = compCtl.getValue();
+            dspConfig.save(ctx);
+            if (livePreviewDsp != null) livePreviewDsp.updateConfig(dspConfig);
+            paintEditorStrip();
+        };
+
+        noiseCtl.setOnValueChanged(v -> syncLiveDsp.run());
+        deEssCtl.setOnValueChanged(v -> syncLiveDsp.run());
+        compCtl.setOnValueChanged(v -> syncLiveDsp.run());
+        hpfBtn.setOnClickListener(v -> {
+            dspConfig.hpfEnabled = !dspConfig.hpfEnabled;
+            hpfBtn.setText(dspConfig.hpfEnabled
+                    ? "80 Hz Rumble Cut: ON" : "80 Hz Rumble Cut: OFF");
+            hpfBtn.setBackgroundResource(dspConfig.hpfEnabled
+                    ? R.drawable.bg_chip_selected : R.drawable.bg_chip);
+            syncLiveDsp.run();
+        });
+
+        TextView btnPolish = new TextView(ctx);
+        btnPolish.setText("Voice Polish");
+        btnPolish.setGravity(android.view.Gravity.CENTER);
+        btnPolish.setTextColor(0xFFFFFFFF);
+        btnPolish.setBackgroundResource(R.drawable.bg_chip_selected);
+        btnPolish.setPadding(hPad, hPad / 2, hPad, hPad / 2);
+        btnPolish.setOnClickListener(v -> {
+            dspConfig = DspChain.Config.voicePolish();
+            noiseCtl.setValue(dspConfig.noisePct, false);
+            deEssCtl.setValue(dspConfig.deEssPct, false);
+            compCtl.setValue(dspConfig.compPct, false);
+            hpfBtn.setText("80 Hz Rumble Cut: ON");
+            hpfBtn.setBackgroundResource(R.drawable.bg_chip_selected);
+            syncLiveDsp.run();
+        });
+
+        TextView btnBypass = new TextView(ctx);
+        btnBypass.setText("Reset Off");
+        btnBypass.setGravity(android.view.Gravity.CENTER);
+        btnBypass.setTextColor(0xFF9AA3AF);
+        btnBypass.setBackgroundResource(R.drawable.bg_chip);
+        btnBypass.setPadding(hPad, hPad / 2, hPad, hPad / 2);
+        btnBypass.setOnClickListener(v -> {
+            dspConfig = new DspChain.Config();
+            noiseCtl.setValue(0, false);
+            deEssCtl.setValue(0, false);
+            compCtl.setValue(0, false);
+            hpfBtn.setText("80 Hz Rumble Cut: OFF");
+            hpfBtn.setBackgroundResource(R.drawable.bg_chip);
+            syncLiveDsp.run();
+        });
+
+        android.widget.LinearLayout.LayoutParams halfLp =
+                new android.widget.LinearLayout.LayoutParams(0,
+                        ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        halfLp.rightMargin = hPad / 2;
+        presetRow.addView(btnPolish, halfLp);
+        presetRow.addView(btnBypass, halfLp);
+
+        root.addView(noiseCtl, prLp);
+        root.addView(deEssCtl, prLp);
+        root.addView(compCtl, prLp);
+        root.addView(hpfBtn, prLp);
+
+        TextView doneBtn = new TextView(ctx);
+        doneBtn.setText(R.string.settings_done);
+        doneBtn.setGravity(android.view.Gravity.CENTER);
+        doneBtn.setTextColor(0xFFFFFFFF);
+        doneBtn.setTextSize(14);
+        doneBtn.setBackgroundResource(R.drawable.bg_btn_primary);
+        doneBtn.setPadding(hPad, hPad, hPad, hPad);
+        doneBtn.setOnClickListener(v -> d.dismiss());
+        root.addView(doneBtn, prLp);
+
+        d.setContentView(root);
+        d.show();
+    }
+
     private void paint() {
         if (getView() == null || !isAdded()) return;
         // A capture paused outside the studio (call, notification, mic
@@ -1511,6 +1842,7 @@ public class StudioFragment extends Fragment {
         statusDot.setBackgroundResource(rec ? R.drawable.dot_live : R.drawable.bg_round_btn);
         if (rec) startDotPulse(); else stopDotPulse();
         statusDot.setAlpha(rec ? 1f : 0.35f);
+        paintEditorStrip();
 
         try {
             activity().syncFabWithEngine();
