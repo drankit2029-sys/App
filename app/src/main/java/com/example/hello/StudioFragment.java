@@ -281,37 +281,25 @@ public class StudioFragment extends Fragment {
             btnCutDelete.setVisibility(View.GONE);
         }
 
-        // 1) "Replace" Button (btnPreviewPlay):
-        //    When scrolled back into the recording, pressing Replace once
-        //    immediately starts replacing audio from the playhead!
+        // 1) "Replace" Mode Toggle Button (btnPreviewPlay):
+        //    Pure toggle: pressing once selects Replace (red pill, main FAB
+        //    morphs to Mic icon), pressing again deselects Replace (normal pill,
+        //    main FAB morphs back to Play icon). NEVER calls startOrResumeCapture()
+        //    directly, so pressing Replace NEVER hides or flickers editorStrip!
         if (btnPreviewPlay != null) {
             PressAnim.applySoft(btnPreviewPlay, 0.95f);
             btnPreviewPlay.setOnClickListener(view -> {
                 if (!ensurePausedForEditing()) return;
                 stopStudioPreview();
-                long totalFrames = engine.totalFrames();
-                long curFrames = engine.cursorFrames();
-                boolean atEnd = (curFrames >= totalFrames - 1200);
-                if (!atEnd) {
-                    replaceModeArmed = true;
-                    paintEditorStrip();
-                    paintFxPanelControls();
-                    startOrResumeCapture();
-                    return;
-                }
                 replaceModeArmed = !replaceModeArmed;
                 if (replaceModeArmed) {
-                    engine.warmUpMic(requireContext(), preset.audioSource, engine.channels);
-                    Toast.makeText(requireContext(),
-                            "Scroll waveform to where you want to replace, then tap Replace or Resume",
-                            Toast.LENGTH_SHORT).show();
+                    RawFloatPlayer.releaseWarmSpeaker();
                 } else {
-                    Toast.makeText(requireContext(),
-                            "Normal mode",
-                            Toast.LENGTH_SHORT).show();
+                    RawFloatPlayer.warmUpSpeaker(engine.channels);
                 }
                 paintEditorStrip();
                 paintFxPanelControls();
+                syncStudioFabIcon();
             });
         }
 
@@ -1218,26 +1206,52 @@ public class StudioFragment extends Fragment {
         boolean atEnd = (curFrames >= totalFrames - 1200);
         boolean hasSel = waveform != null && waveform.hasSelection();
 
-        // If the playhead is at the end of the recording (and no selection is
-        // active), always switch to normal record mode to append more audio!
+        // 1) If Replace mode is selected (armed): record replacement audio in-place!
+        //    If the user armed Replace while parked at the very end of the take
+        //    (or if a selection is active), start from selection start (if selected)
+        //    or from the current playhead!
+        if (replaceModeArmed) {
+            if (hasSel) {
+                long selStart = Math.round(
+                        waveform.selectionStartFraction() * totalFrames);
+                long selEnd = Math.round(
+                        waveform.selectionEndFraction() * totalFrames);
+                if (selEnd > selStart) {
+                    engine.armPunchRange(selStart, selEnd);
+                } else {
+                    engine.seekCursorFrame(selStart);
+                }
+            } else if (atEnd && totalFrames > 0) {
+                // User armed Replace while at the very end without scrolling back:
+                // step back 2 seconds (or to start of take) so Replace actually
+                // overwrites the last phrase instead of appending at the end!
+                long backFrame = Math.max(0L,
+                        totalFrames - RecordingEngine.SAMPLE_RATE * 2L);
+                engine.seekCursorFrame(backFrame);
+                if (waveform != null) {
+                    waveform.setPlayheadFraction(backFrame / (float) totalFrames);
+                }
+            } else {
+                // Lock cursorExplicit = true at the exact current playhead!
+                engine.seekCursorFrame(curFrames);
+            }
+            startOrResumeCapture();
+            return;
+        }
+
+        // 2) Replace is NOT selected: if parked at the end with no selection,
+        //    append more audio to the recording!
         if (atEnd && !hasSel) {
             userScrolledWhilePaused = false;
-            replaceModeArmed = false;
             engine.seekCursorFrame(totalFrames);
             startOrResumeCapture();
             return;
         }
 
-        // When scrolled back into the take (or when a selection is active) and
-        // Replace is NOT armed, pressing Resume previews from the playhead!
-        if (!replaceModeArmed) {
-            toggleStudioPreview();
-            activity().syncFabWithEngine();
-            return;
-        }
-        // Replace mode is armed and playhead is mid-take: overwrite in-place
-        // from cursorFrames()!
-        startOrResumeCapture();
+        // 3) Replace is NOT selected and user is scrolled back (or has a selection):
+        //    play preview from the playhead!
+        toggleStudioPreview();
+        syncStudioFabIcon();
     }
 
     /** Split stop button: pause, then ask save vs discard in a styled modal. */
@@ -1598,6 +1612,7 @@ public class StudioFragment extends Fragment {
     private void startOrResumeCapture() {
         if (!isAdded() || saving) return;
         stopStudioPreview();
+        RawFloatPlayer.releaseWarmSpeaker();
         // Block capture if a phone/VoIP call is active so the mic never records
         // silent 0.0f samples during a call!
         if (RecordingService.isCallActive(requireContext())) {
@@ -1652,7 +1667,7 @@ public class StudioFragment extends Fragment {
         }
         handler.post(tick);
         paint();
-        activity().syncFabWithEngine();
+        syncStudioFabIcon();
     }
 
     private void pauseTake() {
@@ -1665,21 +1680,21 @@ public class StudioFragment extends Fragment {
         engine.pauseCapture();
         setTelePaused(true);
         userScrolledWhilePaused = false;
+        // Disarm Replace after finishing a replacement pass so the user can
+        // immediately press Play to audition the replaced audio (or tap Replace
+        // again if they want to record another pass).
+        replaceModeArmed = false;
         if (replacingSelectionActive) {
             finishSelectAndReplaceIfNeeded();
         } else {
-            // Keep playhead right where recording/replacement paused so the
-            // surviving tail ahead of pausedAtFrame remains intact and visible!
             long total = Math.max(1L, engine.totalFrames());
-            long target = (pausedAtFrame > 0 && pausedAtFrame <= total)
+            long target = (pausedAtFrame >= 0 && pausedAtFrame <= total)
                     ? pausedAtFrame : total;
             engine.seekCursorFrame(target);
             if (waveform != null) {
                 waveform.setPlayheadFraction(target / (float) total);
             }
-            // Pre-warm speaker & mic immediately on pause for instant scrubbing
             RawFloatPlayer.warmUpSpeaker(engine.channels);
-            engine.warmUpMic(requireContext(), preset.audioSource, engine.channels);
         }
         if (fromInterruption) {
             try {
@@ -1695,7 +1710,7 @@ public class StudioFragment extends Fragment {
         try {
             if (isAdded() && getView() != null) {
                 paint();
-                activity().syncFabWithEngine();
+                syncStudioFabIcon();
             }
         } catch (Exception ignored) {}
     }
@@ -2160,11 +2175,14 @@ public class StudioFragment extends Fragment {
                 engine.seekCursorFrame(lastFrame);
             }
         }
+        // NOTE: Do NOT set btnPreviewPlay.setText("▶ Preview") or reset its
+        // background here! btnPreviewPlay is the "Replace" toggle button and
+        // is styled exclusively by paintEditorStrip() based on replaceModeArmed.
         if (btnPreviewPlay != null) {
-            boolean hasSel = waveform != null && waveform.hasSelection();
-            btnPreviewPlay.setText(hasSel ? "▶ Sel" : "▶ Preview");
-            btnPreviewPlay.setBackgroundResource(R.drawable.bg_chip);
-            btnPreviewPlay.setTextColor(0xFFF2F4F7);
+            btnPreviewPlay.setText("Replace");
+            btnPreviewPlay.setBackgroundResource(replaceModeArmed
+                    ? R.drawable.bg_chip_selected : R.drawable.bg_chip);
+            btnPreviewPlay.setTextColor(replaceModeArmed ? 0xFFFFFFFF : 0xFF9AA3AF);
         }
     }
 
@@ -2262,10 +2280,46 @@ public class StudioFragment extends Fragment {
                     || engine.cursorFrames() < engine.totalFrames() - 1200) {
                 hintText.setText("Playhead " + formatTimer(engine.cursorMs())
                         + " • Tap Resume to play or tap Replace");
-            } else {
-                hintText.setText("Scroll waveform to scrub or tap Select");
-            }
+        } else {
+            hintText.setText("Scroll waveform to scrub or tap Select");
         }
+        syncStudioFabIcon();
+    }
+
+    /**
+     * Updates the main bottom FAB icon while paused in Studio so the user has
+     * unmistakable visual feedback of what pressing the main button will do:
+     * - When preview is playing: shows Pause icon.
+     * - When Replace mode is selected (or parked at the end with no selection):
+     *   shows Mic icon (pressing main button records/replaces audio).
+     * - When scrolled back (or selection active) with Replace deselected:
+     *   shows Play icon (pressing main button plays preview from playhead).
+     */
+    private void syncStudioFabIcon() {
+        if (!isAdded()) return;
+        try {
+            MainActivity act = activity();
+            if (engine.state == RecordingEngine.State.RECORDING) {
+                act.syncFabWithEngine();
+                return;
+            }
+            if (engine.state == RecordingEngine.State.PAUSED && engine.hasSession()) {
+                act.setStopVisible(true);
+                if (studioPreviewPlayer != null) {
+                    act.morphFabIcon(R.drawable.ic_pause);
+                    return;
+                }
+                long totalFrames = engine.totalFrames();
+                long curFrames = engine.cursorFrames();
+                boolean atEnd = (curFrames >= totalFrames - 1200);
+                boolean hasSel = waveform != null && waveform.hasSelection();
+                boolean willRecord = replaceModeArmed || (atEnd && !hasSel);
+                act.morphFabIcon(willRecord ? R.drawable.ic_mic : R.drawable.ic_play);
+                return;
+            }
+            act.syncFabWithEngine();
+        } catch (Exception ignored) {}
+    }
     }
 
     private void runEditOperation(boolean isTrim) {
@@ -2928,9 +2982,7 @@ public class StudioFragment extends Fragment {
         statusDot.setAlpha(rec ? 1f : 0.35f);
         paintEditorStrip();
 
-        try {
-            activity().syncFabWithEngine();
-        } catch (Exception ignored) {}
+        syncStudioFabIcon();
     }
 
     private boolean isUnfinalised() {

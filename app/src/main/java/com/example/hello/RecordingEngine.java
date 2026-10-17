@@ -21,7 +21,7 @@ import java.util.Locale;
  * Crash-safe 32-bit float capture engine.
  *
  * Audio is streamed straight to a permanent 32-bit float WAV file (IEEE
- * float, 48&nbsp;kHz) under the user-chosen take name. A sibling
+ * float, 48 kHz) under the user-chosen take name. A sibling
  * {@code .pending} marker means "unfinalised": it is created when the
  * session starts and deleted only on a clean finalize/discard, so a crash
  * (or process kill) always leaves a recoverable trace that is picked up on
@@ -186,14 +186,6 @@ public final class RecordingEngine {
         }
     }
 
-    // ---- Fast Mic Config Cache (Never Holds Hardware Mic Open While Idle) ----
-    private volatile int cachedMicSource = -1;
-    private volatile int cachedMicWantedCh = -1;
-    private volatile int cachedMicChannelCfg = -1;
-    private volatile int cachedMicEncoding = -1;
-    private volatile int cachedMicBufSize = -1;
-    private volatile boolean warmingMic;
-
     // Parent session stash when inside "Select & Replace" sub-editor mode
     private File parentRawFile;
     private String parentTakeName;
@@ -203,50 +195,13 @@ public final class RecordingEngine {
     private long parentSelEndFrame = 0;
 
     /**
-     * Probes and caches the optimal AudioRecord parameters on a background
-     * thread without holding an idle AudioRecord open (holding an unstarted
-     * AudioRecord while AudioTrack preview plays causes the first read() to
-     * fail on Samsung/Qualcomm HALs).
+     * No-op hook retained for callers: never probe or hold AudioRecord open on
+     * a background thread while the user is scrubbing, as concurrent HAL queries
+     * can race openRecorderLocked() when the user taps Resume.
      */
-    @android.annotation.SuppressLint("MissingPermission")
     public void warmUpMic(final Context ctx, final int requestedSource,
                           final int wantedOutCh) {
-        if (state == State.RECORDING || warmingMic) return;
-        if (cachedMicSource == requestedSource
-                && cachedMicWantedCh == wantedOutCh
-                && cachedMicBufSize > 0) {
-            return;
-        }
-        warmingMic = true;
-        new Thread(() -> {
-            try {
-                int[] channelPref = wantedOutCh == 1
-                        ? new int[]{AudioFormat.CHANNEL_IN_MONO, AudioFormat.CHANNEL_IN_STEREO}
-                        : new int[]{AudioFormat.CHANNEL_IN_STEREO, AudioFormat.CHANNEL_IN_MONO};
-                int[] encPref = {AudioFormat.ENCODING_PCM_FLOAT, AudioFormat.ENCODING_PCM_16BIT};
-                int[] sources = requestedSource == MediaRecorder.AudioSource.UNPROCESSED
-                        ? new int[]{MediaRecorder.AudioSource.UNPROCESSED,
-                                MediaRecorder.AudioSource.MIC}
-                        : new int[]{requestedSource};
-                for (int src : sources) {
-                    for (int chCfg : channelPref) {
-                        for (int enc : encPref) {
-                            int min = AudioRecord.getMinBufferSize(SAMPLE_RATE, chCfg, enc);
-                            if (min <= 0) continue;
-                            cachedMicSource = src;
-                            cachedMicWantedCh = wantedOutCh;
-                            cachedMicChannelCfg = chCfg;
-                            cachedMicEncoding = enc;
-                            cachedMicBufSize = Math.max(min * 4, 32768);
-                            return;
-                        }
-                    }
-                }
-            } catch (Throwable ignored) {
-            } finally {
-                warmingMic = false;
-            }
-        }, "takeone-mic-warm").start();
+        // Intentionally empty: openRecorderLocked() opens AudioRecord cleanly on demand.
     }
 
     public void releaseWarmMic() {
@@ -391,10 +346,6 @@ public final class RecordingEngine {
             takeName = sanitize(name);
             channels = outChannels == 1 ? 1 : 2;
             File dir = takesDir(ctx);
-            // Stage the file first and only publish rawFile once the header
-            // and marker both exist: if either write throws (storage full,
-            // permissions), the engine must not be left pointing at a
-            // missing or 0-byte file that blocks every later session.
             File candidate = uniqueRaw(dir, takeName);
             try {
                 writeHeaderNew(candidate, channels, 0);
@@ -411,6 +362,7 @@ public final class RecordingEngine {
             cursorFrame = 0;
             punchOutFrame = -1;
             cursorExplicit = false;
+            truncateTailOnWrite = false;
             punchInFadeBuf = null;
             punchOutFadeBuf = null;
             fellBackToMono = false;
@@ -441,6 +393,7 @@ public final class RecordingEngine {
             cursorFrame = 0;
             punchOutFrame = -1;
             cursorExplicit = false;
+            truncateTailOnWrite = false;
             punchInFadeBuf = null;
             punchOutFadeBuf = null;
             if (!pendingFor(raw).exists()) writePending(raw, takeName, channels);
@@ -465,10 +418,6 @@ public final class RecordingEngine {
                     oldPending.renameTo(pendingFor(dest));
                 }
                 writePending(rawFile, clean, channels);
-                // The incremental encoder points at the OLD path (and its
-                // part file). Drop it so resume/save re-attach to the renamed
-                // raw instead of encoding nothing and adopting a truncated
-                // part on save.
                 endStreamingAbortLocked();
             }
             takeName = clean;
@@ -488,23 +437,17 @@ public final class RecordingEngine {
             cursorFrame = 0;
             punchOutFrame = -1;
             cursorExplicit = false;
+            truncateTailOnWrite = false;
             punchInFadeBuf = null;
             punchOutFadeBuf = null;
             level = 0f;
         }
-        // Let a parked conversion worker yield/resume immediately.
         ConversionService.onRecordingStateChanged();
         RecordingService.onRecordingStateChanged();
     }
 
     // ---- incremental background encoding ----
 
-    /**
-     * Starts the incremental encoder for the current session, if none is
-     * running. Any failure (missing encoder, I/O) is swallowed: capture is
-     * unaffected and the save falls back to a full conversion. Best-effort
-     * by design — the raw file stays the source of truth.
-     */
     public void beginStreaming(Context ctx, RecordPreset preset,
                                SaveFormat format) {
         synchronized (lock) {
@@ -521,12 +464,6 @@ public final class RecordingEngine {
         }
     }
 
-    /**
-     * A4-07: switch the incremental encoder to a new format mid-take. The
-     * running pump keeps writing the old container otherwise, and at save
-     * time the mismatch throws the whole .part away and re-converts from
-     * scratch. Returns true when a new pump took over.
-     */
     public boolean restartStreaming(Context ctx, RecordPreset preset,
                                     SaveFormat format) {
         synchronized (lock) {
@@ -549,17 +486,12 @@ public final class RecordingEngine {
         }
     }
 
-    /** Live incremental session, or null when not streaming. */
     public StreamingEncoder streaming() {
         synchronized (lock) {
             return streaming;
         }
     }
 
-    /**
-     * Hands the streaming session to the save flow and forgets it. The
-     * caller owns finishing or aborting it.
-     */
     public StreamingEncoder endStreamingDetach() {
         synchronized (lock) {
             StreamingEncoder sess = streaming;
@@ -580,16 +512,14 @@ public final class RecordingEngine {
     // ---- capture ----
 
     public void startCapture(Context ctx, int requestedSource) throws Exception {
+        // Release any pre-warmed low-latency speaker AudioTrack before opening
+        // AudioRecord so the output HAL never conflicts with mic capture.
+        RawFloatPlayer.releaseWarmSpeaker();
         synchronized (lock) {
             if (rawFile == null) throw new IllegalStateException("no session");
             if (state == State.RECORDING) return;
-            // Open and seek the file BEFORE starting the microphone: if this
-            // throws, no recorder is left capturing with no session able to
-            // stop it (pauseCapture only acts in State.RECORDING).
             raf = new RandomAccessFile(rawFile, "rw");
             try {
-                // Cursor-aware seek: punch in mid-take with a 240-frame
-                // crossfade pre-read instead of blindly appending.
                 dataBytes = payloadBytesOf(rawFile);
                 int ch = Math.max(1, channels);
                 long totalFrames = dataBytes / (ch * 4L);
@@ -600,8 +530,6 @@ public final class RecordingEngine {
                 punchInFadeBuf = null;
                 punchOutFadeBuf = null;
                 if (cursorFrame < totalFrames) {
-                    // Punching in mid-take: pre-read 240 frames (5ms) at punch-in
-                    // point for a click-free crossfade from existing audio.
                     int fadeInN = (int) Math.min(Dsp.CROSSFADE_FRAMES,
                             totalFrames - cursorFrame);
                     if (fadeInN > 0) {
@@ -624,14 +552,9 @@ public final class RecordingEngine {
                                     .asFloatBuffer().get(punchOutFadeBuf);
                         }
                     } else if (truncateTailOnWrite) {
-                        // Immediate playhead replacement (or variable-length replace
-                        // where post-selection tail was saved separately): truncate
-                        // old trailing bytes from cursorFrame forward!
                         dataBytes = cursorFrame * ch * 4L;
                         raf.setLength(44L + dataBytes);
                     }
-                    // If StreamingEncoder already encoded past cursorFrame, abort it
-                    // so save re-encodes the overwritten span cleanly.
                     if (streaming != null && cursorFrame < streaming.framesEncoded()) {
                         endStreamingAbortLocked();
                     }
@@ -653,9 +576,7 @@ public final class RecordingEngine {
                 raf = null;
                 throw e;
             }
-            // Only clear cursorExplicit AFTER openRecorderLocked() succeeded!
             cursorExplicit = false;
-            // Reconcile byte count with what is actually on disk.
             dataBytes = payloadBytesOf(rawFile);
             capRun = true;
             capThread = new Thread(this::capLoop, "takeone-cap");
@@ -664,7 +585,6 @@ public final class RecordingEngine {
             state = State.RECORDING;
             lastHeaderPatch = System.currentTimeMillis();
         }
-        // Let a parked conversion worker yield/resume immediately.
         ConversionService.onRecordingStateChanged();
         RecordingService.onRecordingStateChanged();
     }
@@ -696,20 +616,18 @@ public final class RecordingEngine {
                 level = 0f;
             }
         }
-        // Let a parked conversion worker yield/resume immediately.
         ConversionService.onRecordingStateChanged();
         RecordingService.onRecordingStateChanged();
     }
 
     public void resumeCapture(Context ctx, int requestedSource) throws Exception {
+        // Release any pre-warmed low-latency speaker AudioTrack before opening
+        // AudioRecord so the output HAL never conflicts with mic capture.
+        RawFloatPlayer.releaseWarmSpeaker();
         synchronized (lock) {
             if (state != State.PAUSED) return;
-            // Same ordering guarantee as startCapture(): the file must be
-            // open before the microphone starts.
             raf = new RandomAccessFile(rawFile, "rw");
             try {
-                // Cursor-aware seek: punch in mid-take with a 240-frame
-                // crossfade pre-read instead of blindly appending.
                 dataBytes = payloadBytesOf(rawFile);
                 int ch = Math.max(1, channels);
                 long totalFrames = dataBytes / (ch * 4L);
@@ -723,8 +641,6 @@ public final class RecordingEngine {
                 punchInFadeBuf = null;
                 punchOutFadeBuf = null;
                 if (cursorFrame < totalFrames) {
-                    // Punching in mid-take: pre-read 240 frames (5ms) at punch-in
-                    // point for a click-free crossfade from existing audio.
                     int fadeInN = (int) Math.min(Dsp.CROSSFADE_FRAMES,
                             totalFrames - cursorFrame);
                     if (fadeInN > 0) {
@@ -747,14 +663,9 @@ public final class RecordingEngine {
                                     .asFloatBuffer().get(punchOutFadeBuf);
                         }
                     } else if (truncateTailOnWrite) {
-                        // Immediate playhead replacement (or variable-length replace
-                        // where post-selection tail was saved separately): truncate
-                        // old trailing bytes from cursorFrame forward!
                         dataBytes = cursorFrame * ch * 4L;
                         raf.setLength(44L + dataBytes);
                     }
-                    // If StreamingEncoder already encoded past cursorFrame, abort it
-                    // so save re-encodes the overwritten span cleanly.
                     if (streaming != null && cursorFrame < streaming.framesEncoded()) {
                         endStreamingAbortLocked();
                     }
@@ -776,7 +687,6 @@ public final class RecordingEngine {
                 raf = null;
                 throw e;
             }
-            // Only clear cursorExplicit AFTER openRecorderLocked() succeeded!
             cursorExplicit = false;
             dataBytes = payloadBytesOf(rawFile);
             capRun = true;
@@ -786,7 +696,6 @@ public final class RecordingEngine {
             state = State.RECORDING;
             lastHeaderPatch = System.currentTimeMillis();
         }
-        // Let a parked conversion worker yield/resume immediately.
         ConversionService.onRecordingStateChanged();
         RecordingService.onRecordingStateChanged();
     }
@@ -820,19 +729,12 @@ public final class RecordingEngine {
                 // noinspection ResultOfMethodCallIgnored
                 pendingFor(out).delete();
             }
-            // Capture is over: let a parked conversion worker resume.
             ConversionService.onRecordingStateChanged();
             RecordingService.onRecordingStateChanged();
             return out;
         }
     }
 
-    /**
-     * Shuts the capture path down in the only safe order: stop (so the
-     * blocked read() returns), join the writer, THEN release. Releasing the
-     * AudioRecord while the capture thread is still inside read() is a
-     * use-after-free in native code and takes the whole process down.
-     */
     private static void stopThenJoinThenRelease(AudioRecord rec, Thread th) {
         if (rec != null) {
             try {
@@ -884,6 +786,7 @@ public final class RecordingEngine {
             cursorFrame = 0;
             punchOutFrame = -1;
             cursorExplicit = false;
+            truncateTailOnWrite = false;
             punchInFadeBuf = null;
             punchOutFadeBuf = null;
             level = 0f;
@@ -901,18 +804,6 @@ public final class RecordingEngine {
 
     // ---- internals ----
 
-    /**
-     * Opens the mic for {@code wantedOutCh} output channels (1/2) using
-     * {@code requestedSource} first (UNPROCESSED for Music/Raw) and falling
-     * back to plain MIC when the device refuses it. Channel layouts are
-     * tried wanted-first, so a stereo request on single-mic hardware lands
-     * on mono and reports {@link #fellBackToMono} instead of failing.
-     *
-     * <p>RECORD_AUDIO is verified at every entry point (StudioFragment's
-     * permission gate, including the recovery autostart path), and a revoked
-     * permission surfaces as SecurityException, which is caught per-config
-     * below and degrades to a startup toast instead of a crash.
-     */
     @android.annotation.SuppressLint("MissingPermission")
     private void openRecorderLocked(int requestedSource, int wantedOutCh) throws Exception {
         int[] channelPref = wantedOutCh == 1
@@ -954,18 +845,6 @@ public final class RecordingEngine {
                         audioSource = src;
                         actualChannels = (chCfg == AudioFormat.CHANNEL_IN_STEREO) ? 2 : 1;
                         floatNative = enc == AudioFormat.ENCODING_PCM_FLOAT;
-                        // Mono input for a stereo file is duplicated; stereo
-                        // input for a mono file is downmixed. A stereo request
-                        // that only yields mono keeps recording in mono.
-                        //
-                        // A4-03: never renegotiate the layout of a session
-                        // that already holds audio (punch-in edit, resumed
-                        // take) or is being streamed. Rewriting the header to
-                        // mono while the file holds stereo frames makes it
-                        // play back at half speed and desynchronises the
-                        // incremental encoder, which has already committed to
-                        // the old geometry. capLoop duplicates the mono mic
-                        // input into both channels instead.
                         boolean hasAudio = dataBytes > 0 || streaming != null;
                         if (wantedOutCh == 1 && !hasAudio) {
                             channels = 1;
@@ -973,8 +852,6 @@ public final class RecordingEngine {
                             channels = actualChannels;
                         }
                         fellBackToMono = wantedOutCh == 2 && actualChannels == 1;
-                        // Keep the on-disk header in sync when the channel
-                        // layout was renegotiated (e.g. mono fallback).
                         patchHeaderLocked();
                         return;
                     } catch (Exception e) {
@@ -999,7 +876,10 @@ public final class RecordingEngine {
         }
         byte[] out = new byte[framesPerRead * outCh * 4];
         ByteBuffer bb = ByteBuffer.wrap(out).order(ByteOrder.LITTLE_ENDIAN);
+        float[] fReadBuf = floatNative ? new float[framesPerRead * Math.max(1, actualChannels)] : null;
+        short[] sReadBuf = !floatNative ? new short[framesPerRead * Math.max(1, actualChannels)] : null;
         int sincePatch = 0;
+        int transientErrors = 0;
         try {
             while (capRun) {
                 AudioRecord ar;
@@ -1011,17 +891,20 @@ public final class RecordingEngine {
                 float peak = 0f;
                 bb.clear();
                 if (floatNative) {
-                    float[] buf = new float[framesPerRead * actualChannels];
-                    int n = ar.read(buf, 0, buf.length, AudioRecord.READ_BLOCKING);
+                    int n = ar.read(fReadBuf, 0, fReadBuf.length, AudioRecord.READ_BLOCKING);
                     if (n <= 0) {
-                        if (n < 0) break;
+                        // Tolerate brief HAL route-switch hiccups on initial reads
+                        // instead of immediately aborting capLoop back to PAUSED!
+                        if (n < 0 && ++transientErrors > 8) break;
+                        try { Thread.sleep(15); } catch (InterruptedException ie) { break; }
                         continue;
                     }
+                    transientErrors = 0;
                     frames = n / actualChannels;
                     for (int f = 0; f < frames; f++) {
-                        float s0 = buf[f * actualChannels];
+                        float s0 = fReadBuf[f * actualChannels];
                         float s1 = actualChannels > 1
-                                ? buf[f * actualChannels + 1] : s0;
+                                ? fReadBuf[f * actualChannels + 1] : s0;
                         if (outCh == 2) {
                             bb.putFloat(s0);
                             bb.putFloat(s1);
@@ -1032,17 +915,18 @@ public final class RecordingEngine {
                         if (a > peak) peak = a;
                     }
                 } else {
-                    short[] buf = new short[framesPerRead * actualChannels];
-                    int n = ar.read(buf, 0, buf.length, AudioRecord.READ_BLOCKING);
+                    int n = ar.read(sReadBuf, 0, sReadBuf.length, AudioRecord.READ_BLOCKING);
                     if (n <= 0) {
-                        if (n < 0) break;
+                        if (n < 0 && ++transientErrors > 8) break;
+                        try { Thread.sleep(15); } catch (InterruptedException ie) { break; }
                         continue;
                     }
+                    transientErrors = 0;
                     frames = n / actualChannels;
                     for (int f = 0; f < frames; f++) {
-                        float s0 = buf[f * actualChannels] / 32768f;
+                        float s0 = sReadBuf[f * actualChannels] / 32768f;
                         float s1 = actualChannels > 1
-                                ? buf[f * actualChannels + 1] / 32768f : s0;
+                                ? sReadBuf[f * actualChannels + 1] / 32768f : s0;
                         if (outCh == 2) {
                             bb.putFloat(s0);
                             bb.putFloat(s1);
@@ -1082,7 +966,7 @@ public final class RecordingEngine {
                     int startF = frames - fadeN;
                     java.nio.FloatBuffer fb = bb.asFloatBuffer();
                     for (int f = 0; f < fadeN; f++) {
-                        float wOut = (f + 0.5f) / fadeN; // fade back to original tail
+                        float wOut = (f + 0.5f) / fadeN;
                         float wIn = 1.0f - wOut;
                         for (int c = 0; c < outCh; c++) {
                             int bIdx = (startF + f) * outCh + c;
@@ -1109,8 +993,6 @@ public final class RecordingEngine {
                     }
                 }
                 if (reachedPunchOut) {
-                    // Auto-stop at end of selected punch-in range:
-                    // capLoop's finally block transitions state to PAUSED.
                     break;
                 }
                 level = Math.max(0f, Math.min(1f, peak));
@@ -1129,8 +1011,6 @@ public final class RecordingEngine {
             synchronized (lock) {
                 patchHeaderLocked();
                 if (capRun) {
-                    // Exited due to hardware disconnect, call preemption, or
-                    // I/O error rather than pauseCapture()/finalizeRaw().
                     capRun = false;
                     unexpectedExit = true;
                     deadRec = recorder;
@@ -1248,7 +1128,6 @@ public final class RecordingEngine {
                 File raw = new File(dir, rawName);
                 long payload = payloadBytesOf(raw);
                 if (!raw.exists() || payload <= 0) {
-                    // Orphan marker with no usable audio: clean it up silently.
                     // noinspection ResultOfMethodCallIgnored
                     f.delete();
                     continue;
@@ -1290,12 +1169,6 @@ public final class RecordingEngine {
         return ok;
     }
 
-    /**
-     * NEW-07 fix: locates the real {@code data} chunk via
-     * {@link Dsp#parseWavHeader(RandomAccessFile)} instead of assuming a
-     * fixed 44-byte offset, falling back to {@code raw.length() - 44} only
-     * when the header is unparseable.
-     */
     public static long payloadBytesOf(File raw) {
         if (raw == null || !raw.exists()) return 0;
         try (RandomAccessFile r = new RandomAccessFile(raw, "r")) {
