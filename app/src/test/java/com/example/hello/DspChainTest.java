@@ -183,10 +183,24 @@ public class DspChainTest {
 
             DspChain chain = new DspChain(2, cfg);
             // A loud sustained tone keeps the physical noise gate fully open
-            // (envelope >> threshold), which is correct behavior — so feed the
-            // gate a quiet tone that falls below its threshold instead.
+            // (envelope >> threshold), which is gate-correct — feed the gate
+            // a quiet tone below its threshold instead.
             float amp = (type == DspChain.EffectType.ROOM_GATE) ? 0.003f : 0.5f;
-            float[] buf = sine(4800, 2, amp);
+            // The de-esser only processes the 4.5–9.5 kHz sibilance band BY
+            // DESIGN, so a low tone never moves it — feed it a bright 6 kHz
+            // sibilant tone instead.
+            float[] buf;
+            if (type == DspChain.EffectType.DE_ESSER) {
+                buf = new float[4800 * 2];
+                for (int f = 0; f < 4800; f++) {
+                    float s = (float) Math.sin(2.0 * Math.PI * 6000.0
+                            * f / 48000.0) * amp;
+                    buf[f * 2] = s;
+                    buf[f * 2 + 1] = s;
+                }
+            } else {
+                buf = sine(4800, 2, amp);
+            }
             float[] orig = buf.clone();
             chain.processInPlace(buf, 4800);
             boolean modified = false;
