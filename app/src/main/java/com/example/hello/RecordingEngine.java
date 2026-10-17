@@ -74,6 +74,10 @@ public final class RecordingEngine {
     private RandomAccessFile raf;
     private boolean floatNative;
     private int actualChannels;
+    private int cachedSrc = -1;
+    private int cachedChCfg = -1;
+    private int cachedEnc = -1;
+    private int cachedWantedCh = -1;
     private long lastHeaderPatch;
     private long cursorFrame = 0;
     private long punchOutFrame = -1;
@@ -460,9 +464,13 @@ public final class RecordingEngine {
             if (streaming != null || rawFile == null) return;
             // Never start the append-only incremental encoder when replacing
             // mid-file or after an in-place edit: it would race ahead and encode
-            // the entire un-replaced file on disk in milliseconds!
-            if (inPlaceEdited || (dataBytes > 0 && cursorFrame < totalFrames()
-                    && cursorFrame != 0L)) {
+// the entire un-replaced file on disk in milliseconds!
+            // cursorFrame == 0 means a freshly attached/imported session parked
+            // at the start of the take: nothing has been replaced yet, so the
+            // append-only encoder is still safe (and required, see
+            // ConversionConcurrencyTest.abandonedAdoptLeavesNoEncoderOnThePartFile).
+            if (inPlaceEdited || (dataBytes > 0 && cursorFrame > 0
+                    && cursorFrame < totalFrames())) {
                 return;
             }
             try {
@@ -824,6 +832,17 @@ public final class RecordingEngine {
 
     @android.annotation.SuppressLint("MissingPermission")
     private void openRecorderLocked(int requestedSource, int wantedOutCh) throws Exception {
+        Exception last = null;
+        fellBackToMono = false;
+        // Fast path: if we already verified a working hardware config for this
+        // source & channel count, try it immediately on the first shot to avoid
+        // probing unsupported combinations.
+        if (cachedSrc == requestedSource && cachedWantedCh == wantedOutCh
+                && cachedChCfg != -1 && cachedEnc != -1) {
+            if (tryOpenSingleConfigLocked(cachedSrc, cachedChCfg, cachedEnc, wantedOutCh)) {
+                return;
+            }
+        }
         int[] channelPref = wantedOutCh == 1
                 ? new int[]{AudioFormat.CHANNEL_IN_MONO, AudioFormat.CHANNEL_IN_STEREO}
                 : new int[]{AudioFormat.CHANNEL_IN_STEREO, AudioFormat.CHANNEL_IN_MONO};
@@ -832,8 +851,6 @@ public final class RecordingEngine {
                 ? new int[]{MediaRecorder.AudioSource.UNPROCESSED,
                         MediaRecorder.AudioSource.MIC}
                 : new int[]{requestedSource};
-        Exception last = null;
-        fellBackToMono = false;
         for (int src : sources) {
             for (int chCfg : channelPref) {
                 for (int enc : encPref) {
@@ -870,6 +887,10 @@ public final class RecordingEngine {
                             channels = actualChannels;
                         }
                         fellBackToMono = wantedOutCh == 2 && actualChannels == 1;
+                        cachedSrc = requestedSource;
+                        cachedWantedCh = wantedOutCh;
+                        cachedChCfg = chCfg;
+                        cachedEnc = enc;
                         patchHeaderLocked();
                         return;
                     } catch (Exception e) {
@@ -886,8 +907,52 @@ public final class RecordingEngine {
         throw last != null ? last : new IllegalStateException("no mic config");
     }
 
+    @android.annotation.SuppressLint("MissingPermission")
+    private boolean tryOpenSingleConfigLocked(int src, int chCfg, int enc, int wantedOutCh) {
+        AudioRecord ar = null;
+        try {
+            int min = AudioRecord.getMinBufferSize(SAMPLE_RATE, chCfg, enc);
+            if (min <= 0) return false;
+            int bufSize = Math.max(min * 2, 16384);
+            ar = new AudioRecord(src, SAMPLE_RATE, chCfg, enc, bufSize);
+            if (ar.getState() != AudioRecord.STATE_INITIALIZED) {
+                try { ar.release(); } catch (Exception ignored) {}
+                return false;
+            }
+            ar.startRecording();
+            if (ar.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING) {
+                try { ar.stop(); } catch (Exception ignored) {}
+                try { ar.release(); } catch (Exception ignored) {}
+                return false;
+            }
+            recorder = ar;
+            audioSource = src;
+            actualChannels = (chCfg == AudioFormat.CHANNEL_IN_STEREO) ? 2 : 1;
+            floatNative = enc == AudioFormat.ENCODING_PCM_FLOAT;
+            boolean hasAudio = dataBytes > 0 || streaming != null;
+            if (wantedOutCh == 1 && !hasAudio) {
+                channels = 1;
+            } else if (!hasAudio && actualChannels > 1) {
+                channels = actualChannels;
+            }
+            fellBackToMono = wantedOutCh == 2 && actualChannels == 1;
+            patchHeaderLocked();
+            return true;
+        } catch (Exception e) {
+            if (ar != null) {
+                try { ar.release(); } catch (Exception ignored) {}
+            }
+            return false;
+        }
+    }
+
     private void capLoop() {
-        final int framesPerRead = 2048;
+        // 512 frames @ 48 kHz = 10.6 ms per read (4x faster response than 2048),
+        // eliminating initial read buffering lag and allowing fine-grained
+        // trimming of hardware ADC/HAL startup dead air.
+        final int framesPerRead = 512;
+        final int maxWarmupSkipFrames = SAMPLE_RATE / 3; // bound warmup skip to ~333 ms
+        final float warmupSilenceFloor = 0.0008f;        // ~ -62 dBFS hardware mute floor
         final int outCh;
         synchronized (lock) {
             outCh = Math.max(1, channels);
@@ -898,6 +963,8 @@ public final class RecordingEngine {
         short[] sReadBuf = !floatNative ? new short[framesPerRead * Math.max(1, actualChannels)] : null;
         int sincePatch = 0;
         int transientErrors = 0;
+        boolean micWarmupActive = true;
+        int warmupSkippedFrames = 0;
         try {
             while (capRun) {
                 AudioRecord ar;
@@ -914,12 +981,34 @@ public final class RecordingEngine {
                         // Tolerate brief HAL route-switch hiccups on initial reads
                         // instead of immediately aborting capLoop back to PAUSED!
                         if (n < 0 && ++transientErrors > 8) break;
-                        try { Thread.sleep(15); } catch (InterruptedException ie) { break; }
+                        try { Thread.sleep(10); } catch (InterruptedException ie) { break; }
                         continue;
                     }
                     transientErrors = 0;
-                    frames = n / actualChannels;
-                    for (int f = 0; f < frames; f++) {
+                    int rawFrames = n / actualChannels;
+                    int firstValid = 0;
+                    if (micWarmupActive) {
+                        while (firstValid < rawFrames) {
+                            float s0 = fReadBuf[firstValid * actualChannels];
+                            float s1 = actualChannels > 1
+                                    ? fReadBuf[firstValid * actualChannels + 1] : s0;
+                            if (Math.max(Math.abs(s0), Math.abs(s1)) > warmupSilenceFloor) {
+                                micWarmupActive = false;
+                                break;
+                            }
+                            firstValid++;
+                        }
+                        if (micWarmupActive) {
+                            warmupSkippedFrames += rawFrames;
+                            if (warmupSkippedFrames < maxWarmupSkipFrames) {
+                                continue;
+                            }
+                            micWarmupActive = false;
+                            firstValid = 0;
+                        }
+                    }
+                    frames = rawFrames - firstValid;
+                    for (int f = firstValid; f < rawFrames; f++) {
                         float s0 = fReadBuf[f * actualChannels];
                         float s1 = actualChannels > 1
                                 ? fReadBuf[f * actualChannels + 1] : s0;
@@ -936,12 +1025,34 @@ public final class RecordingEngine {
                     int n = ar.read(sReadBuf, 0, sReadBuf.length, AudioRecord.READ_BLOCKING);
                     if (n <= 0) {
                         if (n < 0 && ++transientErrors > 8) break;
-                        try { Thread.sleep(15); } catch (InterruptedException ie) { break; }
+                        try { Thread.sleep(10); } catch (InterruptedException ie) { break; }
                         continue;
                     }
                     transientErrors = 0;
-                    frames = n / actualChannels;
-                    for (int f = 0; f < frames; f++) {
+                    int rawFrames = n / actualChannels;
+                    int firstValid = 0;
+                    if (micWarmupActive) {
+                        while (firstValid < rawFrames) {
+                            float s0 = sReadBuf[firstValid * actualChannels] / 32768f;
+                            float s1 = actualChannels > 1
+                                    ? sReadBuf[firstValid * actualChannels + 1] / 32768f : s0;
+                            if (Math.max(Math.abs(s0), Math.abs(s1)) > warmupSilenceFloor) {
+                                micWarmupActive = false;
+                                break;
+                            }
+                            firstValid++;
+                        }
+                        if (micWarmupActive) {
+                            warmupSkippedFrames += rawFrames;
+                            if (warmupSkippedFrames < maxWarmupSkipFrames) {
+                                continue;
+                            }
+                            micWarmupActive = false;
+                            firstValid = 0;
+                        }
+                    }
+                    frames = rawFrames - firstValid;
+                    for (int f = firstValid; f < rawFrames; f++) {
                         float s0 = sReadBuf[f * actualChannels] / 32768f;
                         float s1 = actualChannels > 1
                                 ? sReadBuf[f * actualChannels + 1] / 32768f : s0;

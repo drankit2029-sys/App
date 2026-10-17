@@ -99,6 +99,8 @@ public class StudioFragment extends Fragment {
 
     private boolean replacingSelectionActive = false;
     private long replacePassStartFrame = -1L;
+    private long replaceTargetEndFrame = -1L;
+    private long lastPushedCursorFrame = -1L;
     private File replaceSavedTailFile = null;
     private RawFloatPlayer studioPreviewPlayer;
     private DspChain.Config dspConfig = new DspChain.Config();
@@ -500,7 +502,11 @@ public class StudioFragment extends Fragment {
         initialSessionBytes = engine.hasSession() ? engine.dataBytes : 0L;
         setTelePaused(engine.state != RecordingEngine.State.RECORDING);
 
+        if (editorStrip != null) {
+            editorStrip.setVisibility(View.VISIBLE);
+        }
         paint();
+        handler.removeCallbacks(tick);
         handler.post(tick);
         activity().syncFabWithEngine();
 
@@ -548,6 +554,7 @@ public class StudioFragment extends Fragment {
     @Override
     public void onResume() {
         super.onResume();
+        handler.removeCallbacks(tick);
         handler.post(tick);
         paint();
         activity().syncFabWithEngine();
@@ -1231,23 +1238,27 @@ public class StudioFragment extends Fragment {
         boolean hasSel = !replaceModeArmed && waveform != null && waveform.hasSelection();
 
         // 1) If Replace mode is selected (armed): record replacement audio in-place!
+        //    Nuance: if the playhead is already at the end of the take, deactivate
+        //    Replace and append to the recording like normal.
         if (replaceModeArmed) {
-            if (atEnd && totalFrames > 0) {
-                // User armed Replace while at the very end without scrolling back:
-                // step back 2 seconds (or to start of take) so Replace actually
-                // overwrites the last phrase instead of appending at the end!
-                long backFrame = Math.max(0L,
-                        totalFrames - RecordingEngine.SAMPLE_RATE * 2L);
-                replacePassStartFrame = backFrame;
-                engine.seekCursorFrame(backFrame);
+            if (atEnd) {
+                replaceModeArmed = false;
+                replacePassStartFrame = -1L;
+                replaceTargetEndFrame = -1L;
                 if (waveform != null) {
-                    waveform.setPlayheadFraction(backFrame / (float) totalFrames);
+                    waveform.setSelectionLocked(false);
                 }
-            } else {
-                // Lock cursorExplicit = true at the exact current playhead!
-                replacePassStartFrame = curFrames;
-                engine.seekCursorFrame(curFrames);
+                userScrolledWhilePaused = false;
+                engine.seekCursorFrame(totalFrames);
+                paintEditorStrip();
+                paintFxPanelControls();
+                startOrResumeCapture();
+                return;
             }
+            // Lock cursorExplicit = true at the exact current playhead!
+            replacePassStartFrame = curFrames;
+            replaceTargetEndFrame = totalFrames;
+            engine.seekCursorFrame(curFrames);
             startOrResumeCapture();
             return;
         }
@@ -1641,17 +1652,31 @@ public class StudioFragment extends Fragment {
             if (engine.hasSession() && engine.dataBytes > 0 && waveform != null) {
                 long totalFrames = engine.totalFrames();
                 long curFrames = engine.cursorFrames();
-                if (replaceModeArmed || curFrames < totalFrames - 480) {
+                waveform.syncFramesPerBar(totalFrames);
+                if (replaceModeArmed && curFrames < totalFrames - 480) {
                     // In-place Replace from playhead: snapshot for Undo, keep
                     // the entire take forward of curFrames intact (do NOT
                     // call waveform.truncateToPlayhead()), and smoothly morph
                     // the waveform bars as new audio is recorded!
                     replacePassStartFrame = curFrames;
+                    replaceTargetEndFrame = totalFrames;
                     activeUndoJournal().recordSnapshot(engine.rawFile);
                     waveform.recordUndoPeaks();
                     dspBakedToRaw = false;
                 } else {
+                    if (replaceModeArmed) {
+                        // Already at end of take: deactivate Replace and append
+                        replaceModeArmed = false;
+                        waveform.setSelectionLocked(false);
+                    }
                     replacePassStartFrame = -1L;
+                    replaceTargetEndFrame = -1L;
+                }
+            } else {
+                replacePassStartFrame = -1L;
+                replaceTargetEndFrame = -1L;
+                if (waveform != null) {
+                    waveform.syncFramesPerBar(0L);
                 }
             }
             if (wasPaused) {
@@ -1683,6 +1708,8 @@ public class StudioFragment extends Fragment {
                     Toast.LENGTH_SHORT).show();
             return;
         }
+        lastPushedCursorFrame = engine.cursorFrames();
+        handler.removeCallbacks(tick);
         handler.post(tick);
         paint();
         syncStudioFabIcon();
@@ -1698,32 +1725,36 @@ public class StudioFragment extends Fragment {
         engine.pauseCapture();
         setTelePaused(true);
         userScrolledWhilePaused = false;
-        // Disarm Replace after finishing a replacement pass so other editing
-        // options unlock and the user can immediately press Play to audition.
-        replaceModeArmed = false;
-        if (waveform != null) {
-            waveform.setSelectionLocked(false);
-        }
         if (replacingSelectionActive) {
+            replaceModeArmed = false;
+            if (waveform != null) waveform.setSelectionLocked(false);
             finishSelectAndReplaceIfNeeded();
         } else {
             long total = Math.max(1L, engine.totalFrames());
             long target = (pausedAtFrame >= 0 && pausedAtFrame <= total)
                     ? pausedAtFrame : total;
+            // If the user was in Replace mode and reached the end of the take,
+            // Replace auto-deactivates; if they paused mid-take before the end,
+            // keep Replace active so the user can disable it manually after pausing!
+            if (replaceModeArmed && target >= total - 480) {
+                replaceModeArmed = false;
+            }
+            if (waveform != null) {
+                waveform.setSelectionLocked(replaceModeArmed);
+            }
             engine.seekCursorFrame(target);
             if (waveform != null) {
-                if (replacePassStartFrame >= 0
-                        && target > replacePassStartFrame
-                        && engine.rawFile != null) {
-                    waveform.reloadSelectionPeaksFromWav(
-                            engine.rawFile,
-                            replacePassStartFrame / (float) total,
-                            target / (float) total);
-                }
+                // Do NOT call reloadSelectionPeaksFromWav here! The in-memory
+                // bars were already updated frame-accurately during capture;
+                // reloading from disk re-buckets the whole WAV and changes the
+                // shape of the previous waveform on Pause.
                 waveform.setPlayheadFraction(target / (float) total);
             }
             replacePassStartFrame = -1L;
-            RawFloatPlayer.warmUpSpeaker(engine.channels);
+            replaceTargetEndFrame = -1L;
+            if (!replaceModeArmed) {
+                RawFloatPlayer.warmUpSpeaker(engine.channels);
+            }
         }
         if (fromInterruption) {
             try {
@@ -2063,9 +2094,26 @@ public class StudioFragment extends Fragment {
                 if (live) {
                     long total = Math.max(1L, engine.totalFrames());
                     long cur = engine.cursorFrames();
-                    boolean appending = (cur >= total - 2048);
-                    waveform.pushOrOverwrite(lvl,
-                            Math.min(1f, cur / (float) total), appending);
+                    // If replacing and we reached the end of the original take,
+                    // keep recording seamlessly (appending) and auto-deactivate
+                    // the Replace button to indicate we are now appending!
+                    if (replaceModeArmed
+                            && ((replaceTargetEndFrame > 0 && cur >= replaceTargetEndFrame)
+                            || cur >= total)) {
+                        replaceModeArmed = false;
+                        replaceTargetEndFrame = -1L;
+                        if (waveform != null) {
+                            waveform.setSelectionLocked(false);
+                        }
+                        paintEditorStrip();
+                        paintFxPanelControls();
+                    }
+                    // Only advance/draw waveform bars once the mic has actually
+                    // delivered audio frames (prevents blank waveform during mic warm-up).
+                    if (cur != lastPushedCursorFrame && cur > 0) {
+                        lastPushedCursorFrame = cur;
+                        waveform.updateLiveFromFrames(lvl, cur, replaceTargetEndFrame);
+                    }
                     timerText.setText(formatTimer(engine.cursorMs()));
                 } else if (studioPreviewPlayer != null) {
                     long posMs = studioPreviewPlayer.positionMs();
@@ -2111,7 +2159,9 @@ public class StudioFragment extends Fragment {
             if (waveform.historyCount() > 0) return;
             waveform.loadFromFloatWavTwentyHz(raw, () -> {
                 if (isAdded() && getView() != null) {
-                    engine.seekCursorFrame(engine.totalFrames());
+                    long total = engine.totalFrames();
+                    waveform.syncFramesPerBar(total);
+                    engine.seekCursorFrame(total);
                     waveform.setPlayheadFraction(1f);
                     refreshZoomValue();
                     paintEditorStrip();
@@ -2217,40 +2267,40 @@ public class StudioFragment extends Fragment {
 
     private void paintEditorStrip() {
         if (editorStrip == null || !isAdded()) return;
-        // Editing options are ONLY available when the Studio is in PAUSED state!
-        boolean show = engine.hasSession()
+        // Keep the audio editing rack always visible in Studio; only enable its
+        // buttons when the recording is in the PAUSED state with audio.
+        if (editorStrip.getVisibility() != View.VISIBLE) {
+            editorStrip.setVisibility(View.VISIBLE);
+            editorStrip.setAlpha(1f);
+            editorStrip.setTranslationY(0f);
+        }
+        boolean canEdit = engine.hasSession()
                 && engine.dataBytes > 0
                 && engine.state == RecordingEngine.State.PAUSED;
-        if (show && editorStrip.getVisibility() != View.VISIBLE) {
-            editorStrip.setVisibility(View.VISIBLE);
-            editorStrip.setAlpha(0f);
-            editorStrip.setTranslationY(-6f);
-            editorStrip.animate().cancel();
-            editorStrip.animate()
-                    .alpha(1f).translationY(0f)
-                    .setDuration(180)
-                    .setInterpolator(new android.view.animation.DecelerateInterpolator(1.4f))
-                    .start();
-        } else if (!show && editorStrip.getVisibility() == View.VISIBLE) {
-            editorStrip.setVisibility(View.GONE);
+        if (!canEdit && studioPreviewPlayer != null) {
             stopStudioPreview();
-            return;
         }
-        if (!show) return;
 
-        boolean hasSel = !replaceModeArmed && waveform != null && waveform.hasSelection();
-        boolean othersEnabled = !replaceModeArmed;
+        boolean hasSel = canEdit && !replaceModeArmed
+                && waveform != null && waveform.hasSelection();
+        boolean othersEnabled = canEdit && !replaceModeArmed;
         long durMs = Math.max(1L, engine.durationMs());
 
-        // 1) Replace Mode Toggle Button (btnPreviewPlay)
+        // 1) Replace Mode Toggle Button (btnPreviewPlay):
+        //    Enabled in PAUSED state; stays visually lit while actively
+        //    recording in Replace mode until it reaches the end of the take
+        //    (where it auto-deactivates) or the user pauses and disables it.
         if (btnPreviewPlay != null) {
+            boolean showReplaceActive = replaceModeArmed
+                    && (canEdit || engine.state == RecordingEngine.State.RECORDING);
             btnPreviewPlay.setText("Replace");
-            btnPreviewPlay.setEnabled(true);
-            btnPreviewPlay.setClickable(true);
-            btnPreviewPlay.setAlpha(1f);
-            btnPreviewPlay.setBackgroundResource(replaceModeArmed
+            btnPreviewPlay.setEnabled(canEdit);
+            btnPreviewPlay.setClickable(canEdit);
+            btnPreviewPlay.setAlpha(canEdit ? 1f : (showReplaceActive ? 0.75f : 0.35f));
+            btnPreviewPlay.setBackgroundResource(showReplaceActive
                     ? R.drawable.bg_chip_selected : R.drawable.bg_chip);
-            btnPreviewPlay.setTextColor(replaceModeArmed ? 0xFFFFFFFF : 0xFF9AA3AF);
+            btnPreviewPlay.setTextColor(showReplaceActive ? 0xFFFFFFFF
+                    : (canEdit ? 0xFF9AA3AF : 0xFF5D6672));
         }
 
         // 2) Select Button: stays "Select" and turns red ONLY when Select is active;
@@ -2315,7 +2365,7 @@ public class StudioFragment extends Fragment {
             btnEditUndo.setTextColor(canUndo ? 0xFFF2F4F7 : 0xFF5D6672);
         }
 
-        if (hintText != null) {
+        if (hintText != null && canEdit) {
             if (inSelectAndReplaceEditor) {
                 hintText.setText("Select & Replace Take • Tap Stop to splice into main take");
             } else if (studioPreviewPlayer != null) {

@@ -262,4 +262,30 @@ public class WaveformTimelineTest {
         wv.toggleSelectionAtPlayhead();
         assertTrue(wv.hasSelection());
     }
+
+    @Test
+    public void updateLiveFromFramesKeepsConstantSpeedAcrossReplaceToAppendTransition() {
+        WaveformView wv = loaded(activity(), 100); // 100 bars = 5.0s at 20 bars/sec
+        long totalFrames = 100L * 2400L; // 240,000 frames
+        wv.syncFramesPerBar(totalFrames);
+        wv.setLive(true);
+
+        // 1) Replace mid-take at bar 50 (frame 120,000) -> bar count stays 100
+        wv.updateLiveFromFrames(0.9f, 120_000L, totalFrames);
+        assertEquals(100, wv.historyCount());
+        assertEquals(0.5f, wv.playheadFraction(), 0.01f);
+
+        // 2) Reach the exact end of the take (frame 240,000) -> still 100 bars
+        wv.updateLiveFromFrames(0.8f, 240_000L, totalFrames);
+        assertEquals(100, wv.historyCount());
+
+        // 3) Cross the end of the take by 100ms (2 bars = 4,800 frames) ->
+        //    must advance by exactly 2 bars (102 total), never speeding up!
+        wv.updateLiveFromFrames(0.7f, 244_800L, totalFrames);
+        assertEquals(102, wv.historyCount());
+
+        // 4) Pause (setLive(false)) -> previous bars (e.g. bar 20) keep their exact shape!
+        wv.setLive(false);
+        assertEquals(0.5f, wv.peakAtForTest(20), 0.0001f);
+    }
 }

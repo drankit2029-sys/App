@@ -63,9 +63,10 @@ public class WaveformView extends View {
     private int stashedParentSelStart = 0;
     private int stashedParentSelEnd = 0;
 
-    // Smooth morphing state for in-place Replace
+    // Smooth morphing state for in-place Replace & frame-locked live speed
     private int lastMorphIdx = -1;
     private float morphAlpha = 0f;
+    private float framesPerBar = 2400f; // 2400 frames @ 48 kHz = 50 ms (20 bars/sec)
 
     private float downX = 0f;
     private float downY = 0f;
@@ -487,15 +488,78 @@ public class WaveformView extends View {
                 morphAlpha = Math.min(1.0f, morphAlpha + 0.20f);
             }
             history[idx] = history[idx] * (1.0f - morphAlpha) + clampedV * morphAlpha;
-            if (idx + 1 < count) {
-                history[idx + 1] = history[idx + 1] * 0.86f + clampedV * 0.14f;
-            }
-            if (idx + 2 < count) {
-                history[idx + 2] = history[idx + 2] * 0.94f + clampedV * 0.06f;
-            }
             playheadPos = Math.min(count, idx + 1f);
             playheadIndex = Math.round(playheadPos);
             postInvalidateOnAnimation();
+        }
+    }
+
+    /**
+     * Frame-accurate live waveform updater used during recording and Replace.
+     *
+     * <p>Locks the bucket advance rate to {@code framesPerBar} (2,400 frames =
+     * 50 ms per bar, or {@code replaceEndFrame / count} when replacing an
+     * existing take) so that when a Replace pass reaches {@code replaceEndFrame}
+     * and seamlessly transitions into appending, the waveform continues at the
+     * exact same speed without any abrupt jump or shape distortion on Pause!
+     */
+    public synchronized void updateLiveFromFrames(float v, long curFrames,
+                                                  long replaceEndFrame) {
+        float clampedV = Math.max(0f, Math.min(1f, v));
+        if (curFrames <= 0 && count == 0) return;
+        if (framesPerBar <= 0f) framesPerBar = 2400f;
+
+        if (replaceEndFrame > 0 && curFrames < replaceEndFrame && count > 0) {
+            // In-place Replace before the original end of the take:
+            float exactPos = Math.max(0f,
+                    Math.min(count, (curFrames / (float) replaceEndFrame) * count));
+            int idx = Math.min(count - 1, Math.max(0, (int) Math.floor(exactPos)));
+            if (idx != lastMorphIdx) {
+                lastMorphIdx = idx;
+                morphAlpha = 0.62f;
+            } else {
+                morphAlpha = Math.min(1.0f, morphAlpha + 0.20f);
+            }
+            history[idx] = history[idx] * (1.0f - morphAlpha) + clampedV * morphAlpha;
+            playheadPos = exactPos;
+            playheadIndex = Math.round(playheadPos);
+            postInvalidateOnAnimation();
+            return;
+        }
+
+        // Appending (either a fresh recording or Replace after passing replaceEndFrame):
+        // Advance strictly by audio frame position (curFrames / framesPerBar)
+        // so the speed is 100% identical to pre-end Replace and independent of UI tick rate!
+        float targetBuckets = curFrames / framesPerBar;
+        int neededCount = Math.max(1, (int) Math.ceil(targetBuckets));
+        if (count == 0) {
+            push(clampedV);
+        } else if (neededCount > count) {
+            int toAdd = Math.min(8, neededCount - count);
+            for (int i = 0; i < toAdd; i++) {
+                push(clampedV);
+            }
+        } else {
+            int last = count - 1;
+            if (clampedV > history[last]) {
+                history[last] = clampedV;
+            } else {
+                history[last] = history[last] * 0.85f + clampedV * 0.15f;
+            }
+        }
+        playheadPos = Math.min(count, Math.max(0f, targetBuckets));
+        playheadIndex = Math.round(playheadPos);
+        lastMorphIdx = -1;
+        morphAlpha = 0f;
+        postInvalidateOnAnimation();
+    }
+
+    /** Calibrates the bucket frame density when a session is loaded or Replace begins. */
+    public synchronized void syncFramesPerBar(long totalFrames) {
+        if (count > 0 && totalFrames > 0) {
+            framesPerBar = Math.max(240f, totalFrames / (float) count);
+        } else {
+            framesPerBar = 2400f;
         }
     }
 
@@ -582,6 +646,7 @@ public class WaveformView extends View {
     }
 
     private void halveHistory() {
+        framesPerBar *= 2f;
         int half = count / 2;
         for (int i = 0; i < half; i++) {
             history[i] = Math.max(history[i * 2], history[i * 2 + 1]);
@@ -605,6 +670,7 @@ public class WaveformView extends View {
         savedReplaceTailPeaks = null;
         lastMorphIdx = -1;
         morphAlpha = 0f;
+        framesPerBar = 2400f;
         invalidate();
     }
 
@@ -1003,7 +1069,9 @@ public class WaveformView extends View {
             n = count;
             isLive = live;
             pIdx = playheadIndex;
-            headPos = isLive ? ((pIdx >= 0 && pIdx <= n) ? pIdx : n) : playheadPos;
+            headPos = (playheadPos >= 0f && playheadPos <= n)
+                    ? playheadPos
+                    : ((pIdx >= 0 && pIdx <= n) ? pIdx : n);
             selOn = !isLive && selectionActive && selEndIdx > selStartIdx && count > 0;
             sIdx = selStartIdx;
             eIdx = selEndIdx;
