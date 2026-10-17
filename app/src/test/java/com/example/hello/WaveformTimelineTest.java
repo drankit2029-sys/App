@@ -231,4 +231,35 @@ public class WaveformTimelineTest {
         assertEquals(2, WaveformView.subBarsForZoom(2.0f));
         assertEquals(4, WaveformView.subBarsForZoom(4.0f));
     }
+
+    @Test
+    public void screenBarCountIsConstantAndHighConcentrationAtAllZooms() {
+        assertEquals(300, WaveformView.screenBarCountForZoom(0.01f));
+        assertEquals(300, WaveformView.screenBarCountForZoom(0.05f));
+        assertEquals(300, WaveformView.screenBarCountForZoom(0.5f));
+        assertEquals(300, WaveformView.screenBarCountForZoom(1.0f));
+        assertEquals(300, WaveformView.screenBarCountForZoom(4.0f));
+    }
+
+    @Test
+    public void minimumZoomBelowFivePercentAccommodatesWholeTakeLeftOfPlayhead() {
+        WaveformView wv = loaded(activity(), 3000); // 150s -> minZoom = 75/3000 = 2.5% (< 5%)
+        assertEquals(0.025f, wv.minimumZoom(), 0.0001f);
+        wv.setZoom(wv.minimumZoom());
+        assertEquals(0.025f, wv.getZoom(), 0.0001f);
+        assertTrue(wv.isFollowingMinZoom());
+    }
+
+    @Test
+    public void selectionLockedBlocksSelectionWhileReplaceModeIsOn() {
+        WaveformView wv = loaded(activity(), 100);
+        wv.setSelectionLocked(true);
+        assertTrue(wv.isSelectionLocked());
+        wv.toggleSelectionAtPlayhead();
+        assertFalse("selection must not activate while locked by Replace mode",
+                wv.hasSelection());
+        wv.setSelectionLocked(false);
+        wv.toggleSelectionAtPlayhead();
+        assertTrue(wv.hasSelection());
+    }
 }

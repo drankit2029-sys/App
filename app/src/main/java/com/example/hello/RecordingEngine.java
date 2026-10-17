@@ -79,6 +79,7 @@ public final class RecordingEngine {
     private long punchOutFrame = -1;
     private boolean cursorExplicit = false;
     private boolean truncateTailOnWrite = false;
+    private boolean inPlaceEdited = false;
     private float[] punchInFadeBuf;
     private float[] punchOutFadeBuf;
 
@@ -235,6 +236,7 @@ public final class RecordingEngine {
             punchOutFrame = -1;
             cursorExplicit = false;
             truncateTailOnWrite = false;
+            inPlaceEdited = false;
             state = State.IDLE;
             level = 0f;
         }
@@ -332,6 +334,7 @@ public final class RecordingEngine {
     /** Aborts any running incremental encoder after an in-place edit/undo/DSP commit. */
     public void abortStreaming() {
         synchronized (lock) {
+            inPlaceEdited = true;
             endStreamingAbortLocked();
         }
     }
@@ -363,6 +366,7 @@ public final class RecordingEngine {
             punchOutFrame = -1;
             cursorExplicit = false;
             truncateTailOnWrite = false;
+            inPlaceEdited = false;
             punchInFadeBuf = null;
             punchOutFadeBuf = null;
             fellBackToMono = false;
@@ -394,6 +398,7 @@ public final class RecordingEngine {
             punchOutFrame = -1;
             cursorExplicit = false;
             truncateTailOnWrite = false;
+            inPlaceEdited = false;
             punchInFadeBuf = null;
             punchOutFadeBuf = null;
             if (!pendingFor(raw).exists()) writePending(raw, takeName, channels);
@@ -438,6 +443,7 @@ public final class RecordingEngine {
             punchOutFrame = -1;
             cursorExplicit = false;
             truncateTailOnWrite = false;
+            inPlaceEdited = false;
             punchInFadeBuf = null;
             punchOutFadeBuf = null;
             level = 0f;
@@ -452,6 +458,12 @@ public final class RecordingEngine {
                                SaveFormat format) {
         synchronized (lock) {
             if (streaming != null || rawFile == null) return;
+            // Never start the append-only incremental encoder when replacing
+            // mid-file or after an in-place edit: it would race ahead and encode
+            // the entire un-replaced file on disk in milliseconds!
+            if (inPlaceEdited || (dataBytes > 0 && cursorFrame < totalFrames())) {
+                return;
+            }
             try {
                 streaming = StreamingEncoder.start(preset, format,
                         Math.max(1, channels), rawFile);
@@ -530,6 +542,8 @@ public final class RecordingEngine {
                 punchInFadeBuf = null;
                 punchOutFadeBuf = null;
                 if (cursorFrame < totalFrames) {
+                    inPlaceEdited = true;
+                    endStreamingAbortLocked();
                     int fadeInN = (int) Math.min(Dsp.CROSSFADE_FRAMES,
                             totalFrames - cursorFrame);
                     if (fadeInN > 0) {
@@ -641,6 +655,8 @@ public final class RecordingEngine {
                 punchInFadeBuf = null;
                 punchOutFadeBuf = null;
                 if (cursorFrame < totalFrames) {
+                    inPlaceEdited = true;
+                    endStreamingAbortLocked();
                     int fadeInN = (int) Math.min(Dsp.CROSSFADE_FRAMES,
                             totalFrames - cursorFrame);
                     if (fadeInN > 0) {
@@ -787,6 +803,7 @@ public final class RecordingEngine {
             punchOutFrame = -1;
             cursorExplicit = false;
             truncateTailOnWrite = false;
+            inPlaceEdited = false;
             punchInFadeBuf = null;
             punchOutFadeBuf = null;
             level = 0f;
@@ -949,6 +966,7 @@ public final class RecordingEngine {
                 // Blend first 240 frames on mid-file punch-in
                 if (punchInFadeBuf != null) {
                     int fadeN = Math.min(punchInFadeBuf.length / outCh, frames);
+                    bb.position(0);
                     java.nio.FloatBuffer fb = bb.asFloatBuffer();
                     for (int f = 0; f < fadeN; f++) {
                         float wIn = (f + 0.5f) / fadeN;
@@ -964,6 +982,7 @@ public final class RecordingEngine {
                 if (reachedPunchOut && punchOutFadeBuf != null) {
                     int fadeN = Math.min(punchOutFadeBuf.length / outCh, frames);
                     int startF = frames - fadeN;
+                    bb.position(0);
                     java.nio.FloatBuffer fb = bb.asFloatBuffer();
                     for (int f = 0; f < fadeN; f++) {
                         float wOut = (f + 0.5f) / fadeN;

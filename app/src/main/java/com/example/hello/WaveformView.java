@@ -35,6 +35,11 @@ import java.util.Deque;
 public class WaveformView extends View {
 
     private static final int COLS = 150;
+    /**
+     * Constant high-concentration bar count across the screen regardless of
+     * zoom level (150 bars on the left of the center playhead, 150 on the right).
+     */
+    public static final int SCREEN_BARS = 300;
     private static final int MAX_HISTORY = 8192;
 
     private final Paint barPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -87,6 +92,7 @@ public class WaveformView extends View {
     private float playheadPos = 0f;
     private int playheadIndex = 0;
     private boolean selectionActive = false;
+    private boolean selectionLocked = false;
     private int selStartIdx = 0;
     private int selEndIdx = 0;
 
@@ -361,7 +367,7 @@ public class WaveformView extends View {
         float sf;
         float ef;
         synchronized (this) {
-            if (count <= 1) return;
+            if (selectionLocked || count <= 1) return;
             int s = Math.round(Math.max(0f, Math.min(1f, startFrac)) * count);
             int e = Math.round(Math.max(0f, Math.min(1f, endFrac)) * count);
             if (e < s) {
@@ -386,8 +392,21 @@ public class WaveformView extends View {
         }
     }
 
+    /** Locks or unlocks range selection (e.g. while Replace mode is armed). */
+    public synchronized void setSelectionLocked(boolean locked) {
+        this.selectionLocked = locked;
+        if (locked && selectionActive) {
+            selectionActive = false;
+            invalidate();
+        }
+    }
+
+    public synchronized boolean isSelectionLocked() {
+        return selectionLocked;
+    }
+
     public synchronized void toggleSelectionAtPlayhead() {
-        if (count <= 1) return;
+        if (selectionLocked || count <= 1) return;
         selectionActive = !selectionActive;
         if (selectionActive) {
             int visibleCols = Math.max(8, Math.round(COLS / Math.max(0.25f, zoom)));
@@ -507,8 +526,8 @@ public class WaveformView extends View {
             lo = minimumZoom();
             float hi = ZOOM_STEPS[ZOOM_STEPS.length - 1];
             nz = Math.max(lo, Math.min(hi, z));
-            followMinZoom = (count > COLS / 2) && (nz <= lo + 0.0005f);
-            changed = Math.abs(nz - zoom) > 0.0001f;
+            followMinZoom = (nz <= lo + 0.001f);
+            changed = Math.abs(nz - zoom) > 0.00005f;
             zoom = nz;
         }
         if (changed) {
@@ -538,7 +557,7 @@ public class WaveformView extends View {
     public synchronized void push(float v) {
         float prevMin = minimumZoom();
         boolean wasAtMin = followMinZoom
-                || (count > COLS / 2 && Math.abs(zoom - prevMin) <= 0.0005f);
+                || (count >= COLS / 2 && zoom <= prevMin + 0.008f);
         if (count == history.length) {
             if (history.length >= MAX_HISTORY) {
                 halveHistory();
@@ -708,7 +727,20 @@ public class WaveformView extends View {
     // ---- Red Waveform Center-Playhead Coordinate Math ----
 
     private float gapPxLocked(int w) {
-        return Math.max(0.25f, (w / (float) COLS) * zoom);
+        // Never clamp at 0.25px! At w=750, COLS=150, w/COLS = 5px, so 5% zoom
+        // (zoom=0.05) was 0.25px and any zoom below 5% was blocked by the 0.25f
+        // floor, pushing bars off the left of the screen instead of fitting
+        // the whole take to the left of the center playhead!
+        return Math.max(1e-5f, (w / (float) COLS) * zoom);
+    }
+
+    /**
+     * Number of waveform bars across the full screen width — constant at
+     * {@link #SCREEN_BARS} regardless of zoom level so the screen always has
+     * the same dense concentration of bars.
+     */
+    static int screenBarCountForZoom(float z) {
+        return SCREEN_BARS;
     }
 
     /**
@@ -864,7 +896,7 @@ public class WaveformView extends View {
                     float pFrac;
                     synchronized (this) {
                         float gap = gapPxLocked(w);
-                        float barsPerPx = 1f / Math.max(0.25f, gap);
+                        float barsPerPx = 1f / gap;
                         playheadPos = Math.max(0f, Math.min(n,
                                 playheadPos - stepDx * barsPerPx));
                         playheadIndex = Math.round(playheadPos);
@@ -905,7 +937,7 @@ public class WaveformView extends View {
                             playheadPos = tappedIdx;
                             playheadIndex = tappedIdx;
                             tappedEditor = true;
-                            if (now - lastTapUpMs < 280L && count > 1) {
+                            if (!selectionLocked && now - lastTapUpMs < 280L && count > 1) {
                                 lastTapUpMs = 0L;
                                 toggledSel = true;
                             } else {
@@ -971,7 +1003,7 @@ public class WaveformView extends View {
             n = count;
             isLive = live;
             pIdx = playheadIndex;
-            headPos = isLive ? ((pIdx > 0 && pIdx <= n) ? pIdx : n) : playheadPos;
+            headPos = isLive ? ((pIdx >= 0 && pIdx <= n) ? pIdx : n) : playheadPos;
             selOn = !isLive && selectionActive && selEndIdx > selStartIdx && count > 0;
             sIdx = selStartIdx;
             eIdx = selEndIdx;
@@ -979,11 +1011,16 @@ public class WaveformView extends View {
             curZoom = zoom;
         }
 
-        // Dynamic bar concentration: subdivide each bucket into `subBars`
-        // when zoomed in (zoom > 1.0f) so high zoom has rich, dense bars!
-        int subBars = subBarsForZoom(curZoom);
-        float subGap = gap / subBars;
-        float barW = Math.max(1.5f, Math.min(4.2f * density, subGap * 0.48f));
+        // Constant high concentration of bars on screen regardless of zoom:
+        // Exactly SCREEN_BARS (300) bars fit across the full width `w`
+        // (150 bars on the left of the center playhead, 150 on the right).
+        // Each visual bar spans `bucketsPerBar` history buckets so its screen
+        // pitch is always `bucketsPerBar * gap = w / SCREEN_BARS` at ANY zoom!
+        final float barSpacingPx = w / (float) SCREEN_BARS;
+        final float bucketsPerBar = (COLS / (float) SCREEN_BARS)
+                / Math.max(1e-5f, curZoom);
+        final float barW = Math.max(1.1f,
+                Math.min(2.6f * density, barSpacingPx * 0.56f));
         barPaint.setStrokeWidth(barW);
 
         float xSelStart = centerX - (headPos - sIdx) * gap;
@@ -1001,68 +1038,67 @@ public class WaveformView extends View {
             }
         }
 
-        // 2) Draw Red Waveform Bars (with half-bar playhead crossing & dynamic zoom density)
+        // 2) Draw Red Waveform Bars (constant screen concentration across all zoom levels)
         if (n > 0) {
-            int iMin = Math.max(0, (int) Math.floor(headPos - (centerX + gap) / gap));
-            int iMax = Math.min(n - 1, (int) Math.ceil(headPos + (w - centerX + gap) / gap));
-            int step = subBars > 1 ? 1 : Math.max(1, (iMax - iMin + 1) / 300);
+            long kMin = (long) Math.floor((headPos - (centerX + barW) / gap) / bucketsPerBar) - 1L;
+            long kMax = (long) Math.ceil((headPos + (w - centerX + barW) / gap) / bucketsPerBar) + 1L;
+            long kStart = Math.max(0L, kMin);
+            long kEnd = Math.min((long) Math.ceil(n / (double) bucketsPerBar), kMax);
 
-            for (int i = iMin; i <= iMax; i += step) {
-                float v0 = 0f;
-                float vNext = 0f;
-                float vPrev = 0f;
+            for (long k = kStart; k <= kEnd; k++) {
+                float bStart = k * bucketsPerBar;
+                float bEnd = (k + 1) * bucketsPerBar;
+                if (bStart >= n || bEnd <= 0f) continue;
+
+                float barCenterBucket = (k + 0.5f) * bucketsPerBar;
+                if (barCenterBucket > n) continue;
+
+                float x = centerX - (headPos - barCenterBucket) * gap;
+                if (x < -barW || x > w + barW) continue;
+
+                float v = 0f;
                 synchronized (this) {
-                    int lim = Math.min(n, i + step);
-                    for (int k = i; k < lim; k++) {
-                        if (history[k] > v0) v0 = history[k];
-                    }
-                    vNext = (i + 1 < n) ? history[i + 1] : v0;
-                    vPrev = (i - 1 >= 0) ? history[i - 1] : v0;
-                }
-
-                int subs = (step > 1) ? 1 : subBars;
-                for (int s = 0; s < subs; s++) {
-                    // Center of this bar/sub-bar in bucket coordinates:
-                    // When subs == 1, barCenter = i + 0.5f (exact midpoint of bar i).
-                    float fracInBucket = (s + 0.5f) / subs;
-                    float barCenterBucket = i + fracInBucket * step;
-                    float x = centerX - (headPos - barCenterBucket) * gap;
-                    if (x < -barW || x > w + barW) continue;
-
-                    float v = v0;
-                    if (subs > 1) {
-                        // Smooth cosine-hermite envelope interpolation across sub-bars
-                        // so high-zoom sub-bars form a natural, organic waveform contour
+                    if (bucketsPerBar >= 1.0f) {
+                        int i0 = Math.max(0, (int) Math.floor(bStart));
+                        int i1 = Math.min(n - 1, (int) Math.ceil(bEnd) - 1);
+                        if (i1 < i0) i1 = i0;
+                        for (int idx = i0; idx <= i1; idx++) {
+                            if (history[idx] > v) v = history[idx];
+                        }
+                    } else {
+                        int idx = Math.max(0, Math.min(n - 1, (int) Math.floor(barCenterBucket)));
+                        float fracInBucket = barCenterBucket - idx;
+                        float v0 = history[idx];
+                        float vPrev = (idx - 1 >= 0) ? history[idx - 1] : v0;
+                        float vNext = (idx + 1 < n) ? history[idx + 1] : v0;
                         float targetNeighbor = (fracInBucket < 0.5f) ? vPrev : vNext;
-                        float distFromCenter = Math.abs(fracInBucket - 0.5f) * 2f; // 0 at center, 1 at edge
+                        float distFromCenter = Math.abs(fracInBucket - 0.5f) * 2f;
                         float weight = 0.5f * (1f - (float) Math.cos(Math.PI * distFromCenter)) * 0.42f;
                         v = v0 * (1f - weight) + targetNeighbor * weight;
                     }
-
-                    float bh = Math.max(2f, v * maxH * 2f);
-
-                    if (selOn && barCenterBucket >= sIdx && barCenterBucket <= eIdx) {
-                        barPaint.setColor(0xFFFF453A);
-                        barPaint.setAlpha(255);
-                    } else if (x <= centerX) {
-                        // HALF-BAR HIGHLIGHT RULE:
-                        // A bar only highlights when its center `x` has reached or
-                        // crossed to the left of `centerX` (i.e. playhead `headPos`
-                        // has crossed at least HALF of the bar: headPos >= barCenterBucket)!
-                        float vis = Math.min(1f, Math.max(0f, x / Math.max(1f, centerX)));
-                        float age = 0.35f + 0.65f * vis;
-                        barPaint.setColor(0xFFFF3B30);
-                        barPaint.setAlpha(Math.round(255 * age));
-                    } else {
-                        // Bar is in front of (to the right of) the playhead:
-                        // keep unhighlighted (dimmed translucent red) until playhead
-                        // crosses half of this bar!
-                        float rightVis = Math.min(1f, Math.max(0f, (w - x) / Math.max(1f, centerX)));
-                        barPaint.setColor(0xFFFF3B30);
-                        barPaint.setAlpha(Math.round(65 + 45 * rightVis));
-                    }
-                    canvas.drawLine(x, centerY - bh / 2f, x, centerY + bh / 2f, barPaint);
                 }
+
+                float bh = Math.max(2f, v * maxH * 2f);
+
+                if (selOn && barCenterBucket >= sIdx && barCenterBucket <= eIdx) {
+                    barPaint.setColor(0xFFFF453A);
+                    barPaint.setAlpha(255);
+                } else if (x <= centerX) {
+                    // HALF-BAR HIGHLIGHT RULE:
+                    // A bar only highlights when its center `x` has reached or
+                    // crossed to the left of `centerX` (headPos >= barCenterBucket).
+                    float vis = Math.min(1f, Math.max(0f, x / Math.max(1f, centerX)));
+                    float age = 0.35f + 0.65f * vis;
+                    barPaint.setColor(0xFFFF3B30);
+                    barPaint.setAlpha(Math.round(255 * age));
+                } else {
+                    // Bar is in front of (to the right of) the playhead:
+                    // keep dimmed translucent red until playhead crosses half of it.
+                    float rightVis = Math.min(1f, Math.max(0f, (w - x) / Math.max(1f, centerX)));
+                    barPaint.setColor(0xFFFF3B30);
+                    barPaint.setAlpha(Math.round(65 + 45 * rightVis));
+                }
+                canvas.drawLine(x, centerY - bh / 2f, x, centerY + bh / 2f, barPaint);
             }
         }
         barPaint.setAlpha(255);

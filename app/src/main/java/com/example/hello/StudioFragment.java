@@ -98,6 +98,7 @@ public class StudioFragment extends Fragment {
     private EditEngine.UndoJournal subEditorUndoJournal;
 
     private boolean replacingSelectionActive = false;
+    private long replacePassStartFrame = -1L;
     private File replaceSavedTailFile = null;
     private RawFloatPlayer studioPreviewPlayer;
     private DspChain.Config dspConfig = new DspChain.Config();
@@ -283,9 +284,8 @@ public class StudioFragment extends Fragment {
 
         // 1) "Replace" Mode Toggle Button (btnPreviewPlay):
         //    Pure toggle: pressing once selects Replace (red pill, main FAB
-        //    morphs to Mic icon), pressing again deselects Replace (normal pill,
-        //    main FAB morphs back to Play icon). NEVER calls startOrResumeCapture()
-        //    directly, so pressing Replace NEVER hides or flickers editorStrip!
+        //    morphs to Mic icon) and locks all other editing options; pressing
+        //    again deselects Replace and re-enables the other editing options.
         if (btnPreviewPlay != null) {
             PressAnim.applySoft(btnPreviewPlay, 0.95f);
             btnPreviewPlay.setOnClickListener(view -> {
@@ -293,8 +293,18 @@ public class StudioFragment extends Fragment {
                 stopStudioPreview();
                 replaceModeArmed = !replaceModeArmed;
                 if (replaceModeArmed) {
+                    if (waveform != null) {
+                        waveform.clearSelection();
+                        waveform.setSelectionLocked(true);
+                    }
+                    if (fxPanelOpen) {
+                        setFxPanelVisible(false);
+                    }
                     RawFloatPlayer.releaseWarmSpeaker();
                 } else {
+                    if (waveform != null) {
+                        waveform.setSelectionLocked(false);
+                    }
                     RawFloatPlayer.warmUpSpeaker(engine.channels);
                 }
                 paintEditorStrip();
@@ -304,9 +314,11 @@ public class StudioFragment extends Fragment {
         }
 
         // 2) "Select" Button: stays labeled "Select", simply turns red when active
+        //    (does NOT activate Select & Replace, and is blocked while Replace is on)
         if (btnSelectRange != null) {
             PressAnim.applySoft(btnSelectRange, 0.95f);
             btnSelectRange.setOnClickListener(view -> {
+                if (replaceModeArmed) return;
                 if (!ensurePausedForEditing()) return;
                 stopStudioPreview();
                 waveform.toggleSelectionAtPlayhead();
@@ -318,6 +330,7 @@ public class StudioFragment extends Fragment {
         if (btnReplaceSeg != null) {
             PressAnim.applySoft(btnReplaceSeg, 0.95f);
             btnReplaceSeg.setOnClickListener(view -> {
+                if (replaceModeArmed) return;
                 if (!ensurePausedForEditing()) return;
                 openSelectAndReplaceSubEditor();
             });
@@ -327,6 +340,7 @@ public class StudioFragment extends Fragment {
         if (btnTrimCrop != null) {
             PressAnim.applySoft(btnTrimCrop, 0.95f);
             btnTrimCrop.setOnClickListener(view -> {
+                if (replaceModeArmed) return;
                 if (!ensurePausedForEditing()) return;
                 showTrimOptionsPopup();
             });
@@ -336,6 +350,7 @@ public class StudioFragment extends Fragment {
         if (btnDspFx != null) {
             PressAnim.applySoft(btnDspFx, 0.95f);
             btnDspFx.setOnClickListener(view -> {
+                if (replaceModeArmed) return;
                 if (!ensurePausedForEditing()) return;
                 toggleFxPanel();
             });
@@ -345,6 +360,7 @@ public class StudioFragment extends Fragment {
         if (btnEditUndo != null) {
             PressAnim.applySoft(btnEditUndo, 0.95f);
             btnEditUndo.setOnClickListener(view -> {
+                if (replaceModeArmed) return;
                 if (!ensurePausedForEditing()) return;
                 performStudioUndo();
             });
@@ -399,13 +415,14 @@ public class StudioFragment extends Fragment {
                 stopStudioPreview();
                 long totalFrames = engine.totalFrames();
                 long targetFrame = Math.round(fraction * totalFrames);
-                // When the user scrolls all the way to the end of the record,
-                // switch back to normal append-record mode so pressing Resume
-                // records more audio instead of snapping back to 00:00.00!
-                if (fraction >= 0.985f || targetFrame >= totalFrames - 1200) {
+                // Never disarm replaceModeArmed while scrubbing! If the user
+                // enabled Replace at the end of the take and starts dragging
+                // back, the initial move events are near 1.0f and must keep
+                // Replace armed.
+                if (!replaceModeArmed
+                        && (fraction >= 0.995f || targetFrame >= totalFrames - 480)) {
                     targetFrame = totalFrames;
                     userScrolledWhilePaused = false;
-                    replaceModeArmed = false;
                 } else {
                     userScrolledWhilePaused = true;
                 }
@@ -1203,36 +1220,32 @@ public class StudioFragment extends Fragment {
         if (engine.state != RecordingEngine.State.PAUSED || saving) return;
         long totalFrames = engine.totalFrames();
         long curFrames = engine.cursorFrames();
-        boolean atEnd = (curFrames >= totalFrames - 1200);
-        boolean hasSel = waveform != null && waveform.hasSelection();
+        if (waveform != null && totalFrames > 0) {
+            long wfFrame = Math.round(waveform.playheadFraction() * totalFrames);
+            if (Math.abs(wfFrame - curFrames) > 240) {
+                curFrames = wfFrame;
+                engine.seekCursorFrame(curFrames);
+            }
+        }
+        boolean atEnd = (curFrames >= totalFrames - 480);
+        boolean hasSel = !replaceModeArmed && waveform != null && waveform.hasSelection();
 
         // 1) If Replace mode is selected (armed): record replacement audio in-place!
-        //    If the user armed Replace while parked at the very end of the take
-        //    (or if a selection is active), start from selection start (if selected)
-        //    or from the current playhead!
         if (replaceModeArmed) {
-            if (hasSel) {
-                long selStart = Math.round(
-                        waveform.selectionStartFraction() * totalFrames);
-                long selEnd = Math.round(
-                        waveform.selectionEndFraction() * totalFrames);
-                if (selEnd > selStart) {
-                    engine.armPunchRange(selStart, selEnd);
-                } else {
-                    engine.seekCursorFrame(selStart);
-                }
-            } else if (atEnd && totalFrames > 0) {
+            if (atEnd && totalFrames > 0) {
                 // User armed Replace while at the very end without scrolling back:
                 // step back 2 seconds (or to start of take) so Replace actually
                 // overwrites the last phrase instead of appending at the end!
                 long backFrame = Math.max(0L,
                         totalFrames - RecordingEngine.SAMPLE_RATE * 2L);
+                replacePassStartFrame = backFrame;
                 engine.seekCursorFrame(backFrame);
                 if (waveform != null) {
                     waveform.setPlayheadFraction(backFrame / (float) totalFrames);
                 }
             } else {
                 // Lock cursorExplicit = true at the exact current playhead!
+                replacePassStartFrame = curFrames;
                 engine.seekCursorFrame(curFrames);
             }
             startOrResumeCapture();
@@ -1551,6 +1564,7 @@ public class StudioFragment extends Fragment {
             engine.enterSelectAndReplaceSubSession(requireContext(), startF, endF);
             inSelectAndReplaceEditor = true;
             replaceModeArmed = false;
+            if (waveform != null) waveform.setSelectionLocked(false);
             userScrolledWhilePaused = false;
             timerText.setText(formatTimer(0));
             refreshZoomValue();
@@ -1586,6 +1600,7 @@ public class StudioFragment extends Fragment {
             engine.exitSelectAndReplaceSubSession(hasReplacementAudio, undoJournal);
             inSelectAndReplaceEditor = false;
             replaceModeArmed = false;
+            if (waveform != null) waveform.setSelectionLocked(false);
             userScrolledWhilePaused = false;
             if (waveform != null) {
                 waveform.exitSubEditorMode(hasReplacementAudio);
@@ -1626,14 +1641,17 @@ public class StudioFragment extends Fragment {
             if (engine.hasSession() && engine.dataBytes > 0 && waveform != null) {
                 long totalFrames = engine.totalFrames();
                 long curFrames = engine.cursorFrames();
-                if (curFrames < totalFrames - 1200) {
+                if (replaceModeArmed || curFrames < totalFrames - 480) {
                     // In-place Replace from playhead: snapshot for Undo, keep
                     // the entire take forward of curFrames intact (do NOT
                     // call waveform.truncateToPlayhead()), and smoothly morph
                     // the waveform bars as new audio is recorded!
+                    replacePassStartFrame = curFrames;
                     activeUndoJournal().recordSnapshot(engine.rawFile);
                     waveform.recordUndoPeaks();
                     dspBakedToRaw = false;
+                } else {
+                    replacePassStartFrame = -1L;
                 }
             }
             if (wasPaused) {
@@ -1680,10 +1698,12 @@ public class StudioFragment extends Fragment {
         engine.pauseCapture();
         setTelePaused(true);
         userScrolledWhilePaused = false;
-        // Disarm Replace after finishing a replacement pass so the user can
-        // immediately press Play to audition the replaced audio (or tap Replace
-        // again if they want to record another pass).
+        // Disarm Replace after finishing a replacement pass so other editing
+        // options unlock and the user can immediately press Play to audition.
         replaceModeArmed = false;
+        if (waveform != null) {
+            waveform.setSelectionLocked(false);
+        }
         if (replacingSelectionActive) {
             finishSelectAndReplaceIfNeeded();
         } else {
@@ -1692,8 +1712,17 @@ public class StudioFragment extends Fragment {
                     ? pausedAtFrame : total;
             engine.seekCursorFrame(target);
             if (waveform != null) {
+                if (replacePassStartFrame >= 0
+                        && target > replacePassStartFrame
+                        && engine.rawFile != null) {
+                    waveform.reloadSelectionPeaksFromWav(
+                            engine.rawFile,
+                            replacePassStartFrame / (float) total,
+                            target / (float) total);
+                }
                 waveform.setPlayheadFraction(target / (float) total);
             }
+            replacePassStartFrame = -1L;
             RawFloatPlayer.warmUpSpeaker(engine.channels);
         }
         if (fromInterruption) {
@@ -2053,7 +2082,7 @@ public class StudioFragment extends Fragment {
                     timerText.setText(formatTimer(0));
                 }
                 dbMeter.setLevel(lvl);
-                if (live && zoomValue != null) {
+                if (zoomValue != null && waveform != null && waveform.historyCount() > 0) {
                     int floor = currentMinZoomBp();
                     if (floor != zoomValue.getMin()) refreshZoomValue();
                 }
@@ -2209,57 +2238,80 @@ public class StudioFragment extends Fragment {
         }
         if (!show) return;
 
-        boolean hasSel = waveform != null && waveform.hasSelection();
+        boolean hasSel = !replaceModeArmed && waveform != null && waveform.hasSelection();
+        boolean othersEnabled = !replaceModeArmed;
         long durMs = Math.max(1L, engine.durationMs());
 
         // 1) Replace Mode Toggle Button (btnPreviewPlay)
         if (btnPreviewPlay != null) {
             btnPreviewPlay.setText("Replace");
+            btnPreviewPlay.setEnabled(true);
+            btnPreviewPlay.setClickable(true);
+            btnPreviewPlay.setAlpha(1f);
             btnPreviewPlay.setBackgroundResource(replaceModeArmed
                     ? R.drawable.bg_chip_selected : R.drawable.bg_chip);
             btnPreviewPlay.setTextColor(replaceModeArmed ? 0xFFFFFFFF : 0xFF9AA3AF);
         }
 
-        // 2) Select Button: never changes text to "Selected" — stays "Select"
-        //    and simply turns red (bg_chip_selected) when active!
+        // 2) Select Button: stays "Select" and turns red ONLY when Select is active;
+        //    disabled while Replace mode is on.
         if (btnSelectRange != null) {
             btnSelectRange.setText("Select");
+            btnSelectRange.setEnabled(othersEnabled);
+            btnSelectRange.setClickable(othersEnabled);
+            btnSelectRange.setAlpha(othersEnabled ? 1f : 0.35f);
             btnSelectRange.setBackgroundResource(hasSel
                     ? R.drawable.bg_chip_selected : R.drawable.bg_chip);
-            btnSelectRange.setTextColor(hasSel ? 0xFFFFFFFF : 0xFF9AA3AF);
+            btnSelectRange.setTextColor(!othersEnabled ? 0xFF5D6672
+                    : (hasSel ? 0xFFFFFFFF : 0xFF9AA3AF));
         }
 
-        // 3) Select & Replace Button: hidden when already inside Select & Replace sub-editor
+        // 3) Select & Replace Button: never turns red just because Select is pressed;
+        //    disabled while Replace mode is on, hidden when inside sub-editor.
         if (btnReplaceSeg != null) {
             btnReplaceSeg.setVisibility(inSelectAndReplaceEditor ? View.GONE : View.VISIBLE);
             btnReplaceSeg.setText("Select & Replace");
-            btnReplaceSeg.setBackgroundResource(hasSel
-                    ? R.drawable.bg_btn_danger : R.drawable.bg_chip);
-            btnReplaceSeg.setTextColor(hasSel ? 0xFFFF453A : 0xFF9AA3AF);
+            btnReplaceSeg.setEnabled(othersEnabled);
+            btnReplaceSeg.setClickable(othersEnabled);
+            btnReplaceSeg.setAlpha(othersEnabled ? 1f : 0.35f);
+            btnReplaceSeg.setBackgroundResource(R.drawable.bg_chip);
+            btnReplaceSeg.setTextColor(!othersEnabled ? 0xFF5D6672
+                    : (hasSel ? 0xFFF2F4F7 : 0xFF9AA3AF));
         }
 
-        // 4) Trim Button
+        // 4) Trim Button: disabled while Replace mode is on.
         if (btnTrimCrop != null) {
             btnTrimCrop.setText("Trim");
-            btnTrimCrop.setAlpha(hasSel ? 1f : 0.75f);
-            btnTrimCrop.setTextColor(hasSel ? 0xFFF2F4F7 : 0xFF9AA3AF);
+            btnTrimCrop.setEnabled(othersEnabled);
+            btnTrimCrop.setClickable(othersEnabled);
+            btnTrimCrop.setAlpha(!othersEnabled ? 0.35f : (hasSel ? 1f : 0.75f));
+            btnTrimCrop.setBackgroundResource(R.drawable.bg_chip);
+            btnTrimCrop.setTextColor(!othersEnabled ? 0xFF5D6672
+                    : (hasSel ? 0xFFF2F4F7 : 0xFF9AA3AF));
         }
 
-        // 5) FX Button
+        // 5) FX Button: disabled while Replace mode is on.
         if (btnDspFx != null) {
-            boolean fxActive = fxPanelOpen || (dspConfig != null && dspConfig.isActive());
+            boolean fxActive = othersEnabled
+                    && (fxPanelOpen || (dspConfig != null && dspConfig.isActive()));
             btnDspFx.setText(dspConfig != null && dspConfig.isActive()
                     ? dspConfig.badgeSummary() : "FX");
+            btnDspFx.setEnabled(othersEnabled);
+            btnDspFx.setClickable(othersEnabled);
+            btnDspFx.setAlpha(othersEnabled ? 1f : 0.35f);
             btnDspFx.setBackgroundResource(fxActive
                     ? R.drawable.bg_chip_selected : R.drawable.bg_chip);
-            btnDspFx.setTextColor(fxActive ? 0xFFFFFFFF : 0xFF9AA3AF);
+            btnDspFx.setTextColor(!othersEnabled ? 0xFF5D6672
+                    : (fxActive ? 0xFFFFFFFF : 0xFF9AA3AF));
         }
 
-        // 6) Undo Button
+        // 6) Undo Button: disabled while Replace mode is on.
         if (btnEditUndo != null) {
             EditEngine.UndoJournal uj = activeUndoJournal();
-            boolean canUndo = uj != null && uj.canUndo();
-            btnEditUndo.setAlpha(canUndo ? 1f : 0.40f);
+            boolean canUndo = othersEnabled && uj != null && uj.canUndo();
+            btnEditUndo.setEnabled(canUndo);
+            btnEditUndo.setClickable(canUndo);
+            btnEditUndo.setAlpha(canUndo ? 1f : 0.35f);
             btnEditUndo.setTextColor(canUndo ? 0xFFF2F4F7 : 0xFF5D6672);
         }
 
