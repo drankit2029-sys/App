@@ -1129,11 +1129,6 @@ public class StudioFragment extends Fragment {
      * Strictly enforces that editing options can only be used when the Studio
      * is in the PAUSED state with recorded audio.
      */
-    /** Edits route to the sub-editor journal while inside Select & Replace. */
-    private EditEngine.UndoJournal activeUndoJournal() {
-        return inSelectAndReplaceEditor ? subEditorUndoJournal : undoJournal;
-    }
-
     private boolean ensurePausedForEditing() {
         if (!isAdded()) return false;
         if (engine.state == RecordingEngine.State.RECORDING) {
