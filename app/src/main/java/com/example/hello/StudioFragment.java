@@ -2280,8 +2280,9 @@ public class StudioFragment extends Fragment {
                     || engine.cursorFrames() < engine.totalFrames() - 1200) {
                 hintText.setText("Playhead " + formatTimer(engine.cursorMs())
                         + " • Tap Resume to play or tap Replace");
-        } else {
-            hintText.setText("Scroll waveform to scrub or tap Select");
+            } else {
+                hintText.setText("Scroll waveform to scrub or tap Select");
+            }
         }
         syncStudioFabIcon();
     }
@@ -2319,7 +2320,6 @@ public class StudioFragment extends Fragment {
             }
             act.syncFabWithEngine();
         } catch (Exception ignored) {}
-    }
     }
 
     private void runEditOperation(boolean isTrim) {
