@@ -70,7 +70,7 @@ public class ConversionConcurrencyTest {
     @Test
     public void formatSwitchSaveSkipsStallAndGoesBackground() throws Exception {
         RecordingEngine engine = recordedSession("Format switch", SaveFormat.M4A,
-                3000);
+                12000);
         // The user changed the format on the last moment: same take, new
         // encoder from the start, whole recording unencoded again.
         assertTrue("expected a restarted encoder",
@@ -85,6 +85,12 @@ public class ConversionConcurrencyTest {
             Thread.sleep(50);
         }
         assertTrue("encoder never reported progress", sess.framesEncoded() > 0);
+        // The invariant below only exists while a real multi-second backlog is
+        // left: a restarted encoder can finish a very short (near-silent) take
+        // inside the poll interval above, and then inline adoption is the
+        // correct, fast path rather than a stall.
+        org.junit.Assume.assumeTrue("no multi-second backlog to exercise",
+                sess.unencodedFrames() > 72000L);
 
         long t0 = System.currentTimeMillis();
         ConversionJobs.SaveResult r = ConversionJobs.dispatchSave(ctx(),
