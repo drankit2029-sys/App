@@ -17,8 +17,13 @@ public final class DspChain {
     private static final int DECIM = 16;
     private static final float INV_DECIM = 1.0f / DECIM;
 
-    /** Immutable or live-updated user FX configuration. */
+    /** Immutable or live-updated user FX configuration with explicit 3-way mode state. */
     public static final class Config {
+        public static final int MODE_OFF = 0;
+        public static final int MODE_NOISE_SUPPRESSION = 1;
+        public static final int MODE_CUSTOM = 2;
+
+        public int mode = MODE_OFF;
         public boolean hpfEnabled = false;
         /** 0..100%: 3-band adaptive noise floor suppression. */
         public int noisePct = 0;
@@ -27,6 +32,13 @@ public final class DspChain {
         /** 0..100%: soft-knee vocal/master compressor + auto-makeup + limiter. */
         public int compPct = 0;
 
+        // Remembered Custom preset values so switching Noise Suppression <-> Custom
+        // always restores the user's distinct Custom settings.
+        public boolean customHpf = true;
+        public int customNoisePct = 35;
+        public int customDeEssPct = 30;
+        public int customCompPct = 30;
+
         public Config() {}
 
         public Config(boolean hpf, int noise, int deEss, int comp) {
@@ -34,6 +46,70 @@ public final class DspChain {
             this.noisePct = clamp(noise);
             this.deEssPct = clamp(deEss);
             this.compPct = clamp(comp);
+            if (!isActive()) {
+                this.mode = MODE_OFF;
+            } else if (hpf && this.noisePct == 50
+                    && this.deEssPct == 45 && this.compPct == 40) {
+                this.mode = MODE_NOISE_SUPPRESSION;
+            } else {
+                this.mode = MODE_CUSTOM;
+                this.customHpf = hpf;
+                this.customNoisePct = this.noisePct;
+                this.customDeEssPct = this.deEssPct;
+                this.customCompPct = this.compPct;
+            }
+        }
+
+        /** Switches between MODE_OFF, MODE_NOISE_SUPPRESSION, and MODE_CUSTOM interchangeably. */
+        public void applyMode(int targetMode) {
+            if (targetMode == MODE_OFF) {
+                this.mode = MODE_OFF;
+                this.hpfEnabled = false;
+                this.noisePct = 0;
+                this.deEssPct = 0;
+                this.compPct = 0;
+            } else if (targetMode == MODE_NOISE_SUPPRESSION) {
+                this.mode = MODE_NOISE_SUPPRESSION;
+                this.hpfEnabled = true;
+                this.noisePct = 50;
+                this.deEssPct = 45;
+                this.compPct = 40;
+            } else {
+                this.mode = MODE_CUSTOM;
+                if (!customHpf && customNoisePct <= 0
+                        && customDeEssPct <= 0 && customCompPct <= 0) {
+                    customHpf = true;
+                    customNoisePct = 35;
+                    customDeEssPct = 30;
+                    customCompPct = 30;
+                }
+                this.hpfEnabled = customHpf;
+                this.noisePct = clamp(customNoisePct);
+                this.deEssPct = clamp(customDeEssPct);
+                this.compPct = clamp(customCompPct);
+            }
+        }
+
+        /** Called when the user manually tweaks any slider or toggle. */
+        public void onManualAdjustment() {
+            onManualAdjustment(hpfEnabled, noisePct, deEssPct, compPct);
+        }
+
+        /** Called when the user manually tweaks any slider or toggle. */
+        public void onManualAdjustment(boolean hpf, int noise, int deEss, int comp) {
+            this.hpfEnabled = hpf;
+            this.noisePct = clamp(noise);
+            this.deEssPct = clamp(deEss);
+            this.compPct = clamp(comp);
+            if (!isActive()) {
+                this.mode = MODE_OFF;
+            } else {
+                this.mode = MODE_CUSTOM;
+                this.customHpf = this.hpfEnabled;
+                this.customNoisePct = this.noisePct;
+                this.customDeEssPct = this.deEssPct;
+                this.customCompPct = this.compPct;
+            }
         }
 
         public boolean isActive() {
@@ -41,17 +117,18 @@ public final class DspChain {
         }
 
         public String badgeSummary() {
-            if (!isActive()) return "FX Off";
-            if (hpfEnabled && noisePct == 50 && deEssPct == 45 && compPct == 40) {
+            if (!isActive() || mode == MODE_OFF) return "FX Off";
+            if (mode == MODE_NOISE_SUPPRESSION
+                    || (hpfEnabled && noisePct == 50 && deEssPct == 45 && compPct == 40)) {
                 return "FX • Polish";
             }
-            int activeCount = (hpfEnabled ? 1 : 0) + (noisePct > 0 ? 1 : 0)
-                    + (deEssPct > 0 ? 1 : 0) + (compPct > 0 ? 1 : 0);
-            return "FX • " + activeCount + " On";
+            return "FX • Custom";
         }
 
         public static Config voicePolish() {
-            return new Config(true, 50, 45, 40);
+            Config c = new Config(true, 50, 45, 40);
+            c.mode = MODE_NOISE_SUPPRESSION;
+            return c;
         }
 
         public static Config load(Context ctx) {
@@ -64,6 +141,23 @@ public final class DspChain {
                 c.noisePct = clamp(p.getInt("dsp_noise", 0));
                 c.deEssPct = clamp(p.getInt("dsp_deess", 0));
                 c.compPct = clamp(p.getInt("dsp_comp", 0));
+                c.customHpf = p.getBoolean("dsp_custom_hpf", true);
+                c.customNoisePct = clamp(p.getInt("dsp_custom_noise", 35));
+                c.customDeEssPct = clamp(p.getInt("dsp_custom_deess", 30));
+                c.customCompPct = clamp(p.getInt("dsp_custom_comp", 30));
+                int savedMode = p.getInt("dsp_mode", -1);
+                if (savedMode >= MODE_OFF && savedMode <= MODE_CUSTOM) {
+                    c.mode = savedMode;
+                    if (!c.isActive()) c.mode = MODE_OFF;
+                } else {
+                    if (!c.isActive()) c.mode = MODE_OFF;
+                    else if (c.hpfEnabled && c.noisePct == 50
+                            && c.deEssPct == 45 && c.compPct == 40) {
+                        c.mode = MODE_NOISE_SUPPRESSION;
+                    } else {
+                        c.mode = MODE_CUSTOM;
+                    }
+                }
             } catch (Exception ignored) {}
             return c;
         }
@@ -72,10 +166,15 @@ public final class DspChain {
             if (ctx == null) return;
             try {
                 ctx.getSharedPreferences("takeone", Context.MODE_PRIVATE).edit()
+                        .putInt("dsp_mode", mode)
                         .putBoolean("dsp_hpf", hpfEnabled)
                         .putInt("dsp_noise", clamp(noisePct))
                         .putInt("dsp_deess", clamp(deEssPct))
                         .putInt("dsp_comp", clamp(compPct))
+                        .putBoolean("dsp_custom_hpf", customHpf)
+                        .putInt("dsp_custom_noise", clamp(customNoisePct))
+                        .putInt("dsp_custom_deess", clamp(customDeEssPct))
+                        .putInt("dsp_custom_comp", clamp(customCompPct))
                         .apply();
             } catch (Exception ignored) {}
         }
@@ -255,7 +354,6 @@ public final class DspChain {
                             ? (1.0f - 0.75f * nAmt)
                             : (1.0f - 0.88f * nAmt);
                     g = Math.max(floorG, Math.min(1.0f, g));
-                    // Fast attack (open gate on speech), smooth release
                     float smooth = g > nsTargetGain[b] ? 0.35f
                             : (b == 2 ? 0.08f : 0.035f);
                     nsTargetGain[b] += smooth * (g - nsTargetGain[b]);
@@ -373,33 +471,26 @@ public final class DspChain {
         }
     }
 
-    /**
-     * Fast IEEE-754 bit-level 20*log10(x) approximation (+/- 0.08 dB accuracy).
-     * 8x faster than Math.log10() on budget Cortex-A53 cores.
-     */
     public static float fastLinToDb(float x) {
         if (x <= 1e-7f) return -140.0f;
         int bits = Float.floatToRawIntBits(x);
         int exp = ((bits >>> 23) & 0xFF) - 127;
         float m = Float.intBitsToFloat((bits & 0x007FFFFF) | 0x3F800000);
-        // 2nd-order minimax fit for log2(m) on [1, 2)
         float log2m = -0.34484843f * m * m + 2.02466578f * m - 1.67487759f;
         return (exp + log2m) * 6.0205999f;
     }
 
-    /**
-     * Fast IEEE-754 bit-level 10^(db/20) approximation.
-     */
     public static float fastDbToLin(float db) {
         if (db <= -140.0f) return 0.0f;
         if (db > 36.0f) db = 36.0f;
-        float p = db * 0.16609640f; // db / 6.0205999f = log2(lin)
+        float p = db * 0.16609640f;
         int exp = (int) Math.floor(p);
         float f = p - exp;
-        // 2nd-order minimax fit for 2^f on [0, 1)
         float mant = 0.33971f * f * f + 0.66029f * f + 1.0f;
         int bits = Float.floatToRawIntBits(mant);
         bits += (exp << 23);
         return Float.intBitsToFloat(bits);
     }
 }
+
+

@@ -67,14 +67,18 @@ public class StudioFragment extends Fragment {
     private TextView btnCutDelete;
     private TextView btnDspFx;
     private TextView btnEditUndo;
-    private android.widget.ProgressBar editProgressBar;
-    private TextView editTimeStart;
-    private TextView editTimeEnd;
     private boolean replacingSelectionActive = false;
     private File replaceSavedTailFile = null;
     private RawFloatPlayer studioPreviewPlayer;
     private DspChain.Config dspConfig = new DspChain.Config();
     private DspChain livePreviewDsp;
+    /**
+     * True once the current dspConfig has been baked into `raw` via "Apply FX",
+     * so live preview does not double-process the audio while keeping the UI
+     * mode badge ("FX • Polish" / "FX • Custom") visible. Reset to false
+     * whenever the user changes any FX setting or records/undos audio.
+     */
+    private boolean dspBakedToRaw = false;
     private EditEngine.UndoJournal undoJournal;
     private DbMeterView dbMeter;
     private View settingsRow;
@@ -229,11 +233,9 @@ public class StudioFragment extends Fragment {
         btnCutDelete = v.findViewById(R.id.btnCutDelete);
         btnDspFx = v.findViewById(R.id.btnDspFx);
         btnEditUndo = v.findViewById(R.id.btnEditUndo);
-        editProgressBar = v.findViewById(R.id.editProgressBar);
-        editTimeStart = v.findViewById(R.id.editTimeStart);
-        editTimeEnd = v.findViewById(R.id.editTimeEnd);
 
         dspConfig = DspChain.Config.load(requireContext());
+        dspBakedToRaw = false;
         undoJournal = new EditEngine.UndoJournal(RecordingEngine.takesDir(requireContext()));
 
         // Cut button is retired in favor of Trim + Select & Replace; keep view GONE
@@ -1147,8 +1149,8 @@ public class StudioFragment extends Fragment {
     /**
      * Dedicated Select & Replace: allows the user to select `[selStart, selEnd]`
      * on the red waveform and record a new replacement of ANY length (shorter
-     * or longer than the selected part). The post-selection tail `[selEnd, end)`
-     * is preserved and automatically crossfaded back when the user pauses/stops!
+     * or longer than the selected part). Both the audio file AND the in-memory
+     * red waveform peaks preserve the post-selection tail and splice it back on Pause!
      */
     private void startSelectAndReplaceRecording() {
         if (!isAdded() || saving) return;
@@ -1159,7 +1161,7 @@ public class StudioFragment extends Fragment {
             waveform.toggleSelectionAtPlayhead();
             paintEditorStrip();
             Toast.makeText(requireContext(),
-                    "Drag [ ] handles to select segment, then tap Replace",
+                    "Drag [ ] handles on the waveform, then tap Replace again",
                     Toast.LENGTH_SHORT).show();
             return;
         }
@@ -1180,17 +1182,18 @@ public class StudioFragment extends Fragment {
             if (undoJournal != null) {
                 undoJournal.recordSnapshot(raw);
             }
-            // Save the surviving tail [endF, totalFrames) so replacement can be
-            // shorter OR longer than [startF, endF]!
+            // Snapshot & stash post-selection waveform peaks so the red waveform
+            // stays at 20 bars/sec without reloading 400 bars/sec from disk!
+            waveform.recordUndoPeaks();
+            waveform.beginReplaceSelection();
+
             replaceSavedTailFile = new File(raw.getParentFile(),
                     raw.getName() + ".reptail");
             EditEngine.saveTailFrom(raw, endF, replaceSavedTailFile);
             replacingSelectionActive = true;
+            dspBakedToRaw = false;
 
-            // Position cursor at startF (open-ended, truncating old bytes past startF)
             engine.seekCursorFrame(startF);
-            waveform.clearSelection();
-            waveform.truncateToFraction(sFrac);
             ensurePermissionThenStart();
         } catch (Exception e) {
             replacingSelectionActive = false;
@@ -1204,7 +1207,7 @@ public class StudioFragment extends Fragment {
         }
     }
 
-    /** If a variable-length Select & Replace was active, splices the saved tail back. */
+    /** Splices both the audio tail and the red waveform peak tail back on Pause/Stop. */
     private void finishSelectAndReplaceIfNeeded() {
         if (!replacingSelectionActive) return;
         replacingSelectionActive = false;
@@ -1220,8 +1223,11 @@ public class StudioFragment extends Fragment {
             engine.dataBytes = newBytes;
             long newTotal = engine.totalFrames();
             engine.seekCursorFrame(Math.min(replaceEndFrame, newTotal));
-            reloadWaveformPreservingPlayhead(
-                    newTotal > 0 ? (replaceEndFrame / (float) newTotal) : 1f);
+            if (waveform != null) {
+                waveform.finishReplaceSelection();
+                refreshZoomValue();
+            }
+            paintEditorStrip();
         } catch (Exception ignored) {
             // noinspection ResultOfMethodCallIgnored
             tail.delete();
@@ -1254,12 +1260,12 @@ public class StudioFragment extends Fragment {
                 long totalFrames = engine.totalFrames();
                 long curFrames = engine.cursorFrames();
                 if (curFrames < totalFrames - 1200) {
-                    // Immediate playhead replacement for accidental misspells:
-                    // snapshot for Undo and truncate the red waveform to the playhead!
                     if (undoJournal != null) {
                         undoJournal.recordSnapshot(engine.rawFile);
                     }
+                    waveform.recordUndoPeaks();
                     waveform.truncateToPlayhead();
+                    dspBakedToRaw = false;
                 }
             }
             if (wasPaused) {
@@ -1305,16 +1311,12 @@ public class StudioFragment extends Fragment {
         if (replacingSelectionActive) {
             finishSelectAndReplaceIfNeeded();
         } else {
-            // Keep the red waveform in place! Only sync cursor to end if not already
-            // positioned, and if this was a very short take (< 15 buckets), load
-            // high-res peaks without switching waveform style.
+            // Leave the red waveform completely as-is when Pause is pressed!
+            // Never clear or reload 400-bars/sec from disk; just park playhead
+            // at the end so the user can immediately scroll through it.
             engine.seekCursorFrame(engine.totalFrames());
             if (waveform != null) {
-                if (waveform.historyCount() < 16) {
-                    reloadWaveformPreservingPlayhead(1f);
-                } else {
-                    waveform.setPlayheadFraction(1f);
-                }
+                waveform.setPlayheadFraction(1f);
             }
         }
         if (fromInterruption) {
@@ -1336,45 +1338,6 @@ public class StudioFragment extends Fragment {
         } catch (Exception ignored) {}
     }
 
-    /** Reloads peak buckets from disk after Trim / Undo / Splice while keeping playheadFrac. */
-    private void reloadWaveformPreservingPlayhead(final float playheadFrac) {
-        try {
-            if (waveform == null || !engine.hasSession()) return;
-            File raw = engine.rawFile;
-            if (raw == null || !raw.exists()) return;
-            if (RecordingEngine.payloadBytesOf(raw) <= 0) return;
-            waveform.clear();
-            waveform.loadFromFloatWav(raw, () -> {
-                if (isAdded() && getView() != null) {
-                    waveform.setPlayheadFraction(
-                            Math.max(0f, Math.min(1f, playheadFrac)));
-                    refreshZoomValue();
-                    paintEditorStrip();
-                }
-            });
-        } catch (Exception ignored) {}
-    }
-
-    /** Clears existing peaks and reloads high-resolution buckets from disk. */
-    private void reloadWaveformCleanly() {
-        try {
-            if (waveform == null || !engine.hasSession()) return;
-            File raw = engine.rawFile;
-            if (raw == null || !raw.exists()) return;
-            if (RecordingEngine.payloadBytesOf(raw) <= 0) return;
-            waveform.clear();
-            waveform.loadFromFloatWav(raw, () -> {
-                if (isAdded() && getView() != null) {
-                    long total = Math.max(1L, engine.totalFrames());
-                    waveform.setPlayheadFraction(
-                            Math.min(1f, engine.cursorFrames() / (float) total));
-                    refreshZoomValue();
-                    paintEditorStrip();
-                }
-            });
-        } catch (Exception ignored) {}
-    }
-
     private void resumeTake() {
         if (engine.state != RecordingEngine.State.PAUSED || saving) return;
         startOrResumeCapture();
@@ -1389,6 +1352,25 @@ public class StudioFragment extends Fragment {
         if (replacingSelectionActive
                 && engine.state != RecordingEngine.State.RECORDING) {
             finishSelectAndReplaceIfNeeded();
+        }
+        // If the user enabled FX (Noise Suppression or Custom) in the FX dialog
+        // and tapped "Done" without tapping "Apply to Take", bake the active
+        // DspChain into `raw` now so the saved file actually contains the FX!
+        if (dspConfig != null && dspConfig.isActive() && !dspBakedToRaw) {
+            try {
+                File raw = engine.rawFile;
+                if (raw != null && raw.exists()) {
+                    FormatConverter.WavInfo info = FormatConverter.readFloatWav(raw);
+                    long totalFrames = info.dataBytes / 4 / Math.max(1, info.channels);
+                    if (totalFrames > 0) {
+                        DspChain chain = new DspChain(info.channels, dspConfig);
+                        EditEngine.applyDspToRange(raw, 0, totalFrames, chain, null);
+                        engine.abortStreaming();
+                        engine.dataBytes = RecordingEngine.payloadBytesOf(raw);
+                        dspBakedToRaw = true;
+                    }
+                }
+            } catch (Exception ignored) {}
         }
         final long editId = editSourceId;
         final String editTitle = editSourceTitle;
@@ -1663,8 +1645,10 @@ public class StudioFragment extends Fragment {
                     lastWaveLive = live;
                     waveform.setLive(live);
                     if (!live && engine.hasSession()) {
-                        engine.seekCursorFrame(engine.totalFrames());
-                        reloadWaveformCleanly();
+                        // Do NOT call reloadWaveformCleanly() here! Leaving the
+                        // red waveform untouched on Pause prevents the 20x
+                        // bar-explosion that filled the whole screen.
+                        paintEditorStrip();
                     }
                 }
                 float lvl = live ? engine.level : 0f;
@@ -1709,7 +1693,7 @@ public class StudioFragment extends Fragment {
         return pendingName;
     }
 
-    /** Fills the waveform from an attached edit/recovery file (BUG-04 & NEW-05). */
+    /** Fills the waveform at 20 bars/sec for an attached edit/recovery file. */
     private void restoreWaveformForAttachedSession() {
         try {
             if (waveform == null || !engine.hasSession()) return;
@@ -1717,9 +1701,12 @@ public class StudioFragment extends Fragment {
             if (raw == null || !raw.exists()) return;
             if (RecordingEngine.payloadBytesOf(raw) <= 0) return;
             if (waveform.historyCount() > 0) return;
-            waveform.loadFromFloatWav(raw, () -> {
+            waveform.loadFromFloatWavTwentyHz(raw, () -> {
                 if (isAdded() && getView() != null) {
+                    engine.seekCursorFrame(engine.totalFrames());
+                    waveform.setPlayheadFraction(1f);
                     refreshZoomValue();
+                    paintEditorStrip();
                 }
             });
         } catch (Exception ignored) {}
@@ -1745,7 +1732,11 @@ public class StudioFragment extends Fragment {
             if (info.channels < 1 || info.channels > 2) return;
             long totalFrames = info.dataBytes / 4 / info.channels;
             if (totalFrames <= 0) return;
-            livePreviewDsp = new DspChain(info.channels, dspConfig);
+            // Only run livePreviewDsp if dspConfig has NOT already been baked
+            // into `raw` (prevents double-applying FX while keeping badge active).
+            DspChain.Config activeCfg = dspBakedToRaw
+                    ? new DspChain.Config() : dspConfig;
+            livePreviewDsp = new DspChain(info.channels, activeCfg);
             final RawFloatPlayer[] slot = new RawFloatPlayer[1];
             slot[0] = new RawFloatPlayer(raw, completed -> handler.post(() -> {
                 if (studioPreviewPlayer == slot[0]) {
@@ -1821,11 +1812,11 @@ public class StudioFragment extends Fragment {
         if (show && editorStrip.getVisibility() != View.VISIBLE) {
             editorStrip.setVisibility(View.VISIBLE);
             editorStrip.setAlpha(0f);
-            editorStrip.setTranslationY(-8f);
+            editorStrip.setTranslationY(-6f);
             editorStrip.animate().cancel();
             editorStrip.animate()
                     .alpha(1f).translationY(0f)
-                    .setDuration(220)
+                    .setDuration(180)
                     .setInterpolator(new android.view.animation.DecelerateInterpolator(1.4f))
                     .start();
         } else if (!show && editorStrip.getVisibility() == View.VISIBLE) {
@@ -1837,23 +1828,6 @@ public class StudioFragment extends Fragment {
 
         boolean hasSel = waveform != null && waveform.hasSelection();
         long durMs = Math.max(1L, engine.durationMs());
-        long curMs = studioPreviewPlayer != null
-                ? studioPreviewPlayer.positionMs() : engine.cursorMs();
-
-        if (editProgressBar != null) {
-            int prog = (int) Math.max(0, Math.min(1000, curMs * 1000L / durMs));
-            editProgressBar.setProgress(prog);
-        }
-        if (editTimeStart != null) {
-            editTimeStart.setText(hasSel
-                    ? formatTimer(Math.round(waveform.selectionStartFraction() * durMs))
-                    : formatTimer(curMs));
-        }
-        if (editTimeEnd != null) {
-            editTimeEnd.setText(hasSel
-                    ? formatTimer(Math.round(waveform.selectionEndFraction() * durMs))
-                    : formatTimer(durMs));
-        }
 
         if (btnSelectRange != null) {
             btnSelectRange.setText(hasSel ? "[✓] Selected" : "[ ] Select");
@@ -1901,7 +1875,7 @@ public class StudioFragment extends Fragment {
                 hintText.setText("Playhead " + formatTimer(engine.cursorMs())
                         + " • Resume replaces from here");
             } else {
-                hintText.setText("Scroll red waveform to scrub or tap [ ] Select");
+                hintText.setText("Scroll waveform to scrub or tap [ ] Select");
             }
         }
     }
@@ -1930,25 +1904,30 @@ public class StudioFragment extends Fragment {
                     waveform.selectionStartFraction() * totalFrames);
             long end = Math.round(
                     waveform.selectionEndFraction() * totalFrames);
+            waveform.recordUndoPeaks();
             if (isTrim) {
                 EditEngine.cropToSelection(raw, start, end, undoJournal);
+                waveform.cropToSelectionBuckets();
             } else {
                 EditEngine.deleteSelection(raw, start, end, undoJournal);
+                waveform.deleteSelectionBuckets();
             }
-            // Invalidate any incremental StreamingEncoder so save encodes the
-            // newly edited audio instead of adopting a stale pre-edit .part!
             engine.abortStreaming();
             engine.dataBytes = RecordingEngine.payloadBytesOf(raw);
             long newTotal = engine.totalFrames();
             long nextCursor = isTrim ? newTotal : Math.min(start, newTotal);
             engine.seekCursorFrame(nextCursor);
-            waveform.clearSelection();
-            reloadWaveformCleanly();
+            refreshZoomValue();
             timerText.setText(formatTimer(engine.cursorMs()));
+            Toast.makeText(requireContext(),
+                    isTrim ? "Trimmed to selection" : "Selection removed",
+                    Toast.LENGTH_SHORT).show();
         } catch (IllegalArgumentException iae) {
+            waveform.popUndoPeaks();
             Toast.makeText(requireContext(), iae.getMessage(),
                     Toast.LENGTH_SHORT).show();
         } catch (Exception e) {
+            waveform.popUndoPeaks();
             Toast.makeText(requireContext(), "Edit failed",
                     Toast.LENGTH_SHORT).show();
         }
@@ -1966,12 +1945,17 @@ public class StudioFragment extends Fragment {
                 engine.dataBytes = RecordingEngine.payloadBytesOf(raw);
                 engine.seekCursorFrame(engine.totalFrames());
                 if (waveform != null) {
-                    waveform.clearSelection();
-                    reloadWaveformCleanly();
+                    if (!waveform.popUndoPeaks()) {
+                        waveform.loadFromFloatWavTwentyHz(raw, this::refreshZoomValue);
+                    } else {
+                        refreshZoomValue();
+                    }
                 }
                 if (timerText != null) {
                     timerText.setText(formatTimer(engine.durationMs()));
                 }
+                Toast.makeText(requireContext(), "Undid last edit",
+                        Toast.LENGTH_SHORT).show();
             }
         } catch (Exception ignored) {}
         paint();
@@ -1981,12 +1965,12 @@ public class StudioFragment extends Fragment {
         if (!isAdded()) return false;
         stopStudioPreview();
         if (dspConfig == null || !dspConfig.isActive()) {
-            Toast.makeText(requireContext(), "Turn on an effect first",
+            Toast.makeText(requireContext(), "Select Noise Suppression or Custom first",
                     Toast.LENGTH_SHORT).show();
             return false;
         }
         if (engine.state == RecordingEngine.State.RECORDING) {
-            Toast.makeText(requireContext(), "Stop recording first",
+            Toast.makeText(requireContext(), "Pause recording first",
                     Toast.LENGTH_SHORT).show();
             return false;
         }
@@ -1998,7 +1982,8 @@ public class StudioFragment extends Fragment {
             if (totalFrames <= 0) return false;
             long start = 0;
             long end = totalFrames;
-            if (waveform.hasSelection()) {
+            boolean hadSel = waveform.hasSelection();
+            if (hadSel) {
                 start = Math.round(
                         waveform.selectionStartFraction() * totalFrames);
                 end = Math.round(
@@ -2009,24 +1994,23 @@ public class StudioFragment extends Fragment {
                         Toast.LENGTH_SHORT).show();
                 return false;
             }
+            waveform.recordUndoPeaks();
             DspChain chain = new DspChain(info.channels, dspConfig);
             EditEngine.applyDspToRange(raw, start, end, chain, undoJournal);
-            // DSP rewrites samples in place: drop any incremental .part so
-            // save re-encodes the processed audio instead of adopting stale
-            // pre-FX bytes (same hazard as trim/cut/undo).
             engine.abortStreaming();
             engine.dataBytes = RecordingEngine.payloadBytesOf(raw);
-            // Reset dspConfig after baking into raw so subsequent previews
-            // do not double-apply the effects on top of the processed audio!
-            dspConfig = new DspChain.Config();
-            dspConfig.save(requireContext());
-            if (livePreviewDsp != null) livePreviewDsp.updateConfig(dspConfig);
-            float keepFrac = waveform.playheadFraction();
+            // Keep dspConfig's mode visible in the UI while marking dspBakedToRaw
+            // so preview does not double-process the baked audio!
+            dspBakedToRaw = !hadSel;
+            if (livePreviewDsp != null) {
+                livePreviewDsp.updateConfig(dspBakedToRaw
+                        ? new DspChain.Config() : dspConfig);
+            }
             waveform.clearSelection();
-            reloadWaveformPreservingPlayhead(keepFrac);
             Toast.makeText(requireContext(), "FX applied (Undo available)",
                     Toast.LENGTH_SHORT).show();
         } catch (Exception e) {
+            if (waveform != null) waveform.popUndoPeaks();
             Toast.makeText(requireContext(), "FX failed",
                     Toast.LENGTH_SHORT).show();
             return false;
@@ -2077,7 +2061,8 @@ public class StudioFragment extends Fragment {
         subLp.topMargin = Math.round(3 * density);
         root.addView(sub, subLp);
 
-        // 1) Aligned 3-Way Segmented Mode Selector: Off | Voice Polish | Custom
+        // 1) Interchangeable 3-Way Segmented Mode Selector:
+        //    Off (MODE_OFF) | Noise Suppression (MODE_NOISE_SUPPRESSION) | Custom (MODE_CUSTOM)
         android.widget.LinearLayout presetRow = new android.widget.LinearLayout(ctx);
         presetRow.setOrientation(android.widget.LinearLayout.HORIZONTAL);
         presetRow.setBackgroundResource(R.drawable.bg_search);
@@ -2091,14 +2076,14 @@ public class StudioFragment extends Fragment {
         root.addView(presetRow, prLp);
 
         TextView btnBypass = new TextView(ctx);
-        TextView btnPolish = new TextView(ctx);
+        TextView btnNoiseSupp = new TextView(ctx);
         TextView btnCustom = new TextView(ctx);
-        TextView[] modeBtns = {btnBypass, btnPolish, btnCustom};
-        String[] modeNames = {"FX Off", "Voice Polish", "Custom"};
+        TextView[] modeBtns = {btnBypass, btnNoiseSupp, btnCustom};
+        String[] modeNames = {"Off", "Noise Suppression", "Custom"};
         for (int i = 0; i < 3; i++) {
             TextView b = modeBtns[i];
             b.setText(modeNames[i]);
-            b.setTextSize(11.5f);
+            b.setTextSize(11f);
             b.setGravity(android.view.Gravity.CENTER);
             b.setSingleLine(true);
             b.setTypeface(android.graphics.Typeface.create(
@@ -2113,7 +2098,7 @@ public class StudioFragment extends Fragment {
             PressAnim.applySoft(b, 0.96f);
         }
 
-        // 2) Effect Cards with aligned header, status dot, progress bar, and TeleValue
+        // 2) Effect Cards with aligned header, status badge, progress bar, and TeleValue
         TeleValue noiseCtl = new TeleValue(ctx);
         noiseCtl.configure(0, 100, 5, dspConfig.noisePct, "%");
         android.widget.ProgressBar noiseBar = new android.widget.ProgressBar(
@@ -2189,24 +2174,23 @@ public class StudioFragment extends Fragment {
 
         TextView btnApply = new TextView(ctx);
 
-        // Central state painter: clearly indicates selected mode & each active toggle
-        Runnable syncUiAndLiveDsp = () -> {
-            dspConfig.noisePct = noiseCtl.getValue();
-            dspConfig.deEssPct = deEssCtl.getValue();
-            dspConfig.compPct = compCtl.getValue();
+        // Guard flag so programmatic setValue() during mode switches does not
+        // trigger manual-override into MODE_CUSTOM.
+        final boolean[] programmaticUpdate = {false};
+
+        Runnable paintDialogState = () -> {
             dspConfig.save(ctx);
-            if (livePreviewDsp != null) livePreviewDsp.updateConfig(dspConfig);
+            if (livePreviewDsp != null) {
+                livePreviewDsp.updateConfig(dspBakedToRaw
+                        ? new DspChain.Config() : dspConfig);
+            }
 
-            boolean isOff = !dspConfig.isActive();
-            boolean isPolish = dspConfig.hpfEnabled
-                    && dspConfig.noisePct == 50
-                    && dspConfig.deEssPct == 45
-                    && dspConfig.compPct == 40;
-            boolean isCustom = !isOff && !isPolish;
-
-            styleModePill(btnBypass, "FX Off", isOff);
-            styleModePill(btnPolish, "Voice Polish", isPolish);
-            styleModePill(btnCustom, "Custom", isCustom);
+            styleModePill(btnBypass, "Off",
+                    dspConfig.mode == DspChain.Config.MODE_OFF);
+            styleModePill(btnNoiseSupp, "Noise Suppression",
+                    dspConfig.mode == DspChain.Config.MODE_NOISE_SUPPRESSION);
+            styleModePill(btnCustom, "Custom",
+                    dspConfig.mode == DspChain.Config.MODE_CUSTOM);
 
             updateFxCardState(noiseCard, noiseBar, noiseState, dspConfig.noisePct);
             updateFxCardState(deEssCard, deEssBar, deEssState, dspConfig.deEssPct);
@@ -2230,44 +2214,65 @@ public class StudioFragment extends Fragment {
             paintEditorStrip();
         };
 
-        TeleValue.OnScrubListener liveScrub = new TeleValue.OnScrubListener() {
-            @Override public void onScrubValueChanged(int value) { syncUiAndLiveDsp.run(); }
-            @Override public void onScrubFinished(int value) { syncUiAndLiveDsp.run(); }
+        Runnable onManualSliderChange = () -> {
+            if (programmaticUpdate[0]) return;
+            dspBakedToRaw = false;
+            dspConfig.noisePct = noiseCtl.getValue();
+            dspConfig.deEssPct = deEssCtl.getValue();
+            dspConfig.compPct = compCtl.getValue();
+            dspConfig.onManualAdjustment();
+            paintDialogState.run();
         };
-        noiseCtl.setOnValueChanged(v -> syncUiAndLiveDsp.run());
+
+        TeleValue.OnScrubListener liveScrub = new TeleValue.OnScrubListener() {
+            @Override public void onScrubValueChanged(int value) { onManualSliderChange.run(); }
+            @Override public void onScrubFinished(int value) { onManualSliderChange.run(); }
+        };
+        noiseCtl.setOnValueChanged(v -> onManualSliderChange.run());
         noiseCtl.setOnScrubListener(liveScrub);
-        deEssCtl.setOnValueChanged(v -> syncUiAndLiveDsp.run());
+        deEssCtl.setOnValueChanged(v -> onManualSliderChange.run());
         deEssCtl.setOnScrubListener(liveScrub);
-        compCtl.setOnValueChanged(v -> syncUiAndLiveDsp.run());
+        compCtl.setOnValueChanged(v -> onManualSliderChange.run());
         compCtl.setOnScrubListener(liveScrub);
 
         hpfCard.setOnClickListener(v -> {
+            dspBakedToRaw = false;
             dspConfig.hpfEnabled = !dspConfig.hpfEnabled;
-            syncUiAndLiveDsp.run();
+            dspConfig.onManualAdjustment();
+            paintDialogState.run();
         });
 
+        // 3-Way Mode Buttons: Off <-> Noise Suppression <-> Custom switch
+        // interchangeably in any order!
         btnBypass.setOnClickListener(v -> {
-            dspConfig = new DspChain.Config();
-            noiseCtl.setValue(0, false);
-            deEssCtl.setValue(0, false);
-            compCtl.setValue(0, false);
-            syncUiAndLiveDsp.run();
-        });
-        btnPolish.setOnClickListener(v -> {
-            dspConfig = DspChain.Config.voicePolish();
+            dspBakedToRaw = false;
+            programmaticUpdate[0] = true;
+            dspConfig.applyMode(DspChain.Config.MODE_OFF);
             noiseCtl.setValue(dspConfig.noisePct, false);
             deEssCtl.setValue(dspConfig.deEssPct, false);
             compCtl.setValue(dspConfig.compPct, false);
-            syncUiAndLiveDsp.run();
+            programmaticUpdate[0] = false;
+            paintDialogState.run();
+        });
+        btnNoiseSupp.setOnClickListener(v -> {
+            dspBakedToRaw = false;
+            programmaticUpdate[0] = true;
+            dspConfig.applyMode(DspChain.Config.MODE_NOISE_SUPPRESSION);
+            noiseCtl.setValue(dspConfig.noisePct, false);
+            deEssCtl.setValue(dspConfig.deEssPct, false);
+            compCtl.setValue(dspConfig.compPct, false);
+            programmaticUpdate[0] = false;
+            paintDialogState.run();
         });
         btnCustom.setOnClickListener(v -> {
-            if (!dspConfig.isActive()) {
-                dspConfig = new DspChain.Config(true, 25, 25, 25);
-                noiseCtl.setValue(25, false);
-                deEssCtl.setValue(25, false);
-                compCtl.setValue(25, false);
-            }
-            syncUiAndLiveDsp.run();
+            dspBakedToRaw = false;
+            programmaticUpdate[0] = true;
+            dspConfig.applyMode(DspChain.Config.MODE_CUSTOM);
+            noiseCtl.setValue(dspConfig.noisePct, false);
+            deEssCtl.setValue(dspConfig.deEssPct, false);
+            compCtl.setValue(dspConfig.compPct, false);
+            programmaticUpdate[0] = false;
+            paintDialogState.run();
         });
 
         // 4) Bottom Action Row: Preview FX | Apply FX | Done
@@ -2321,7 +2326,7 @@ public class StudioFragment extends Fragment {
         doneBtn.setOnClickListener(v -> d.dismiss());
         root.addView(doneBtn, prLp);
 
-        syncUiAndLiveDsp.run();
+        paintDialogState.run();
         d.setContentView(scroll);
         android.view.Window w = d.getWindow();
         if (w != null) {

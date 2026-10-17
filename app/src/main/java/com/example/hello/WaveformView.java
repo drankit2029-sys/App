@@ -9,21 +9,20 @@ import android.util.AttributeSet;
 import android.view.MotionEvent;
 import android.view.View;
 
+import java.io.RandomAccessFile;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.util.ArrayDeque;
 import java.util.Arrays;
+import java.util.Deque;
 
 /**
  * Unified Red-Waveform interactive recording & non-linear editing timeline.
  *
- * <p>Both live recording ({@code live == true}) and paused editing
- * ({@code live == false}) render on the <b>same red center-playhead waveform</b>:
- * <ul>
- *   <li><b>Live recording</b>: scrolls red peaks leftward from the center
- *       playhead.</li>
- *   <li><b>Paused / Edit mode</b>: keeps the red waveform in place, activates
- *       smooth 1:1 horizontal finger scrolling across the center playhead, and
- *       renders draggable {@code [} and {@code ]} selection handles directly on
- *       the red bars.</li>
- * </ul>
+ * <p>When Pause is pressed, the red waveform stays <b>as-is</b> (zero reload or
+ * density jump) and enables smooth 1:1 horizontal scrolling across the center
+ * playhead, draggable {@code [} and {@code ]} selection handles, and in-place
+ * peak editing for Trim, Select & Replace, and Undo.
  */
 public class WaveformView extends View {
 
@@ -44,6 +43,9 @@ public class WaveformView extends View {
     private boolean live;
     private float zoom = 1f;
     private boolean followMinZoom = false;
+
+    private final Deque<float[]> undoPeakStack = new ArrayDeque<>();
+    private float[] savedReplaceTailPeaks = null;
 
     private float downX = 0f;
     private float downY = 0f;
@@ -66,10 +68,6 @@ public class WaveformView extends View {
 
     private TimelineListener timelineListener;
 
-    /**
-     * Continuous playhead position in bucket units (0.0 .. count) for smooth
-     * sub-bar scrolling when paused; integerplayheadIndex is Math.round(playheadPos).
-     */
     private float playheadPos = 0f;
     private int playheadIndex = 0;
     private boolean selectionActive = false;
@@ -146,6 +144,102 @@ public class WaveformView extends View {
         return count <= 0 ? 1f : Math.max(0f, Math.min(1f, selEndIdx / (float) count));
     }
 
+    /** Snapshots the current in-memory waveform peaks before an edit operation. */
+    public synchronized void recordUndoPeaks() {
+        if (count <= 0) return;
+        while (undoPeakStack.size() >= 3) {
+            undoPeakStack.removeLast();
+        }
+        undoPeakStack.addFirst(Arrays.copyOf(history, count));
+    }
+
+    /** Restores the most recent in-memory waveform peak snapshot on Undo. */
+    public synchronized boolean popUndoPeaks() {
+        if (undoPeakStack.isEmpty()) return false;
+        float[] snap = undoPeakStack.pollFirst();
+        if (snap == null) return false;
+        if (history.length < snap.length) {
+            history = new float[Math.max(COLS, snap.length)];
+        }
+        Arrays.fill(history, 0f);
+        System.arraycopy(snap, 0, history, 0, snap.length);
+        count = snap.length;
+        playheadPos = count;
+        playheadIndex = count;
+        selectionActive = false;
+        postInvalidateOnAnimation();
+        return true;
+    }
+
+    /** Crops the in-memory waveform bars to the current selection `[selStartIdx, selEndIdx)` in-place. */
+    public synchronized void cropToSelectionBuckets() {
+        if (!hasSelection()) return;
+        int s = Math.max(0, Math.min(count, selStartIdx));
+        int e = Math.max(s + 1, Math.min(count, selEndIdx));
+        int keep = e - s;
+        System.arraycopy(history, s, history, 0, keep);
+        Arrays.fill(history, keep, count, 0f);
+        count = keep;
+        playheadPos = count;
+        playheadIndex = count;
+        selectionActive = false;
+        postInvalidateOnAnimation();
+    }
+
+    /**Deletes the selected buckets `[selStartIdx, selEndIdx)` in-place and shifts the tail left. */
+    public synchronized void deleteSelectionBuckets() {
+        if (!hasSelection()) return;
+        int s = Math.max(0, Math.min(count, selStartIdx));
+        int e = Math.max(s, Math.min(count, selEndIdx));
+        int tail = count - e;
+        if (tail > 0) {
+            System.arraycopy(history, e, history, s, tail);
+        }
+        int newCount = s + tail;
+        Arrays.fill(history, newCount, count, 0f);
+        count = newCount;
+        playheadPos = s;
+        playheadIndex = s;
+        selectionActive = false;
+        postInvalidateOnAnimation();
+    }
+
+    /**
+     * Stashes the post-selection peak bars `[selEndIdx, count)` and truncates
+     * the live waveform to `selStartIdx` so variable-length Select & Replace
+     * appends new red bars from `selStartIdx` and splices the tail bars back on pause!
+     */
+    public synchronized void beginReplaceSelection() {
+        if (!hasSelection()) return;
+        int s = Math.max(0, Math.min(count, selStartIdx));
+        int e = Math.max(s, Math.min(count, selEndIdx));
+        int tailLen = Math.max(0, count - e);
+        savedReplaceTailPeaks = tailLen > 0
+                ? Arrays.copyOfRange(history, e, count) : new float[0];
+        Arrays.fill(history, s, count, 0f);
+        count = s;
+        playheadPos = s;
+        playheadIndex = s;
+        selectionActive = false;
+        postInvalidateOnAnimation();
+    }
+
+    /** Appends the stashed post-selection peak bars back after Select & Replace recording finishes. */
+    public synchronized void finishReplaceSelection() {
+        float[] tail = savedReplaceTailPeaks;
+        savedReplaceTailPeaks = null;
+        int replaceEnd = count;
+        if (tail != null && tail.length > 0) {
+            for (float v : tail) {
+                push(v);
+            }
+        }
+        playheadPos = replaceEnd;
+        playheadIndex = replaceEnd;
+        selectionActive = false;
+        postInvalidateOnAnimation();
+    }
+
     /** Programmatically selects `[startFrac, endFrac]` (0..1) and notifies listeners. */
     public void selectRange(float startFrac, float endFrac) {
         boolean active;
@@ -178,10 +272,12 @@ public class WaveformView extends View {
     }
 
     public synchronized void toggleSelectionAtPlayhead() {
-        if (count <= 4) return;
+        if (count <= 1) return;
         selectionActive = !selectionActive;
         if (selectionActive) {
             int visibleCols = Math.max(8, Math.round(COLS / Math.max(0.25f, zoom)));
+            // Select ~35% of the take (or ~1/3 of visible columns) so the
+            // selection is always a meaningful, easy-to-grab audio segment.
             int span = Math.max(4, Math.min(count / 3, visibleCols / 4));
             int center = Math.min(count, Math.max(0, playheadIndex));
             if (center >= count - 2) {
@@ -217,11 +313,6 @@ public class WaveformView extends View {
         }
     }
 
-    /**
-     * Truncates retained waveform peaks at `playheadIndex` (or `frac * count`)
-     * when resuming recording mid-take so the new recording cleanly replaces
-     * everything from that point onward on the red waveform.
-     */
     public synchronized void truncateToPlayhead() {
         int keep = Math.max(0, Math.min(count, playheadIndex));
         if (keep < count) {
@@ -246,7 +337,6 @@ public class WaveformView extends View {
         postInvalidateOnAnimation();
     }
 
-    /** Updates an existing bucket in-place or appends during capture. */
     public synchronized void pushOrOverwrite(float v, float cursorFrac, boolean appending) {
         if (appending || count == 0) {
             push(v);
@@ -361,6 +451,7 @@ public class WaveformView extends View {
         selStartIdx = 0;
         selEndIdx = 0;
         followMinZoom = false;
+        savedReplaceTailPeaks = null;
         invalidate();
     }
 
@@ -374,40 +465,115 @@ public class WaveformView extends View {
             try {
                 float[] peaks = Dsp.loadPeaks(raw, MAX_HISTORY);
                 if (peaks.length == 0) return;
+                applyLoadedPeaks(peaks, onLoaded);
+            } catch (Exception ignored) {}
+        }, "takeone-wave-load").start();
+    }
+
+    /**
+     * Loads an attached Edit/Recovery session at the exact same 20-bars/sec
+     * (50 ms per bar = 2400 frames @ 48 kHz) scale as live recording so an
+     * opened take matches live recording spacing and never overfills the screen.
+     */
+    public void loadFromFloatWavTwentyHz(java.io.File raw, Runnable onLoaded) {
+        if (raw == null) return;
+        new Thread(() -> {
+            try {
+                long payload = RecordingEngine.payloadBytesOf(raw);
+                FormatConverter.WavInfo info = FormatConverter.readFloatWav(raw);
+                long totalFrames = payload / 4 / Math.max(1, info.channels);
+                int buckets20Hz = (int) Math.max(8,
+                        Math.min(MAX_HISTORY, (totalFrames + 1200) / 2400));
+                float[] peaks = loadPeaksExactBuckets(raw, buckets20Hz);
+                if (peaks.length == 0) return;
                 synchronized (WaveformView.this) {
-                    int n = Math.min(peaks.length, MAX_HISTORY);
-                    int livePushed = count;
-                    int totalNeeded = Math.min(MAX_HISTORY, n + livePushed);
-                    while (history.length < totalNeeded
-                            && history.length < MAX_HISTORY) {
-                        float[] bigger = new float[Math.min(MAX_HISTORY,
-                                history.length * 2)];
-                        System.arraycopy(history, 0, bigger, 0, count);
-                        history = bigger;
+                    if (history.length < peaks.length) {
+                        history = new float[Math.min(MAX_HISTORY,
+                                Math.max(COLS, peaks.length))];
                     }
-                    if (livePushed > 0) {
-                        int keepLive = Math.min(livePushed,
-                                MAX_HISTORY - n);
-                        if (keepLive > 0) {
-                            System.arraycopy(history, 0, history, n, keepLive);
-                        }
-                        System.arraycopy(peaks, 0, history, 0, n);
-                        count = n + Math.max(0, keepLive);
-                    } else {
-                        System.arraycopy(peaks, 0, history, 0, n);
-                        count = n;
-                    }
-                    if (playheadIndex <= 0 || playheadIndex > count) {
-                        playheadIndex = count;
-                        playheadPos = count;
-                    }
+                    Arrays.fill(history, 0f);
+                    count = Math.min(peaks.length, history.length);
+                    System.arraycopy(peaks, 0, history, 0, count);
+                    playheadIndex = count;
+                    playheadPos = count;
                     zoom = Math.max(minimumZoom(), Math.min(zoom,
                             ZOOM_STEPS[ZOOM_STEPS.length - 1]));
                 }
                 postInvalidate();
                 if (onLoaded != null) post(onLoaded);
             } catch (Exception ignored) {}
-        }, "takeone-wave-load").start();
+        }, "takeone-wave-load-20hz").start();
+    }
+
+    private static float[] loadPeaksExactBuckets(java.io.File wav, int buckets)
+            throws Exception {
+        try (RandomAccessFile r = new RandomAccessFile(wav, "r")) {
+            Dsp.WavHeader h = Dsp.parseWavHeader(r);
+            long onDisk = Math.max(0, r.length() - h.dataStart);
+            long dataBytes = (h.dataBytes <= 0 || h.dataBytes > onDisk)
+                    ? onDisk : h.dataBytes;
+            long totalFrames = dataBytes / 4 / Math.max(1, h.channels);
+            if (totalFrames <= 0) return new float[0];
+            int bCount = (int) Math.max(1, Math.min(buckets, totalFrames));
+            float[] peaks = new float[bCount];
+            int framesPerRead = Math.max(1, 65536 / 4 / h.channels);
+            byte[] in = new byte[framesPerRead * h.channels * 4];
+            java.nio.FloatBuffer fb = ByteBuffer.wrap(in)
+                    .order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer();
+            r.seek(h.dataStart);
+            long frame = 0;
+            while (frame < totalFrames) {
+                int want = (int) Math.min(framesPerRead, totalFrames - frame);
+                r.readFully(in, 0, want * h.channels * 4);
+                fb.clear();
+                fb.limit(want * h.channels);
+                for (int f = 0; f < want; f++) {
+                    float peak = 0f;
+                    for (int c = 0; c < h.channels; c++) {
+                        float a = Math.abs(fb.get(f * h.channels + c));
+                        if (a > peak) peak = a;
+                    }
+                    int b = (int) ((frame + f) * bCount / totalFrames);
+                    if (b >= bCount) b = bCount - 1;
+                    if (peak > peaks[b]) peaks[b] = peak;
+                }
+                frame += want;
+            }
+            return peaks;
+        }
+    }
+
+    private void applyLoadedPeaks(float[] peaks, Runnable onLoaded) {
+        synchronized (WaveformView.this) {
+            int n = Math.min(peaks.length, MAX_HISTORY);
+            int livePushed = count;
+            int totalNeeded = Math.min(MAX_HISTORY, n + livePushed);
+            while (history.length < totalNeeded
+                    && history.length < MAX_HISTORY) {
+                float[] bigger = new float[Math.min(MAX_HISTORY,
+                        history.length * 2)];
+                System.arraycopy(history, 0, bigger, 0, count);
+                history = bigger;
+            }
+            if (livePushed > 0) {
+                int keepLive = Math.min(livePushed,
+                        MAX_HISTORY - n);
+                if (keepLive > 0) {
+                    System.arraycopy(history, 0, history, n, keepLive);
+                }
+                System.arraycopy(peaks, 0, history, 0, n);
+                count = n + Math.max(0, keepLive);
+            } else {
+                System.arraycopy(peaks, 0, history, 0, n);
+                count = n;
+            }
+            playheadIndex = count;
+            playheadPos = count;
+            zoom = Math.max(minimumZoom(), Math.min(zoom,
+                    ZOOM_STEPS[ZOOM_STEPS.length - 1]));
+        }
+        postInvalidate();
+        if (onLoaded != null) post(onLoaded);
     }
 
     // ---- Red Waveform Center-Playhead Coordinate Math ----
@@ -416,11 +582,6 @@ public class WaveformView extends View {
         return Math.max(0.25f, (w / (float) COLS) * zoom);
     }
 
-    /**
-     * Screen X coordinate for bucket index `idx` on the red center-playhead
-     * waveform. Bucket `playheadPos - 1` sits immediately to the left of
-     * `centerX`; bucket `playheadPos` sits at `centerX`.
-     */
     private float screenXForBucketLocked(float idx, int w) {
         if (w <= 0) return 0f;
         float centerX = w / 2f;
@@ -517,7 +678,6 @@ public class WaveformView extends View {
 
                 if (dragMode == DRAG_SEL_START) {
                     synchronized (this) {
-                        // Auto-scroll red waveform if dragging handle near edges
                         float edge = 28f * density;
                         float gap = gapPxLocked(w);
                         if (x < edge && playheadPos > 0) {
@@ -556,12 +716,13 @@ public class WaveformView extends View {
                     int pIdx;
                     float pFrac;
                     synchronized (this) {
+                        float gap = gapPxLocked(w);
                         // Dragging waveform right (stepDx > 0) moves earlier audio
                         // to the center playhead (decreases playheadPos); dragging
                         // left (stepDx < 0) advances toward the end.
-                        float gap = gapPxLocked(w);
                         // Scale sensitivity so a full-width swipe can traverse a
-                        // long take even when zoomed in, while remaining 1:1 at normal zoom.
+                        // long take even when zoomed in, while remaining 1:1 at
+                        // normal zoom.
                         float barsPerPx = Math.max(1f / gap, n / (float) Math.max(w, 1));
                         playheadPos = Math.max(0f, Math.min(n,
                                 playheadPos - stepDx * barsPerPx));
@@ -603,7 +764,7 @@ public class WaveformView extends View {
                             playheadPos = tappedIdx;
                             playheadIndex = tappedIdx;
                             tappedEditor = true;
-                            if (now - lastTapUpMs < 280L && count > 4) {
+                            if (now - lastTapUpMs < 280L && count > 1) {
                                 lastTapUpMs = 0L;
                                 toggledSel = true;
                             } else {
@@ -692,9 +853,8 @@ public class WaveformView extends View {
             }
         }
 
-        // 2) Draw Red Waveform Bars (both live & paused)
+        // 2) Draw Red Waveform Bars (both live & paused — identical scale & position)
         if (n > 0) {
-            // Compute visible bucket range [iMin, iMax] so drawing is O(visible_bars)
             int iMin = Math.max(0, (int) Math.floor(headPos - 1f - (centerX + barW) / gap));
             int iMax = Math.min(n - 1, (int) Math.ceil(headPos - 1f + (w - centerX + barW) / gap));
             int step = Math.max(1, (iMax - iMin + 1) / 300);
@@ -712,18 +872,14 @@ public class WaveformView extends View {
                 float bh = Math.max(2f, v * maxH * 2f);
 
                 if (selOn && i >= sIdx && i < eIdx) {
-                    // Selected red bars glow bright crimson
                     barPaint.setColor(0xFFFF453A);
                     barPaint.setAlpha(255);
                 } else if (i < headPos) {
-                    // Recorded bars to the left of the center playhead: Studio Red
                     float vis = Math.min(1f, Math.max(0f, x / Math.max(1f, centerX)));
                     float age = 0.35f + 0.65f * vis;
                     barPaint.setColor(0xFFFF3B30);
                     barPaint.setAlpha(Math.round(255 * age));
                 } else {
-                    // Bars to the right of the center playhead when scrolled back:
-                    // translucent red so the user sees the audio that will play or be replaced.
                     float rightVis = Math.min(1f, Math.max(0f, (w - x) / Math.max(1f, centerX)));
                     barPaint.setColor(0xFFFF3B30);
                     barPaint.setAlpha(Math.round(90 + 65 * rightVis));
@@ -759,7 +915,7 @@ public class WaveformView extends View {
             }
         }
 
-        // 4) Center Playhead Line + Top/Bottom Indicator Caps
+        // 4) Center Playhead Line + Top Indicator Cap
         playPaint.setColor(0xFFFF3B30);
         playPaint.setAlpha((isLive || n > 0) ? 255 : 90);
         float topY = Math.max(2f, centerY - maxH - 4f);
@@ -770,3 +926,4 @@ public class WaveformView extends View {
         }
     }
 }
+

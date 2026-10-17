@@ -3,18 +3,16 @@ package com.example.hello;
 import android.media.AudioAttributes;
 import android.media.AudioFormat;
 import android.media.AudioTrack;
+import android.os.SystemClock;
 
 import java.io.File;
 import java.io.RandomAccessFile;
 
 /**
- * Plays a 32-bit float WAV (the retained raw of a take that is still
- * converting) straight through {@link AudioTrack}. Lets the user preview a
- * recording while its format conversion runs in the background.
- *
- * <p>Play/pause/stop plus sample-accurate seek (the file layout is fixed),
- * all on a dedicated thread. Any I/O or audio error ends playback through
- * {@link Listener#onDone(boolean)} rather than throwing.
+ * Plays a 32-bit float WAV straight through {@link AudioTrack} with sample-accurate
+ * playhead tracking, range preview, full hardware buffer draining (so short takes
+ * and selections are never cut off before the speaker plays them), and real-time
+ * {@link DspChain} preview.
  */
 public final class RawFloatPlayer {
 
@@ -32,6 +30,7 @@ public final class RawFloatPlayer {
     private Thread thread;
     private volatile boolean stop;
     private volatile boolean paused;
+    private volatile long startFramePos;
     private volatile long framePos;
     private volatile AudioTrack activeTrack;
     private volatile long generation;
@@ -69,6 +68,7 @@ public final class RawFloatPlayer {
         paused = false;
         stopAtFrame = -1;
         framePos = Math.max(0, Math.min(totalFrames, frame));
+        startFramePos = framePos;
         generation++;
         thread = new Thread(this::run, "takeone-raw-preview");
         thread.start();
@@ -80,6 +80,7 @@ public final class RawFloatPlayer {
         stop = false;
         paused = false;
         framePos = Math.max(0, Math.min(totalFrames, startFrame));
+        startFramePos = framePos;
         stopAtFrame = (endFrame > framePos && endFrame <= totalFrames)
                 ? endFrame : -1;
         generation++;
@@ -88,21 +89,35 @@ public final class RawFloatPlayer {
     }
 
     public synchronized void pause() {
+        long cur = positionFrames();
         paused = true;
         stopLocked();
+        framePos = cur;
     }
 
     public synchronized void stop() {
         stopLocked();
         framePos = 0;
+        startFramePos = 0;
     }
 
     public long positionFrames() {
+        AudioTrack t = activeTrack;
+        if (t != null && !stop && !paused) {
+            try {
+                long head = t.getPlaybackHeadPosition() & 0xFFFFFFFFL;
+                if (head > 0) {
+                    long limit = (stopAtFrame > 0 && stopAtFrame <= totalFrames)
+                            ? stopAtFrame : totalFrames;
+                    return Math.min(limit, startFramePos + head);
+                }
+            } catch (Exception ignored) {}
+        }
         return framePos;
     }
 
     public long positionMs() {
-        return framePos * 1000L / RecordingEngine.SAMPLE_RATE;
+        return positionFrames() * 1000L / RecordingEngine.SAMPLE_RATE;
     }
 
     public synchronized void seekToMs(long ms) {
@@ -110,6 +125,7 @@ public final class RawFloatPlayer {
         boolean wasPlaying = thread != null && !paused;
         stopLocked();
         framePos = Math.max(0, Math.min(totalFrames, f));
+        startFramePos = framePos;
         if (wasPlaying) {
             stop = false;
             paused = false;
@@ -120,17 +136,14 @@ public final class RawFloatPlayer {
     }
 
     private synchronized void stopLocked() {
-        // Retire the running generation FIRST so its finally block cannot
-        // fire listener.onDone(false) into a pause/seek/stop caller.
         generation++;
         stop = true;
         paused = true;
-        // Unblock a writer parked in WRITE_BLOCKING so join() below cannot
-        // stall; without this a pause during a slow drain leaks a live
-        // thread that then races the next playback over the shared position.
         AudioTrack t = activeTrack;
         if (t != null) {
             try {
+                t.pause();
+                t.flush();
                 t.stop();
             } catch (Exception ignored) {}
         }
@@ -148,9 +161,6 @@ public final class RawFloatPlayer {
         boolean completed = false;
         AudioTrack track = null;
         RandomAccessFile r = null;
-        // Hold the raw for as long as we read it: the conversion worker
-        // deletes this file the moment the job finishes, which used to pull it
-        // out from under this reader and truncate playback.
         ConversionJobs.beginRawRead(file.getAbsolutePath());
         try {
             int mask = channels == 2 ? AudioFormat.CHANNEL_OUT_STEREO
@@ -168,20 +178,24 @@ public final class RawFloatPlayer {
                     .setSampleRate(RecordingEngine.SAMPLE_RATE)
                     .setChannelMask(mask)
                     .build();
-            track = new AudioTrack(attrs, af, Math.max(minBytes, 65536),
+            long limitFrame = (stopAtFrame > 0 && stopAtFrame <= totalFrames)
+                    ? stopAtFrame : totalFrames;
+            long framesToPlay = Math.max(1L, limitFrame - startFramePos);
+            int spanBytes = (int) Math.min(65536L,
+                    Math.max(minBytes, framesToPlay * channels * 4L));
+            track = new AudioTrack(attrs, af, spanBytes,
                     AudioTrack.MODE_STREAM, 0);
             if (track.getState() != AudioTrack.STATE_INITIALIZED) return;
             r = new RandomAccessFile(file, "r");
-            float[] buf = new float[4096 * channels];
+            float[] buf = new float[2048 * channels];
             byte[] raw = new byte[buf.length * 4];
             java.nio.FloatBuffer fb = java.nio.ByteBuffer.wrap(raw)
                     .order(java.nio.ByteOrder.LITTLE_ENDIAN).asFloatBuffer();
             track.play();
             activeTrack = track;
-            long limitFrame = (stopAtFrame > 0 && stopAtFrame <= totalFrames)
-                    ? stopAtFrame : totalFrames;
+            long writtenFrames = 0;
             while (!stop && framePos < limitFrame) {
-                int want = (int) Math.min(4096, limitFrame - framePos);
+                int want = (int) Math.min(2048, limitFrame - framePos);
                 r.seek(dataStart + framePos * channels * 4L);
                 r.readFully(raw, 0, want * channels * 4);
                 fb.clear();
@@ -200,8 +214,40 @@ public final class RawFloatPlayer {
                     written += n;
                 }
                 framePos += want;
+                writtenFrames += want;
             }
-            completed = !stop && framePos >= limitFrame;
+            // Wait for the AudioTrack hardware buffer to finish playing out
+            // before stopping/releasing the track in finally!
+            if (!stop && framePos >= limitFrame && writtenFrames > 0) {
+                long drainStart = SystemClock.elapsedRealtime();
+                long maxDrainMs = Math.min(1500L,
+                        (writtenFrames * 1000L / RecordingEngine.SAMPLE_RATE) + 350L);
+                long lastHead = -1;
+                long lastAdvanceAt = drainStart;
+                while (!stop) {
+                    long now = SystemClock.elapsedRealtime();
+                    if (now - drainStart >= maxDrainMs) break;
+                    long head = 0;
+                    try {
+                        head = track.getPlaybackHeadPosition() & 0xFFFFFFFFL;
+                    } catch (Exception ignored) {}
+                    if (head >= writtenFrames) break;
+                    if (head != lastHead) {
+                        lastHead = head;
+                        lastAdvanceAt = now;
+                    } else if (now - lastAdvanceAt > 180L) {
+                        // Headless / Robolectric AudioTrack stub where playback
+                        // head does not advance: exit promptly.
+                        break;
+                    }
+                    try {
+                        Thread.sleep(15);
+                    } catch (InterruptedException ie) {
+                        break;
+                    }
+                }
+                completed = !stop;
+            }
         } catch (Exception ignored) {
         } finally {
             activeTrack = null;
@@ -219,8 +265,6 @@ public final class RawFloatPlayer {
                 } catch (Exception ignored) {}
             }
             ConversionJobs.endRawRead(file.getAbsolutePath());
-            // Only the latest generation reports: a stopped-then-replayed
-            // thread must not overwrite the new playback's completion.
             if (gen == generation && listener != null) {
                 try {
                     listener.onDone(completed);
@@ -229,3 +273,5 @@ public final class RawFloatPlayer {
         }
     }
 }
+
+

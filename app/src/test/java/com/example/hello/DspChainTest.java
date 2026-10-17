@@ -84,7 +84,7 @@ public class DspChainTest {
         assertEquals("FX Off", new DspChain.Config().badgeSummary());
         assertEquals("FX • Polish", DspChain.Config.voicePolish()
                 .badgeSummary());
-        assertEquals("FX • 1 On",
+        assertEquals("FX • Custom",
                 new DspChain.Config(false, 30, 0, 0).badgeSummary());
     }
 
@@ -98,5 +98,54 @@ public class DspChainTest {
         assertEquals(50, back.noisePct);
         assertEquals(45, back.deEssPct);
         assertEquals(40, back.compPct);
+    }
+
+    @Test
+    public void threeModesSwitchInterchangeably() {
+        Context ctx = ApplicationProvider.getApplicationContext();
+        DspChain.Config c = new DspChain.Config();
+        assertEquals(DspChain.Config.MODE_OFF, c.mode);
+        assertFalse(c.isActive());
+
+        // 1) Off -> Noise Suppression
+        c.applyMode(DspChain.Config.MODE_NOISE_SUPPRESSION);
+        assertEquals(DspChain.Config.MODE_NOISE_SUPPRESSION, c.mode);
+        assertTrue(c.isActive());
+        assertEquals(50, c.noisePct);
+        assertEquals(45, c.deEssPct);
+        assertEquals(40, c.compPct);
+
+        // 2) Noise Suppression -> Custom (previously broken!)
+        c.applyMode(DspChain.Config.MODE_CUSTOM);
+        assertEquals(DspChain.Config.MODE_CUSTOM, c.mode);
+        assertTrue(c.isActive());
+        assertEquals("FX • Custom", c.badgeSummary());
+
+        // Adjust a custom slider and switch back to Noise Suppression, then Custom
+        c.noisePct = 75;
+        c.onManualAdjustment();
+        assertEquals(DspChain.Config.MODE_CUSTOM, c.mode);
+
+        c.applyMode(DspChain.Config.MODE_NOISE_SUPPRESSION);
+        assertEquals(DspChain.Config.MODE_NOISE_SUPPRESSION, c.mode);
+        assertEquals(50, c.noisePct);
+
+        c.applyMode(DspChain.Config.MODE_CUSTOM);
+        assertEquals(DspChain.Config.MODE_CUSTOM, c.mode);
+        assertEquals(75, c.noisePct);
+
+        // 3) Custom -> Off -> Custom
+        c.applyMode(DspChain.Config.MODE_OFF);
+        assertEquals(DspChain.Config.MODE_OFF, c.mode);
+        assertFalse(c.isActive());
+
+        c.applyMode(DspChain.Config.MODE_CUSTOM);
+        assertEquals(DspChain.Config.MODE_CUSTOM, c.mode);
+        assertEquals(75, c.noisePct);
+
+        c.save(ctx);
+        DspChain.Config loaded = DspChain.Config.load(ctx);
+        assertEquals(DspChain.Config.MODE_CUSTOM, loaded.mode);
+        assertEquals(75, loaded.noisePct);
     }
 }

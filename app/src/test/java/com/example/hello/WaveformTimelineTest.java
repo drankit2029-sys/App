@@ -84,10 +84,30 @@ public class WaveformTimelineTest {
     }
 
     @Test
-    public void tinyHistoryCannotSelect() {
-        WaveformView wv = loaded(activity(), 4);
+    public void tinyHistorySelectsWhenAtLeastTwoBars() {
+        WaveformView wv = loaded(activity(), 1);
         wv.toggleSelectionAtPlayhead();
         assertFalse(wv.hasSelection());
+
+        WaveformView wv4 = loaded(activity(), 4);
+        wv4.toggleSelectionAtPlayhead();
+        assertTrue(wv4.hasSelection());
+    }
+
+    @Test
+    public void inPlaceCropReplaceAndUndoPreserveBarDensity() {
+        WaveformView wv = loaded(activity(), 60); // 3.0s at 20 bars/sec
+        wv.setLive(false);
+        wv.selectRange(0.25f, 0.75f); // buckets 15..45 (30 bars)
+        assertTrue(wv.hasSelection());
+
+        wv.recordUndoPeaks();
+        wv.cropToSelectionBuckets();
+        assertEquals(30, wv.historyCount());
+        assertFalse(wv.hasSelection());
+
+        assertTrue(wv.popUndoPeaks());
+        assertEquals(60, wv.historyCount());
     }
 
     @Test
