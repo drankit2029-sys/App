@@ -223,4 +223,12 @@ public class WaveformTimelineTest {
         float morphed = wv.peakAtForTest(50);
         assertTrue("morphed=" + morphed, morphed > 0.6f && morphed < 0.95f);
     }
+
+    @Test
+    public void dynamicBarConcentrationIncreasesAtHighZoom() {
+        assertEquals(1, WaveformView.subBarsForZoom(0.5f));
+        assertEquals(1, WaveformView.subBarsForZoom(1.0f));
+        assertEquals(2, WaveformView.subBarsForZoom(2.0f));
+        assertEquals(4, WaveformView.subBarsForZoom(4.0f));
+    }
 }

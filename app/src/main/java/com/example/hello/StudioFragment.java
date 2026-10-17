@@ -281,21 +281,33 @@ public class StudioFragment extends Fragment {
             btnCutDelete.setVisibility(View.GONE);
         }
 
-        // 1) "Replace" Mode Toggle Button (formerly Preview)
+        // 1) "Replace" Button (btnPreviewPlay):
+        //    When scrolled back into the recording, pressing Replace once
+        //    immediately starts replacing audio from the playhead!
         if (btnPreviewPlay != null) {
             PressAnim.applySoft(btnPreviewPlay, 0.95f);
             btnPreviewPlay.setOnClickListener(view -> {
                 if (!ensurePausedForEditing()) return;
                 stopStudioPreview();
+                long totalFrames = engine.totalFrames();
+                long curFrames = engine.cursorFrames();
+                boolean atEnd = (curFrames >= totalFrames - 1200);
+                if (!atEnd) {
+                    replaceModeArmed = true;
+                    paintEditorStrip();
+                    paintFxPanelControls();
+                    startOrResumeCapture();
+                    return;
+                }
                 replaceModeArmed = !replaceModeArmed;
                 if (replaceModeArmed) {
                     engine.warmUpMic(requireContext(), preset.audioSource, engine.channels);
                     Toast.makeText(requireContext(),
-                            "Replace mode on — tap Resume to overwrite from playhead",
+                            "Scroll waveform to where you want to replace, then tap Replace or Resume",
                             Toast.LENGTH_SHORT).show();
                 } else {
                     Toast.makeText(requireContext(),
-                            "Play mode — tap Resume to play from playhead",
+                            "Normal mode",
                             Toast.LENGTH_SHORT).show();
                 }
                 paintEditorStrip();
@@ -389,9 +401,6 @@ public class StudioFragment extends Fragment {
             @Override
             public void onScrollStarted() {
                 if (engine.state != RecordingEngine.State.PAUSED) return;
-                userScrolledWhilePaused = true;
-                // Pre-warm both speaker and mic as soon as the user touches/scrolls
-                // the waveform so Resume (Play or Replace) is instantaneous!
                 RawFloatPlayer.warmUpSpeaker(engine.channels);
                 engine.warmUpMic(requireContext(), preset.audioSource, engine.channels);
             }
@@ -399,13 +408,23 @@ public class StudioFragment extends Fragment {
             @Override
             public void onPlayheadScrubbed(int bucketIndex, float fraction) {
                 if (engine.state != RecordingEngine.State.PAUSED) return;
-                userScrolledWhilePaused = true;
                 stopStudioPreview();
                 long totalFrames = engine.totalFrames();
                 long targetFrame = Math.round(fraction * totalFrames);
+                // When the user scrolls all the way to the end of the record,
+                // switch back to normal append-record mode so pressing Resume
+                // records more audio instead of snapping back to 00:00.00!
+                if (fraction >= 0.985f || targetFrame >= totalFrames - 1200) {
+                    targetFrame = totalFrames;
+                    userScrolledWhilePaused = false;
+                    replaceModeArmed = false;
+                } else {
+                    userScrolledWhilePaused = true;
+                }
                 engine.seekCursorFrame(targetFrame);
                 timerText.setText(formatTimer(engine.cursorMs()));
                 paintEditorStrip();
+                paintFxPanelControls();
             }
 
             @Override
@@ -1197,17 +1216,27 @@ public class StudioFragment extends Fragment {
         long totalFrames = engine.totalFrames();
         long curFrames = engine.cursorFrames();
         boolean atEnd = (curFrames >= totalFrames - 1200);
+        boolean hasSel = waveform != null && waveform.hasSelection();
 
-        // By default, when the user scrolls while paused (or is not at the end)
-        // and Replace is NOT armed, pressing Resume plays the audio from the
-        // playhead position instead of replacing it!
-        if (!replaceModeArmed && (userScrolledWhilePaused || !atEnd)) {
+        // If the playhead is at the end of the recording (and no selection is
+        // active), always switch to normal record mode to append more audio!
+        if (atEnd && !hasSel) {
+            userScrolledWhilePaused = false;
+            replaceModeArmed = false;
+            engine.seekCursorFrame(totalFrames);
+            startOrResumeCapture();
+            return;
+        }
+
+        // When scrolled back into the take (or when a selection is active) and
+        // Replace is NOT armed, pressing Resume previews from the playhead!
+        if (!replaceModeArmed) {
             toggleStudioPreview();
             activity().syncFabWithEngine();
             return;
         }
-        // Otherwise (Replace is armed, or user is parked at the end in normal
-        // append mode), start/resume capture from cursorFrame!
+        // Replace mode is armed and playhead is mid-take: overwrite in-place
+        // from cursorFrames()!
         startOrResumeCapture();
     }
 
@@ -1984,7 +2013,9 @@ public class StudioFragment extends Fragment {
                         paintEditorStrip();
                     }
                 }
-                float lvl = live ? engine.level : 0f;
+                // Live dBFS meter during both recording AND preview playback!
+                float lvl = live ? engine.level
+                        : (studioPreviewPlayer != null ? studioPreviewPlayer.level : 0f);
                 if (live) {
                     long total = Math.max(1L, engine.totalFrames());
                     long cur = engine.cursorFrames();
@@ -2331,6 +2362,13 @@ public class StudioFragment extends Fragment {
         if (fxPanel == null || telePanel == null) return;
         fxPanelOpen = open;
         if (open) {
+            // If no effects are currently enabled when opening the FX rack,
+            // activate the default Voice Polish rack so Preview & Apply work
+            // immediately out of the box!
+            if (dspConfig != null && !dspConfig.isActive()) {
+                dspConfig.applyPreset(DspChain.Preset.VOICE_POLISH);
+                dspConfig.save(requireContext());
+            }
             teleWasVisibleBeforeFx = (telePanel.getVisibility() == View.VISIBLE);
             setTelePaused(true);
             telePanel.setVisibility(View.GONE);
@@ -2777,7 +2815,8 @@ public class StudioFragment extends Fragment {
             return false;
         }
         // Require the user to select the audio region before applying FX!
-        if (!ensureSelectionOrAutoEnable("Apply")) {
+        boolean hadSel = waveform.hasSelection();
+        if (!hadSel && !ensureSelectionOrAutoEnable("Apply")) {
             return false;
         }
         File raw = engine.rawFile;
@@ -2798,6 +2837,17 @@ public class StudioFragment extends Fragment {
             EditEngine.applyDspToRange(raw, start, end, chain, activeUndoJournal());
             engine.abortStreaming();
             engine.dataBytes = RecordingEngine.payloadBytesOf(raw);
+            if (!hadSel) {
+                // Full-range bake: keep the future baked flag set so the next
+                // save() won't re-apply the DSP chain on top of these samples!
+                dspBakedToRaw = true;
+                // Redraw the whole waveform from the freshly baked WAV!
+                waveform.reloadSelectionPeaksFromWav(raw, 0f, 1f);
+            } else {
+                waveform.reloadSelectionPeaksFromWav(raw,
+                        waveform.selectionStartFraction(),
+                        waveform.selectionEndFraction());
+            }
             waveform.clearSelection();
             Toast.makeText(requireContext(),
                     "Effects applied to selected region (Undo available)",

@@ -172,4 +172,31 @@ public class DspChainTest {
         cfg.removeSlot(added);
         assertFalse(cfg.isActive());
     }
+
+    @Test
+    public void allEightEffectsModifySignalWhenEnabled() {
+        for (DspChain.EffectType type : DspChain.EffectType.values()) {
+            DspChain.Config cfg = new DspChain.Config();
+            cfg.applyPreset(DspChain.Preset.CLEAR_ALL);
+            cfg.addOrFocusSlot(type);
+            assertTrue("Effect " + type.id + " should be active", cfg.isActive());
+
+            DspChain chain = new DspChain(2, cfg);
+            // A loud sustained tone keeps the physical noise gate fully open
+            // (envelope >> threshold), which is correct behavior — so feed the
+            // gate a quiet tone that falls below its threshold instead.
+            float amp = (type == DspChain.EffectType.ROOM_GATE) ? 0.003f : 0.5f;
+            float[] buf = sine(4800, 2, amp);
+            float[] orig = buf.clone();
+            chain.processInPlace(buf, 4800);
+            boolean modified = false;
+            for (int i = 0; i < buf.length; i++) {
+                if (Math.abs(buf[i] - orig[i]) > 1e-4f) {
+                    modified = true;
+                    break;
+                }
+            }
+            assertTrue("Effect " + type.id + " produced no audio change", modified);
+        }
+    }
 }

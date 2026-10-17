@@ -21,15 +21,15 @@ import java.util.Deque;
  *
  * <p>Features:
  * <ul>
+ *   <li><b>Half-Bar Playhead Highlight Rule</b>: A bar (or sub-bar) is centered
+ *       at {@code bucket + 0.5f} and only highlights once the center playhead
+ *       has crossed half of it ({@code x <= centerX}), never highlighting bars
+ *       in front of the playhead.</li>
+ *   <li><b>Dynamic Bar Concentration at High Zoom</b>: When {@code zoom > 1.0f},
+ *       each bucket dynamically subdivides into up to 6 cosine-interpolated
+ *       sub-bars so high zoom (e.g. 400%) feels dense, smooth, and responsive.</li>
  *   <li><b>Zoom-Adaptive 1:1 Scrolling</b>: Horizontal scroll sensitivity is
- *       strictly {@code 1f / gapPxLocked(w)}, dynamically scaling with zoom so
- *       high zoom is never over-sensitive.</li>
- *   <li><b>Smooth Waveform Morphing During In-Place Replace</b>: When overwriting
- *       existing audio mid-take, bars smoothly morph from the old peak envelope
- *       into the newly recorded audio with a 3-bar lookahead blend.</li>
- *   <li><b>Sub-Editor Stash Support</b>: Can stash and restore the main take's
- *       waveform peaks when entering the dedicated {@code Select & Replace}
- *       sub-editor mode.</li>
+ *       strictly {@code 1f / gapPxLocked(w)}.</li>
  * </ul>
  */
 public class WaveformView extends View {
@@ -221,10 +221,38 @@ public class WaveformView extends View {
     }
 
     /**
-     * Stashes the main take's waveform peaks and selection bounds when entering
-     * the dedicated Select & Replace sub-editor mode, clearing the canvas for
-     * the new replacement take.
+     * Updates the in-memory waveform bars across `[startFrac, endFrac]` from
+     * `raw` after `Apply FX` so the user visually sees the effect on the bars.
      */
+    public void reloadSelectionPeaksFromWav(final java.io.File raw,
+                                            final float startFrac,
+                                            final float endFrac) {
+        if (raw == null || !raw.exists()) return;
+        new Thread(() -> {
+            try {
+                int curCount;
+                synchronized (WaveformView.this) {
+                    curCount = count;
+                }
+                if (curCount <= 0) return;
+                float[] updated = loadPeaksExactBuckets(raw, curCount);
+                if (updated.length != curCount) return;
+                synchronized (WaveformView.this) {
+                    if (count == curCount) {
+                        int s = Math.max(0, Math.min(count - 1,
+                                Math.round(startFrac * count)));
+                        int e = Math.max(s + 1, Math.min(count,
+                                Math.round(endFrac * count)));
+                        for (int i = s; i < e; i++) {
+                            history[i] = updated[i];
+                        }
+                    }
+                }
+                postInvalidateOnAnimation();
+            } catch (Exception ignored) {}
+        }, "takeone-fx-peak-sync").start();
+    }
+
     public synchronized void enterSubEditorMode() {
         stashedParentPeaks = count > 0 ? Arrays.copyOf(history, count) : new float[0];
         stashedParentSelStart = Math.max(0, Math.min(count, selStartIdx));
@@ -242,12 +270,6 @@ public class WaveformView extends View {
         postInvalidateOnAnimation();
     }
 
-    /**
-     * Splices the newly recorded sub-editor waveform bars `[0, count)` into
-     * the stashed parent waveform at `[stashedParentSelStart, stashedParentSelEnd)`
-     * with a smooth 3-bar boundary morph, or restores the parent untouched if
-     * `commitReplacement == false`.
-     */
     public synchronized void exitSubEditorMode(boolean commitReplacement) {
         if (stashedParentPeaks == null) return;
         float[] parent = stashedParentPeaks;
@@ -284,7 +306,6 @@ public class WaveformView extends View {
         int copyRep = Math.min(repLen, newTotal - s);
         if (copyRep > 0) {
             System.arraycopy(rep, 0, history, s, copyRep);
-            // Smooth 2-bar morph at the start and end splice boundaries
             if (s > 0) {
                 history[s] = 0.35f * parent[s - 1] + 0.65f * history[s];
             }
@@ -335,7 +356,6 @@ public class WaveformView extends View {
         postInvalidateOnAnimation();
     }
 
-    /** Programmatically selects `[startFrac, endFrac]` (0..1) and notifies listeners. */
     public void selectRange(float startFrac, float endFrac) {
         boolean active;
         float sf;
@@ -430,11 +450,6 @@ public class WaveformView extends View {
         postInvalidateOnAnimation();
     }
 
-    /**
-     * Appends a new peak bar when at the end of the take, or smoothly morphs
-     * the existing waveform bars into the new audio's waveform during in-place
-     * Replace (keeping all bars ahead of the playhead intact!).
-     */
     public synchronized void pushOrOverwrite(float v, float cursorFrac, boolean appending) {
         float clampedV = Math.max(0f, Math.min(1f, v));
         if (appending || count == 0) {
@@ -452,10 +467,7 @@ public class WaveformView extends View {
             } else {
                 morphAlpha = Math.min(1.0f, morphAlpha + 0.20f);
             }
-            // Smoothly morph the target bucket from its old amplitude to the new audio
             history[idx] = history[idx] * (1.0f - morphAlpha) + clampedV * morphAlpha;
-            // Subtle 2-bar lookahead feathering so the transition into untouched
-            // upcoming audio ahead of the playhead looks liquid-smooth
             if (idx + 1 < count) {
                 history[idx + 1] = history[idx + 1] * 0.86f + clampedV * 0.14f;
             }
@@ -699,20 +711,35 @@ public class WaveformView extends View {
         return Math.max(0.25f, (w / (float) COLS) * zoom);
     }
 
+    /**
+     * Number of visual sub-bars rendered per history bucket at the current
+     * zoom level. At zoom <= 1.0, 1 bar per bucket; as zoom increases up to
+     * 4.0 (400%), bar concentration dynamically scales up to 4 sub-bars per
+     * bucket so high zoom never looks sparse or hollow!
+     */
+    static int subBarsForZoom(float z) {
+        if (z <= 1.15f) return 1;
+        return Math.min(6, Math.max(2, Math.round(z)));
+    }
+
+    /**
+     * Screen X coordinate of bucket boundary `idx` (0 .. count).
+     * Since bucket `i` spans `[i, i + 1]` and its center is at `i + 0.5f`,
+     * boundary `idx` is at `centerX - (playheadPos - idx) * gap` (and the center
+     * of bucket `i` is at `centerX - (playheadPos - (i + 0.5f)) * gap`).
+     */
     private float screenXForBucketLocked(float idx, int w) {
         if (w <= 0) return 0f;
         float centerX = w / 2f;
         float gap = gapPxLocked(w);
-        float barW = Math.max(1.5f, gap * 0.45f);
-        return centerX - (playheadPos - 1f - idx) * gap - barW / 2f;
+        return centerX - (playheadPos - idx) * gap;
     }
 
     private int bucketForScreenXLocked(float sx, int w) {
         if (count <= 0 || w <= 0) return 0;
         float centerX = w / 2f;
         float gap = gapPxLocked(w);
-        float barW = Math.max(1.5f, gap * 0.45f);
-        float idx = playheadPos - 1f - (centerX - barW / 2f - sx) / gap;
+        float idx = playheadPos - (centerX - sx) / gap;
         return Math.max(0, Math.min(count, Math.round(idx)));
     }
 
@@ -836,10 +863,6 @@ public class WaveformView extends View {
                     int pIdx;
                     float pFrac;
                     synchronized (this) {
-                        // Zoom-adaptive 1:1 physical scrolling:
-                        // gap = (w / COLS) * zoom. Therefore 1f / gap automatically
-                        // reduces bars-per-pixel at high zoom (fine sample-accurate
-                        // scrubbing) and increases bars-per-pixel at low zoom!
                         float gap = gapPxLocked(w);
                         float barsPerPx = 1f / Math.max(0.25f, gap);
                         playheadPos = Math.max(0f, Math.min(n,
@@ -943,6 +966,7 @@ public class WaveformView extends View {
         int sIdx;
         int eIdx;
         float gap;
+        float curZoom;
         synchronized (this) {
             n = count;
             isLive = live;
@@ -952,13 +976,18 @@ public class WaveformView extends View {
             sIdx = selStartIdx;
             eIdx = selEndIdx;
             gap = gapPxLocked(w);
+            curZoom = zoom;
         }
 
-        float barW = Math.max(1.5f, gap * 0.45f);
+        // Dynamic bar concentration: subdivide each bucket into `subBars`
+        // when zoomed in (zoom > 1.0f) so high zoom has rich, dense bars!
+        int subBars = subBarsForZoom(curZoom);
+        float subGap = gap / subBars;
+        float barW = Math.max(1.5f, Math.min(4.2f * density, subGap * 0.48f));
         barPaint.setStrokeWidth(barW);
 
-        float xSelStart = centerX - (headPos - 1f - sIdx) * gap - barW / 2f;
-        float xSelEnd = centerX - (headPos - 1f - eIdx) * gap - barW / 2f;
+        float xSelStart = centerX - (headPos - sIdx) * gap;
+        float xSelEnd = centerX - (headPos - eIdx) * gap;
 
         // 1) Selection highlight box on the red waveform when paused
         if (selOn) {
@@ -972,38 +1001,68 @@ public class WaveformView extends View {
             }
         }
 
-        // 2) Draw Red Waveform Bars (both live & paused — identical scale & position)
+        // 2) Draw Red Waveform Bars (with half-bar playhead crossing & dynamic zoom density)
         if (n > 0) {
-            int iMin = Math.max(0, (int) Math.floor(headPos - 1f - (centerX + barW) / gap));
-            int iMax = Math.min(n - 1, (int) Math.ceil(headPos - 1f + (w - centerX + barW) / gap));
-            int step = Math.max(1, (iMax - iMin + 1) / 300);
+            int iMin = Math.max(0, (int) Math.floor(headPos - (centerX + gap) / gap));
+            int iMax = Math.min(n - 1, (int) Math.ceil(headPos + (w - centerX + gap) / gap));
+            int step = subBars > 1 ? 1 : Math.max(1, (iMax - iMin + 1) / 300);
 
             for (int i = iMin; i <= iMax; i += step) {
-                float v = 0f;
+                float v0 = 0f;
+                float vNext = 0f;
+                float vPrev = 0f;
                 synchronized (this) {
                     int lim = Math.min(n, i + step);
                     for (int k = i; k < lim; k++) {
-                        if (history[k] > v) v = history[k];
+                        if (history[k] > v0) v0 = history[k];
                     }
+                    vNext = (i + 1 < n) ? history[i + 1] : v0;
+                    vPrev = (i - 1 >= 0) ? history[i - 1] : v0;
                 }
-                float x = centerX - (headPos - 1f - i) * gap - barW / 2f;
-                if (x < -barW || x > w + barW) continue;
-                float bh = Math.max(2f, v * maxH * 2f);
 
-                if (selOn && i >= sIdx && i < eIdx) {
-                    barPaint.setColor(0xFFFF453A);
-                    barPaint.setAlpha(255);
-                } else if (i < headPos) {
-                    float vis = Math.min(1f, Math.max(0f, x / Math.max(1f, centerX)));
-                    float age = 0.35f + 0.65f * vis;
-                    barPaint.setColor(0xFFFF3B30);
-                    barPaint.setAlpha(Math.round(255 * age));
-                } else {
-                    float rightVis = Math.min(1f, Math.max(0f, (w - x) / Math.max(1f, centerX)));
-                    barPaint.setColor(0xFFFF3B30);
-                    barPaint.setAlpha(Math.round(90 + 65 * rightVis));
+                int subs = (step > 1) ? 1 : subBars;
+                for (int s = 0; s < subs; s++) {
+                    // Center of this bar/sub-bar in bucket coordinates:
+                    // When subs == 1, barCenter = i + 0.5f (exact midpoint of bar i).
+                    float fracInBucket = (s + 0.5f) / subs;
+                    float barCenterBucket = i + fracInBucket * step;
+                    float x = centerX - (headPos - barCenterBucket) * gap;
+                    if (x < -barW || x > w + barW) continue;
+
+                    float v = v0;
+                    if (subs > 1) {
+                        // Smooth cosine-hermite envelope interpolation across sub-bars
+                        // so high-zoom sub-bars form a natural, organic waveform contour
+                        float targetNeighbor = (fracInBucket < 0.5f) ? vPrev : vNext;
+                        float distFromCenter = Math.abs(fracInBucket - 0.5f) * 2f; // 0 at center, 1 at edge
+                        float weight = 0.5f * (1f - (float) Math.cos(Math.PI * distFromCenter)) * 0.42f;
+                        v = v0 * (1f - weight) + targetNeighbor * weight;
+                    }
+
+                    float bh = Math.max(2f, v * maxH * 2f);
+
+                    if (selOn && barCenterBucket >= sIdx && barCenterBucket <= eIdx) {
+                        barPaint.setColor(0xFFFF453A);
+                        barPaint.setAlpha(255);
+                    } else if (x <= centerX) {
+                        // HALF-BAR HIGHLIGHT RULE:
+                        // A bar only highlights when its center `x` has reached or
+                        // crossed to the left of `centerX` (i.e. playhead `headPos`
+                        // has crossed at least HALF of the bar: headPos >= barCenterBucket)!
+                        float vis = Math.min(1f, Math.max(0f, x / Math.max(1f, centerX)));
+                        float age = 0.35f + 0.65f * vis;
+                        barPaint.setColor(0xFFFF3B30);
+                        barPaint.setAlpha(Math.round(255 * age));
+                    } else {
+                        // Bar is in front of (to the right of) the playhead:
+                        // keep unhighlighted (dimmed translucent red) until playhead
+                        // crosses half of this bar!
+                        float rightVis = Math.min(1f, Math.max(0f, (w - x) / Math.max(1f, centerX)));
+                        barPaint.setColor(0xFFFF3B30);
+                        barPaint.setAlpha(Math.round(65 + 45 * rightVis));
+                    }
+                    canvas.drawLine(x, centerY - bh / 2f, x, centerY + bh / 2f, barPaint);
                 }
-                canvas.drawLine(x, centerY - bh / 2f, x, centerY + bh / 2f, barPaint);
             }
         }
         barPaint.setAlpha(255);
@@ -1045,5 +1104,3 @@ public class WaveformView extends View {
         }
     }
 }
-
-

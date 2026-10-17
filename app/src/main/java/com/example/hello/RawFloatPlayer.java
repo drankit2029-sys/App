@@ -12,13 +12,13 @@ import java.io.RandomAccessFile;
 /**
  * Plays a 32-bit float WAV straight through {@link AudioTrack} with:
  * <ul>
- *   <li><b>Zero Playhead Jerk</b>: {@link #positionFrames()} strictly tracks the
- *       monotonic hardware speaker head ({@code startFramePos + head}) instead
- *       of falling back to the ahead-of-time file read cursor {@code framePos}
- *       while {@code head == 0}.</li>
- *   <li><b>Speaker Pre-Warming</b>: {@link #warmUpSpeaker(int)} pre-allocates
- *       and primes a low-latency {@link AudioTrack} when the user begins
- *       scrolling the waveform so playback starts in < 5 ms.</li>
+ *   <li><b>Live dBFS Meter Level ({@link #level})</b>: Computes the real-time
+ *       post-FX peak amplitude of every played chunk so {@link DbMeterView}
+ *       shows live dBFS readings while previewing!</li>
+ *   <li><b>Zero Playhead Jerk</b>: {@link #positionFrames()} tracks the
+ *       monotonic hardware speaker head ({@code startFramePos + head}).</li>
+ *   <li><b>Speaker Pre-Warming</b>: {@link #warmUpSpeaker(int)} primes a
+ *       low-latency {@link AudioTrack} for instant start.</li>
  * </ul>
  */
 public final class RawFloatPlayer {
@@ -53,7 +53,6 @@ public final class RawFloatPlayer {
                 built = createLowLatencyTrack(ch, 32768);
                 if (built.getState() == AudioTrack.STATE_INITIALIZED) {
                     built.play();
-                    // Prime AudioFlinger mixer with 128 zero frames (~2.6 ms silence)
                     float[] silence = new float[128 * ch];
                     built.write(silence, 0, silence.length, AudioTrack.WRITE_NON_BLOCKING);
                     built.pause();
@@ -81,7 +80,6 @@ public final class RawFloatPlayer {
         }, "takeone-speaker-warm").start();
     }
 
-    /** Releases any pre-warmed speaker track when leaving the Studio. */
     public static void releaseWarmSpeaker() {
         synchronized (WARM_LOCK) {
             if (warmTrack != null) {
@@ -153,6 +151,12 @@ public final class RawFloatPlayer {
     private volatile DspChain dspChain;
     private volatile long stopAtFrame = -1;
 
+    /**
+     * Real-time peak amplitude (0..1) of the audio currently playing through
+     * the speaker (including live DspChain FX), driving DbMeterView during preview!
+     */
+    public volatile float level = 0f;
+
     public void setDspChain(DspChain chain) {
         this.dspChain = chain;
     }
@@ -215,6 +219,7 @@ public final class RawFloatPlayer {
         framePos = cur;
         startFramePos = cur;
         maxReportedFrame = cur;
+        level = 0f;
     }
 
     public synchronized void stop() {
@@ -222,15 +227,9 @@ public final class RawFloatPlayer {
         framePos = 0;
         startFramePos = 0;
         maxReportedFrame = 0;
+        level = 0f;
     }
 
-    /**
-     * Sample-accurate monotonic playback position.
-     *
-     * <p>Never returns the ahead-of-time file read cursor {@code framePos}
-     * while {@code head == 0}, completely eliminating the playhead forward-jerk
-     * and snap-back when starting preview playback!
-     */
     public long positionFrames() {
         long limit = (stopAtFrame > 0 && stopAtFrame <= totalFrames)
                 ? stopAtFrame : totalFrames;
@@ -244,8 +243,6 @@ public final class RawFloatPlayer {
                         if (pos > maxReportedFrame) maxReportedFrame = pos;
                         return maxReportedFrame;
                     }
-                    // Headless / Robolectric fallback only after 160ms if
-                    // AudioTrack stub never advances getPlaybackHeadPosition()
                     long elapsed = SystemClock.elapsedRealtime() - playStartedRealtimeMs;
                     if (elapsed > 160L && framePos > startFramePos) {
                         long sim = Math.min(limit,
@@ -285,6 +282,7 @@ public final class RawFloatPlayer {
         generation++;
         stop = true;
         paused = true;
+        level = 0f;
         AudioTrack t = activeTrack;
         if (t != null) {
             try {
@@ -316,7 +314,6 @@ public final class RawFloatPlayer {
             track = obtainTrack(channels, spanBytes);
             if (track.getState() != AudioTrack.STATE_INITIALIZED) return;
             r = new RandomAccessFile(file, "r");
-            // 1024-frame (~21ms) chunks for ultra-low-latency start and stop
             float[] buf = new float[1024 * channels];
             byte[] raw = new byte[buf.length * 4];
             java.nio.FloatBuffer fb = java.nio.ByteBuffer.wrap(raw)
@@ -336,10 +333,19 @@ public final class RawFloatPlayer {
                 if (chain != null && chain.isActive()) {
                     chain.processInPlace(buf, want);
                 }
+                // Compute post-FX peak level for the dBFS meter during preview!
+                float chunkPeak = 0f;
+                int totalSamples = want * channels;
+                for (int i = 0; i < totalSamples; i++) {
+                    float a = Math.abs(buf[i]);
+                    if (a > chunkPeak) chunkPeak = a;
+                }
+                this.level = Math.min(1f, chunkPeak);
+
                 int written = 0;
-                while (written < want * channels && !stop) {
+                while (written < totalSamples && !stop) {
                     int n = track.write(buf, written,
-                            want * channels - written,
+                            totalSamples - written,
                             AudioTrack.WRITE_BLOCKING);
                     if (n <= 0) break;
                     written += n;
@@ -380,6 +386,7 @@ public final class RawFloatPlayer {
             }
         } catch (Exception ignored) {
         } finally {
+            this.level = 0f;
             activeTrack = null;
             if (track != null) {
                 try {
@@ -403,5 +410,3 @@ public final class RawFloatPlayer {
         }
     }
 }
-
-

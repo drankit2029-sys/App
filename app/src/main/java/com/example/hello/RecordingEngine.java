@@ -186,12 +186,12 @@ public final class RecordingEngine {
         }
     }
 
-    // ---- Standby Microphone Pre-Warming & Sub-Session Stack ----
-    private AudioRecord warmRecorder;
-    private int warmSource = -1;
-    private int warmChannels = -1;
-    private boolean warmFloatNative;
-    private int warmActualChannels;
+    // ---- Fast Mic Config Cache (Never Holds Hardware Mic Open While Idle) ----
+    private volatile int cachedMicSource = -1;
+    private volatile int cachedMicWantedCh = -1;
+    private volatile int cachedMicChannelCfg = -1;
+    private volatile int cachedMicEncoding = -1;
+    private volatile int cachedMicBufSize = -1;
     private volatile boolean warmingMic;
 
     // Parent session stash when inside "Select & Replace" sub-editor mode
@@ -203,27 +203,22 @@ public final class RecordingEngine {
     private long parentSelEndFrame = 0;
 
     /**
-     * Pre-warms an AudioRecord instance on a background thread when the user
-     * scrolls the waveform or arms Replace, eliminating mic initialization lag.
+     * Probes and caches the optimal AudioRecord parameters on a background
+     * thread without holding an idle AudioRecord open (holding an unstarted
+     * AudioRecord while AudioTrack preview plays causes the first read() to
+     * fail on Samsung/Qualcomm HALs).
      */
     @android.annotation.SuppressLint("MissingPermission")
     public void warmUpMic(final Context ctx, final int requestedSource,
                           final int wantedOutCh) {
         if (state == State.RECORDING || warmingMic) return;
-        synchronized (lock) {
-            if (warmRecorder != null
-                    && warmRecorder.getState() == AudioRecord.STATE_INITIALIZED
-                    && warmSource == requestedSource
-                    && warmChannels == wantedOutCh) {
-                return;
-            }
-            warmingMic = true;
+        if (cachedMicSource == requestedSource
+                && cachedMicWantedCh == wantedOutCh
+                && cachedMicBufSize > 0) {
+            return;
         }
+        warmingMic = true;
         new Thread(() -> {
-            AudioRecord built = null;
-            int chosenSrc = requestedSource;
-            int chosenActualCh = 1;
-            boolean chosenFloat = true;
             try {
                 int[] channelPref = wantedOutCh == 1
                         ? new int[]{AudioFormat.CHANNEL_IN_MONO, AudioFormat.CHANNEL_IN_STEREO}
@@ -233,49 +228,29 @@ public final class RecordingEngine {
                         ? new int[]{MediaRecorder.AudioSource.UNPROCESSED,
                                 MediaRecorder.AudioSource.MIC}
                         : new int[]{requestedSource};
-                outer:
                 for (int src : sources) {
                     for (int chCfg : channelPref) {
                         for (int enc : encPref) {
                             int min = AudioRecord.getMinBufferSize(SAMPLE_RATE, chCfg, enc);
                             if (min <= 0) continue;
-                            int bufSize = Math.max(min * 4, 32768);
-                            AudioRecord ar = new AudioRecord(src, SAMPLE_RATE, chCfg, enc, bufSize);
-                            if (ar.getState() == AudioRecord.STATE_INITIALIZED) {
-                                built = ar;
-                                chosenSrc = src;
-                                chosenActualCh = (chCfg == AudioFormat.CHANNEL_IN_STEREO) ? 2 : 1;
-                                chosenFloat = (enc == AudioFormat.ENCODING_PCM_FLOAT);
-                                break outer;
-                            }
-                            try { ar.release(); } catch (Exception ignored) {}
+                            cachedMicSource = src;
+                            cachedMicWantedCh = wantedOutCh;
+                            cachedMicChannelCfg = chCfg;
+                            cachedMicEncoding = enc;
+                            cachedMicBufSize = Math.max(min * 4, 32768);
+                            return;
                         }
                     }
                 }
-            } catch (Throwable ignored) {}
-            synchronized (lock) {
+            } catch (Throwable ignored) {
+            } finally {
                 warmingMic = false;
-                if (built != null) {
-                    if (warmRecorder != null) {
-                        try { warmRecorder.release(); } catch (Exception ignored) {}
-                    }
-                    warmRecorder = built;
-                    warmSource = chosenSrc;
-                    warmChannels = wantedOutCh;
-                    warmActualChannels = chosenActualCh;
-                    warmFloatNative = chosenFloat;
-                }
             }
         }, "takeone-mic-warm").start();
     }
 
     public void releaseWarmMic() {
-        synchronized (lock) {
-            if (warmRecorder != null) {
-                try { warmRecorder.release(); } catch (Exception ignored) {}
-                warmRecorder = null;
-            }
-        }
+        // No idle AudioRecord held open; nothing to release.
     }
 
     /**
@@ -618,11 +593,10 @@ public final class RecordingEngine {
                 dataBytes = payloadBytesOf(rawFile);
                 int ch = Math.max(1, channels);
                 long totalFrames = dataBytes / (ch * 4L);
-                if (!cursorExplicit || cursorFrame > totalFrames) {
+                if (!cursorExplicit || cursorFrame < 0 || cursorFrame > totalFrames) {
                     cursorFrame = totalFrames;
                     truncateTailOnWrite = false;
                 }
-                cursorExplicit = false;
                 punchInFadeBuf = null;
                 punchOutFadeBuf = null;
                 if (cursorFrame < totalFrames) {
@@ -679,6 +653,8 @@ public final class RecordingEngine {
                 raf = null;
                 throw e;
             }
+            // Only clear cursorExplicit AFTER openRecorderLocked() succeeded!
+            cursorExplicit = false;
             // Reconcile byte count with what is actually on disk.
             dataBytes = payloadBytesOf(rawFile);
             capRun = true;
@@ -737,11 +713,13 @@ public final class RecordingEngine {
                 dataBytes = payloadBytesOf(rawFile);
                 int ch = Math.max(1, channels);
                 long totalFrames = dataBytes / (ch * 4L);
-                if (!cursorExplicit || cursorFrame > totalFrames) {
+                // When resuming from PAUSED, cursorFrame is ALWAYS valid in
+                // [0, totalFrames]; never reset it to totalFrames if the user
+                // scrubbed back to a mid-take playhead!
+                if (cursorFrame < 0 || cursorFrame > totalFrames) {
                     cursorFrame = totalFrames;
                     truncateTailOnWrite = false;
                 }
-                cursorExplicit = false;
                 punchInFadeBuf = null;
                 punchOutFadeBuf = null;
                 if (cursorFrame < totalFrames) {
@@ -798,6 +776,8 @@ public final class RecordingEngine {
                 raf = null;
                 throw e;
             }
+            // Only clear cursorExplicit AFTER openRecorderLocked() succeeded!
+            cursorExplicit = false;
             dataBytes = payloadBytesOf(rawFile);
             capRun = true;
             capThread = new Thread(this::capLoop, "takeone-cap");
@@ -935,32 +915,6 @@ public final class RecordingEngine {
      */
     @android.annotation.SuppressLint("MissingPermission")
     private void openRecorderLocked(int requestedSource, int wantedOutCh) throws Exception {
-        // Claim the standby warmed recorder first when its config matches:
-        // the mic hardware path is already initialized, so capture starts
-        // without any AudioRecord construction latency.
-        if (warmRecorder != null
-                && warmRecorder.getState() == AudioRecord.STATE_INITIALIZED
-                && warmChannels == wantedOutCh) {
-            AudioRecord ar = warmRecorder;
-            warmRecorder = null;
-            try {
-                ar.startRecording();
-                if (ar.getRecordingState() == AudioRecord.RECORDSTATE_RECORDING) {
-                    recorder = ar;
-                    audioSource = warmSource;
-                    actualChannels = warmActualChannels;
-                    floatNative = warmFloatNative;
-                    boolean hasAudio = dataBytes > 0 || streaming != null;
-                    if (wantedOutCh == 1 && !hasAudio) channels = 1;
-                    else if (!hasAudio && actualChannels > 1) channels = actualChannels;
-                    fellBackToMono = wantedOutCh == 2 && actualChannels == 1;
-                    patchHeaderLocked();
-                    return;
-                }
-            } catch (Exception ignored) {}
-            try { ar.release(); } catch (Exception ignored) {}
-        }
-
         int[] channelPref = wantedOutCh == 1
                 ? new int[]{AudioFormat.CHANNEL_IN_MONO, AudioFormat.CHANNEL_IN_STEREO}
                 : new int[]{AudioFormat.CHANNEL_IN_STEREO, AudioFormat.CHANNEL_IN_MONO};
