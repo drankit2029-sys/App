@@ -461,7 +461,8 @@ public final class RecordingEngine {
             // Never start the append-only incremental encoder when replacing
             // mid-file or after an in-place edit: it would race ahead and encode
             // the entire un-replaced file on disk in milliseconds!
-            if (inPlaceEdited || (dataBytes > 0 && cursorFrame < totalFrames())) {
+            if (inPlaceEdited || (dataBytes > 0 && cursorFrame < totalFrames()
+                    && cursorFrame != 0L)) {
                 return;
             }
             try {
