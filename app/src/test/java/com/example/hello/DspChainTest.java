@@ -148,4 +148,28 @@ public class DspChainTest {
         assertEquals(DspChain.Config.MODE_CUSTOM, loaded.mode);
         assertEquals(75, loaded.noisePct);
     }
+
+    @Test
+    public void proFxRackPresetsCheckmarksAndDeletionWork() {
+        DspChain.Config cfg = new DspChain.Config();
+        cfg.applyPreset(DspChain.Preset.PODCAST_BROADCAST);
+        assertTrue(cfg.isActive());
+        assertTrue(cfg.enabledSlotCount() >= 5);
+
+        // Unchecking all slots disables processing
+        for (DspChain.EffectSlot s : cfg.slots) {
+            s.enabled = false;
+        }
+        cfg.syncLegacyFieldsFromSlots();
+        assertFalse(cfg.isActive());
+
+        // Adding a single slot enables it
+        DspChain.EffectSlot added = cfg.addOrFocusSlot(DspChain.EffectType.WARMTH_BODY);
+        assertTrue(added.enabled);
+        assertTrue(cfg.isActive());
+
+        // Deleting the slot removes it from the rack
+        cfg.removeSlot(added);
+        assertFalse(cfg.isActive());
+    }
 }

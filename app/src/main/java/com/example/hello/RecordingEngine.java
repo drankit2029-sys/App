@@ -152,8 +152,12 @@ public final class RecordingEngine {
     }
 
     /**
-     * Positions the recording head at `frame` while IDLE or PAUSED so the next
-     * resumeCapture()/startCapture() replaces from that point onward.
+     * Positions the recording/playhead cursor at `frame` while IDLE or PAUSED.
+     *
+     * <p>IMPORTANT: Does NOT set {@code truncateTailOnWrite = true}! When the
+     * user presses Replace and records from {@code cursorFrame}, the entire take
+     * forward of {@code cursorFrame} is kept intact and only the frames up to
+     * where Pause is pressed are modified in-place.
      */
     public void seekCursorFrame(long frame) {
         synchronized (lock) {
@@ -162,7 +166,7 @@ public final class RecordingEngine {
             cursorFrame = Math.max(0L, Math.min(total, frame));
             punchOutFrame = -1L;
             cursorExplicit = true;
-            truncateTailOnWrite = (cursorFrame < total);
+            truncateTailOnWrite = false;
         }
     }
 
@@ -180,6 +184,219 @@ public final class RecordingEngine {
             cursorExplicit = true;
             truncateTailOnWrite = false;
         }
+    }
+
+    // ---- Standby Microphone Pre-Warming & Sub-Session Stack ----
+    private AudioRecord warmRecorder;
+    private int warmSource = -1;
+    private int warmChannels = -1;
+    private boolean warmFloatNative;
+    private int warmActualChannels;
+    private volatile boolean warmingMic;
+
+    // Parent session stash when inside "Select & Replace" sub-editor mode
+    private File parentRawFile;
+    private String parentTakeName;
+    private int parentChannels = 2;
+    private long parentDataBytes = 0;
+    private long parentSelStartFrame = 0;
+    private long parentSelEndFrame = 0;
+
+    /**
+     * Pre-warms an AudioRecord instance on a background thread when the user
+     * scrolls the waveform or arms Replace, eliminating mic initialization lag.
+     */
+    @android.annotation.SuppressLint("MissingPermission")
+    public void warmUpMic(final Context ctx, final int requestedSource,
+                          final int wantedOutCh) {
+        if (state == State.RECORDING || warmingMic) return;
+        synchronized (lock) {
+            if (warmRecorder != null
+                    && warmRecorder.getState() == AudioRecord.STATE_INITIALIZED
+                    && warmSource == requestedSource
+                    && warmChannels == wantedOutCh) {
+                return;
+            }
+            warmingMic = true;
+        }
+        new Thread(() -> {
+            AudioRecord built = null;
+            int chosenSrc = requestedSource;
+            int chosenActualCh = 1;
+            boolean chosenFloat = true;
+            try {
+                int[] channelPref = wantedOutCh == 1
+                        ? new int[]{AudioFormat.CHANNEL_IN_MONO, AudioFormat.CHANNEL_IN_STEREO}
+                        : new int[]{AudioFormat.CHANNEL_IN_STEREO, AudioFormat.CHANNEL_IN_MONO};
+                int[] encPref = {AudioFormat.ENCODING_PCM_FLOAT, AudioFormat.ENCODING_PCM_16BIT};
+                int[] sources = requestedSource == MediaRecorder.AudioSource.UNPROCESSED
+                        ? new int[]{MediaRecorder.AudioSource.UNPROCESSED,
+                                MediaRecorder.AudioSource.MIC}
+                        : new int[]{requestedSource};
+                outer:
+                for (int src : sources) {
+                    for (int chCfg : channelPref) {
+                        for (int enc : encPref) {
+                            int min = AudioRecord.getMinBufferSize(SAMPLE_RATE, chCfg, enc);
+                            if (min <= 0) continue;
+                            int bufSize = Math.max(min * 4, 32768);
+                            AudioRecord ar = new AudioRecord(src, SAMPLE_RATE, chCfg, enc, bufSize);
+                            if (ar.getState() == AudioRecord.STATE_INITIALIZED) {
+                                built = ar;
+                                chosenSrc = src;
+                                chosenActualCh = (chCfg == AudioFormat.CHANNEL_IN_STEREO) ? 2 : 1;
+                                chosenFloat = (enc == AudioFormat.ENCODING_PCM_FLOAT);
+                                break outer;
+                            }
+                            try { ar.release(); } catch (Exception ignored) {}
+                        }
+                    }
+                }
+            } catch (Throwable ignored) {}
+            synchronized (lock) {
+                warmingMic = false;
+                if (built != null) {
+                    if (warmRecorder != null) {
+                        try { warmRecorder.release(); } catch (Exception ignored) {}
+                    }
+                    warmRecorder = built;
+                    warmSource = chosenSrc;
+                    warmChannels = wantedOutCh;
+                    warmActualChannels = chosenActualCh;
+                    warmFloatNative = chosenFloat;
+                }
+            }
+        }, "takeone-mic-warm").start();
+    }
+
+    public void releaseWarmMic() {
+        synchronized (lock) {
+            if (warmRecorder != null) {
+                try { warmRecorder.release(); } catch (Exception ignored) {}
+                warmRecorder = null;
+            }
+        }
+    }
+
+    /**
+     * Enters a dedicated sub-session for "Select & Replace" so the replacement
+     * take is recorded and edited in its own float WAV session before splicing
+     * into the parent take.
+     */
+    public void enterSelectAndReplaceSubSession(Context ctx, long selStartFrame,
+                                                long selEndFrame) throws Exception {
+        synchronized (lock) {
+            if (state == State.RECORDING) pauseCapture();
+            endStreamingAbortLocked();
+            parentRawFile = rawFile;
+            parentTakeName = takeName;
+            parentChannels = channels;
+            parentDataBytes = dataBytes;
+            parentSelStartFrame = selStartFrame;
+            parentSelEndFrame = selEndFrame;
+
+            File subFile = new File(takesDir(ctx),
+                    sanitize(takeName != null ? takeName : "Take")
+                            + "_subrep_" + System.nanoTime() + ".wav");
+            writeHeaderNew(subFile, channels, 0);
+            rawFile = subFile;
+            dataBytes = 0;
+            cursorFrame = 0;
+            punchOutFrame = -1;
+            cursorExplicit = false;
+            truncateTailOnWrite = false;
+            state = State.IDLE;
+            level = 0f;
+        }
+    }
+
+    public boolean isInSubSession() {
+        synchronized (lock) {
+            return parentRawFile != null;
+        }
+    }
+
+    /**
+     * Exits the "Select & Replace" sub-session, splicing the recorded replacement
+     * into `[parentSelStartFrame, parentSelEndFrame)` of the parent take when
+     * `commit == true` (or discarding the sub-session when `commit == false`).
+     */
+    public void exitSelectAndReplaceSubSession(boolean commit,
+                                               EditEngine.UndoJournal undo) throws Exception {
+        File sub;
+        File parent;
+        long sFrame;
+        long eFrame;
+        synchronized (lock) {
+            if (parentRawFile == null) return;
+            if (state == State.RECORDING) pauseCapture();
+            endStreamingAbortLocked();
+            sub = rawFile;
+            parent = parentRawFile;
+            sFrame = parentSelStartFrame;
+            eFrame = parentSelEndFrame;
+
+            rawFile = parentRawFile;
+            takeName = parentTakeName;
+            channels = parentChannels;
+            dataBytes = parentDataBytes;
+            parentRawFile = null;
+            parentTakeName = null;
+        }
+        try {
+            if (commit && sub != null && sub.exists() && payloadBytesOf(sub) > 0) {
+                long newBytes = EditEngine.spliceReplacementFile(
+                        parent, sFrame, eFrame, sub, undo);
+                synchronized (lock) {
+                    dataBytes = newBytes;
+                    long repFrames = payloadBytesOf(sub) / (Math.max(1, channels) * 4L);
+                    cursorFrame = Math.min(totalFrames(), sFrame + repFrames);
+                    cursorExplicit = true;
+                    state = State.PAUSED;
+                }
+            } else {
+                synchronized (lock) {
+                    dataBytes = payloadBytesOf(parent);
+                    cursorFrame = Math.min(totalFrames(), sFrame);
+                    cursorExplicit = true;
+                    state = State.PAUSED;
+                }
+            }
+        } finally {
+            if (sub != null && sub.exists()) {
+                // noinspection ResultOfMethodCallIgnored
+                sub.delete();
+            }
+        }
+    }
+
+    /**
+     * When pausing an in-place mid-take Replace (`cursorFrame < totalFrames`),
+     * fades in the first 240 frames (5 ms) of the surviving future audio so the
+     * punch-out transition has zero click.
+     */
+    private void crossfadeOutOnPauseLocked() {
+        if (rawFile == null || !rawFile.exists()) return;
+        try {
+            int ch = Math.max(1, channels);
+            long frameBytes = ch * 4L;
+            long totalFrames = dataBytes / frameBytes;
+            if (cursorFrame > Dsp.CROSSFADE_FRAMES && cursorFrame < totalFrames) {
+                int fade = (int) Math.min(Dsp.CROSSFADE_FRAMES, totalFrames - cursorFrame);
+                if (fade > 0 && raf != null) {
+                    byte[] tailBytes = new byte[fade * ch * 4];
+                    long pos = 44L + cursorFrame * frameBytes;
+                    raf.seek(pos);
+                    raf.readFully(tailBytes);
+                    float[] tail = new float[fade * ch];
+                    ByteBuffer.wrap(tailBytes).order(ByteOrder.LITTLE_ENDIAN)
+                            .asFloatBuffer().get(tail);
+                    Dsp.applyFadeInPlace(tail, 0, fade, ch, true);
+                    raf.seek(pos);
+                    Dsp.writeFloatsLE(raf, tail, 0, tail.length);
+                }
+            }
+        } catch (Exception ignored) {}
     }
 
     /** Aborts any running incremental encoder after an in-place edit/undo/DSP commit. */
@@ -496,6 +713,7 @@ public final class RecordingEngine {
             stopThenJoinThenRelease(rec, th);
         } finally {
             synchronized (lock) {
+                crossfadeOutOnPauseLocked();
                 closeRafLocked();
                 patchHeaderLocked();
                 state = State.PAUSED;
@@ -717,6 +935,32 @@ public final class RecordingEngine {
      */
     @android.annotation.SuppressLint("MissingPermission")
     private void openRecorderLocked(int requestedSource, int wantedOutCh) throws Exception {
+        // Claim the standby warmed recorder first when its config matches:
+        // the mic hardware path is already initialized, so capture starts
+        // without any AudioRecord construction latency.
+        if (warmRecorder != null
+                && warmRecorder.getState() == AudioRecord.STATE_INITIALIZED
+                && warmChannels == wantedOutCh) {
+            AudioRecord ar = warmRecorder;
+            warmRecorder = null;
+            try {
+                ar.startRecording();
+                if (ar.getRecordingState() == AudioRecord.RECORDSTATE_RECORDING) {
+                    recorder = ar;
+                    audioSource = warmSource;
+                    actualChannels = warmActualChannels;
+                    floatNative = warmFloatNative;
+                    boolean hasAudio = dataBytes > 0 || streaming != null;
+                    if (wantedOutCh == 1 && !hasAudio) channels = 1;
+                    else if (!hasAudio && actualChannels > 1) channels = actualChannels;
+                    fellBackToMono = wantedOutCh == 2 && actualChannels == 1;
+                    patchHeaderLocked();
+                    return;
+                }
+            } catch (Exception ignored) {}
+            try { ar.release(); } catch (Exception ignored) {}
+        }
+
         int[] channelPref = wantedOutCh == 1
                 ? new int[]{AudioFormat.CHANNEL_IN_MONO, AudioFormat.CHANNEL_IN_STEREO}
                 : new int[]{AudioFormat.CHANNEL_IN_STEREO, AudioFormat.CHANNEL_IN_MONO};

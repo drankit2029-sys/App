@@ -200,6 +200,77 @@ public final class EditEngine {
     }
 
     /**
+     * Splices a newly recorded replacement session file (`repWav`) into
+     * `[selStartFrame, selEndFrame)` of `parentRaw` with 240-frame (5 ms)
+     * raised-cosine crossfades at both splice boundaries.
+     */
+    public static long spliceReplacementFile(File parentRaw, long selStartFrame,
+                                             long selEndFrame, File repWav,
+                                             UndoJournal undo) throws Exception {
+        FormatConverter.WavInfo pInfo = FormatConverter.readFloatWav(parentRaw);
+        FormatConverter.WavInfo rInfo = FormatConverter.readFloatWav(repWav);
+        int ch = pInfo.channels;
+        long frameBytes = ch * 4L;
+        long pTotalFrames = pInfo.dataBytes / frameBytes;
+        long rTotalFrames = rInfo.dataBytes / (rInfo.channels * 4L);
+        if (rTotalFrames <= 0) return pInfo.dataBytes;
+
+        selStartFrame = Math.max(0, Math.min(pTotalFrames, selStartFrame));
+        selEndFrame = Math.max(selStartFrame, Math.min(pTotalFrames, selEndFrame));
+
+        if (undo != null) undo.recordSnapshot(parentRaw);
+
+        File tailTmp = new File(parentRaw.getParentFile(),
+                parentRaw.getName() + ".subtail");
+        try {
+            saveTailFrom(parentRaw, selEndFrame, tailTmp);
+            try (RandomAccessFile praf = new RandomAccessFile(parentRaw, "rw");
+                 RandomAccessFile rraf = new RandomAccessFile(repWav, "r")) {
+                int fadeIn = (int) Math.min(Dsp.CROSSFADE_FRAMES,
+                        Math.min(selStartFrame, rTotalFrames));
+                long writePos = pInfo.dataStart + selStartFrame * frameBytes;
+                if (fadeIn > 0) {
+                    float[] pre = readFloatFrames(praf,
+                            pInfo.dataStart + (selStartFrame - fadeIn) * frameBytes,
+                            fadeIn, ch);
+                    float[] inc = readFloatFrames(rraf, rInfo.dataStart, fadeIn, ch);
+                    float[] blended = new float[fadeIn * ch];
+                    Dsp.crossfadeFrames(pre, 0, inc, 0, blended, 0, fadeIn, ch);
+                    praf.seek(pInfo.dataStart + (selStartFrame - fadeIn) * frameBytes);
+                    Dsp.writeFloatsLE(praf, blended, 0, blended.length);
+                }
+                long remRepFrames = Math.max(0, rTotalFrames - fadeIn);
+                long remRepBytes = remRepFrames * frameBytes;
+                rraf.seek(rInfo.dataStart + fadeIn * frameBytes);
+                praf.seek(writePos);
+                byte[] buf = new byte[CHUNK_BYTES];
+                long copied = 0;
+                while (copied < remRepBytes) {
+                    int want = (int) Math.min(buf.length, remRepBytes - copied);
+                    int n = rraf.read(buf, 0, want);
+                    if (n <= 0) break;
+                    praf.write(buf, 0, n);
+                    copied += n;
+                }
+                long repEndFrame = selStartFrame + remRepFrames;
+                long curPayload = repEndFrame * frameBytes;
+                praf.setLength(pInfo.dataStart + curPayload);
+                praf.seek(0);
+                praf.write(Dsp.wavFloatHeader(ch, pInfo.sampleRate, curPayload));
+            }
+            long replaceEndFrame = selStartFrame
+                    + Math.max(0, rTotalFrames - Math.min(Dsp.CROSSFADE_FRAMES,
+                            Math.min(selStartFrame, rTotalFrames)));
+            return spliceTailAfterReplace(parentRaw, replaceEndFrame, tailTmp);
+        } finally {
+            if (tailTmp.exists()) {
+                // noinspection ResultOfMethodCallIgnored
+                tailTmp.delete();
+            }
+        }
+    }
+
+    /**
      * Crops `raw` in-place so only `[startFrame, endFrame)` remains, with
      * zero-crossing snap and 5 ms raised-cosine fade-in/fade-out at the edges.
      */

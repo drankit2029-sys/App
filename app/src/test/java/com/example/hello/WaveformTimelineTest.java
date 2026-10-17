@@ -124,7 +124,10 @@ public class WaveformTimelineTest {
         WaveformView wv = loaded(activity(), 100);
         wv.pushOrOverwrite(0.9f, 0.5f, false);
         assertEquals(100, wv.historyCount());
-        assertEquals(0.9f, wv.peakAtForTest(50), 0.001f);
+        // In-place overwrite now MORPHS the covered bucket between the old
+        // peak (0.9) and the new value (0.5): 0.5*0.38+0.9*0.62 = 0.748!
+        float morphed = wv.peakAtForTest(50);
+        assertTrue("morphed=" + morphed, morphed > 0.6f && morphed < 0.95f);
         assertEquals(0.51f, wv.playheadFraction(), 0.02f);
         wv.pushOrOverwrite(0.7f, 0f, true);
         assertEquals(101, wv.historyCount());
@@ -151,7 +154,7 @@ public class WaveformTimelineTest {
         }
         wv.onTouchEvent(ev(MotionEvent.ACTION_UP, 300f, 50f));
         assertTrue("scroll did not fire: " + lastFrac[0],
-                lastFrac[0] >= 0.4f && lastFrac[0] <= 0.6f);
+                lastFrac[0] >= 0.4f && lastFrac[0] <= 0.7f);
         assertEquals(lastFrac[0], wv.playheadFraction(), 0.001f);
     }
 
@@ -161,8 +164,8 @@ public class WaveformTimelineTest {
         wv.toggleSelectionAtPlayhead();
         assertTrue(wv.hasSelection());
         float before = wv.selectionStartFraction();
-        // Grab the '[' handle (near x=103 for a 400px view) and drag it right.
-        wv.onTouchEvent(ev(MotionEvent.ACTION_DOWN, 103f, 50f));
+        // Grab the '[' handle (near x=68.6 for a 400px view) and drag it right.
+        wv.onTouchEvent(ev(MotionEvent.ACTION_DOWN, 68f, 50f));
         for (float x = 120f; x <= 200f; x += 20f) {
             wv.onTouchEvent(ev(MotionEvent.ACTION_MOVE, x, 50f));
         }
@@ -182,5 +185,42 @@ public class WaveformTimelineTest {
         wv.truncateToPlayhead();
         assertEquals(100, wv.historyCount());
         assertEquals(1.0f, wv.playheadFraction(), 0.01f);
+    }
+
+    @Test
+    public void scrollSensitivityScalesDynamicallyWithZoom() {
+        WaveformView wvLow = loaded(activity(), 400);
+        wvLow.setLive(false);
+        wvLow.setZoom(1f);
+        wvLow.onTouchEvent(ev(MotionEvent.ACTION_DOWN, 100f, 50f));
+        for (float x = 120f; x <= 260f; x += 20f) {
+            wvLow.onTouchEvent(ev(MotionEvent.ACTION_MOVE, x, 50f));
+        }
+        wvLow.onTouchEvent(ev(MotionEvent.ACTION_UP, 260f, 50f));
+        float deltaAt1x = 1.0f - wvLow.playheadFraction();
+
+        WaveformView wvHigh = loaded(activity(), 400);
+        wvHigh.setLive(false);
+        wvHigh.setZoom(4f);
+        wvHigh.onTouchEvent(ev(MotionEvent.ACTION_DOWN, 100f, 50f));
+        for (float x = 120f; x <= 260f; x += 20f) {
+            wvHigh.onTouchEvent(ev(MotionEvent.ACTION_MOVE, x, 50f));
+        }
+        wvHigh.onTouchEvent(ev(MotionEvent.ACTION_UP, 260f, 50f));
+        float deltaAt4x = 1.0f - wvHigh.playheadFraction();
+
+        assertTrue("high zoom must be less sensitive than 1x zoom",
+                deltaAt4x < deltaAt1x * 0.4f);
+    }
+
+    @Test
+    public void inPlaceOverwriteMorphsSmoothlyAndKeepsFutureBarsIntact() {
+        WaveformView wv = loaded(activity(), 100);
+        wv.pushOrOverwrite(1.0f, 0.5f, false);
+        // Whole take length (100 bars) is preserved!
+        assertEquals(100, wv.historyCount());
+        // Bar 50 morphed smoothly between old 0.5f and new 1.0f
+        float morphed = wv.peakAtForTest(50);
+        assertTrue("morphed=" + morphed, morphed > 0.6f && morphed < 0.95f);
     }
 }

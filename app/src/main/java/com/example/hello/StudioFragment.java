@@ -60,13 +60,43 @@ public class StudioFragment extends Fragment {
     private View statusDot;
     private WaveformView waveform;
     private View editorStrip;
-    private TextView btnPreviewPlay;
+    private TextView btnPreviewPlay; // Now acts as the "Replace" mode toggle button
     private TextView btnSelectRange;
-    private TextView btnReplaceSeg;
+    private TextView btnReplaceSeg;  // "Select & Replace" dedicated sub-editor button
     private TextView btnTrimCrop;
     private TextView btnCutDelete;
     private TextView btnDspFx;
     private TextView btnEditUndo;
+
+    // Inline FX Window views (replaces telePanel when open)
+    private View fxPanel;
+    private TextView fxPresetDropdown;
+    private View fxCloseBtn;
+    private android.widget.LinearLayout fxListContainer;
+    private TextView fxPreviewBtn;
+    private TextView fxApplyBtn;
+    private boolean fxPanelOpen = false;
+    private boolean teleWasVisibleBeforeFx = true;
+
+    /**
+     * False by default when scrolling in PAUSED state -> Resume FAB plays audio
+     * from playhead. True when user taps "Replace" -> Resume FAB overwrites audio
+     * in-place from playhead.
+     */
+    private boolean replaceModeArmed = false;
+
+    /**
+     * True once the user has scrolled or tapped the waveform while paused, so
+     * pressing Resume plays from the playhead unless Replace is armed.
+     */
+    private boolean userScrolledWhilePaused = false;
+
+    /**
+     * True when inside the dedicated "Select & Replace" sub-editor mode.
+     */
+    private boolean inSelectAndReplaceEditor = false;
+    private EditEngine.UndoJournal subEditorUndoJournal;
+
     private boolean replacingSelectionActive = false;
     private File replaceSavedTailFile = null;
     private RawFloatPlayer studioPreviewPlayer;
@@ -234,46 +264,142 @@ public class StudioFragment extends Fragment {
         btnDspFx = v.findViewById(R.id.btnDspFx);
         btnEditUndo = v.findViewById(R.id.btnEditUndo);
 
+        fxPanel = v.findViewById(R.id.fxPanel);
+        fxPresetDropdown = v.findViewById(R.id.fxPresetDropdown);
+        fxCloseBtn = v.findViewById(R.id.fxCloseBtn);
+        fxListContainer = v.findViewById(R.id.fxListContainer);
+        fxPreviewBtn = v.findViewById(R.id.fxPreviewBtn);
+        fxApplyBtn = v.findViewById(R.id.fxApplyBtn);
+
         dspConfig = DspChain.Config.load(requireContext());
         dspBakedToRaw = false;
         undoJournal = new EditEngine.UndoJournal(RecordingEngine.takesDir(requireContext()));
+        subEditorUndoJournal = new EditEngine.UndoJournal(
+                new File(RecordingEngine.takesDir(requireContext()), "sub_undo"));
 
-        // Cut button is retired in favor of Trim + Select & Replace; keep view GONE
         if (btnCutDelete != null) {
             btnCutDelete.setVisibility(View.GONE);
         }
 
+        // 1) "Replace" Mode Toggle Button (formerly Preview)
         if (btnPreviewPlay != null) {
             PressAnim.applySoft(btnPreviewPlay, 0.95f);
-            btnPreviewPlay.setOnClickListener(view -> toggleStudioPreview());
+            btnPreviewPlay.setOnClickListener(view -> {
+                if (!ensurePausedForEditing()) return;
+                stopStudioPreview();
+                replaceModeArmed = !replaceModeArmed;
+                if (replaceModeArmed) {
+                    engine.warmUpMic(requireContext(), preset.audioSource, engine.channels);
+                    Toast.makeText(requireContext(),
+                            "Replace mode on — tap Resume to overwrite from playhead",
+                            Toast.LENGTH_SHORT).show();
+                } else {
+                    Toast.makeText(requireContext(),
+                            "Play mode — tap Resume to play from playhead",
+                            Toast.LENGTH_SHORT).show();
+                }
+                paintEditorStrip();
+                paintFxPanelControls();
+            });
         }
+
+        // 2) "Select" Button: stays labeled "Select", simply turns red when active
         if (btnSelectRange != null) {
             PressAnim.applySoft(btnSelectRange, 0.95f);
             btnSelectRange.setOnClickListener(view -> {
+                if (!ensurePausedForEditing()) return;
+                stopStudioPreview();
                 waveform.toggleSelectionAtPlayhead();
                 paintEditorStrip();
             });
         }
+
+        // 3) "Select & Replace" Button: opens dedicated sub-editor configuration
         if (btnReplaceSeg != null) {
             PressAnim.applySoft(btnReplaceSeg, 0.95f);
-            btnReplaceSeg.setOnClickListener(view -> startSelectAndReplaceRecording());
+            btnReplaceSeg.setOnClickListener(view -> {
+                if (!ensurePausedForEditing()) return;
+                openSelectAndReplaceSubEditor();
+            });
         }
+
+        // 4) "Trim" Button: opens stylized Keep Selected / Delete Selected popup
         if (btnTrimCrop != null) {
             PressAnim.applySoft(btnTrimCrop, 0.95f);
-            btnTrimCrop.setOnClickListener(view -> runEditOperation(true));
+            btnTrimCrop.setOnClickListener(view -> {
+                if (!ensurePausedForEditing()) return;
+                showTrimOptionsPopup();
+            });
         }
+
+        // 5) "FX" Button: opens inline Pro FX window in place of Teleprompter
         if (btnDspFx != null) {
             PressAnim.applySoft(btnDspFx, 0.95f);
-            btnDspFx.setOnClickListener(view -> showDspFxDialog());
+            btnDspFx.setOnClickListener(view -> {
+                if (!ensurePausedForEditing()) return;
+                toggleFxPanel();
+            });
         }
+
+        // 6) "Undo" Button
         if (btnEditUndo != null) {
             PressAnim.applySoft(btnEditUndo, 0.95f);
-            btnEditUndo.setOnClickListener(view -> performStudioUndo());
+            btnEditUndo.setOnClickListener(view -> {
+                if (!ensurePausedForEditing()) return;
+                performStudioUndo();
+            });
+        }
+
+        if (fxCloseBtn != null) {
+            PressAnim.applySoft(fxCloseBtn, 0.95f);
+            fxCloseBtn.setOnClickListener(view -> setFxPanelVisible(false));
+        }
+        if (fxPresetDropdown != null) {
+            PressAnim.applySoft(fxPresetDropdown, 0.95f);
+            fxPresetDropdown.setOnClickListener(view -> showFxPresetsMenu());
+        }
+        if (fxPreviewBtn != null) {
+            PressAnim.applySoft(fxPreviewBtn, 0.95f);
+            fxPreviewBtn.setOnClickListener(view -> {
+                if (replaceModeArmed) {
+                    Toast.makeText(requireContext(),
+                            "Disable Replace mode to preview effects",
+                            Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                toggleStudioPreview();
+                paintFxPanelControls();
+            });
+        }
+        if (fxApplyBtn != null) {
+            PressAnim.applySoft(fxApplyBtn, 0.95f);
+            fxApplyBtn.setOnClickListener(view -> {
+                if (replaceModeArmed) {
+                    Toast.makeText(requireContext(),
+                            "Disable Replace mode to apply effects",
+                            Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                if (!ensurePausedForEditing()) return;
+                commitDspFx();
+            });
         }
 
         waveform.setTimelineListener(new WaveformView.TimelineListener() {
             @Override
+            public void onScrollStarted() {
+                if (engine.state != RecordingEngine.State.PAUSED) return;
+                userScrolledWhilePaused = true;
+                // Pre-warm both speaker and mic as soon as the user touches/scrolls
+                // the waveform so Resume (Play or Replace) is instantaneous!
+                RawFloatPlayer.warmUpSpeaker(engine.channels);
+                engine.warmUpMic(requireContext(), preset.audioSource, engine.channels);
+            }
+
+            @Override
             public void onPlayheadScrubbed(int bucketIndex, float fraction) {
+                if (engine.state != RecordingEngine.State.PAUSED) return;
+                userScrolledWhilePaused = true;
                 stopStudioPreview();
                 long totalFrames = engine.totalFrames();
                 long targetFrame = Math.round(fraction * totalFrames);
@@ -285,6 +411,7 @@ public class StudioFragment extends Fragment {
             @Override
             public void onSelectionChanged(boolean active, float startFrac, float endFrac) {
                 paintEditorStrip();
+                paintFxPanelControls();
             }
         });
 
@@ -998,8 +1125,65 @@ public class StudioFragment extends Fragment {
     // ---- called by MainActivity's shared buttons ----
 
     /** Main FAB: name -> start -> pause/resume. Debounced in MainActivity. */
+    /**
+     * Strictly enforces that editing options can only be used when the Studio
+     * is in the PAUSED state with recorded audio.
+     */
+    /** Edits route to the sub-editor journal while inside Select & Replace. */
+    private EditEngine.UndoJournal activeUndoJournal() {
+        return inSelectAndReplaceEditor ? subEditorUndoJournal : undoJournal;
+    }
+
+    private boolean ensurePausedForEditing() {
+        if (!isAdded()) return false;
+        if (engine.state == RecordingEngine.State.RECORDING) {
+            Toast.makeText(requireContext(),
+                    "Pause the recording first to use editing options",
+                    Toast.LENGTH_SHORT).show();
+            return false;
+        }
+        if (engine.state != RecordingEngine.State.PAUSED
+                || !engine.hasSession() || engine.dataBytes <= 0) {
+            Toast.makeText(requireContext(),
+                    "Record and pause first to edit audio",
+                    Toast.LENGTH_SHORT).show();
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Auto-enables the Select button (making it red and placing selection handles
+     * on the waveform) if the user taps Trim, Select & Replace, or Apply FX
+     * without selecting a region first.
+     */
+    private boolean ensureSelectionOrAutoEnable(String actionName) {
+        if (waveform == null || !engine.hasSession() || engine.dataBytes <= 0) {
+            return false;
+        }
+        if (waveform.hasSelection()) return true;
+        waveform.toggleSelectionAtPlayhead();
+        paintEditorStrip();
+        paintFxPanelControls();
+        Toast.makeText(requireContext(),
+                "Select enabled — drag the red [ ] handles, then tap "
+                        + actionName + " again",
+                Toast.LENGTH_SHORT).show();
+        return false;
+    }
+
+    /** Main FAB: name -> start -> pause / play-preview / replace-record. */
     public void onFabPressed() {
         if (saving) return;
+        // If preview playback is currently running while paused, tapping the
+        // main FAB pauses the preview playback!
+        if (studioPreviewPlayer != null) {
+            stopStudioPreview();
+            paintEditorStrip();
+            paintFxPanelControls();
+            activity().syncFabWithEngine();
+            return;
+        }
         if (!engine.hasSession() && pendingName == null) {
             askForName();
             return;
@@ -1013,6 +1197,25 @@ public class StudioFragment extends Fragment {
         }
     }
 
+    private void resumeTake() {
+        if (engine.state != RecordingEngine.State.PAUSED || saving) return;
+        long totalFrames = engine.totalFrames();
+        long curFrames = engine.cursorFrames();
+        boolean atEnd = (curFrames >= totalFrames - 1200);
+
+        // By default, when the user scrolls while paused (or is not at the end)
+        // and Replace is NOT armed, pressing Resume plays the audio from the
+        // playhead position instead of replacing it!
+        if (!replaceModeArmed && (userScrolledWhilePaused || !atEnd)) {
+            toggleStudioPreview();
+            activity().syncFabWithEngine();
+            return;
+        }
+        // Otherwise (Replace is armed, or user is parked at the end in normal
+        // append mode), start/resume capture from cursorFrame!
+        startOrResumeCapture();
+    }
+
     /** Split stop button: pause, then ask save vs discard in a styled modal. */
     public void onStopPressed() {
         if (saving) return;
@@ -1022,6 +1225,22 @@ public class StudioFragment extends Fragment {
             setTelePaused(true);
             paint();
             activity().syncFabWithEngine();
+        }
+        // If inside the Select & Replace sub-editor, Stop offers to splice the
+        // replacement take into the main take or discard the replacement!
+        if (inSelectAndReplaceEditor) {
+            List<OptionsSheet.Item> items = new ArrayList<>();
+            items.add(OptionsSheet.Item.of(R.drawable.ic_check,
+                    "Apply Replacement to Take",
+                    () -> closeSelectAndReplaceSubEditor(true)));
+            items.add(OptionsSheet.Item.danger(R.drawable.ic_trash,
+                    "Discard Replacement",
+                    () -> closeSelectAndReplaceSubEditor(false)));
+            OptionsSheet.showOptions(requireContext(),
+                    "Finish Select & Replace?",
+                    "Splice this replacement recording into your take, or discard it.",
+                    items);
+            return;
         }
         String name = engine.takeName != null ? engine.takeName : "";
         List<OptionsSheet.Item> items = new ArrayList<>();
@@ -1038,6 +1257,16 @@ public class StudioFragment extends Fragment {
     /** Back: idle -> exit; active -> background-or-stop choice. */
     public boolean onBackPressed() {
         if (saving) return true;
+        if (inSelectAndReplaceEditor) {
+            if (engine.state == RecordingEngine.State.RECORDING) {
+                engine.pauseCapture();
+                setTelePaused(true);
+                paint();
+                activity().syncFabWithEngine();
+            }
+            onStopPressed();
+            return true;
+        }
         if (!engine.hasSession()) {
             activity().exitStudio();
             return true;
@@ -1234,6 +1463,114 @@ public class StudioFragment extends Fragment {
         }
     }
 
+    private void showTrimOptionsPopup() {
+        if (!ensurePausedForEditing()) return;
+        stopStudioPreview();
+        if (!ensureSelectionOrAutoEnable("Trim")) return;
+
+        long durMs = Math.max(1L, engine.durationMs());
+        long sMs = Math.round(waveform.selectionStartFraction() * durMs);
+        long eMs = Math.round(waveform.selectionEndFraction() * durMs);
+        String rangeLabel = formatTimer(sMs) + " – " + formatTimer(eMs);
+
+        List<OptionsSheet.Item> items = new ArrayList<>();
+        items.add(OptionsSheet.Item.of(R.drawable.ic_check,
+                "Keep Selected", () -> runEditOperation(true)));
+        items.add(OptionsSheet.Item.danger(R.drawable.ic_trash,
+                "Delete Selected", () -> runEditOperation(false)));
+
+        OptionsSheet.showOptions(requireContext(),
+                "Trim Selection",
+                "Selected region: " + rangeLabel,
+                items);
+    }
+
+    /**
+     * Opens a new editor configuration similar to a new recording for
+     * replacing the selected region `[selStart, selEnd]`, prompting the user
+     * to start recording the replaced take. All editing options (`Replace`,
+     * `Select`, `Trim`, `FX`, `Undo`) are available on this replacement
+     * recording except `Select & Replace`.
+     */
+    private void openSelectAndReplaceSubEditor() {
+        if (!ensurePausedForEditing()) return;
+        if (inSelectAndReplaceEditor) return;
+        stopStudioPreview();
+        if (!ensureSelectionOrAutoEnable("Select & Replace")) return;
+
+        long totalFrames = engine.totalFrames();
+        long startF = Math.round(waveform.selectionStartFraction() * totalFrames);
+        long endF = Math.round(waveform.selectionEndFraction() * totalFrames);
+        if (endF <= startF) return;
+
+        long durMs = Math.max(1L, engine.durationMs());
+        String rangeStr = formatTimer(Math.round(waveform.selectionStartFraction() * durMs))
+                + " – " + formatTimer(Math.round(waveform.selectionEndFraction() * durMs));
+
+        try {
+            if (subEditorUndoJournal != null) subEditorUndoJournal.clear();
+            waveform.enterSubEditorMode();
+            engine.enterSelectAndReplaceSubSession(requireContext(), startF, endF);
+            inSelectAndReplaceEditor = true;
+            replaceModeArmed = false;
+            userScrolledWhilePaused = false;
+            timerText.setText(formatTimer(0));
+            refreshZoomValue();
+            paint();
+            activity().syncFabWithEngine();
+
+            // Prompt the user to start recording the replaced take
+            OptionsSheet.showConfirm(requireContext(),
+                    "Select & Replace",
+                    "Ready to record replacement for " + rangeStr
+                            + ". Tap Start Recording now, or tap the mic button when ready.",
+                    "Start Recording",
+                    R.drawable.ic_mic,
+                    false,
+                    this::ensurePermissionThenStart);
+        } catch (Exception e) {
+            inSelectAndReplaceEditor = false;
+            Toast.makeText(requireContext(), "Could not open Select & Replace editor",
+                    Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void closeSelectAndReplaceSubEditor(boolean commit) {
+        if (!inSelectAndReplaceEditor) return;
+        stopStudioPreview();
+        try {
+            boolean hasReplacementAudio = commit
+                    && engine.rawFile != null
+                    && RecordingEngine.payloadBytesOf(engine.rawFile) > 0;
+            if (hasReplacementAudio && waveform != null) {
+                waveform.recordUndoPeaks();
+            }
+            engine.exitSelectAndReplaceSubSession(hasReplacementAudio, undoJournal);
+            inSelectAndReplaceEditor = false;
+            replaceModeArmed = false;
+            userScrolledWhilePaused = false;
+            if (waveform != null) {
+                waveform.exitSubEditorMode(hasReplacementAudio);
+                long total = Math.max(1L, engine.totalFrames());
+                waveform.setPlayheadFraction(engine.cursorFrames() / (float) total);
+                refreshZoomValue();
+            }
+            if (timerText != null) {
+                timerText.setText(formatTimer(engine.cursorMs()));
+            }
+            paint();
+            activity().syncFabWithEngine();
+            Toast.makeText(requireContext(),
+                    hasReplacementAudio
+                            ? "Replacement spliced into take (Undo available)"
+                            : "Select & Replace cancelled",
+                    Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            inSelectAndReplaceEditor = false;
+            paint();
+        }
+    }
+
     private void startOrResumeCapture() {
         if (!isAdded() || saving) return;
         stopStudioPreview();
@@ -1244,27 +1581,19 @@ public class StudioFragment extends Fragment {
                     Toast.LENGTH_SHORT).show();
             return;
         }
-        // If a selection is active on the red waveform and the user taps the
-        // main Record/Resume FAB, route directly into variable-length Select & Replace!
-        if (!replacingSelectionActive && engine.hasSession()
-                && engine.dataBytes > 0 && waveform != null
-                && waveform.hasSelection()) {
-            startSelectAndReplaceRecording();
-            return;
-        }
         boolean wasPaused = (engine.state == RecordingEngine.State.PAUSED);
         boolean isEditOrRecovery = (editSourceId != -1 || engine.dataBytes > 0);
         try {
-            if (!replacingSelectionActive && engine.hasSession()
-                    && engine.dataBytes > 0 && waveform != null) {
+            if (engine.hasSession() && engine.dataBytes > 0 && waveform != null) {
                 long totalFrames = engine.totalFrames();
                 long curFrames = engine.cursorFrames();
                 if (curFrames < totalFrames - 1200) {
-                    if (undoJournal != null) {
-                        undoJournal.recordSnapshot(engine.rawFile);
-                    }
+                    // In-place Replace from playhead: snapshot for Undo, keep
+                    // the entire take forward of curFrames intact (do NOT
+                    // call waveform.truncateToPlayhead()), and smoothly morph
+                    // the waveform bars as new audio is recorded!
+                    activeUndoJournal().recordSnapshot(engine.rawFile);
                     waveform.recordUndoPeaks();
-                    waveform.truncateToPlayhead();
                     dspBakedToRaw = false;
                 }
             }
@@ -1280,12 +1609,14 @@ public class StudioFragment extends Fragment {
                         Toast.LENGTH_LONG).show();
             }
             try {
-                engine.beginStreaming(requireContext(), preset, saveFormat);
+                if (!inSelectAndReplaceEditor) {
+                    engine.beginStreaming(requireContext(), preset, saveFormat);
+                }
             } catch (Exception ignored) {}
             if (engine.state == RecordingEngine.State.RECORDING) {
-                if (!wasPaused && !isEditOrRecovery) {
+                if (!wasPaused && !isEditOrRecovery && !fxPanelOpen) {
                     teleprompterArmForTake();
-                } else {
+                } else if (!fxPanelOpen) {
                     setTelePaused(false);
                 }
             }
@@ -1306,18 +1637,25 @@ public class StudioFragment extends Fragment {
 
     private void pauseTake(boolean fromInterruption) {
         if (engine.state != RecordingEngine.State.RECORDING) return;
+        long pausedAtFrame = engine.cursorFrames();
         engine.pauseCapture();
         setTelePaused(true);
+        userScrolledWhilePaused = false;
         if (replacingSelectionActive) {
             finishSelectAndReplaceIfNeeded();
         } else {
-            // Leave the red waveform completely as-is when Pause is pressed!
-            // Never clear or reload 400-bars/sec from disk; just park playhead
-            // at the end so the user can immediately scroll through it.
-            engine.seekCursorFrame(engine.totalFrames());
+            // Keep playhead right where recording/replacement paused so the
+            // surviving tail ahead of pausedAtFrame remains intact and visible!
+            long total = Math.max(1L, engine.totalFrames());
+            long target = (pausedAtFrame > 0 && pausedAtFrame <= total)
+                    ? pausedAtFrame : total;
+            engine.seekCursorFrame(target);
             if (waveform != null) {
-                waveform.setPlayheadFraction(1f);
+                waveform.setPlayheadFraction(target / (float) total);
             }
+            // Pre-warm speaker & mic immediately on pause for instant scrubbing
+            RawFloatPlayer.warmUpSpeaker(engine.channels);
+            engine.warmUpMic(requireContext(), preset.audioSource, engine.channels);
         }
         if (fromInterruption) {
             try {
@@ -1338,9 +1676,9 @@ public class StudioFragment extends Fragment {
         } catch (Exception ignored) {}
     }
 
-    private void resumeTake() {
-        if (engine.state != RecordingEngine.State.PAUSED || saving) return;
-        startOrResumeCapture();
+    private EditEngine.UndoJournal activeUndoJournal() {
+        return inSelectAndReplaceEditor && subEditorUndoJournal != null
+                ? subEditorUndoJournal : undoJournal;
     }
 
     // ---- stop: save (convert) or discard ----
@@ -1806,9 +2144,10 @@ public class StudioFragment extends Fragment {
 
     private void paintEditorStrip() {
         if (editorStrip == null || !isAdded()) return;
+        // Editing options are ONLY available when the Studio is in PAUSED state!
         boolean show = engine.hasSession()
                 && engine.dataBytes > 0
-                && engine.state != RecordingEngine.State.RECORDING;
+                && engine.state == RecordingEngine.State.PAUSED;
         if (show && editorStrip.getVisibility() != View.VISIBLE) {
             editorStrip.setVisibility(View.VISIBLE);
             editorStrip.setAlpha(0f);
@@ -1829,53 +2168,76 @@ public class StudioFragment extends Fragment {
         boolean hasSel = waveform != null && waveform.hasSelection();
         long durMs = Math.max(1L, engine.durationMs());
 
+        // 1) Replace Mode Toggle Button (btnPreviewPlay)
+        if (btnPreviewPlay != null) {
+            btnPreviewPlay.setText("Replace");
+            btnPreviewPlay.setBackgroundResource(replaceModeArmed
+                    ? R.drawable.bg_chip_selected : R.drawable.bg_chip);
+            btnPreviewPlay.setTextColor(replaceModeArmed ? 0xFFFFFFFF : 0xFF9AA3AF);
+        }
+
+        // 2) Select Button: never changes text to "Selected" — stays "Select"
+        //    and simply turns red (bg_chip_selected) when active!
         if (btnSelectRange != null) {
-            btnSelectRange.setText(hasSel ? "[✓] Selected" : "[ ] Select");
+            btnSelectRange.setText("Select");
             btnSelectRange.setBackgroundResource(hasSel
                     ? R.drawable.bg_chip_selected : R.drawable.bg_chip);
             btnSelectRange.setTextColor(hasSel ? 0xFFFFFFFF : 0xFF9AA3AF);
         }
+
+        // 3) Select & Replace Button: hidden when already inside Select & Replace sub-editor
         if (btnReplaceSeg != null) {
-            btnReplaceSeg.setText(hasSel ? "● Replace Sel" : "● Replace");
+            btnReplaceSeg.setVisibility(inSelectAndReplaceEditor ? View.GONE : View.VISIBLE);
+            btnReplaceSeg.setText("Select & Replace");
             btnReplaceSeg.setBackgroundResource(hasSel
                     ? R.drawable.bg_btn_danger : R.drawable.bg_chip);
             btnReplaceSeg.setTextColor(hasSel ? 0xFFFF453A : 0xFF9AA3AF);
-            btnReplaceSeg.setAlpha(hasSel ? 1f : 0.75f);
         }
+
+        // 4) Trim Button
         if (btnTrimCrop != null) {
-            btnTrimCrop.setAlpha(hasSel ? 1f : 0.65f);
+            btnTrimCrop.setText("Trim");
+            btnTrimCrop.setAlpha(hasSel ? 1f : 0.75f);
             btnTrimCrop.setTextColor(hasSel ? 0xFFF2F4F7 : 0xFF9AA3AF);
         }
+
+        // 5) FX Button
         if (btnDspFx != null) {
-            boolean fxOn = dspConfig != null && dspConfig.isActive();
-            btnDspFx.setText(dspConfig != null ? dspConfig.badgeSummary() : "FX Off");
-            btnDspFx.setBackgroundResource(fxOn
+            boolean fxActive = fxPanelOpen || (dspConfig != null && dspConfig.isActive());
+            btnDspFx.setText(dspConfig != null && dspConfig.isActive()
+                    ? dspConfig.badgeSummary() : "FX");
+            btnDspFx.setBackgroundResource(fxActive
                     ? R.drawable.bg_chip_selected : R.drawable.bg_chip);
-            btnDspFx.setTextColor(fxOn ? 0xFFFFFFFF : 0xFF9AA3AF);
+            btnDspFx.setTextColor(fxActive ? 0xFFFFFFFF : 0xFF9AA3AF);
         }
+
+        // 6) Undo Button
         if (btnEditUndo != null) {
-            boolean canUndo = undoJournal != null && undoJournal.canUndo();
+            EditEngine.UndoJournal uj = activeUndoJournal();
+            boolean canUndo = uj != null && uj.canUndo();
             btnEditUndo.setAlpha(canUndo ? 1f : 0.40f);
             btnEditUndo.setTextColor(canUndo ? 0xFFF2F4F7 : 0xFF5D6672);
         }
-        if (btnPreviewPlay != null) {
-            boolean playing = (studioPreviewPlayer != null);
-            btnPreviewPlay.setText(playing ? "■ Stop" : (hasSel ? "▶ Sel" : "▶ Preview"));
-            btnPreviewPlay.setBackgroundResource(playing
-                    ? R.drawable.bg_chip_selected : R.drawable.bg_chip);
-            btnPreviewPlay.setTextColor(playing ? 0xFFFFFFFF : 0xFFF2F4F7);
-        }
+
         if (hintText != null) {
-            if (hasSel) {
+            if (inSelectAndReplaceEditor) {
+                hintText.setText("Select & Replace Take • Tap Stop to splice into main take");
+            } else if (studioPreviewPlayer != null) {
+                hintText.setText("Playing preview • Tap Pause FAB or scroll to stop");
+            } else if (replaceModeArmed) {
+                hintText.setText("Replace armed at " + formatTimer(engine.cursorMs())
+                        + " • Tap Resume to overwrite");
+            } else if (hasSel) {
                 long sMs = Math.round(waveform.selectionStartFraction() * durMs);
                 long eMs = Math.round(waveform.selectionEndFraction() * durMs);
                 hintText.setText(formatTimer(sMs) + " – " + formatTimer(eMs)
-                        + " • Tap Replace or Trim");
-            } else if (engine.cursorFrames() < engine.totalFrames() - 1200) {
+                        + " • Tap Trim, FX, or Select & Replace");
+            } else if (userScrolledWhilePaused
+                    || engine.cursorFrames() < engine.totalFrames() - 1200) {
                 hintText.setText("Playhead " + formatTimer(engine.cursorMs())
-                        + " • Resume replaces from here");
+                        + " • Tap Resume to play or tap Replace");
             } else {
-                hintText.setText("Scroll waveform to scrub or tap [ ] Select");
+                hintText.setText("Scroll waveform to scrub or tap Select");
             }
         }
     }
@@ -1961,65 +2323,306 @@ public class StudioFragment extends Fragment {
         paint();
     }
 
-    private boolean commitDspFx() {
-        if (!isAdded()) return false;
-        stopStudioPreview();
-        if (dspConfig == null || !dspConfig.isActive()) {
-            Toast.makeText(requireContext(), "Select Noise Suppression or Custom first",
-                    Toast.LENGTH_SHORT).show();
-            return false;
-        }
-        if (engine.state == RecordingEngine.State.RECORDING) {
-            Toast.makeText(requireContext(), "Pause recording first",
-                    Toast.LENGTH_SHORT).show();
-            return false;
-        }
-        File raw = engine.rawFile;
-        if (raw == null || !raw.exists() || waveform == null) return false;
-        try {
-            FormatConverter.WavInfo info = FormatConverter.readFloatWav(raw);
-            long totalFrames = info.dataBytes / 4 / Math.max(1, info.channels);
-            if (totalFrames <= 0) return false;
-            long start = 0;
-            long end = totalFrames;
-            boolean hadSel = waveform.hasSelection();
-            if (hadSel) {
-                start = Math.round(
-                        waveform.selectionStartFraction() * totalFrames);
-                end = Math.round(
-                        waveform.selectionEndFraction() * totalFrames);
-            }
-            if (end <= start) {
-                Toast.makeText(requireContext(), "Nothing to process",
-                        Toast.LENGTH_SHORT).show();
-                return false;
-            }
-            waveform.recordUndoPeaks();
-            DspChain chain = new DspChain(info.channels, dspConfig);
-            EditEngine.applyDspToRange(raw, start, end, chain, undoJournal);
-            engine.abortStreaming();
-            engine.dataBytes = RecordingEngine.payloadBytesOf(raw);
-            // Keep dspConfig's mode visible in the UI while marking dspBakedToRaw
-            // so preview does not double-process the baked audio!
-            dspBakedToRaw = !hadSel;
-            if (livePreviewDsp != null) {
-                livePreviewDsp.updateConfig(dspBakedToRaw
-                        ? new DspChain.Config() : dspConfig);
-            }
-            waveform.clearSelection();
-            Toast.makeText(requireContext(), "FX applied (Undo available)",
-                    Toast.LENGTH_SHORT).show();
-        } catch (Exception e) {
-            if (waveform != null) waveform.popUndoPeaks();
-            Toast.makeText(requireContext(), "FX failed",
-                    Toast.LENGTH_SHORT).show();
-            return false;
-        }
-        paint();
-        return true;
+    /**
+     * Opens or closes the inline Pro FX Rack in place of the Teleprompter.
+     * Both cannot be open at the same time; while FX is open, the Teleprompter
+     * toggle is disabled.
+     */
+    private void toggleFxPanel() {
+        setFxPanelVisible(!fxPanelOpen);
     }
 
-    private void showDspFxDialog() {
+    private void setFxPanelVisible(boolean open) {
+        if (fxPanel == null || telePanel == null) return;
+        fxPanelOpen = open;
+        if (open) {
+            teleWasVisibleBeforeFx = (telePanel.getVisibility() == View.VISIBLE);
+            setTelePaused(true);
+            telePanel.setVisibility(View.GONE);
+            fxPanel.setVisibility(View.VISIBLE);
+            if (teleToggle != null) {
+                teleToggle.setEnabled(false);
+                teleToggle.setAlpha(0.35f);
+            }
+            if (teleState != null) {
+                teleState.setText("Disabled (FX Open)");
+            }
+            rebuildFxRackList();
+            paintFxPanelControls();
+        } else {
+            fxPanel.setVisibility(View.GONE);
+            if (teleToggle != null) {
+                teleToggle.setEnabled(true);
+                teleToggle.setAlpha(1f);
+            }
+            setTeleprompterVisible(teleWasVisibleBeforeFx);
+        }
+        paintEditorStrip();
+    }
+
+    private void paintFxPanelControls() {
+        if (fxPanel == null || !isAdded()) return;
+        if (fxPresetDropdown != null) {
+            String presetTitle = "Custom";
+            for (DspChain.Preset p : DspChain.Preset.values()) {
+                if (p.id.equals(dspConfig.activePresetId)) {
+                    presetTitle = p.title;
+                    break;
+                }
+            }
+            fxPresetDropdown.setText("Preset: " + presetTitle + " ▾");
+        }
+        boolean playing = (studioPreviewPlayer != null);
+        boolean canUsePreviewAndApply = !replaceModeArmed
+                && engine.state == RecordingEngine.State.PAUSED;
+        if (fxPreviewBtn != null) {
+            fxPreviewBtn.setText(playing ? "■ Stop Preview" : "▶ Preview");
+            fxPreviewBtn.setEnabled(canUsePreviewAndApply);
+            fxPreviewBtn.setAlpha(canUsePreviewAndApply ? 1f : 0.38f);
+            fxPreviewBtn.setBackgroundResource(playing
+                    ? R.drawable.bg_chip_selected : R.drawable.bg_btn_ghost);
+        }
+        if (fxApplyBtn != null) {
+            boolean anyEnabled = dspConfig != null && dspConfig.isActive();
+            fxApplyBtn.setText("Apply");
+            fxApplyBtn.setEnabled(canUsePreviewAndApply);
+            fxApplyBtn.setAlpha((canUsePreviewAndApply && anyEnabled) ? 1f : 0.38f);
+            fxApplyBtn.setBackgroundResource((canUsePreviewAndApply && anyEnabled)
+                    ? R.drawable.bg_btn_primary : R.drawable.bg_btn_ghost);
+        }
+    }
+
+    /**
+     * Populates the single scrollable FX section with collapsible effect pills
+     * (each having a checkmark enable/disable toggle, collapsible TeleValue
+     * settings without any progress bar, and a delete button) followed by the
+     * "+ Add Effect" button at the bottom of the list.
+     */
+    private void rebuildFxRackList() {
+        if (fxListContainer == null || !isAdded()) return;
+        Context ctx = requireContext();
+        fxListContainer.removeAllViews();
+        float density = getResources().getDisplayMetrics().density;
+        int pad = Math.round(10 * density);
+        int gap = Math.round(6 * density);
+
+        for (int i = 0; i < dspConfig.slots.size(); i++) {
+            final DspChain.EffectSlot slot = dspConfig.slots.get(i);
+            android.widget.LinearLayout pill = new android.widget.LinearLayout(ctx);
+            pill.setOrientation(android.widget.LinearLayout.VERTICAL);
+            pill.setBackgroundResource(slot.enabled
+                    ? R.drawable.bg_pill_option_selected : R.drawable.bg_card);
+            pill.setPadding(pad, Math.round(8 * density), pad, Math.round(8 * density));
+
+            android.widget.LinearLayout.LayoutParams pillLp =
+                    new android.widget.LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT);
+            if (i > 0) pillLp.topMargin = gap;
+
+            // Header Row: [Checkmark Toggle] | [Title + Value Summary (Tap to Expand)] | [Delete]
+            android.widget.LinearLayout header = new android.widget.LinearLayout(ctx);
+            header.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+            header.setGravity(android.view.Gravity.CENTER_VERTICAL);
+
+            // 1) Checkmark Enable/Disable Toggle
+            TextView checkBtn = new TextView(ctx);
+            checkBtn.setText(slot.enabled ? "✓" : "");
+            checkBtn.setTextSize(13f);
+            checkBtn.setGravity(android.view.Gravity.CENTER);
+            checkBtn.setTextColor(0xFFFFFFFF);
+            checkBtn.setBackgroundResource(slot.enabled
+                    ? R.drawable.bg_chip_selected : R.drawable.bg_select_ring);
+            int chkSz = Math.round(24 * density);
+            android.widget.LinearLayout.LayoutParams chkLp =
+                    new android.widget.LinearLayout.LayoutParams(chkSz, chkSz);
+            chkLp.rightMargin = Math.round(10 * density);
+            header.addView(checkBtn, chkLp);
+
+            // 2) Title + Collapsible Chevron Summary
+            android.widget.LinearLayout titleCol = new android.widget.LinearLayout(ctx);
+            titleCol.setOrientation(android.widget.LinearLayout.VERTICAL);
+            TextView titleTv = new TextView(ctx);
+            titleTv.setText(slot.type.title);
+            titleTv.setTextSize(13f);
+            titleTv.setTextColor(slot.enabled ? 0xFFF2F4F7 : 0xFF9AA3AF);
+            titleTv.setTypeface(android.graphics.Typeface.create(
+                    "sans-serif-medium", android.graphics.Typeface.NORMAL));
+
+            TextView subTv = new TextView(ctx);
+            subTv.setText((slot.enabled ? "Enabled • " : "Bypassed • ")
+                    + slot.type.paramLabel + ": " + slot.value + slot.type.unit
+                    + (slot.expanded ? "  ▴" : "  ▾"));
+            subTv.setTextSize(10.5f);
+            subTv.setTextColor(slot.enabled ? 0xFFFF453A : 0xFF5D6672);
+            titleCol.addView(titleTv);
+            titleCol.addView(subTv);
+            header.addView(titleCol, new android.widget.LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+            // 3) Delete Button (removes effect from menu)
+            android.widget.ImageView delBtn = new android.widget.ImageView(ctx);
+            delBtn.setImageResource(R.drawable.ic_trash);
+            delBtn.setColorFilter(0xFF9AA3AF);
+            int delSz = Math.round(28 * density);
+            int delPad = Math.round(5 * density);
+            delBtn.setPadding(delPad, delPad, delPad, delPad);
+            delBtn.setBackgroundResource(R.drawable.bg_round_btn);
+            header.addView(delBtn, new android.widget.LinearLayout.LayoutParams(delSz, delSz));
+
+            pill.addView(header);
+
+            // Collapsible Settings Body (NO progress bar — clean TeleValue control)
+            android.widget.LinearLayout body = new android.widget.LinearLayout(ctx);
+            body.setOrientation(android.widget.LinearLayout.VERTICAL);
+            body.setVisibility(slot.expanded ? View.VISIBLE : View.GONE);
+            android.widget.LinearLayout.LayoutParams bodyLp =
+                    new android.widget.LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT);
+            bodyLp.topMargin = Math.round(8 * density);
+
+            TextView descTv = new TextView(ctx);
+            descTv.setText(slot.type.description);
+            descTv.setTextSize(10.5f);
+            descTv.setTextColor(0xFF8A93A0);
+            body.addView(descTv);
+
+            TeleValue ctl = new TeleValue(ctx);
+            ctl.setCaption(slot.type.paramLabel);
+            ctl.configure(slot.type.minVal, slot.type.maxVal,
+                    slot.type.stepVal, slot.value, slot.type.unit);
+            android.widget.LinearLayout.LayoutParams ctlLp =
+                    new android.widget.LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT);
+            ctlLp.topMargin = Math.round(4 * density);
+            body.addView(ctl, ctlLp);
+            pill.addView(body, bodyLp);
+
+            Runnable onSlotMutated = () -> {
+                dspBakedToRaw = false;
+                dspConfig.activePresetId = DspChain.Preset.CUSTOM.id;
+                dspConfig.syncLegacyFieldsFromSlots();
+                dspConfig.save(ctx);
+                if (livePreviewDsp != null) {
+                    livePreviewDsp.updateConfig(dspConfig);
+                }
+                subTv.setText((slot.enabled ? "Enabled • " : "Bypassed • ")
+                        + slot.type.paramLabel + ": " + slot.value + slot.type.unit
+                        + (slot.expanded ? "  ▴" : "  ▾"));
+                paintEditorStrip();
+                paintFxPanelControls();
+            };
+
+            checkBtn.setOnClickListener(v -> {
+                slot.enabled = !slot.enabled;
+                onSlotMutated.run();
+                rebuildFxRackList();
+            });
+
+            titleCol.setOnClickListener(v -> {
+                slot.expanded = !slot.expanded;
+                body.setVisibility(slot.expanded ? View.VISIBLE : View.GONE);
+                dspConfig.save(ctx);
+                subTv.setText((slot.enabled ? "Enabled • " : "Bypassed • ")
+                        + slot.type.paramLabel + ": " + slot.value + slot.type.unit
+                        + (slot.expanded ? "  ▴" : "  ▾"));
+            });
+
+            delBtn.setOnClickListener(v -> {
+                dspConfig.removeSlot(slot);
+                dspConfig.save(ctx);
+                if (livePreviewDsp != null) {
+                    livePreviewDsp.updateConfig(dspConfig);
+                }
+                rebuildFxRackList();
+                paintEditorStrip();
+                paintFxPanelControls();
+            });
+
+            TeleValue.OnScrubListener scrub = new TeleValue.OnScrubListener() {
+                @Override
+                public void onScrubValueChanged(int value) {
+                    slot.value = value;
+                    if (!slot.enabled && value > 0) slot.enabled = true;
+                    onSlotMutated.run();
+                }
+
+                @Override
+                public void onScrubFinished(int value) {
+                    slot.value = value;
+                    onSlotMutated.run();
+                    rebuildFxRackList();
+                }
+            };
+            ctl.setOnScrubListener(scrub);
+            ctl.setOnValueChanged(val -> {
+                slot.value = val;
+                if (!slot.enabled && val > 0) slot.enabled = true;
+                onSlotMutated.run();
+                rebuildFxRackList();
+            });
+
+            fxListContainer.addView(pill, pillLp);
+        }
+
+        // "+ Add Effect" Button at the bottom of the scrollable list
+        TextView addBtn = new TextView(ctx);
+        addBtn.setText("+ Add Effect");
+        addBtn.setTextSize(12.5f);
+        addBtn.setTypeface(android.graphics.Typeface.create(
+                "sans-serif-medium", android.graphics.Typeface.NORMAL));
+        addBtn.setGravity(android.view.Gravity.CENTER);
+        addBtn.setTextColor(0xFFF2F4F7);
+        addBtn.setBackgroundResource(R.drawable.bg_btn_ghost);
+        int addPad = Math.round(10 * density);
+        addBtn.setPadding(addPad, addPad, addPad, addPad);
+        android.widget.LinearLayout.LayoutParams addLp =
+                new android.widget.LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT);
+        addLp.topMargin = Math.round(8 * density);
+        PressAnim.applySoft(addBtn, 0.96f);
+        addBtn.setOnClickListener(v -> showAddEffectSearchDialog());
+        fxListContainer.addView(addBtn, addLp);
+    }
+
+    /** Dropdown menu of premade presets (templates of effects and their settings). */
+    private void showFxPresetsMenu() {
+        if (!isAdded()) return;
+        DspChain.Preset[] presets = {
+                DspChain.Preset.VOICE_POLISH,
+                DspChain.Preset.PODCAST_BROADCAST,
+                DspChain.Preset.NOISY_ROOM,
+                DspChain.Preset.WARM_VOCAL,
+                DspChain.Preset.CRISP_CLARITY,
+                DspChain.Preset.CLEAR_ALL
+        };
+        List<OptionsSheet.Item> items = new ArrayList<>();
+        for (DspChain.Preset p : presets) {
+            final DspChain.Preset pick = p;
+            boolean checked = p.id.equals(dspConfig.activePresetId);
+            items.add(new OptionsSheet.Item(0, p.title, false, checked, () -> {
+                dspBakedToRaw = false;
+                dspConfig.applyPreset(pick);
+                dspConfig.save(requireContext());
+                if (livePreviewDsp != null) {
+                    livePreviewDsp.updateConfig(dspConfig);
+                }
+                rebuildFxRackList();
+                paintFxPanelControls();
+                paintEditorStrip();
+            }));
+        }
+        OptionsSheet.showOptions(requireContext(),
+                "FX Presets",
+                "Premade effect chains & settings",
+                items);
+    }
+
+    /** Searchable menu of available effects opened by "+ Add Effect". */
+    private void showAddEffectSearchDialog() {
         if (!isAdded()) return;
         Context ctx = requireContext();
         android.app.Dialog d = new android.app.Dialog(ctx, R.style.TakeOneCenterDialog);
@@ -2027,307 +2630,117 @@ public class StudioFragment extends Fragment {
 
         float density = getResources().getDisplayMetrics().density;
         int pad = Math.round(18 * density);
-        int gap = Math.round(8 * density);
-
-        android.widget.ScrollView scroll = new android.widget.ScrollView(ctx);
         android.widget.LinearLayout root = new android.widget.LinearLayout(ctx);
         root.setOrientation(android.widget.LinearLayout.VERTICAL);
         root.setBackgroundResource(R.drawable.bg_modal);
         root.setPadding(pad, pad, pad, pad);
-        scroll.addView(root, new ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT));
 
         TextView title = new TextView(ctx);
-        title.setText("Mastering & Voice FX");
-        title.setTextSize(18);
+        title.setText("Add Effect");
+        title.setTextSize(17f);
         title.setTextColor(0xFFF2F4F7);
         title.setGravity(android.view.Gravity.CENTER);
         title.setTypeface(android.graphics.Typeface.create(
                 "sans-serif-medium", android.graphics.Typeface.NORMAL));
         root.addView(title);
 
-        TextView sub = new TextView(ctx);
-        sub.setText(waveform != null && waveform.hasSelection()
-                ? "Live preview active • Applies to selected range"
-                : "Live preview active • Applies to entire take");
-        sub.setTextSize(11.5f);
-        sub.setTextColor(0xFF9AA3AF);
-        sub.setGravity(android.view.Gravity.CENTER);
-        android.widget.LinearLayout.LayoutParams subLp =
+        android.widget.EditText searchBox = new android.widget.EditText(ctx);
+        searchBox.setHint("Search effects (e.g. noise, de-ess, warm)...");
+        searchBox.setHintTextColor(0xFF5D6672);
+        searchBox.setTextColor(0xFFF2F4F7);
+        searchBox.setTextSize(13.5f);
+        searchBox.setSingleLine(true);
+        searchBox.setBackgroundResource(R.drawable.bg_search);
+        int sPad = Math.round(10 * density);
+        searchBox.setPadding(sPad, sPad, sPad, sPad);
+        android.widget.LinearLayout.LayoutParams sLp =
                 new android.widget.LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT);
-        subLp.topMargin = Math.round(3 * density);
-        root.addView(sub, subLp);
+        sLp.topMargin = Math.round(10 * density);
+        root.addView(searchBox, sLp);
 
-        // 1) Interchangeable 3-Way Segmented Mode Selector:
-        //    Off (MODE_OFF) | Noise Suppression (MODE_NOISE_SUPPRESSION) | Custom (MODE_CUSTOM)
-        android.widget.LinearLayout presetRow = new android.widget.LinearLayout(ctx);
-        presetRow.setOrientation(android.widget.LinearLayout.HORIZONTAL);
-        presetRow.setBackgroundResource(R.drawable.bg_search);
-        int segPad = Math.round(4 * density);
-        presetRow.setPadding(segPad, segPad, segPad, segPad);
-        android.widget.LinearLayout.LayoutParams prLp =
+        android.widget.ScrollView listScroll = new android.widget.ScrollView(ctx);
+        android.widget.LinearLayout listCol = new android.widget.LinearLayout(ctx);
+        listCol.setOrientation(android.widget.LinearLayout.VERTICAL);
+        listScroll.addView(listCol);
+        android.widget.LinearLayout.LayoutParams scLp =
                 new android.widget.LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT);
-        prLp.topMargin = Math.round(12 * density);
-        root.addView(presetRow, prLp);
+                        Math.round(240 * density));
+        scLp.topMargin = Math.round(10 * density);
+        root.addView(listScroll, scLp);
 
-        TextView btnBypass = new TextView(ctx);
-        TextView btnNoiseSupp = new TextView(ctx);
-        TextView btnCustom = new TextView(ctx);
-        TextView[] modeBtns = {btnBypass, btnNoiseSupp, btnCustom};
-        String[] modeNames = {"Off", "Noise Suppression", "Custom"};
-        for (int i = 0; i < 3; i++) {
-            TextView b = modeBtns[i];
-            b.setText(modeNames[i]);
-            b.setTextSize(11f);
-            b.setGravity(android.view.Gravity.CENTER);
-            b.setSingleLine(true);
-            b.setTypeface(android.graphics.Typeface.create(
-                    "sans-serif-medium", android.graphics.Typeface.NORMAL));
-            int vP = Math.round(8 * density);
-            b.setPadding(segPad, vP, segPad, vP);
-            android.widget.LinearLayout.LayoutParams lp =
-                    new android.widget.LinearLayout.LayoutParams(
-                            0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-            if (i > 0) lp.leftMargin = segPad;
-            presetRow.addView(b, lp);
-            PressAnim.applySoft(b, 0.96f);
-        }
+        Runnable populateList = () -> {
+            String q = searchBox.getText().toString().trim().toLowerCase(Locale.US);
+            listCol.removeAllViews();
+            for (DspChain.EffectType t : DspChain.EffectType.values()) {
+                if (!q.isEmpty()
+                        && !t.title.toLowerCase(Locale.US).contains(q)
+                        && !t.description.toLowerCase(Locale.US).contains(q)) {
+                    continue;
+                }
+                android.widget.LinearLayout row = new android.widget.LinearLayout(ctx);
+                row.setOrientation(android.widget.LinearLayout.VERTICAL);
+                row.setBackgroundResource(R.drawable.bg_pill_option);
+                row.setPadding(sPad, sPad, sPad, sPad);
+                android.widget.LinearLayout.LayoutParams rLp =
+                        new android.widget.LinearLayout.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.WRAP_CONTENT);
+                rLp.topMargin = Math.round(6 * density);
 
-        // 2) Effect Cards with aligned header, status badge, progress bar, and TeleValue
-        TeleValue noiseCtl = new TeleValue(ctx);
-        noiseCtl.configure(0, 100, 5, dspConfig.noisePct, "%");
-        android.widget.ProgressBar noiseBar = new android.widget.ProgressBar(
-                ctx, null, android.R.attr.progressBarStyleHorizontal);
-        TextView noiseState = new TextView(ctx);
-        View noiseCard = buildFxSliderCard(ctx, "Noise Suppression",
-                "3-band adaptive floor gate", noiseCtl, noiseBar, noiseState);
-        root.addView(noiseCard, prLp);
+                TextView rTitle = new TextView(ctx);
+                rTitle.setText(t.title);
+                rTitle.setTextSize(13.5f);
+                rTitle.setTextColor(0xFFF2F4F7);
+                rTitle.setTypeface(android.graphics.Typeface.create(
+                        "sans-serif-medium", android.graphics.Typeface.NORMAL));
 
-        TeleValue deEssCtl = new TeleValue(ctx);
-        deEssCtl.configure(0, 100, 5, dspConfig.deEssPct, "%");
-        android.widget.ProgressBar deEssBar = new android.widget.ProgressBar(
-                ctx, null, android.R.attr.progressBarStyleHorizontal);
-        TextView deEssState = new TextView(ctx);
-        View deEssCard = buildFxSliderCard(ctx, "De-Esser (4.5–9.5 kHz)",
-                "Split-band sibilance control", deEssCtl, deEssBar, deEssState);
-        root.addView(deEssCard, prLp);
+                TextView rSub = new TextView(ctx);
+                rSub.setText(t.description);
+                rSub.setTextSize(11f);
+                rSub.setTextColor(0xFF9AA3AF);
 
-        TeleValue compCtl = new TeleValue(ctx);
-        compCtl.configure(0, 100, 5, dspConfig.compPct, "%");
-        android.widget.ProgressBar compBar = new android.widget.ProgressBar(
-                ctx, null, android.R.attr.progressBarStyleHorizontal);
-        TextView compState = new TextView(ctx);
-        View compCard = buildFxSliderCard(ctx, "Compressor & Limiter",
-                "Soft-knee vocal leveler + brickwall ceiling", compCtl, compBar, compState);
-        root.addView(compCard, prLp);
-
-        // 3) Aligned 80 Hz Low-Cut Toggle Row (matches card width & padding)
-        android.widget.LinearLayout hpfCard = new android.widget.LinearLayout(ctx);
-        hpfCard.setOrientation(android.widget.LinearLayout.HORIZONTAL);
-        hpfCard.setGravity(android.view.Gravity.CENTER_VERTICAL);
-        hpfCard.setBackgroundResource(R.drawable.bg_search);
-        int cPad = Math.round(12 * density);
-        hpfCard.setPadding(cPad, cPad, cPad, cPad);
-        hpfCard.setClickable(true);
-        hpfCard.setFocusable(true);
-
-        View hpfDot = new View(ctx);
-        int dotSz = Math.round(8 * density);
-        android.widget.LinearLayout.LayoutParams dotLp =
-                new android.widget.LinearLayout.LayoutParams(dotSz, dotSz);
-        dotLp.rightMargin = Math.round(10 * density);
-        hpfCard.addView(hpfDot, dotLp);
-
-        android.widget.LinearLayout hpfTextCol = new android.widget.LinearLayout(ctx);
-        hpfTextCol.setOrientation(android.widget.LinearLayout.VERTICAL);
-        TextView hpfTitle = new TextView(ctx);
-        hpfTitle.setText("80 Hz Low-Cut Filter");
-        hpfTitle.setTextSize(13f);
-        hpfTitle.setTextColor(0xFFF2F4F7);
-        hpfTitle.setTypeface(android.graphics.Typeface.create(
-                "sans-serif-medium", android.graphics.Typeface.NORMAL));
-        TextView hpfSub = new TextView(ctx);
-        hpfSub.setText("Removes mic rumble & plosive thumps");
-        hpfSub.setTextSize(10.5f);
-        hpfSub.setTextColor(0xFF8A93A0);
-        hpfTextCol.addView(hpfTitle);
-        hpfTextCol.addView(hpfSub);
-        hpfCard.addView(hpfTextCol, new android.widget.LinearLayout.LayoutParams(
-                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-
-        TextView hpfPill = new TextView(ctx);
-        hpfPill.setTextSize(11.5f);
-        hpfPill.setGravity(android.view.Gravity.CENTER);
-        hpfPill.setTypeface(android.graphics.Typeface.create(
-                "sans-serif-medium", android.graphics.Typeface.NORMAL));
-        int pH = Math.round(14 * density);
-        int pV = Math.round(6 * density);
-        hpfPill.setPadding(pH, pV, pH, pV);
-        hpfCard.addView(hpfPill);
-        PressAnim.applySoft(hpfCard, 0.98f);
-        root.addView(hpfCard, prLp);
-
-        TextView btnApply = new TextView(ctx);
-
-        // Guard flag so programmatic setValue() during mode switches does not
-        // trigger manual-override into MODE_CUSTOM.
-        final boolean[] programmaticUpdate = {false};
-
-        Runnable paintDialogState = () -> {
-            dspConfig.save(ctx);
-            if (livePreviewDsp != null) {
-                livePreviewDsp.updateConfig(dspBakedToRaw
-                        ? new DspChain.Config() : dspConfig);
+                row.addView(rTitle);
+                row.addView(rSub);
+                PressAnim.applySoft(row, 0.97f);
+                row.setOnClickListener(v -> {
+                    dspBakedToRaw = false;
+                    dspConfig.addOrFocusSlot(t);
+                    dspConfig.save(ctx);
+                    if (livePreviewDsp != null) {
+                        livePreviewDsp.updateConfig(dspConfig);
+                    }
+                    rebuildFxRackList();
+                    paintFxPanelControls();
+                    paintEditorStrip();
+                    d.dismiss();
+                });
+                listCol.addView(row, rLp);
             }
-
-            styleModePill(btnBypass, "Off",
-                    dspConfig.mode == DspChain.Config.MODE_OFF);
-            styleModePill(btnNoiseSupp, "Noise Suppression",
-                    dspConfig.mode == DspChain.Config.MODE_NOISE_SUPPRESSION);
-            styleModePill(btnCustom, "Custom",
-                    dspConfig.mode == DspChain.Config.MODE_CUSTOM);
-
-            updateFxCardState(noiseCard, noiseBar, noiseState, dspConfig.noisePct);
-            updateFxCardState(deEssCard, deEssBar, deEssState, dspConfig.deEssPct);
-            updateFxCardState(compCard, compBar, compState, dspConfig.compPct);
-
-            boolean hpfOn = dspConfig.hpfEnabled;
-            hpfCard.setBackgroundResource(hpfOn
-                    ? R.drawable.bg_pill_option_selected : R.drawable.bg_search);
-            hpfDot.setBackgroundResource(hpfOn
-                    ? R.drawable.dot_live : R.drawable.bg_round_btn);
-            hpfDot.setAlpha(hpfOn ? 1f : 0.4f);
-            hpfPill.setText(hpfOn ? "ON" : "OFF");
-            hpfPill.setTextColor(hpfOn ? 0xFFFFFFFF : 0xFF9AA3AF);
-            hpfPill.setBackgroundResource(hpfOn
-                    ? R.drawable.bg_chip_selected : R.drawable.bg_chip);
-
-            boolean anyOn = dspConfig.isActive();
-            btnApply.setAlpha(anyOn ? 1f : 0.45f);
-            btnApply.setBackgroundResource(anyOn
-                    ? R.drawable.bg_btn_primary : R.drawable.bg_btn_ghost);
-            paintEditorStrip();
         };
+        populateList.run();
 
-        Runnable onManualSliderChange = () -> {
-            if (programmaticUpdate[0]) return;
-            dspBakedToRaw = false;
-            dspConfig.noisePct = noiseCtl.getValue();
-            dspConfig.deEssPct = deEssCtl.getValue();
-            dspConfig.compPct = compCtl.getValue();
-            dspConfig.onManualAdjustment();
-            paintDialogState.run();
-        };
-
-        TeleValue.OnScrubListener liveScrub = new TeleValue.OnScrubListener() {
-            @Override public void onScrubValueChanged(int value) { onManualSliderChange.run(); }
-            @Override public void onScrubFinished(int value) { onManualSliderChange.run(); }
-        };
-        noiseCtl.setOnValueChanged(v -> onManualSliderChange.run());
-        noiseCtl.setOnScrubListener(liveScrub);
-        deEssCtl.setOnValueChanged(v -> onManualSliderChange.run());
-        deEssCtl.setOnScrubListener(liveScrub);
-        compCtl.setOnValueChanged(v -> onManualSliderChange.run());
-        compCtl.setOnScrubListener(liveScrub);
-
-        hpfCard.setOnClickListener(v -> {
-            dspBakedToRaw = false;
-            dspConfig.hpfEnabled = !dspConfig.hpfEnabled;
-            dspConfig.onManualAdjustment();
-            paintDialogState.run();
+        searchBox.addTextChangedListener(new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int st, int c, int a) {}
+            @Override public void onTextChanged(CharSequence s, int st, int b, int c) {
+                populateList.run();
+            }
+            @Override public void afterTextChanged(android.text.Editable s) {}
         });
 
-        // 3-Way Mode Buttons: Off <-> Noise Suppression <-> Custom switch
-        // interchangeably in any order!
-        btnBypass.setOnClickListener(v -> {
-            dspBakedToRaw = false;
-            programmaticUpdate[0] = true;
-            dspConfig.applyMode(DspChain.Config.MODE_OFF);
-            noiseCtl.setValue(dspConfig.noisePct, false);
-            deEssCtl.setValue(dspConfig.deEssPct, false);
-            compCtl.setValue(dspConfig.compPct, false);
-            programmaticUpdate[0] = false;
-            paintDialogState.run();
-        });
-        btnNoiseSupp.setOnClickListener(v -> {
-            dspBakedToRaw = false;
-            programmaticUpdate[0] = true;
-            dspConfig.applyMode(DspChain.Config.MODE_NOISE_SUPPRESSION);
-            noiseCtl.setValue(dspConfig.noisePct, false);
-            deEssCtl.setValue(dspConfig.deEssPct, false);
-            compCtl.setValue(dspConfig.compPct, false);
-            programmaticUpdate[0] = false;
-            paintDialogState.run();
-        });
-        btnCustom.setOnClickListener(v -> {
-            dspBakedToRaw = false;
-            programmaticUpdate[0] = true;
-            dspConfig.applyMode(DspChain.Config.MODE_CUSTOM);
-            noiseCtl.setValue(dspConfig.noisePct, false);
-            deEssCtl.setValue(dspConfig.deEssPct, false);
-            compCtl.setValue(dspConfig.compPct, false);
-            programmaticUpdate[0] = false;
-            paintDialogState.run();
-        });
+        TextView cancelBtn = new TextView(ctx);
+        cancelBtn.setText(R.string.cancel);
+        cancelBtn.setGravity(android.view.Gravity.CENTER);
+        cancelBtn.setTextColor(0xFF9AA3AF);
+        cancelBtn.setTextSize(13.5f);
+        cancelBtn.setBackgroundResource(R.drawable.bg_btn_ghost);
+        cancelBtn.setPadding(sPad, sPad, sPad, sPad);
+        cancelBtn.setOnClickListener(v -> d.dismiss());
+        root.addView(cancelBtn, sLp);
 
-        // 4) Bottom Action Row: Preview FX | Apply FX | Done
-        android.widget.LinearLayout actRow = new android.widget.LinearLayout(ctx);
-        actRow.setOrientation(android.widget.LinearLayout.HORIZONTAL);
-        TextView btnPreviewModal = new TextView(ctx);
-        btnPreviewModal.setText(studioPreviewPlayer != null ? "■ Stop Preview" : "▶ Preview FX");
-        btnPreviewModal.setTextSize(13f);
-        btnPreviewModal.setGravity(android.view.Gravity.CENTER);
-        btnPreviewModal.setTextColor(0xFFF2F4F7);
-        btnPreviewModal.setBackgroundResource(R.drawable.bg_btn_ghost);
-        int bPad = Math.round(11 * density);
-        btnPreviewModal.setPadding(bPad, bPad, bPad, bPad);
-        btnPreviewModal.setOnClickListener(v -> {
-            toggleStudioPreview();
-            btnPreviewModal.setText(studioPreviewPlayer != null
-                    ? "■ Stop Preview" : "▶ Preview FX");
-        });
-
-        boolean hasSel = waveform != null && waveform.hasSelection();
-        btnApply.setText(hasSel ? "Apply to Selection" : "Apply to Take");
-        btnApply.setTextSize(13f);
-        btnApply.setGravity(android.view.Gravity.CENTER);
-        btnApply.setTextColor(0xFFFFFFFF);
-        btnApply.setTypeface(android.graphics.Typeface.create(
-                "sans-serif-medium", android.graphics.Typeface.NORMAL));
-        btnApply.setPadding(bPad, bPad, bPad, bPad);
-        btnApply.setOnClickListener(v -> {
-            if (commitDspFx()) d.dismiss();
-        });
-
-        android.widget.LinearLayout.LayoutParams leftLp =
-                new android.widget.LinearLayout.LayoutParams(0,
-                        ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        leftLp.rightMargin = gap / 2;
-        android.widget.LinearLayout.LayoutParams rightLp =
-                new android.widget.LinearLayout.LayoutParams(0,
-                        ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        rightLp.leftMargin = gap / 2;
-        actRow.addView(btnPreviewModal, leftLp);
-        actRow.addView(btnApply, rightLp);
-        root.addView(actRow, prLp);
-
-        TextView doneBtn = new TextView(ctx);
-        doneBtn.setText(R.string.settings_done);
-        doneBtn.setGravity(android.view.Gravity.CENTER);
-        doneBtn.setTextColor(0xFF9AA3AF);
-        doneBtn.setTextSize(13.5f);
-        doneBtn.setBackgroundResource(R.drawable.bg_btn_ghost);
-        doneBtn.setPadding(bPad, bPad, bPad, bPad);
-        doneBtn.setOnClickListener(v -> d.dismiss());
-        root.addView(doneBtn, prLp);
-
-        paintDialogState.run();
-        d.setContentView(scroll);
+        d.setContentView(root);
         android.view.Window w = d.getWindow();
         if (w != null) {
             w.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(
@@ -2338,77 +2751,71 @@ public class StudioFragment extends Fragment {
         d.show();
     }
 
-    private void styleModePill(TextView tv, String baseLabel, boolean selected) {
-        tv.setText(selected ? ("✓ " + baseLabel) : baseLabel);
-        tv.setBackgroundResource(selected
-                ? R.drawable.bg_chip_selected : R.drawable.bg_chip);
-        tv.setTextColor(selected ? 0xFFFFFFFF : 0xFF9AA3AF);
-    }
 
-    private View buildFxSliderCard(Context ctx, String titleText, String subText,
-                                   TeleValue ctl, android.widget.ProgressBar bar,
-                                   TextView badge) {
-        float density = getResources().getDisplayMetrics().density;
-        int pad = Math.round(10 * density);
-        android.widget.LinearLayout card = new android.widget.LinearLayout(ctx);
-        card.setOrientation(android.widget.LinearLayout.VERTICAL);
-        card.setBackgroundResource(R.drawable.bg_search);
-        card.setPadding(pad, pad, pad, pad);
+    /**
+     * Applies enabled effects from the FX rack to the selected audio region.
+     * Requires the user to select an area first (auto-enabling Select and
+     * prompting them if nothing is selected). Works identically on both the
+     * normal recording and the Select & Replace sub-editor recording!
+     */
 
-        android.widget.LinearLayout head = new android.widget.LinearLayout(ctx);
-        head.setOrientation(android.widget.LinearLayout.HORIZONTAL);
-        head.setGravity(android.view.Gravity.CENTER_VERTICAL);
-
-        android.widget.LinearLayout titles = new android.widget.LinearLayout(ctx);
-        titles.setOrientation(android.widget.LinearLayout.VERTICAL);
-        TextView t = new TextView(ctx);
-        t.setText(titleText);
-        t.setTextSize(12.5f);
-        t.setTextColor(0xFFF2F4F7);
-        t.setTypeface(android.graphics.Typeface.create(
-                "sans-serif-medium", android.graphics.Typeface.NORMAL));
-        TextView s = new TextView(ctx);
-        s.setText(subText);
-        s.setTextSize(10f);
-        s.setTextColor(0xFF8A93A0);
-        titles.addView(t);
-        titles.addView(s);
-        head.addView(titles, new android.widget.LinearLayout.LayoutParams(
-                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-
-        badge.setTextSize(10.5f);
-        int bH = Math.round(8 * density);
-        int bV = Math.round(2 * density);
-        badge.setPadding(bH, bV, bH, bV);
-        head.addView(badge);
-        card.addView(head);
-
-        bar.setMax(100);
-        bar.setProgressTintList(android.content.res.ColorStateList.valueOf(0xFFFF3B30));
-        bar.setProgressBackgroundTintList(
-                android.content.res.ColorStateList.valueOf(0xFF262C35));
-        android.widget.LinearLayout.LayoutParams barLp =
-                new android.widget.LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        Math.round(5 * density));
-        barLp.topMargin = Math.round(6 * density);
-        barLp.bottomMargin = Math.round(4 * density);
-        card.addView(bar, barLp);
-        card.addView(ctl, new android.widget.LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT));
-        return card;
-    }
-
-    private void updateFxCardState(View card, android.widget.ProgressBar bar,
-                                   TextView badge, int pct) {
-        boolean active = pct > 0;
-        bar.setProgress(pct);
-        badge.setText(active ? ("ACTIVE • " + pct + "%") : "BYPASSED");
-        badge.setTextColor(active ? 0xFFFF453A : 0xFF5D6672);
-        badge.setBackgroundResource(active ? R.drawable.bg_badge : 0);
-        card.setBackgroundResource(active
-                ? R.drawable.bg_pill_option_selected : R.drawable.bg_search);
+    /**
+     * Applies enabled effects from the FX rack to the selected audio region.
+     * Requires the user to select an area first (auto-enabling Select and
+     * prompting them if nothing is selected). Works identically on both the
+     * normal recording and the Select & Replace sub-editor recording!
+     */
+    private boolean commitDspFx() {
+        if (!ensurePausedForEditing()) return false;
+        if (replaceModeArmed) {
+            Toast.makeText(requireContext(),
+                    "Disable Replace mode before applying effects",
+                    Toast.LENGTH_SHORT).show();
+            return false;
+        }
+        stopStudioPreview();
+        dspConfig.syncLegacyFieldsFromSlots();
+        if (dspConfig == null || !dspConfig.isActive()) {
+            Toast.makeText(requireContext(),
+                    "Enable at least one effect (checkmark) first",
+                    Toast.LENGTH_SHORT).show();
+            return false;
+        }
+        // Require the user to select the audio region before applying FX!
+        if (!ensureSelectionOrAutoEnable("Apply")) {
+            return false;
+        }
+        File raw = engine.rawFile;
+        if (raw == null || !raw.exists() || waveform == null) return false;
+        try {
+            FormatConverter.WavInfo info = FormatConverter.readFloatWav(raw);
+            long totalFrames = info.dataBytes / 4 / Math.max(1, info.channels);
+            if (totalFrames <= 0) return false;
+            long start = Math.round(waveform.selectionStartFraction() * totalFrames);
+            long end = Math.round(waveform.selectionEndFraction() * totalFrames);
+            if (end <= start) {
+                Toast.makeText(requireContext(), "Select a valid audio region first",
+                        Toast.LENGTH_SHORT).show();
+                return false;
+            }
+            waveform.recordUndoPeaks();
+            DspChain chain = new DspChain(info.channels, dspConfig);
+            EditEngine.applyDspToRange(raw, start, end, chain, activeUndoJournal());
+            engine.abortStreaming();
+            engine.dataBytes = RecordingEngine.payloadBytesOf(raw);
+            waveform.clearSelection();
+            Toast.makeText(requireContext(),
+                    "Effects applied to selected region (Undo available)",
+                    Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            if (waveform != null) waveform.popUndoPeaks();
+            Toast.makeText(requireContext(), "FX failed",
+                    Toast.LENGTH_SHORT).show();
+            return false;
+        }
+        paint();
+        paintFxPanelControls();
+        return true;
     }
 
     private void paint() {
