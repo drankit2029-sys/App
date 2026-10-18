@@ -2771,6 +2771,40 @@ public class StudioFragment extends Fragment {
                 && dspConfig != null && dspConfig.isActive());
     }
 
+    /** Small pill button used by the FX inspector's per-effect controls. */
+    private TextView makeFxChip(Context ctx, String text, float density) {
+        TextView chip = new TextView(ctx);
+        chip.setText(text);
+        chip.setTextSize(11.5f);
+        chip.setTypeface(android.graphics.Typeface.create(
+                "sans-serif-medium", android.graphics.Typeface.NORMAL));
+        chip.setGravity(android.view.Gravity.CENTER);
+        chip.setTextColor(0xFFF2F4F7);
+        chip.setBackgroundResource(R.drawable.bg_btn_ghost);
+        int padH = Math.round(12 * density);
+        int padV = Math.round(7 * density);
+        chip.setPadding(padH, padV, padH, padV);
+        android.widget.LinearLayout.LayoutParams lp =
+                new android.widget.LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.rightMargin = Math.round(6 * density);
+        chip.setLayoutParams(lp);
+        PressAnim.applySoft(chip, 0.95f);
+        return chip;
+    }
+
+    /**
+     * True for the parameter that a slot's primary TeleValue already controls
+     * ({@code amt} for percentage stages, {@code cutoff} for the HPF). Every
+     * other {@link FxParameter} the processor exposes is rendered as an extra
+     * knob in the expanded drawer, so multi-parameter effects get a full
+     * inspector with no bespoke UI.
+     */
+    private static boolean isPrimaryFxParam(String paramId) {
+        return "amt".equals(paramId) || "cutoff".equals(paramId);
+    }
+
     /**
      * Populates the single scrollable FX section with collapsible effect pills
      * (each having a checkmark enable/disable toggle, collapsible TeleValue
@@ -2942,6 +2976,155 @@ public class StudioFragment extends Fragment {
                 onSlotMutated.run();
                 rebuildFxRackList();
             });
+
+            // ---- Inspector extras: ordering, blend, reset, extra params ----
+            final int slotIdx = i;
+
+            android.widget.LinearLayout ops =
+                    new android.widget.LinearLayout(ctx);
+            ops.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+            android.widget.LinearLayout.LayoutParams opsLp =
+                    new android.widget.LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT);
+            opsLp.topMargin = Math.round(8 * density);
+
+            TextView upBtn = makeFxChip(ctx, "↑ Move Up", density);
+            TextView downBtn = makeFxChip(ctx, "↓ Move Down", density);
+            TextView resetBtn = makeFxChip(ctx, "Reset", density);
+            ops.addView(upBtn);
+            ops.addView(downBtn);
+            ops.addView(resetBtn);
+            body.addView(ops, opsLp);
+
+            boolean canUp = slotIdx > 0;
+            boolean canDown = slotIdx < dspConfig.slots.size() - 1;
+            upBtn.setEnabled(canUp);
+            upBtn.setAlpha(canUp ? 1f : 0.35f);
+            downBtn.setEnabled(canDown);
+            downBtn.setAlpha(canDown ? 1f : 0.35f);
+            upBtn.setOnClickListener(v -> {
+                if (slotIdx <= 0) return;
+                DspChain.EffectSlot moved =
+                        dspConfig.slots.remove(slotIdx);
+                dspConfig.slots.add(slotIdx - 1, moved);
+                onSlotMutated.run();
+                rebuildFxRackList();
+            });
+            downBtn.setOnClickListener(v -> {
+                if (slotIdx >= dspConfig.slots.size() - 1) return;
+                DspChain.EffectSlot moved =
+                        dspConfig.slots.remove(slotIdx);
+                dspConfig.slots.add(slotIdx + 1, moved);
+                onSlotMutated.run();
+                rebuildFxRackList();
+            });
+            resetBtn.setOnClickListener(v -> {
+                slot.value = slot.type.defaultVal;
+                slot.wetDry = 1f;
+                slot.extraParams.clear();
+                onSlotMutated.run();
+                rebuildFxRackList();
+            });
+
+            // Wet/dry blend for the 1:1 stages. Warmth and presence share the
+            // combined legacy tone processor, so those two slots stay fully
+            // wet and get no mix control.
+            if (slot.type != DspChain.EffectType.WARMTH_BODY
+                    && slot.type != DspChain.EffectType.VOCAL_PRESENCE) {
+                TextView mixCaption = new TextView(ctx);
+                mixCaption.setText("Wet-Dry Mix");
+                mixCaption.setTextSize(10.5f);
+                mixCaption.setTextColor(0xFF8A93A0);
+                body.addView(mixCaption);
+
+                TeleValue mixCtl = new TeleValue(ctx);
+                mixCtl.configure(0, 100, 5,
+                        Math.round(slot.wetDry * 100f), "%");
+                android.widget.LinearLayout.LayoutParams mixLp =
+                        new android.widget.LinearLayout.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.WRAP_CONTENT);
+                mixLp.topMargin = Math.round(4 * density);
+                body.addView(mixCtl, mixLp);
+                mixCtl.setOnScrubListener(new TeleValue.OnScrubListener() {
+                    @Override
+                    public void onScrubValueChanged(int value) {
+                        slot.wetDry = value / 100f;
+                        onSlotMutated.run();
+                    }
+
+                    @Override
+                    public void onScrubFinished(int value) {
+                        slot.wetDry = value / 100f;
+                        onSlotMutated.run();
+                    }
+                });
+                mixCtl.setOnValueChanged(val -> {
+                    slot.wetDry = val / 100f;
+                    onSlotMutated.run();
+                });
+            }
+
+            // Secondary processor parameters. The legacy stages expose only
+            // their primary knob, so nothing extra is rendered for them; new
+            // multi-parameter effects get a control per FxParameter here.
+            AudioProcessor meta = FxRackChain.createProcessor(slot.type.id);
+            if (meta != null) {
+                for (FxParameter param : meta.getParameters()) {
+                    if (isPrimaryFxParam(param.id)) continue;
+                    if (param.type == FxParameter.Type.BOOLEAN) {
+                        TextView b = makeFxChip(ctx, param.name, density);
+                        final boolean on = slot.extraParams.containsKey(
+                                param.id)
+                                && slot.extraParams.get(param.id) != 0;
+                        b.setText(param.name + ": "
+                                + (on ? "On" : "Off"));
+                        b.setOnClickListener(v -> {
+                            slot.extraParams.put(param.id, on ? 0 : 1);
+                            onSlotMutated.run();
+                            rebuildFxRackList();
+                        });
+                        body.addView(b);
+                        continue;
+                    }
+                    if (param.type != FxParameter.Type.INT
+                            && param.type != FxParameter.Type.FLOAT) {
+                        continue;
+                    }
+                    TeleValue pc = new TeleValue(ctx);
+                    pc.setCaption(param.name);
+                    pc.setValueScale(Math.max(1, param.scaleDivisor));
+                    pc.configure(param.minRaw, param.maxRaw, param.stepRaw,
+                            slot.extraParams.containsKey(param.id)
+                                    ? slot.extraParams.get(param.id)
+                                    : param.defaultRaw,
+                            param.unit);
+                    android.widget.LinearLayout.LayoutParams pcLp =
+                            new android.widget.LinearLayout.LayoutParams(
+                                    ViewGroup.LayoutParams.MATCH_PARENT,
+                                    ViewGroup.LayoutParams.WRAP_CONTENT);
+                    pcLp.topMargin = Math.round(4 * density);
+                    body.addView(pc, pcLp);
+                    pc.setOnScrubListener(new TeleValue.OnScrubListener() {
+                        @Override
+                        public void onScrubValueChanged(int value) {
+                            slot.extraParams.put(param.id, value);
+                            onSlotMutated.run();
+                        }
+
+                        @Override
+                        public void onScrubFinished(int value) {
+                            slot.extraParams.put(param.id, value);
+                            onSlotMutated.run();
+                        }
+                    });
+                    pc.setOnValueChanged(val -> {
+                        slot.extraParams.put(param.id, val);
+                        onSlotMutated.run();
+                    });
+                }
+            }
 
             fxListContainer.addView(pill, pillLp);
         }

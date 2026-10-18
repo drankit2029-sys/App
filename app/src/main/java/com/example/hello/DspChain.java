@@ -7,7 +7,9 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Pro Multi-Effect Rack & Real-Time/Offline 48 kHz Float DSP Engine.
@@ -35,9 +37,8 @@ import java.util.List;
  */
 public final class DspChain {
 
-    private static final int SAMPLE_RATE = 48000;
-    private static final int DECIM = 16;
-    private static final float INV_DECIM = 1.0f / DECIM;
+    /** Session sample rate every legacy stage is tuned for. */
+    public static final int SAMPLE_RATE = 48000;
 
     /** Catalog of available effects for the searchable "+ Add Effect" menu. */
     public enum EffectType {
@@ -126,6 +127,14 @@ public final class DspChain {
         public int value;
         /** UI state: whether the collapsible settings drawer is expanded. */
         public boolean expanded;
+        /** Per-slot wet/dry mix, 0..1 (1 = fully wet, the legacy default). */
+        public float wetDry = 1f;
+        /**
+         * Secondary processor parameters persisted per slot, keyed by
+         * {@link FxParameter#id} (Stage 3+ effects; the legacy stages have
+         * only their primary knob, so this stays empty for them).
+         */
+        public final Map<String, Integer> extraParams = new LinkedHashMap<>();
 
         public EffectSlot(EffectType type, boolean enabled, int value, boolean expanded) {
             this.type = type;
@@ -461,7 +470,18 @@ public final class DspChain {
                         boolean en = o.optBoolean("en", true);
                         int val = o.optInt("val", t.defaultVal);
                         boolean exp = o.optBoolean("exp", false);
-                        c.slots.add(new EffectSlot(t, en, val, exp));
+                        EffectSlot slot = new EffectSlot(t, en, val, exp);
+                        slot.wetDry = Math.max(0f, Math.min(1f,
+                                (float) o.optDouble("mix", 1.0)));
+                        JSONObject pj = o.optJSONObject("params");
+                        if (pj != null) {
+                            java.util.Iterator<String> keys = pj.keys();
+                            while (keys.hasNext()) {
+                                String k = keys.next();
+                                slot.extraParams.put(k, pj.optInt(k));
+                            }
+                        }
+                        c.slots.add(slot);
                     }
                     c.syncLegacyFieldsFromSlots();
                 } else {
@@ -493,6 +513,15 @@ public final class DspChain {
                     o.put("en", s.enabled);
                     o.put("val", s.value);
                     o.put("exp", s.expanded);
+                    o.put("mix", (double) s.wetDry);
+                    if (!s.extraParams.isEmpty()) {
+                        JSONObject p = new JSONObject();
+                        for (Map.Entry<String, Integer> e
+                                : s.extraParams.entrySet()) {
+                            p.put(e.getKey(), e.getValue());
+                        }
+                        o.put("params", p);
+                    }
                     arr.put(o);
                 }
                 ctx.getSharedPreferences("takeone", Context.MODE_PRIVATE).edit()
@@ -518,396 +547,77 @@ public final class DspChain {
     }
 
     private final int channels;
-    private volatile boolean hpfOn;
-    private volatile int currentHpfHz = -1;
-    private volatile float noiseAmt;
-    private volatile float deEssAmt;
-    private volatile float compAmt;
-    private volatile float presenceAmt;
-    private volatile float warmthAmt;
-    private volatile float gateAmt;
-    private volatile float limiterAmt;
-
-    // Stage 1: Dynamic Butterworth High-Pass Filter (40..160 Hz)
-    private volatile float hpfB0, hpfB1, hpfB2, hpfA1, hpfA2;
-    private final float[] hpfZ1 = new float[2];
-    private final float[] hpfZ2 = new float[2];
-
-    // Stage 2: 3-Band Minimum-Statistics Adaptive Noise Suppressor state
-    private static final float NS_ALPHA_LOW = 0.02839f; // 220 Hz 1-pole crossover
-    private static final float NS_ALPHA_HIGH = 0.3919f; // 3800 Hz 1-pole crossover
-    private final float[] nsLp1 = new float[2];
-    private final float[] nsLp2 = new float[2];
-    private final float[] nsEnv = {1e-5f, 1e-5f, 1e-5f};
-    private final float[] nsFloor = {1e-4f, 1e-4f, 1e-4f};
-    private boolean nsSeeded = false;
-    private final float[] nsGain = {1.0f, 1.0f, 1.0f};
-    private final float[] nsTargetGain = {1.0f, 1.0f, 1.0f};
-    private final float[] nsBandAcc = new float[3];
-    private final float[] ScratchLow = new float[DECIM * 2];
-    private final float[] ScratchMid = new float[DECIM * 2];
-    private final float[] ScratchHigh = new float[DECIM * 2];
-
-    // Stage 3: Dedicated Downward Expander / Room Gate state
-    private float gateEnv = 0.0f;
-    private float gateGainCur = 1.0f;
-    private float gateGainTarget = 1.0f;
-
-    // Stage 4: Split-Band Relative Sidechain De-Esser (6800 Hz bandpass, Q=1.5)
-    private final float deB0, deB1, deB2, deA1, deA2;
-    private final float[] deZ1 = new float[2];
-    private final float[] deZ2 = new float[2];
-    private float deSibEnv = 1e-7f;
-    private float deFullEnv = 1e-6f;
-    private float deCutCur = 0.0f;
-    private float deCutTarget = 0.0f;
-    private final float[] ScratchSib = new float[DECIM * 2];
-
-    // Stage 5: Warmth (180 Hz) & Vocal Presence (3500 Hz) state
-    private final float[] warmLp = new float[2];
-    private final float[] presLp = new float[2];
-    private static final float WARM_ALPHA = 0.0233f;  // ~180 Hz
-    private static final float PRES_ALPHA = 0.3678f;  // ~3500 Hz
-
-    // Stage 6: Soft-Knee Compressor + Auto-Makeup
-    private float compEnvDb = -60.0f;
-    private float compGainCur = 1.0f;
-    private float compGainTarget = 1.0f;
+    private final FxRackChain rack;
 
     public DspChain(int channels, Config cfg) {
         this.channels = Math.max(1, Math.min(2, channels));
-        computeHpfCoefficients(80);
-
-        double dw0 = 2.0 * Math.PI * 6800.0 / SAMPLE_RATE;
-        double dCos = Math.cos(dw0);
-        double dAlpha = Math.sin(dw0) / (2.0 * 1.5);
-        double da0Inv = 1.0 / (1.0 + dAlpha);
-        this.deB0 = (float) (dAlpha * da0Inv);
-        this.deB1 = 0.0f;
-        this.deB2 = (float) (-dAlpha * da0Inv);
-        this.deA1 = (float) (-2.0 * dCos * da0Inv);
-        this.deA2 = (float) ((1.0 - dAlpha) * da0Inv);
-
-        updateConfig(cfg);
+        this.rack = FxRackChain.fromLegacyConfig(this.channels, cfg);
     }
 
-    private void computeHpfCoefficients(int cutoffHz) {
-        int hz = Math.max(40, Math.min(160, cutoffHz));
-        if (hz == this.currentHpfHz) return;
-        this.currentHpfHz = hz;
-        double w0 = 2.0 * Math.PI * hz / SAMPLE_RATE;
-        double cosW0 = Math.cos(w0);
-        double alpha = Math.sin(w0) / (2.0 * 0.70710678);
-        double a0Inv = 1.0 / (1.0 + alpha);
-        this.hpfB0 = (float) ((1.0 + cosW0) * 0.5 * a0Inv);
-        this.hpfB1 = (float) (-(1.0 + cosW0) * a0Inv);
-        this.hpfB2 = this.hpfB0;
-        this.hpfA1 = (float) (-2.0 * cosW0 * a0Inv);
-        this.hpfA2 = (float) ((1.0 - alpha) * a0Inv);
+    /**
+     * The modular processor rack backing this chain (Stage 2 architecture).
+     * The legacy engine's eight stages are now {@link AudioProcessor}s in a
+     * fixed-order rack; this chain is a backwards-compatible facade.
+     */
+    public FxRackChain getRack() {
+        return rack;
     }
 
     public void updateConfig(Config cfg) {
-        if (cfg == null) {
-            this.hpfOn = false;
-            this.noiseAmt = 0f;
-            this.deEssAmt = 0f;
-            this.compAmt = 0f;
-            this.presenceAmt = 0f;
-            this.warmthAmt = 0f;
-            this.gateAmt = 0f;
-            this.limiterAmt = 0f;
-            return;
+        rack.applyLegacyConfig(cfg);
+        applySlotExtras(cfg);
+    }
+
+    /**
+     * Pushes per-slot wet/dry mixes and any persisted secondary parameters
+     * into the rack. The combined warmth+presence stage is one processor fed
+     * by two slots, so it has no slot-level mix and stays fully wet.
+     */
+    private void applySlotExtras(Config cfg) {
+        if (cfg == null) return;
+        for (DspChain.EffectSlot s : cfg.slots) {
+            AudioProcessor p = processorForSlot(s.type);
+            if (p == null) continue;
+            p.setWetDryMix(s.wetDry);
+            for (Map.Entry<String, Integer> e : s.extraParams.entrySet()) {
+                FxParameter fp = p.getParam(e.getKey());
+                if (fp != null) fp.setCurrentRaw(e.getValue());
+            }
         }
-        cfg.syncLegacyFieldsFromSlots();
-        this.hpfOn = cfg.hpfEnabled;
-        computeHpfCoefficients(cfg.hpfCutoffHz);
-        this.noiseAmt = cfg.noisePct / 100.0f;
-        this.deEssAmt = cfg.deEssPct / 100.0f;
-        this.compAmt = cfg.compPct / 100.0f;
-        this.presenceAmt = cfg.presencePct / 100.0f;
-        this.warmthAmt = cfg.warmthPct / 100.0f;
-        this.gateAmt = cfg.gatePct / 100.0f;
-        this.limiterAmt = cfg.limiterPct / 100.0f;
+    }
+
+    private AudioProcessor processorForSlot(EffectType type) {
+        switch (type) {
+            case LOW_CUT_HPF:
+                return rack.getProcessor(rack.indexOf("hpf"));
+            case NOISE_SUPPRESSION:
+                return rack.getProcessor(rack.indexOf("noise"));
+            case ROOM_GATE:
+                return rack.getProcessor(rack.indexOf("gate"));
+            case DE_ESSER:
+                return rack.getProcessor(rack.indexOf("deess"));
+            case COMPRESSOR:
+                return rack.getProcessor(rack.indexOf("comp"));
+            case BRICKWALL_LIMITER:
+                return rack.getProcessor(rack.indexOf("limiter"));
+            case WARMTH_BODY:
+            case VOCAL_PRESENCE:
+            default:
+                // Combined tone stage (or unknown type): no slot-level mix.
+                return null;
+        }
     }
 
     public boolean isActive() {
-        return hpfOn || noiseAmt > 0.001f || deEssAmt > 0.001f || compAmt > 0.001f
-                || presenceAmt > 0.001f || warmthAmt > 0.001f
-                || gateAmt > 0.001f || limiterAmt > 0.001f;
+        return rack.isActive();
     }
 
     public void reset() {
-        for (int c = 0; c < 2; c++) {
-            hpfZ1[c] = hpfZ2[c] = 0f;
-            nsLp1[c] = nsLp2[c] = 0f;
-            deZ1[c] = deZ2[c] = 0f;
-            warmLp[c] = presLp[c] = 0f;
-        }
-        for (int b = 0; b < 3; b++) {
-            nsEnv[b] = 1e-5f;
-            nsFloor[b] = 1e-4f;
-            nsGain[b] = nsTargetGain[b] = 1.0f;
-        }
-        nsSeeded = false;
-        gateEnv = 0f;
-        gateGainCur = gateGainTarget = 1.0f;
-        deSibEnv = 1e-7f;
-        deFullEnv = 1e-6f;
-        deCutCur = deCutTarget = 0f;
-        compEnvDb = -60.0f;
-        compGainCur = compGainTarget = 1.0f;
+        rack.reset();
     }
 
     public void processInPlace(float[] buf, int frames) {
-        if (!isActive() || frames <= 0) return;
-        final int ch = this.channels;
-        final boolean doHpf = this.hpfOn;
-        final float nAmt = this.noiseAmt;
-        final float gAmt = this.gateAmt;
-        final float dAmt = this.deEssAmt;
-        final float cAmt = this.compAmt;
-        final float wAmt = this.warmthAmt;
-        final float pAmt = this.presenceAmt;
-        final float lAmt = this.limiterAmt;
-
-        int offset = 0;
-        while (offset < frames) {
-            int blk = Math.min(DECIM, frames - offset);
-
-            // Stage 1: Dynamic Butterworth High-Pass Filter (40..160 Hz)
-            if (doHpf) {
-                final float b0 = this.hpfB0, b1 = this.hpfB1, b2 = this.hpfB2;
-                final float a1 = this.hpfA1, a2 = this.hpfA2;
-                for (int f = 0; f < blk; f++) {
-                    int idx = (offset + f) * ch;
-                    for (int c = 0; c < ch; c++) {
-                        float x = buf[idx + c];
-                        float y = b0 * x + hpfZ1[c];
-                        hpfZ1[c] = b1 * x - a1 * y + hpfZ2[c];
-                        hpfZ2[c] = b2 * x - a2 * y;
-                        buf[idx + c] = y;
-                    }
-                }
-            }
-
-            // Stage 2: 3-Band Adaptive Noise Suppressor
-            if (nAmt > 0.001f) {
-                nsBandAcc[0] = nsBandAcc[1] = nsBandAcc[2] = 0f;
-                for (int f = 0; f < blk; f++) {
-                    int idx = (offset + f) * ch;
-                    int sIdx = f * ch;
-                    for (int c = 0; c < ch; c++) {
-                        float x = buf[idx + c];
-                        nsLp1[c] += NS_ALPHA_LOW * (x - nsLp1[c]);
-                        nsLp2[c] += NS_ALPHA_HIGH * (x - nsLp2[c]);
-                        float bLow = nsLp1[c];
-                        float bMid = nsLp2[c] - bLow;
-                        float bHigh = x - nsLp2[c];
-                        ScratchLow[sIdx + c] = bLow;
-                        ScratchMid[sIdx + c] = bMid;
-                        ScratchHigh[sIdx + c] = bHigh;
-                        nsBandAcc[0] += bLow * bLow;
-                        nsBandAcc[1] += bMid * bMid;
-                        nsBandAcc[2] += bHigh * bHigh;
-                    }
-                }
-                float invSamples = 1.0f / (blk * ch);
-                if (!nsSeeded) {
-                    nsSeeded = true;
-                    for (int b = 0; b < 3; b++) {
-                        float e = Math.max(1e-7f, nsBandAcc[b] * invSamples);
-                        nsEnv[b] = e;
-                        nsFloor[b] = Math.max(1e-6f, e * 0.35f);
-                    }
-                }
-                for (int b = 0; b < 3; b++) {
-                    float e = nsBandAcc[b] * invSamples;
-                    nsEnv[b] = 0.60f * nsEnv[b] + 0.40f * e;
-                    if (nsEnv[b] < nsFloor[b]) {
-                        nsFloor[b] = 0.75f * nsFloor[b] + 0.25f * nsEnv[b];
-                    } else {
-                        nsFloor[b] = nsFloor[b] * 1.0006f + 1e-9f;
-                    }
-                    float snr = nsEnv[b] / (nsFloor[b] + 1e-10f);
-                    float overSub = 1.0f + 3.8f * nAmt;
-                    float g = (snr - overSub) / Math.max(snr, 1e-6f);
-                    float floorG = (b == 1)
-                            ? (1.0f - 0.85f * nAmt)
-                            : (1.0f - 0.94f * nAmt);
-                    g = Math.max(floorG, Math.min(1.0f, g));
-                    float smooth = g > nsTargetGain[b] ? 0.40f
-                            : (b == 2 ? 0.10f : 0.045f);
-                    nsTargetGain[b] += smooth * (g - nsTargetGain[b]);
-                }
-                float dG0 = (nsTargetGain[0] - nsGain[0]) * INV_DECIM;
-                float dG1 = (nsTargetGain[1] - nsGain[1]) * INV_DECIM;
-                float dG2 = (nsTargetGain[2] - nsGain[2]) * INV_DECIM;
-                for (int f = 0; f < blk; f++) {
-                    nsGain[0] += dG0;
-                    nsGain[1] += dG1;
-                    nsGain[2] += dG2;
-                    int idx = (offset + f) * ch;
-                    int sIdx = f * ch;
-                    for (int c = 0; c < ch; c++) {
-                        buf[idx + c] = nsGain[0] * ScratchLow[sIdx + c]
-                                + nsGain[1] * ScratchMid[sIdx + c]
-                                + nsGain[2] * ScratchHigh[sIdx + c];
-                    }
-                }
-            }
-
-            // Stage 3: Dedicated Downward Expander / Room Gate
-            if (gAmt > 0.001f) {
-                float blkPeak = 0f;
-                for (int f = 0; f < blk; f++) {
-                    int idx = (offset + f) * ch;
-                    for (int c = 0; c < ch; c++) {
-                        float a = Math.abs(buf[idx + c]);
-                        if (a > blkPeak) blkPeak = a;
-                    }
-                }
-                float alphaG = blkPeak > gateEnv ? 0.35f : 0.015f;
-                gateEnv += alphaG * (blkPeak - gateEnv);
-                // Threshold ranges from -52 dBFS (0.0025) to -18 dBFS (0.125)
-                float threshLin = fastDbToLin(-52.0f + 34.0f * gAmt);
-                if (gateEnv >= threshLin) {
-                    gateGainTarget = 1.0f;
-                } else {
-                    float ratio = gateEnv / Math.max(1e-6f, threshLin);
-                    float minFloor = 1.0f - 0.92f * gAmt;
-                    gateGainTarget = Math.max(minFloor, ratio * ratio);
-                }
-                float dGate = (gateGainTarget - gateGainCur) * INV_DECIM;
-                for (int f = 0; f < blk; f++) {
-                    gateGainCur += dGate;
-                    int idx = (offset + f) * ch;
-                    for (int c = 0; c < ch; c++) {
-                        buf[idx + c] *= gateGainCur;
-                    }
-                }
-            }
-
-            // Stage 4: Warmth (180 Hz Chest Body) & Vocal Presence (3.5 kHz Air)
-            if (wAmt > 0.001f || pAmt > 0.001f) {
-                float warmGain = wAmt * 1.45f; // up to +9 dB low-mid body
-                float presGain = pAmt * 1.65f; // up to +10 dB air & articulation
-                for (int f = 0; f < blk; f++) {
-                    int idx = (offset + f) * ch;
-                    for (int c = 0; c < ch; c++) {
-                        float x = buf[idx + c];
-                        warmLp[c] += WARM_ALPHA * (x - warmLp[c]);
-                        presLp[c] += PRES_ALPHA * (x - presLp[c]);
-                        float hi = x - presLp[c];
-                        buf[idx + c] = x + warmGain * warmLp[c] + presGain * hi;
-                    }
-                }
-            }
-
-            // Stage 5: Split-Band Relative Sidechain De-Esser
-            if (dAmt > 0.001f) {
-                float sibEnergy = 0f;
-                float fullEnergy = 0f;
-                for (int f = 0; f < blk; f++) {
-                    int idx = (offset + f) * ch;
-                    int sIdx = f * ch;
-                    for (int c = 0; c < ch; c++) {
-                        float x = buf[idx + c];
-                        float sib = deB0 * x + deZ1[c];
-                        deZ1[c] = deB1 * x - deA1 * sib + deZ2[c];
-                        deZ2[c] = deB2 * x - deA2 * sib;
-                        ScratchSib[sIdx + c] = sib;
-                        sibEnergy += sib * sib;
-                        fullEnergy += x * x;
-                    }
-                }
-                float invN = 1.0f / (blk * ch);
-                deSibEnv = 0.50f * deSibEnv + 0.50f * (sibEnergy * invN);
-                deFullEnv = 0.70f * deFullEnv + 0.30f * (fullEnergy * invN);
-                float ratioDb = fastLinToDb(deSibEnv + 1e-10f) * 0.5f
-                        - fastLinToDb(deFullEnv + 1e-9f) * 0.5f;
-                float threshDb = 1.0f - 11.5f * dAmt;
-                float wantCut = 0f;
-                if (ratioDb > threshDb && deFullEnv > 1e-7f) {
-                    float overDb = Math.min(14.0f, (ratioDb - threshDb) * 1.4f);
-                    wantCut = 1.0f - fastDbToLin(-overDb);
-                }
-                float alphaDe = wantCut > deCutTarget ? 0.50f : 0.12f;
-                deCutTarget += alphaDe * (wantCut - deCutTarget);
-                float dCut = (deCutTarget - deCutCur) * INV_DECIM;
-                for (int f = 0; f < blk; f++) {
-                    deCutCur += dCut;
-                    int idx = (offset + f) * ch;
-                    int sIdx = f * ch;
-                    for (int c = 0; c < ch; c++) {
-                        buf[idx + c] -= deCutCur * ScratchSib[sIdx + c];
-                    }
-                }
-            }
-
-            // Stage 6: Soft-Knee Compressor + Auto-Makeup
-            if (cAmt > 0.001f) {
-                float peak = 0f;
-                float sumSq = 0f;
-                for (int f = 0; f < blk; f++) {
-                    int idx = (offset + f) * ch;
-                    for (int c = 0; c < ch; c++) {
-                        float a = Math.abs(buf[idx + c]);
-                        if (a > peak) peak = a;
-                        sumSq += a * a;
-                    }
-                }
-                float rms = (float) Math.sqrt(sumSq / (blk * ch));
-                float det = Math.max(1e-6f, 0.7f * peak + 0.3f * rms);
-                float inDb = fastLinToDb(det);
-                float alphaC = inDb > compEnvDb ? 0.10f : 0.004f;
-                compEnvDb += alphaC * (inDb - compEnvDb);
-
-                float threshDb = -10.0f - 18.0f * cAmt; // -10 .. -28 dBFS
-                float ratio = 1.0f + 5.0f * cAmt;       // 1:1 .. 6:1
-                float slope = 1.0f - (1.0f / ratio);
-                float knee = 6.0f;
-                float over = compEnvDb - threshDb;
-                float grDb;
-                if (2.0f * over < -knee) {
-                    grDb = 0.0f;
-                } else if (2.0f * Math.abs(over) <= knee) {
-                    float t = over + knee * 0.5f;
-                    grDb = -slope * (t * t) / (2.0f * knee);
-                } else {
-                    grDb = -slope * over;
-                }
-                float makeupDb = (-threshDb * slope) * 0.55f;
-                compGainTarget = fastDbToLin(grDb + makeupDb);
-                float dG = (compGainTarget - compGainCur) * INV_DECIM;
-                for (int f = 0; f < blk; f++) {
-                    compGainCur += dG;
-                    int idx = (offset + f) * ch;
-                    for (int c = 0; c < ch; c++) {
-                        buf[idx + c] *= compGainCur;
-                    }
-                }
-            }
-
-            // Stage 7: Dedicated Brickwall Ceiling Limiter (or safety limiter when active)
-            if (lAmt > 0.001f || cAmt > 0.001f || wAmt > 0.001f || pAmt > 0.001f) {
-                float driveLin = lAmt > 0.001f ? fastDbToLin(lAmt * 10.5f) : 1.0f;
-                for (int f = 0; f < blk; f++) {
-                    int idx = (offset + f) * ch;
-                    for (int c = 0; c < ch; c++) {
-                        float y = buf[idx + c] * driveLin;
-                        float ay = Math.abs(y);
-                        if (ay > 0.82f) {
-                            float d = ay - 0.82f;
-                            float lim = 0.82f + 0.165f * (d / (0.165f + d));
-                            y = y >= 0f ? lim : -lim;
-                        }
-                        buf[idx + c] = y;
-                    }
-                }
-            }
-
-            offset += blk;
-        }
+        rack.processInPlace(buf, frames);
     }
 
     public static float fastLinToDb(float x) {

@@ -65,8 +65,25 @@ public class TeleValue extends LinearLayout {
         int stepFor(int currentValue, int direction);
     }
 
+    /**
+     * Optional presentation override so a consumer can render dB, Hz or ratio
+     * labels without subclassing. When unset, the numeric value is joined
+     * with the configured unit.
+     */
+    public interface ValueFormatter {
+        String formatValueText(int value);
+    }
+
     private int valueScale = 1;
     private StepRule stepRule;
+    private ValueFormatter valueFormatter;
+
+    public void setValueFormatter(ValueFormatter formatter) {
+        this.valueFormatter = formatter;
+        if (label != null) {
+            label.setText(formatValueText(value));
+        }
+    }
 
     /**
      * Fixed-point divisor for high-resolution controls (e.g. 100 for basis
@@ -119,6 +136,9 @@ public class TeleValue extends LinearLayout {
     }
 
     private String formatValueText(int v) {
+        if (valueFormatter != null) {
+            return valueFormatter.formatValueText(v);
+        }
         String num = formatNumberPart(v);
         return unit.isEmpty() ? num : num + unit;
     }    private OnValueChanged listener;
@@ -625,10 +645,17 @@ public class TeleValue extends LinearLayout {
             input.setTextSize(16);
             input.setSingleLine(true);
             input.setMaxLines(1);
-            input.setInputType(valueScale > 1
-                    ? (InputType.TYPE_CLASS_NUMBER
-                            | InputType.TYPE_NUMBER_FLAG_DECIMAL)
-                    : InputType.TYPE_CLASS_NUMBER);
+            // Signed keyboards appear only for ranges that can go negative
+            // (e.g. a -24..+24 dB trim), so every existing positive-only
+            // control keeps its familiar keypad.
+            int inputType = InputType.TYPE_CLASS_NUMBER;
+            if (min < 0) {
+                inputType |= InputType.TYPE_NUMBER_FLAG_SIGNED;
+            }
+            if (valueScale > 1) {
+                inputType |= InputType.TYPE_NUMBER_FLAG_DECIMAL;
+            }
+            input.setInputType(inputType);
             input.setText(formatNumberPart(value));
             input.setSelectAllOnFocus(true);
             inputBox.addView(input, new LayoutParams(
