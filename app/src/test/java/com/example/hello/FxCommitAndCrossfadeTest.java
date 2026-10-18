@@ -107,6 +107,16 @@ public class FxCommitAndCrossfadeTest {
         for (int i = 0; i < headBefore.length; i++) {
             headBefore[i] = sampleAt(raw, start - 400 + i);
         }
+        // Snap the tail frames too: the tone is a sine, so compare against the
+        // actual samples rather than the peak amplitude.
+        float[] tailBefore = new float[64];
+        for (int i = 0; i < tailBefore.length; i++) {
+            tailBefore[i] = sampleAt(raw, end + 2000 + i);
+        }
+
+        // Interior sample captured BEFORE the bake, so the assertion below is
+        // a real "the audio changed" check.
+        float midBefore = sampleAt(raw, (start + end) / 2);
 
         EditEngine.applyDspToRange(raw, start, end, limiterChain(), null);
 
@@ -116,14 +126,14 @@ public class FxCommitAndCrossfadeTest {
                             + (start - 400 + i),
                     headBefore[i], sampleAt(raw, start - 400 + i), 0f);
         }
-        assertEquals("audio after the selection was modified",
-                0.4f, Math.abs(sampleAt(raw, end + 2000)), 1e-6f);
+        for (int i = 0; i < tailBefore.length; i++) {
+            assertEquals("audio after the selection was modified: " + (end + 2000 + i),
+                    tailBefore[i], sampleAt(raw, end + 2000 + i), 0f);
+        }
 
         // 2) The audio inside the range really was processed.
-        float midBefore = 0.4f;
-        float midAfter = Math.abs(sampleAt(raw, (start + end) / 2));
         assertNotEquals("selection interior must be processed",
-                midBefore, midAfter, 1e-6f);
+                midBefore, sampleAt(raw, (start + end) / 2), 1e-6f);
 
         // 3) No step discontinuity at either seam: the sample-to-sample delta
         //    across the boundary must stay within the natural slew of the tone.
@@ -147,11 +157,12 @@ public class FxCommitAndCrossfadeTest {
         File raw = toneRaw("short.wav");
         // 100 frames is below one crossfade window: the fades must shrink
         // instead of reading past the range or writing outside the file.
+        float before = sampleAt(raw, 4000);
         EditEngine.applyDspToRange(raw, 5000, 5100, limiterChain(), null);
         FormatConverter.WavInfo info = FormatConverter.readFloatWav(raw);
         assertEquals("geometry must be untouched",
                 48000L * 8L, info.dataBytes);
         assertEquals("audio before a short range must not move",
-                0.4f, Math.abs(sampleAt(raw, 4000)), 1e-6f);
+                before, sampleAt(raw, 4000), 0f);
     }
 }
