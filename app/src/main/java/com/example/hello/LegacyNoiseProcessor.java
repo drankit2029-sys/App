@@ -69,17 +69,22 @@ final class LegacyNoiseProcessor extends AudioProcessor {
 
     @Override
     public boolean isAudible() {
-        return isEnabled() && amt.getFloat() > 0.001f;
+        return isEnabled() && amt01() > 0.001f;
     }
 
     void setLegacyAmount(int pct) {
         amt.setCurrentRaw(pct);
     }
 
+    /** Raw amount is a percent; gain math needs a 0..1 fraction. */
+    private float amt01() {
+        return amt.getCurrentRaw() / 100f;
+    }
+
     @Override
     public void processInPlace(float[] buf, int frames, int channels) {
         final int ch = channels;
-        final float nAmt = amt.getFloat();
+        final float nAmt = amt01();
         if (nAmt <= 0.001f || frames <= 0) return;
 
         int offset = 0;

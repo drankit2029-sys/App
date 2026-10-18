@@ -47,7 +47,7 @@ final class LegacyLimiterProcessor extends AudioProcessor {
 
     @Override
     public boolean isAudible() {
-        return isEnabled() && (drive.getFloat() > 0.001f || safetyOn);
+        return isEnabled() && (drive01() > 0.001f || safetyOn);
     }
 
     void setLegacyState(int drivePct, boolean safety) {
@@ -55,10 +55,15 @@ final class LegacyLimiterProcessor extends AudioProcessor {
         this.safetyOn = safety;
     }
 
+    /** Raw drive is a percent; gain math needs a 0..1 fraction. */
+    private float drive01() {
+        return drive.getCurrentRaw() / 100f;
+    }
+
     @Override
     public void processInPlace(float[] buf, int frames, int channels) {
         final int ch = channels;
-        final float lAmt = drive.getFloat();
+        final float lAmt = drive01();
         if ((lAmt <= 0.001f && !safetyOn) || frames <= 0) return;
 
         int offset = 0;

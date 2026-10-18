@@ -55,8 +55,8 @@ final class LegacyToneProcessor extends AudioProcessor {
 
     @Override
     public boolean isAudible() {
-        return isEnabled() && (warmth.getFloat() > 0.001f
-                || presence.getFloat() > 0.001f);
+        return isEnabled() && (warmth01() > 0.001f
+                || presence01() > 0.001f);
     }
 
     void setLegacyAmounts(int warmthPct, int presencePct) {
@@ -64,11 +64,20 @@ final class LegacyToneProcessor extends AudioProcessor {
         presence.setCurrentRaw(presencePct);
     }
 
+    /** Raw amounts are percents; gain math needs 0..1 fractions. */
+    private float warmth01() {
+        return warmth.getCurrentRaw() / 100f;
+    }
+
+    private float presence01() {
+        return presence.getCurrentRaw() / 100f;
+    }
+
     @Override
     public void processInPlace(float[] buf, int frames, int channels) {
         final int ch = channels;
-        final float wAmt = warmth.getFloat();
-        final float pAmt = presence.getFloat();
+        final float wAmt = warmth01();
+        final float pAmt = presence01();
         if ((wAmt <= 0.001f && pAmt <= 0.001f) || frames <= 0) return;
 
         int offset = 0;
