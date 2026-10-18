@@ -214,6 +214,45 @@ public class WaveformTimelineTest {
     }
 
     @Test
+    public void horizontalDragIsInertWhenTheWholeTakeFitsOnScreen() {
+        // Long take: at its fit zoom the entire recording is visible at every
+        // playhead position, so there is nothing to scroll. Dragging must not
+        // sweep the playhead across the take (dragging toward the left edge
+        // used to slam it onto the last frames, which made the studio timer
+        // jump to the full take duration).
+        WaveformView wv = loaded(activity(), 1200);
+        wv.setLive(false);
+        wv.setZoom(wv.minimumZoom());
+        assertTrue("test must run at the fit zoom", wv.getZoom() <= 0.07f);
+        wv.setPlayheadFraction(0.5f);
+
+        wv.onTouchEvent(ev(MotionEvent.ACTION_DOWN, 200f, 50f));
+        for (float x = 180f; x >= 20f; x -= 20f) {
+            wv.onTouchEvent(ev(MotionEvent.ACTION_MOVE, x, 50f));
+        }
+        wv.onTouchEvent(ev(MotionEvent.ACTION_UP, 20f, 50f));
+
+        assertEquals("a fit-to-screen drag must not move the playhead",
+                0.5f, wv.playheadFraction(), 0.0001f);
+        assertTrue("a fit-to-screen drag must not reach the end of the take",
+                wv.playheadFraction() < 0.6f);
+
+        // Control: zoomed in there IS content off screen, so the same drag
+        // still scrolls the waveform.
+        WaveformView wvIn = loaded(activity(), 1200);
+        wvIn.setLive(false);
+        wvIn.setZoom(1f);
+        wvIn.setPlayheadFraction(0.5f);
+        wvIn.onTouchEvent(ev(MotionEvent.ACTION_DOWN, 200f, 50f));
+        for (float x = 180f; x >= 20f; x -= 20f) {
+            wvIn.onTouchEvent(ev(MotionEvent.ACTION_MOVE, x, 50f));
+        }
+        wvIn.onTouchEvent(ev(MotionEvent.ACTION_UP, 20f, 50f));
+        assertTrue("a zoomed-in drag must still scroll the waveform",
+                wvIn.playheadFraction() > 0.51f);
+    }
+
+    @Test
     public void inPlaceOverwriteMorphsSmoothlyAndKeepsFutureBarsIntact() {
         WaveformView wv = loaded(activity(), 100);
         wv.pushOrOverwrite(1.0f, 0.5f, false);

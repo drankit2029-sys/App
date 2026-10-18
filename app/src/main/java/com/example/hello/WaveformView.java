@@ -960,17 +960,29 @@ public class WaveformView extends View {
                 if (dragMode == DRAG_SCROLL) {
                     int pIdx;
                     float pFrac;
+                    boolean fitsScreen = false;
                     synchronized (this) {
                         float gap = gapPxLocked(w);
-                        float barsPerPx = 1f / gap;
-                        playheadPos = Math.max(0f, Math.min(n,
-                                playheadPos - stepDx * barsPerPx));
-                        playheadIndex = Math.round(playheadPos);
+                        // When the whole take already fits on screen (zoom at or
+                        // below the fit level, n * gap <= centerX) there is
+                        // NOTHING to scroll: the entire take is visible at every
+                        // playhead position. Dragging used to still sweep the
+                        // playhead across the whole take, so a flick toward the
+                        // left edge slammed it onto the last frames and the studio
+                        // snapped the timer to the full duration. Keep the
+                        // playhead exactly where it is (tapping still scrubs).
+                        fitsScreen = n > 0 && (n * gap) <= (w / 2f) + 0.5f;
+                        if (!fitsScreen) {
+                            float barsPerPx = 1f / gap;
+                            playheadPos = Math.max(0f, Math.min(n,
+                                    playheadPos - stepDx * barsPerPx));
+                            playheadIndex = Math.round(playheadPos);
+                        }
                         pIdx = playheadIndex;
                         pFrac = playheadFraction();
                     }
                     invalidate();
-                    if (timelineListener != null) {
+                    if (timelineListener != null && !fitsScreen) {
                         timelineListener.onPlayheadScrubbed(pIdx, pFrac);
                     }
                     return true;
