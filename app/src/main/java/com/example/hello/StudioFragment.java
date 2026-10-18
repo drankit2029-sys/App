@@ -2802,7 +2802,9 @@ public class StudioFragment extends Fragment {
      * inspector with no bespoke UI.
      */
     private static boolean isPrimaryFxParam(String paramId) {
-        return "amt".equals(paramId) || "cutoff".equals(paramId);
+        return "amt".equals(paramId)
+                || "cutoff".equals(paramId)
+                || "drive".equals(paramId);
     }
 
     /**
@@ -2944,6 +2946,7 @@ public class StudioFragment extends Fragment {
             });
 
             delBtn.setOnClickListener(v -> {
+                dspBakedToRaw = false;
                 dspConfig.removeSlot(slot);
                 dspConfig.save(ctx);
                 if (livePreviewDsp != null) {
@@ -3075,9 +3078,11 @@ public class StudioFragment extends Fragment {
                     if (isPrimaryFxParam(param.id)) continue;
                     if (param.type == FxParameter.Type.BOOLEAN) {
                         TextView b = makeFxChip(ctx, param.name, density);
-                        final boolean on = slot.extraParams.containsKey(
+                        final int rawBool = slot.extraParams.containsKey(
                                 param.id)
-                                && slot.extraParams.get(param.id) != 0;
+                                ? slot.extraParams.get(param.id)
+                                : param.defaultRaw;
+                        final boolean on = rawBool != 0;
                         b.setText(param.name + ": "
                                 + (on ? "On" : "Off"));
                         b.setOnClickListener(v -> {
@@ -3088,6 +3093,37 @@ public class StudioFragment extends Fragment {
                         body.addView(b);
                         continue;
                     }
+                    if (param.type == FxParameter.Type.ENUM
+                            && param.enumLabels != null
+                            && param.enumLabels.length > 0) {
+                        TextView eChip = makeFxChip(ctx, param.name, density);
+                        final int curIdx = param.clampRaw(
+                                slot.extraParams.containsKey(param.id)
+                                        ? slot.extraParams.get(param.id)
+                                        : param.defaultRaw);
+                        param.setEnumIndex(curIdx);
+                        eChip.setText(param.name + ": " + param.getEnumLabel());
+                        eChip.setOnClickListener(v -> {
+                            int nextIdx = (curIdx + 1) % param.enumLabels.length;
+                            slot.extraParams.put(param.id, nextIdx);
+                            onSlotMutated.run();
+                            rebuildFxRackList();
+                        });
+                        body.addView(eChip);
+                        continue;
+                    }
+                    if (param.type == FxParameter.Type.ACTION) {
+                        TextView actChip = makeFxChip(ctx, param.name, density);
+                        actChip.setOnClickListener(v -> {
+                            int triggers = slot.extraParams.containsKey(param.id)
+                                    ? slot.extraParams.get(param.id) + 1 : 1;
+                            slot.extraParams.put(param.id, triggers);
+                            onSlotMutated.run();
+                            rebuildFxRackList();
+                        });
+                        body.addView(actChip);
+                        continue;
+                    }
                     if (param.type != FxParameter.Type.INT
                             && param.type != FxParameter.Type.FLOAT) {
                         continue;
@@ -3095,6 +3131,10 @@ public class StudioFragment extends Fragment {
                     TeleValue pc = new TeleValue(ctx);
                     pc.setCaption(param.name);
                     pc.setValueScale(Math.max(1, param.scaleDivisor));
+                    pc.setValueFormatter(rawVal -> {
+                        param.setCurrentRaw(rawVal);
+                        return param.formatDisplay();
+                    });
                     pc.configure(param.minRaw, param.maxRaw, param.stepRaw,
                             slot.extraParams.containsKey(param.id)
                                     ? slot.extraParams.get(param.id)

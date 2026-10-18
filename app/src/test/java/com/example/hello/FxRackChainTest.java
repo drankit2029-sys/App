@@ -448,6 +448,184 @@ public class FxRackChainTest {
         for (float v : carried) assertTrue(Float.isFinite(v));
     }
 
+
+    // ----------------------------------------- Stage 2 audit regression tests
+
+    @Test
+    public void slotReorderingChangesRackExecutionOrderAndAudioOutput() {
+        // BUG-01 regression: reordering cfg.slots must reorder rack processors
+        // and produce distinct audio when nonlinear stages change order.
+        DspChain.Config cfgA = new DspChain.Config();
+        cfgA.applyPreset(DspChain.Preset.CLEAR_ALL);
+        cfgA.addOrFocusSlot(DspChain.EffectType.WARMTH_BODY);
+        cfgA.addOrFocusSlot(DspChain.EffectType.COMPRESSOR);
+        for (DspChain.EffectSlot s : cfgA.slots) {
+            if (s.type == DspChain.EffectType.WARMTH_BODY) s.value = 85;
+            if (s.type == DspChain.EffectType.COMPRESSOR) s.value = 85;
+        }
+        DspChain chainA = new DspChain(1, cfgA);
+        assertTrue(chainA.getRack().indexOf("tone")
+                < chainA.getRack().indexOf("comp"));
+
+        // Swap slot order in-place (Compressor BEFORE Warmth) and call updateConfig
+        DspChain.Config cfgB = new DspChain.Config();
+        cfgB.applyPreset(DspChain.Preset.CLEAR_ALL);
+        cfgB.addOrFocusSlot(DspChain.EffectType.COMPRESSOR);
+        cfgB.addOrFocusSlot(DspChain.EffectType.WARMTH_BODY);
+        for (DspChain.EffectSlot s : cfgB.slots) {
+            if (s.type == DspChain.EffectType.WARMTH_BODY) s.value = 85;
+            if (s.type == DspChain.EffectType.COMPRESSOR) s.value = 85;
+        }
+        DspChain chainB = new DspChain(1, cfgB);
+        assertTrue(chainB.getRack().indexOf("comp")
+                < chainB.getRack().indexOf("tone"));
+
+        float[] sigA = tone(1024, 1, 0.6f, 0.05f);
+        float[] sigB = sigA.clone();
+        chainA.processInPlace(sigA, 1024);
+        chainB.processInPlace(sigB, 1024);
+
+        boolean diff = false;
+        for (int i = 0; i < sigA.length; i++) {
+            if (Math.abs(sigA[i] - sigB[i]) > 1e-4f) {
+                diff = true;
+                break;
+            }
+        }
+        assertTrue("Reordering compressor before tone had no effect on audio", diff);
+    }
+
+    @Test
+    public void primarySlotParamCannotBeOverwrittenByStaleExtraParams() {
+        // BUG-02 regression: LegacyLimiterProcessor's primary "drive" param
+        // must be driven by slot.value and never clobbered by slot.extraParams.
+        DspChain.Config cfg = new DspChain.Config();
+        cfg.applyPreset(DspChain.Preset.CLEAR_ALL);
+        DspChain.EffectSlot limSlot =
+                cfg.addOrFocusSlot(DspChain.EffectType.BRICKWALL_LIMITER);
+        limSlot.value = 80;
+        limSlot.extraParams.put("drive", 10);
+
+        DspChain chain = new DspChain(1, cfg);
+        AudioProcessor lim = chain.getRack().getProcessor(
+                chain.getRack().indexOf("limiter"));
+        assertNotNull(lim);
+        assertEquals(80, lim.getParam("drive").getCurrentRaw());
+    }
+
+    @Test
+    public void safetyLimiterCeilingHoldsEvenWhenLimiterSlotMixIsZeroOrUnchecked() {
+        // BUG-03 regression: upstream gain stages (Warmth + Presence + Comp)
+        // must never clip past the brickwall safety ceiling even if a
+        // BRICKWALL_LIMITER slot has wetDry < 1.0f or is unchecked.
+        DspChain.Config cfg = new DspChain.Config();
+        cfg.applyPreset(DspChain.Preset.CLEAR_ALL);
+        DspChain.EffectSlot w = cfg.addOrFocusSlot(DspChain.EffectType.WARMTH_BODY);
+        DspChain.EffectSlot p = cfg.addOrFocusSlot(DspChain.EffectType.VOCAL_PRESENCE);
+        DspChain.EffectSlot c = cfg.addOrFocusSlot(DspChain.EffectType.COMPRESSOR);
+        DspChain.EffectSlot l = cfg.addOrFocusSlot(DspChain.EffectType.BRICKWALL_LIMITER);
+        w.value = 100;
+        p.value = 100;
+        c.value = 100;
+        l.value = 50;
+        l.wetDry = 0.0f; // 0% drive mix on limiter slot
+
+        DspChain chain = new DspChain(1, cfg);
+        float[] hot = tone(1024, 1, 0.95f, 0.09f);
+        chain.processInPlace(hot, 1024);
+        for (int i = 0; i < hot.length; i++) {
+            assertTrue("Sample clipped past safety ceiling @" + i + ": " + hot[i],
+                    Math.abs(hot[i]) <= 0.99f);
+        }
+    }
+
+    @Test
+    public void removingSlotResetsProcessorWetDryMixToDefault() {
+        // BUG-04 regression: removing a slot with wetDry = 0.2f must reset the
+        // backing processor's wetDryMix back to 1.0f on updateConfig.
+        DspChain.Config cfg = new DspChain.Config();
+        cfg.applyPreset(DspChain.Preset.VOICE_POLISH);
+        DspChain.EffectSlot noiseSlot = null;
+        for (DspChain.EffectSlot s : cfg.slots) {
+            if (s.type == DspChain.EffectType.NOISE_SUPPRESSION) noiseSlot = s;
+        }
+        assertNotNull(noiseSlot);
+        noiseSlot.wetDry = 0.2f;
+
+        DspChain chain = new DspChain(2, cfg);
+        AudioProcessor noiseProc = chain.getRack().getProcessor(
+                chain.getRack().indexOf("noise"));
+        assertEquals(0.2f, noiseProc.getWetDryMix(), 0.0f);
+
+        cfg.removeSlot(noiseSlot);
+        chain.updateConfig(cfg);
+        assertEquals(1.0f, noiseProc.getWetDryMix(), 0.0f);
+    }
+
+    @Test
+    public void manualAdjustmentPreservesSlotWetDryAndOrder() {
+        // BUG-05 regression: calling onManualAdjustment must not wipe out
+        // existing slots' wetDry mix, extraParams, or custom slot order.
+        DspChain.Config cfg = new DspChain.Config();
+        cfg.applyPreset(DspChain.Preset.VOICE_POLISH);
+        // Move COMPRESSOR to index 0
+        DspChain.EffectSlot compSlot = cfg.slots.remove(3);
+        cfg.slots.add(0, compSlot);
+        compSlot.wetDry = 0.4f;
+        compSlot.extraParams.put("custom_knob", 42);
+
+        cfg.noisePct = 65;
+        cfg.onManualAdjustment();
+
+        assertEquals(DspChain.EffectType.COMPRESSOR, cfg.slots.get(0).type);
+        assertEquals(0.4f, cfg.slots.get(0).wetDry, 0.0f);
+        assertEquals(Integer.valueOf(42),
+                cfg.slots.get(0).extraParams.get("custom_knob"));
+    }
+
+    @Test
+    public void fxParameterClampRawRoundsToNearestStepAndReachesMax() {
+        // BUG-07 regression: clampRaw must round to nearest step and allow maxRaw.
+        FxParameter p = FxParameter.intParam("test", "Test", "%", 0, 100, 5, 50);
+        assertEquals(50, p.clampRaw(48));
+        assertEquals(45, p.clampRaw(47));
+        assertEquals(100, p.clampRaw(100));
+
+        FxParameter unaligned = FxParameter.intParam("u", "U", "", 0, 12, 5, 0);
+        assertEquals(12, unaligned.clampRaw(12));
+    }
+
+    @Test
+    public void setSampleRateUpdatesBiquadFilterResponse() {
+        // BUG-10 regression: LegacyHpfProcessor and LegacyDeEsserProcessor must
+        // recompute coefficients when FxRackChain.setSampleRate is called.
+        FxRackChain rack48 = new FxRackChain(1);
+        LegacyHpfProcessor hpf48 = new LegacyHpfProcessor();
+        hpf48.setLegacyState(true, 150);
+        rack48.addProcessor(hpf48);
+        rack48.setSampleRate(48000);
+
+        FxRackChain rack96 = new FxRackChain(1);
+        LegacyHpfProcessor hpf96 = new LegacyHpfProcessor();
+        hpf96.setLegacyState(true, 150);
+        rack96.addProcessor(hpf96);
+        rack96.setSampleRate(96000);
+
+        float[] a = tone(256, 1, 0.8f, 0.02f);
+        float[] b = a.clone();
+        rack48.processInPlace(a, 256);
+        rack96.processInPlace(b, 256);
+
+        boolean diff = false;
+        for (int i = 0; i < a.length; i++) {
+            if (Math.abs(a[i] - b[i]) > 1e-4f) {
+                diff = true;
+                break;
+            }
+        }
+        assertTrue("setSampleRate had no effect on HPF biquad coefficients", diff);
+    }
+
     // ----------------------------------------------------- legacy reference
 
     /** Standalone copy of the pre-Stage-2 engine, for bit-parity checks. */

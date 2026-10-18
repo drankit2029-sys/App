@@ -119,4 +119,21 @@ public class TeleValueScaleTest {
         assertEquals("40", labels[0]);
         assertEquals("45", labels[1]);
     }
+
+    @Test
+    public void negativeScaledValuesFormatAndStepCorrectly() {
+        // BUG-08 regression: negative scaled values <= -10*scale and negative
+        // stepped wheel values must include min and format symmetrically.
+        TeleValue tv = control();
+        tv.setValueScale(100);
+        tv.configure(-2400, 2400, 600, -1250, " dB");
+        assertEquals("-12.5 dB", labelText(tv));
+        tv.setValue(-125, false);
+        assertEquals("-1.25 dB", labelText(tv));
+
+        String[] labels = tv.steppedLabelsForTest();
+        assertTrue(labels.length >= 9);
+        assertEquals("-24 dB", labels[0]);
+        assertEquals("24 dB", labels[labels.length - 1]);
+    }
 }

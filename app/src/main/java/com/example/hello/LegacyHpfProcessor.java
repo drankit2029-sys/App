@@ -3,8 +3,9 @@ package com.example.hello;
 /**
  * Stage 1 of the legacy voice chain: dynamic Butterworth high-pass filter
  * (40..160 Hz). The biquad is Direct Form I, coefficients are recomputed only
- * when the cutoff changes, and the body is a verbatim extraction of the
- * original {@code DspChain} stage so output stays bit-identical.
+ * when the cutoff or sample rate changes, and the body is a verbatim
+ * extraction of the original {@code DspChain} stage so output stays
+ * bit-identical.
  */
 final class LegacyHpfProcessor extends AudioProcessor {
 
@@ -15,18 +16,21 @@ final class LegacyHpfProcessor extends AudioProcessor {
 
     private volatile float b0, b1, b2, a1, a2;
     private volatile int currentHz = -1;
+    private volatile int currentSampleRate = DspChain.SAMPLE_RATE;
     private final float[] z1 = new float[2];
     private final float[] z2 = new float[2];
 
     LegacyHpfProcessor() {
-        computeCoefficients(80);
+        computeCoefficients(80, DspChain.SAMPLE_RATE);
     }
 
-    private void computeCoefficients(int cutoffHz) {
+    private void computeCoefficients(int cutoffHz, int sr) {
         int hz = Math.max(40, Math.min(160, cutoffHz));
-        if (hz == this.currentHz) return;
+        int validSr = sr > 0 ? sr : DspChain.SAMPLE_RATE;
+        if (hz == this.currentHz && validSr == this.currentSampleRate) return;
         this.currentHz = hz;
-        double w0 = 2.0 * Math.PI * hz / DspChain.SAMPLE_RATE;
+        this.currentSampleRate = validSr;
+        double w0 = 2.0 * Math.PI * hz / validSr;
         double cosW0 = Math.cos(w0);
         double alpha = Math.sin(w0) / (2.0 * 0.70710678);
         double a0Inv = 1.0 / (1.0 + alpha);
@@ -59,7 +63,8 @@ final class LegacyHpfProcessor extends AudioProcessor {
 
     @Override
     public void prepare(int sampleRate, int channels) {
-        computeCoefficients(cutoff.getCurrentRaw());
+        int validSr = sampleRate > 0 ? sampleRate : DspChain.SAMPLE_RATE;
+        computeCoefficients(cutoff.getCurrentRaw(), validSr);
     }
 
     @Override
@@ -78,7 +83,7 @@ final class LegacyHpfProcessor extends AudioProcessor {
     /** Mirrors the legacy {@code hpfOn} flag: any cutoff above 0 enables it. */
     void setLegacyState(boolean on, int cutoffHz) {
         cutoff.setCurrentRaw(on ? Math.max(40, Math.min(160, cutoffHz)) : 80);
-        computeCoefficients(cutoff.getCurrentRaw());
+        computeCoefficients(cutoff.getCurrentRaw(), currentSampleRate);
         setEnabled(on);
     }
 
@@ -88,9 +93,9 @@ final class LegacyHpfProcessor extends AudioProcessor {
 
     @Override
     public void processInPlace(float[] buf, int frames, int channels) {
-        final int ch = channels;
-        if (frames <= 0) return;
-        computeCoefficients(cutoff.getCurrentRaw());
+        if (buf == null || frames <= 0) return;
+        final int ch = Math.max(1, Math.min(2, channels));
+        computeCoefficients(cutoff.getCurrentRaw(), currentSampleRate);
         int offset = 0;
         while (offset < frames) {
             int blk = Math.min(DECIM, frames - offset);

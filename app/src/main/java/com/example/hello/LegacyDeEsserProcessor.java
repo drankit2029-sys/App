@@ -13,7 +13,8 @@ final class LegacyDeEsserProcessor extends AudioProcessor {
     private final FxParameter amt = addParameter(FxParameter.intParam(
             "amt", "Reduction", "%", 0, 100, 1, 45));
 
-    private final float b0, b1, b2, a1, a2;
+    private volatile float b0, b1, b2, a1, a2;
+    private volatile int currentSampleRate = -1;
     private final float[] z1 = new float[2];
     private final float[] z2 = new float[2];
     private float sibEnv = 1e-7f;
@@ -23,7 +24,14 @@ final class LegacyDeEsserProcessor extends AudioProcessor {
     private final float[] scratchSib = new float[DECIM * 2];
 
     LegacyDeEsserProcessor() {
-        double dw0 = 2.0 * Math.PI * 6800.0 / DspChain.SAMPLE_RATE;
+        computeCoefficients(DspChain.SAMPLE_RATE);
+    }
+
+    private void computeCoefficients(int sr) {
+        int validSr = sr > 0 ? sr : DspChain.SAMPLE_RATE;
+        if (validSr == this.currentSampleRate) return;
+        this.currentSampleRate = validSr;
+        double dw0 = 2.0 * Math.PI * 6800.0 / validSr;
         double dCos = Math.cos(dw0);
         double dAlpha = Math.sin(dw0) / (2.0 * 1.5);
         double da0Inv = 1.0 / (1.0 + dAlpha);
@@ -56,6 +64,7 @@ final class LegacyDeEsserProcessor extends AudioProcessor {
 
     @Override
     public void prepare(int sampleRate, int channels) {
+        computeCoefficients(sampleRate);
     }
 
     @Override
@@ -86,9 +95,13 @@ final class LegacyDeEsserProcessor extends AudioProcessor {
 
     @Override
     public void processInPlace(float[] buf, int frames, int channels) {
-        final int ch = channels;
+        if (buf == null || frames <= 0) return;
+        final int ch = Math.max(1, Math.min(2, channels));
         final float dAmt = amt01();
-        if (dAmt <= 0.001f || frames <= 0) return;
+        if (dAmt <= 0.001f) return;
+
+        final float fb0 = this.b0, fb1 = this.b1, fb2 = this.b2;
+        final float fa1 = this.a1, fa2 = this.a2;
 
         int offset = 0;
         while (offset < frames) {
@@ -102,9 +115,9 @@ final class LegacyDeEsserProcessor extends AudioProcessor {
                 int sIdx = f * ch;
                 for (int c = 0; c < ch; c++) {
                     float x = buf[idx + c];
-                    float sib = b0 * x + z1[c];
-                    z1[c] = b1 * x - a1 * sib + z2[c];
-                    z2[c] = b2 * x - a2 * sib;
+                    float sib = fb0 * x + z1[c];
+                    z1[c] = fb1 * x - fa1 * sib + z2[c];
+                    z2[c] = fb2 * x - fa2 * sib;
                     scratchSib[sIdx + c] = sib;
                     sibEnergy += sib * sib;
                     fullEnergy += x * x;

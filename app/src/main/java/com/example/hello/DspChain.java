@@ -7,6 +7,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -323,31 +324,68 @@ public final class DspChain {
         }
 
         private void syncSlotsFromLegacyFields() {
-            slots.clear();
+            Map<EffectType, EffectSlot> existingByType =
+                    new EnumMap<>(EffectType.class);
+            List<EffectType> previousOrder = new ArrayList<>(slots.size());
+            for (EffectSlot s : slots) {
+                if (s != null && s.type != null
+                        && !existingByType.containsKey(s.type)) {
+                    existingByType.put(s.type, s);
+                    previousOrder.add(s.type);
+                }
+            }
+            Map<EffectType, Integer> activeValues =
+                    new LinkedHashMap<>();
             if (hpfEnabled) {
-                slots.add(new EffectSlot(EffectType.LOW_CUT_HPF, true,
-                        Math.max(40, Math.min(160, hpfCutoffHz)), false));
+                activeValues.put(EffectType.LOW_CUT_HPF,
+                        Math.max(40, Math.min(160, hpfCutoffHz)));
             }
             if (noisePct > 0) {
-                slots.add(new EffectSlot(EffectType.NOISE_SUPPRESSION, true, noisePct, false));
-            }
-            if (deEssPct > 0) {
-                slots.add(new EffectSlot(EffectType.DE_ESSER, true, deEssPct, false));
-            }
-            if (compPct > 0) {
-                slots.add(new EffectSlot(EffectType.COMPRESSOR, true, compPct, false));
-            }
-            if (warmthPct > 0) {
-                slots.add(new EffectSlot(EffectType.WARMTH_BODY, true, warmthPct, false));
-            }
-            if (presencePct > 0) {
-                slots.add(new EffectSlot(EffectType.VOCAL_PRESENCE, true, presencePct, false));
+                activeValues.put(EffectType.NOISE_SUPPRESSION, noisePct);
             }
             if (gatePct > 0) {
-                slots.add(new EffectSlot(EffectType.ROOM_GATE, true, gatePct, false));
+                activeValues.put(EffectType.ROOM_GATE, gatePct);
+            }
+            if (warmthPct > 0) {
+                activeValues.put(EffectType.WARMTH_BODY, warmthPct);
+            }
+            if (presencePct > 0) {
+                activeValues.put(EffectType.VOCAL_PRESENCE, presencePct);
+            }
+            if (deEssPct > 0) {
+                activeValues.put(EffectType.DE_ESSER, deEssPct);
+            }
+            if (compPct > 0) {
+                activeValues.put(EffectType.COMPRESSOR, compPct);
             }
             if (limiterPct > 0) {
-                slots.add(new EffectSlot(EffectType.BRICKWALL_LIMITER, true, limiterPct, false));
+                activeValues.put(EffectType.BRICKWALL_LIMITER, limiterPct);
+            }
+
+            slots.clear();
+            // Preserve user's relative ordering and per-slot wetDry/extraParams
+            // for any slots that were already present in the rack.
+            for (EffectType t : previousOrder) {
+                Integer val = activeValues.remove(t);
+                if (val != null) {
+                    EffectSlot kept = existingByType.get(t);
+                    kept.enabled = true;
+                    kept.value = Math.max(t.minVal, Math.min(t.maxVal, val));
+                    slots.add(kept);
+                }
+            }
+            // Append any newly enabled legacy stages in canonical stage order.
+            for (Map.Entry<EffectType, Integer> e : activeValues.entrySet()) {
+                EffectType t = e.getKey();
+                int val = e.getValue();
+                EffectSlot kept = existingByType.get(t);
+                if (kept != null) {
+                    kept.enabled = true;
+                    kept.value = Math.max(t.minVal, Math.min(t.maxVal, val));
+                    slots.add(kept);
+                } else {
+                    slots.add(new EffectSlot(t, true, val, false));
+                }
             }
         }
 
@@ -557,16 +595,41 @@ public final class DspChain {
 
     /**
      * The modular processor rack backing this chain (Stage 2 architecture).
-     * The legacy engine's eight stages are now {@link AudioProcessor}s in a
-     * fixed-order rack; this chain is a backwards-compatible facade.
+     * The legacy engine's eight stages are now {@link AudioProcessor}s in an
+     * ordered rack; this chain is a backwards-compatible facade.
      */
     public FxRackChain getRack() {
         return rack;
     }
 
     public void updateConfig(Config cfg) {
+        resetProcessorSlotExtras();
         rack.applyLegacyConfig(cfg);
         applySlotExtras(cfg);
+    }
+
+    /**
+     * Resets per-slot wet/dry mixes and secondary parameters on all rack
+     * processors before applying the active {@link Config} so removed or
+     * reset slots never leave stale state behind.
+     */
+    private void resetProcessorSlotExtras() {
+        for (AudioProcessor p : rack.processors()) {
+            p.setWetDryMix(1.0f);
+            for (FxParameter fp : p.getParameters()) {
+                if (!isPrimaryLegacyParam(fp.id)) {
+                    fp.resetToDefault();
+                }
+            }
+        }
+    }
+
+    private static boolean isPrimaryLegacyParam(String paramId) {
+        return "amt".equals(paramId)
+                || "cutoff".equals(paramId)
+                || "drive".equals(paramId)
+                || "warmth".equals(paramId)
+                || "presence".equals(paramId);
     }
 
     /**
@@ -579,8 +642,15 @@ public final class DspChain {
         for (DspChain.EffectSlot s : cfg.slots) {
             AudioProcessor p = processorForSlot(s.type);
             if (p == null) continue;
-            p.setWetDryMix(s.wetDry);
+            // When the Brickwall Limiter slot is unchecked, it may still run
+            // as the automatic safety ceiling for upstream gain stages; keep
+            // its mix at 100% when disabled so an unchecked slot's mix never
+            // weakens safety limiting.
+            if (s.type != EffectType.BRICKWALL_LIMITER || s.enabled) {
+                p.setWetDryMix(s.wetDry);
+            }
             for (Map.Entry<String, Integer> e : s.extraParams.entrySet()) {
+                if (isPrimaryLegacyParam(e.getKey())) continue;
                 FxParameter fp = p.getParam(e.getKey());
                 if (fp != null) fp.setCurrentRaw(e.getValue());
             }

@@ -1,8 +1,11 @@
 package com.example.hello;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import org.json.JSONArray;
@@ -26,6 +29,10 @@ public final class FxRackChain {
 
     private static final Map<String, ProcessorFactory> REGISTRY =
             new LinkedHashMap<>();
+
+    private static final String[] CANONICAL_LEGACY_ORDER = {
+            "hpf", "noise", "gate", "tone", "deess", "comp", "limiter"
+    };
 
     static {
         register("hpf", LegacyHpfProcessor::new);
@@ -143,6 +150,10 @@ public final class FxRackChain {
      * Runs every enabled, audible processor in rack order. A processor at
      * full mix is applied in place; a partial mix is applied to a scratch
      * copy and blended back, so 0.5 mix is exactly half dry / half wet.
+     * When the brickwall limiter's safety ceiling is armed, the post-blend
+     * output is still clamped to the -0.2 dBFS ceiling so upstream gain
+     * stages can never clip the output even if the limiter's drive mix is
+     * reduced.
      */
     public void processInPlace(float[] buf, int frames) {
         if (buf == null || frames <= 0) return;
@@ -166,6 +177,15 @@ public final class FxRackChain {
                 for (int i = 0; i < n; i++) {
                     buf[i] = buf[i] * d + scratch[i] * w;
                 }
+                if (p instanceof LegacyLimiterProcessor
+                        && ((LegacyLimiterProcessor) p).isSafetyOn()) {
+                    ((LegacyLimiterProcessor) p).enforceSafetyCeiling(
+                            buf, frames, channels);
+                }
+            } else if (p instanceof LegacyLimiterProcessor
+                    && ((LegacyLimiterProcessor) p).isSafetyOn()) {
+                ((LegacyLimiterProcessor) p).enforceSafetyCeiling(
+                        buf, frames, channels);
             }
         }
     }
@@ -236,10 +256,72 @@ public final class FxRackChain {
         return rack;
     }
 
+    /** Maps a {@link DspChain.EffectType} to its rack processor ID. */
+    static String processorIdForSlotType(DspChain.EffectType type) {
+        if (type == null) return null;
+        switch (type) {
+            case LOW_CUT_HPF:
+                return "hpf";
+            case NOISE_SUPPRESSION:
+                return "noise";
+            case ROOM_GATE:
+                return "gate";
+            case WARMTH_BODY:
+            case VOCAL_PRESENCE:
+                return "tone";
+            case DE_ESSER:
+                return "deess";
+            case COMPRESSOR:
+                return "comp";
+            case BRICKWALL_LIMITER:
+                return "limiter";
+            default:
+                return type.id;
+        }
+    }
+
+    /**
+     * Synchronizes the rack's processor execution order with the user's
+     * {@code cfg.slots} order while preserving existing {@link AudioProcessor}
+     * instances and their internal filter/envelope state. Unreferenced
+     * processors keep their canonical relative order (with the safety limiter
+     * anchored at the end unless explicitly moved earlier in {@code cfg.slots}).
+     */
+    private void syncOrderFromSlots(DspChain.Config cfg) {
+        if (cfg == null || cfg.slots == null || cfg.slots.isEmpty()) return;
+        Set<String> desiredIds = new LinkedHashSet<>();
+        for (DspChain.EffectSlot s : cfg.slots) {
+            if (s == null || s.type == null) continue;
+            String pid = processorIdForSlotType(s.type);
+            if (pid != null && indexOf(pid) >= 0) {
+                desiredIds.add(pid);
+            }
+        }
+        for (String canonId : CANONICAL_LEGACY_ORDER) {
+            if (indexOf(canonId) >= 0) {
+                desiredIds.add(canonId);
+            }
+        }
+        for (AudioProcessor p : processors) {
+            desiredIds.add(p.getId());
+        }
+        int targetIdx = 0;
+        for (String pid : desiredIds) {
+            int curIdx = indexOf(pid);
+            if (curIdx >= 0 && curIdx != targetIdx) {
+                moveProcessor(curIdx, targetIdx);
+            }
+            if (curIdx >= 0) {
+                targetIdx++;
+            }
+        }
+    }
+
     /**
      * Pushes a legacy {@code DspChain.Config} into the already-built legacy
      * rack in place, preserving filter/envelope state across live edits (the
-     * original engine only changed amounts, never rebuilt the stages).
+     * original engine only changed amounts, never rebuilt the stages) and
+     * synchronizing processor order with {@code cfg.slots}.
      */
     void applyLegacyConfig(DspChain.Config cfg) {
         if (cfg == null) {
@@ -247,6 +329,7 @@ public final class FxRackChain {
             return;
         }
         cfg.syncLegacyFieldsFromSlots();
+        syncOrderFromSlots(cfg);
         for (AudioProcessor p : processors) {
             if (p instanceof LegacyHpfProcessor) {
                 ((LegacyHpfProcessor) p).setLegacyState(

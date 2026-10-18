@@ -19,8 +19,8 @@ import org.json.JSONObject;
  */
 public abstract class AudioProcessor {
 
-    private boolean enabled = true;
-    private float wetDryMix = 1.0f;
+    private volatile boolean enabled = true;
+    private volatile float wetDryMix = 1.0f;
     private final List<FxParameter> parameters = new ArrayList<>();
 
     public abstract String getId();

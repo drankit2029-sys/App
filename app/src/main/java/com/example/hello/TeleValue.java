@@ -119,7 +119,7 @@ public class TeleValue extends LinearLayout {
             return String.valueOf(v / valueScale);
         }
         double d = v / (double) valueScale;
-        if (v >= 10 * valueScale) {
+        if (Math.abs((long) v) >= 10L * valueScale) {
             String s = String.format(Locale.US, "%.1f", d);
             if (s.endsWith(".0")) s = s.substring(0, s.length() - 2);
             return s;
@@ -381,8 +381,9 @@ public class TeleValue extends LinearLayout {
                 cur = next;
             }
         } else {
-            int first = Math.min(max, ((min + step - 1) / step) * step);
-            if (first > min && valueScale > 1) {
+            int rem = ((min % step) + step) % step;
+            int first = (rem == 0) ? min : Math.min(max, min + (step - rem));
+            if (first > min && (valueScale > 1 || min < 0)) {
                 out.add(min);
             }
             for (int v = first; v <= max; v += step) {

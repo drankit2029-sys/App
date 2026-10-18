@@ -40,8 +40,8 @@ public final class FxParameter {
     public final int scaleDivisor;
     public final String[] enumLabels;
 
-    private int currentRaw;
-    private ValueFormatter formatter;
+    private volatile int currentRaw;
+    private volatile ValueFormatter formatter;
 
     private FxParameter(String id, String name, String unit, Type type,
                         Scale scale, int minRaw, int maxRaw, int stepRaw,
@@ -115,9 +115,13 @@ public final class FxParameter {
 
     public int clampRaw(int raw) {
         int v = Math.max(minRaw, Math.min(maxRaw, raw));
-        if (type == Type.ENUM || type == Type.BOOLEAN) return v;
-        if (stepRaw > 1) {
-            v = minRaw + ((v - minRaw) / stepRaw) * stepRaw;
+        if (type == Type.ENUM || type == Type.BOOLEAN || type == Type.ACTION) {
+            return v;
+        }
+        if (stepRaw > 1 && v < maxRaw) {
+            int steps = Math.round((v - minRaw) / (float) stepRaw);
+            v = minRaw + steps * stepRaw;
+            v = Math.max(minRaw, Math.min(maxRaw, v));
         }
         return v;
     }

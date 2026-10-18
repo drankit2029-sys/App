@@ -64,9 +64,10 @@ final class LegacyCompressorProcessor extends AudioProcessor {
 
     @Override
     public void processInPlace(float[] buf, int frames, int channels) {
-        final int ch = channels;
+        if (buf == null || frames <= 0) return;
+        final int ch = Math.max(1, Math.min(2, channels));
         final float cAmt = amt01();
-        if (cAmt <= 0.001f || frames <= 0) return;
+        if (cAmt <= 0.001f) return;
 
         int offset = 0;
         while (offset < frames) {

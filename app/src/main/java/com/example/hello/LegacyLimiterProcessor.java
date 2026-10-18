@@ -55,16 +55,41 @@ final class LegacyLimiterProcessor extends AudioProcessor {
         this.safetyOn = safety;
     }
 
+    boolean isSafetyOn() {
+        return safetyOn;
+    }
+
     /** Raw drive is a percent; gain math needs a 0..1 fraction. */
     private float drive01() {
         return drive.getCurrentRaw() / 100f;
     }
 
+    /**
+     * Applies only the unity-gain -0.2 dBFS brickwall safety ceiling without
+     * additional drive, used when the limiter's wet/dry mix is below 1.0 while
+     * upstream gain stages require peak protection.
+     */
+    void enforceSafetyCeiling(float[] buf, int frames, int channels) {
+        if (buf == null || frames <= 0) return;
+        final int ch = Math.max(1, Math.min(2, channels));
+        int n = Math.min(buf.length, frames * ch);
+        for (int i = 0; i < n; i++) {
+            float y = buf[i];
+            float ay = Math.abs(y);
+            if (ay > 0.82f) {
+                float d = ay - 0.82f;
+                float lim = 0.82f + 0.165f * (d / (0.165f + d));
+                buf[i] = y >= 0f ? lim : -lim;
+            }
+        }
+    }
+
     @Override
     public void processInPlace(float[] buf, int frames, int channels) {
-        final int ch = channels;
+        if (buf == null || frames <= 0) return;
+        final int ch = Math.max(1, Math.min(2, channels));
         final float lAmt = drive01();
-        if ((lAmt <= 0.001f && !safetyOn) || frames <= 0) return;
+        if (lAmt <= 0.001f && !safetyOn) return;
 
         int offset = 0;
         while (offset < frames) {
