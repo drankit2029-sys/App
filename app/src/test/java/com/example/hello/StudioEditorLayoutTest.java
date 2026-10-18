@@ -144,7 +144,9 @@ public class StudioEditorLayoutTest {
     }
 
     @Test
-    @Config(qualifiers = "land-w800dp-h360dp-xhdpi")
+    // Resource qualifier order is fixed: available width, available height,
+    // orientation, then density — "land-w800dp-..." is rejected by Robolectric.
+    @Config(qualifiers = "w800dp-h360dp-land-xhdpi")
     public void landscapeDialogsAreBoundedAndEditorKeepSaveImportVisible() {
         Activity a = activity();
         float density = a.getResources().getDisplayMetrics().density;
