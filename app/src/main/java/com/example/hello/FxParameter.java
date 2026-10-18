@@ -56,6 +56,7 @@ public final class FxParameter {
         this.stepRaw = Math.max(1, stepRaw);
         this.scaleDivisor = Math.max(1, scaleDivisor);
         this.enumLabels = enumLabels;
+        this.defaultRaw = Math.max(minRaw, Math.min(maxRaw, defaultRaw));
         this.currentRaw = clampRaw(defaultRaw);
     }
 
