@@ -50,7 +50,7 @@ final class LegacyCompressorProcessor extends AudioProcessor {
 
     @Override
     public boolean isAudible() {
-        return amt.getFloat() > 0.001f;
+        return isEnabled() && amt.getFloat() > 0.001f;
     }
 
     void setLegacyAmount(int pct) {

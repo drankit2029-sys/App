@@ -55,7 +55,8 @@ final class LegacyToneProcessor extends AudioProcessor {
 
     @Override
     public boolean isAudible() {
-        return warmth.getFloat() > 0.001f || presence.getFloat() > 0.001f;
+        return isEnabled() && (warmth.getFloat() > 0.001f
+                || presence.getFloat() > 0.001f);
     }
 
     void setLegacyAmounts(int warmthPct, int presencePct) {

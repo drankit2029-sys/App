@@ -47,7 +47,7 @@ final class LegacyLimiterProcessor extends AudioProcessor {
 
     @Override
     public boolean isAudible() {
-        return drive.getFloat() > 0.001f || safetyOn;
+        return isEnabled() && (drive.getFloat() > 0.001f || safetyOn);
     }
 
     void setLegacyState(int drivePct, boolean safety) {

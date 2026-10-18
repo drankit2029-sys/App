@@ -552,6 +552,7 @@ public final class DspChain {
     public DspChain(int channels, Config cfg) {
         this.channels = Math.max(1, Math.min(2, channels));
         this.rack = FxRackChain.fromLegacyConfig(this.channels, cfg);
+        applySlotExtras(cfg);
     }
 
     /**
