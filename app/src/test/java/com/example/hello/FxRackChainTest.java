@@ -450,6 +450,9 @@ public class FxRackChainTest {
 
     // ----------------------------------------------------- legacy reference
 
+    /** Standalone copy of the pre-Stage-2 engine, for bit-parity checks. */
+    private static final class LegacyRef {
+
 // ==== VERBATIM COPY of the pre-Stage-2 DspChain engine (commit 2c98087) ==== // ==== kept in the test only so rack output is proven bit-identical. ====
 
     private static final int DECIM = 16;
@@ -841,5 +844,6 @@ public class FxRackChainTest {
 
             offset += blk;
         }
+    }
     }
 }
