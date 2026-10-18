@@ -421,9 +421,16 @@ public class StudioFragment extends Fragment {
                 // enabled Replace at the end of the take and starts dragging
                 // back, the initial move events are near 1.0f and must keep
                 // Replace armed.
+                //
+                // The playhead is NEVER snapped forward here: the timer must
+                // show the real scrubbed position. At low zoom a short drag
+                // covers many buckets, so forcing targetFrame = totalFrames as
+                // soon as the drag came within 480 frames of the end made the
+                // timer jump to the whole take duration mid-scroll. Parking at
+                // the end is still recognised by the 480-frame tolerance in
+                // resumeTake()/syncStudioFabIcon(), which is all this flag is for.
                 if (!replaceModeArmed
                         && (fraction >= 0.995f || targetFrame >= totalFrames - 480)) {
-                    targetFrame = totalFrames;
                     userScrolledWhilePaused = false;
                 } else {
                     userScrolledWhilePaused = true;

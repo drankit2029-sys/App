@@ -214,31 +214,46 @@ public class WaveformTimelineTest {
     }
 
     @Test
-    public void horizontalDragIsInertWhenTheWholeTakeFitsOnScreen() {
-        // Long take: at its fit zoom the entire recording is visible at every
-        // playhead position, so there is nothing to scroll. Dragging must not
-        // sweep the playhead across the take (dragging toward the left edge
-        // used to slam it onto the last frames, which made the studio timer
-        // jump to the full take duration).
+    public void scrollingStillWorksAtFitZoomAndReportsTheRealPlayhead() {
+        // At the fit zoom of a long take the whole recording is visible at every
+        // playhead position, but scrolling MUST keep working: it is how the user
+        // moves the playhead for editing.
         WaveformView wv = loaded(activity(), 1200);
         wv.setLive(false);
         wv.setZoom(wv.minimumZoom());
         assertTrue("test must run at the fit zoom", wv.getZoom() <= 0.07f);
         wv.setPlayheadFraction(0.5f);
 
+        final float[] reported = {-1f};
+        wv.setTimelineListener(new WaveformView.TimelineListener() {
+            @Override
+            public void onScrollStarted() {}
+
+            @Override
+            public void onPlayheadScrubbed(int bucketIndex, float fraction) {
+                reported[0] = fraction;
+            }
+
+            @Override
+            public void onSelectionChanged(boolean active, float startFrac, float endFrac) {}
+        });
+
         wv.onTouchEvent(ev(MotionEvent.ACTION_DOWN, 200f, 50f));
-        for (float x = 180f; x >= 20f; x -= 20f) {
+        for (float x = 180f; x >= 140f; x -= 20f) {
             wv.onTouchEvent(ev(MotionEvent.ACTION_MOVE, x, 50f));
         }
-        wv.onTouchEvent(ev(MotionEvent.ACTION_UP, 20f, 50f));
+        wv.onTouchEvent(ev(MotionEvent.ACTION_UP, 140f, 50f));
 
-        assertEquals("a fit-to-screen drag must not move the playhead",
-                0.5f, wv.playheadFraction(), 0.0001f);
-        assertTrue("a fit-to-screen drag must not reach the end of the take",
-                wv.playheadFraction() < 0.6f);
+        assertTrue("scrolling must still move the playhead at fit zoom",
+                wv.playheadFraction() > 0.55f);
+        assertTrue("the playhead must stay strictly inside the take",
+                wv.playheadFraction() < 1.0f);
+        // The scrub callback must report the real playhead so the studio timer
+        // never has to snap forward to the take duration.
+        assertEquals("scrub callback must report the real playhead",
+                wv.playheadFraction(), reported[0], 0.0001f);
 
-        // Control: zoomed in there IS content off screen, so the same drag
-        // still scrolls the waveform.
+        // Zoomed in, the same drag behaves the same way (scroll still works).
         WaveformView wvIn = loaded(activity(), 1200);
         wvIn.setLive(false);
         wvIn.setZoom(1f);
