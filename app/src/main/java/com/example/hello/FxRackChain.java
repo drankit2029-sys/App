@@ -46,7 +46,7 @@ public final class FxRackChain {
     /** Instantiates a registered processor, or null when unknown. */
     public static AudioProcessor createProcessor(String id) {
         ProcessorFactory f = REGISTRY.get(id);
-        return f == null ? null : f.get();
+        return f == null ? null : f.create();
     }
 
     private final CopyOnWriteArrayList<AudioProcessor> processors =
