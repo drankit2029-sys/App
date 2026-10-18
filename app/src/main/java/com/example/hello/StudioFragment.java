@@ -1928,6 +1928,7 @@ public class StudioFragment extends Fragment {
                         DspChain chain = new DspChain(info.channels, dspConfig);
                         EditEngine.applyDspToRange(raw, 0, totalFrames, chain, null);
                         engine.abortStreaming();
+                        engine.setFxBakeRequired(false);
                         engine.dataBytes = RecordingEngine.payloadBytesOf(raw);
                         dspBakedToRaw = true;
                     }
@@ -2743,11 +2744,20 @@ public class StudioFragment extends Fragment {
         }
         if (fxApplyBtn != null) {
             boolean anyEnabled = dspConfig != null && dspConfig.isActive();
-            fxApplyBtn.setText("Apply");
+            // The Apply button always says what it will do: the selection when
+            // there is one, the entire take otherwise.
+            fxApplyBtn.setText(waveform != null && waveform.hasSelection()
+                    ? "Apply to Selection" : "Apply to Entire Take");
             fxApplyBtn.setEnabled(canUsePreviewAndApply);
             fxApplyBtn.setAlpha((canUsePreviewAndApply && anyEnabled) ? 1f : 0.38f);
             fxApplyBtn.setBackgroundResource((canUsePreviewAndApply && anyEnabled)
                     ? R.drawable.bg_btn_primary : R.drawable.bg_btn_ghost);
+        }
+        // Keep the save path honest: while a chain is enabled but not baked,
+        // the incremental part must never be adopted.
+        if (engine != null) {
+            engine.setFxBakeRequired(!dspBakedToRaw
+                    && dspConfig != null && dspConfig.isActive());
         }
     }
 
@@ -3134,43 +3144,49 @@ public class StudioFragment extends Fragment {
                     Toast.LENGTH_SHORT).show();
             return false;
         }
-        // Require the user to select the audio region before applying FX!
+        // Apply works on the selection when there is one and on the WHOLE TAKE
+        // otherwise — the old forced "enable selection first" return aborted
+        // silently and made the full-take branch below unreachable.
         boolean hadSel = waveform.hasSelection();
-        if (!hadSel && !ensureSelectionOrAutoEnable("Apply")) {
-            return false;
-        }
         File raw = engine.rawFile;
         if (raw == null || !raw.exists() || waveform == null) return false;
         try {
             FormatConverter.WavInfo info = FormatConverter.readFloatWav(raw);
             long totalFrames = info.dataBytes / 4 / Math.max(1, info.channels);
             if (totalFrames <= 0) return false;
-            long start = Math.round(waveform.selectionStartFraction() * totalFrames);
-            long end = Math.round(waveform.selectionEndFraction() * totalFrames);
-            if (end <= start) {
-                Toast.makeText(requireContext(), "Select a valid audio region first",
-                        Toast.LENGTH_SHORT).show();
-                return false;
+            long start = 0L;
+            long end = totalFrames;
+            if (hadSel) {
+                start = Math.round(waveform.selectionStartFraction() * totalFrames);
+                end = Math.round(waveform.selectionEndFraction() * totalFrames);
+                if (end <= start) {
+                    Toast.makeText(requireContext(),
+                            "Select a valid audio region first",
+                            Toast.LENGTH_SHORT).show();
+                    return false;
+                }
             }
             waveform.recordUndoPeaks();
             DspChain chain = new DspChain(info.channels, dspConfig);
             EditEngine.applyDspToRange(raw, start, end, chain, activeUndoJournal());
+            // The raw now carries the chain for the applied range: the
+            // incremental pump must not keep encoding unprocessed audio, and
+            // neither preview nor save may process these samples a second time.
             engine.abortStreaming();
+            engine.setFxBakeRequired(false);
+            dspBakedToRaw = true;
             engine.dataBytes = RecordingEngine.payloadBytesOf(raw);
-            if (!hadSel) {
-                // Full-range bake: keep the future baked flag set so the next
-                // save() won't re-apply the DSP chain on top of these samples!
-                dspBakedToRaw = true;
-                // Redraw the whole waveform from the freshly baked WAV!
-                waveform.reloadSelectionPeaksFromWav(raw, 0f, 1f);
-            } else {
+            if (hadSel) {
                 waveform.reloadSelectionPeaksFromWav(raw,
                         waveform.selectionStartFraction(),
                         waveform.selectionEndFraction());
+            } else {
+                waveform.reloadSelectionPeaksFromWav(raw, 0f, 1f);
             }
             waveform.clearSelection();
             Toast.makeText(requireContext(),
-                    "Effects applied to selected region (Undo available)",
+                    hadSel ? "Effects applied to selection (Undo available)"
+                            : "Effects applied to entire take (Undo available)",
                     Toast.LENGTH_SHORT).show();
         } catch (Exception e) {
             if (waveform != null) waveform.popUndoPeaks();

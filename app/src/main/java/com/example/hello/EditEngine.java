@@ -406,8 +406,20 @@ public final class EditEngine {
     }
 
     /**
-     * Applies `DspChain` in-place to `[startFrame, endFrame)` of `raw` with
-     * 240-frame crossfades at both boundaries.
+     * Applies `chain` in-place to `[startFrame, endFrame)` of `raw`.
+     *
+     * <p>Two details make an offline bake inaudible at the seams:
+     * <ul>
+     *   <li>240 frames (5 ms) of raised-cosine crossfades blend the processed
+     *       audio back into the untouched samples at both boundaries, so gain,
+     *       EQ, phase or dynamics changes cannot click.</li>
+     *   <li>240 frames of pre-roll are pushed through the chain BEFORE
+     *       {@code startFrame} and discarded, so biquad and envelope state is
+     *       already settled when the first processed sample is written (no
+     *       filter start-up transient at the seam, and time-based effects such
+     *       as delay/reverb have their tail already running).</li>
+     * </ul>
+     * Samples outside the range (including the pre-roll) are never modified.
      */
     public static void applyDspToRange(File raw, long startFrame, long endFrame,
                                        DspChain chain, UndoJournal undo)
@@ -424,12 +436,34 @@ public final class EditEngine {
         chain.reset();
         long frameBytes = ch * 4L;
         int chunkFrames = 4096;
+        // Never let the fades eat more than half of a very short range.
+        int fade = (int) Math.max(0,
+                Math.min(Dsp.CROSSFADE_FRAMES, (endFrame - startFrame) / 2));
         byte[] rawBuf = new byte[chunkFrames * ch * 4];
         float[] fBuf = new float[chunkFrames * ch];
         ByteBuffer bb = ByteBuffer.wrap(rawBuf).order(ByteOrder.LITTLE_ENDIAN);
 
         try (RandomAccessFile raf = new RandomAccessFile(raw, "rw")) {
+            // Original (unprocessed) head and tail kept for the seam crossfades.
+            float[] origHead = null;
+            float[] origTail = null;
+            if (fade > 0) {
+                origHead = readFloatFrames(raf,
+                        info.dataStart + startFrame * frameBytes, fade, ch);
+                origTail = readFloatFrames(raf,
+                        info.dataStart + (endFrame - fade) * frameBytes, fade, ch);
+            }
+
+            // Pre-roll: settle filter/envelope state before the range, discarded.
+            if (fade > 0 && startFrame > 0) {
+                int pre = (int) Math.min(fade, startFrame);
+                float[] preRoll = readFloatFrames(raf,
+                        info.dataStart + (startFrame - pre) * frameBytes, pre, ch);
+                chain.processInPlace(preRoll, pre);
+            }
+
             long cur = startFrame;
+            int processedHead = 0;   // processed frames already head-blended
             while (cur < endFrame) {
                 int want = (int) Math.min(chunkFrames, endFrame - cur);
                 long pos = info.dataStart + cur * frameBytes;
@@ -441,6 +475,35 @@ public final class EditEngine {
 
                 chain.processInPlace(fBuf, want);
 
+                if (fade > 0) {
+                    // Head seam: crossfade the first `fade` processed frames
+                    // against the untouched original head.
+                    for (int f = 0; f < fade && processedHead < want; f++) {
+                        float wIn = raisedCosineIn(fade, f);
+                        float wOut = 1f - wIn;
+                        for (int c = 0; c < ch; c++) {
+                            int idx = f * ch + c;
+                            fBuf[idx] = fBuf[idx] * wIn + origHead[idx] * wOut;
+                        }
+                        processedHead++;
+                    }
+                    // Tail seam: crossfade the last `fade` processed frames of
+                    // the range against the untouched original tail.
+                    long tailStart = endFrame - cur - fade;
+                    if (tailStart >= 0 && tailStart < want) {
+                        int from = (int) tailStart;
+                        for (int f = from; f < want; f++) {
+                            float wOut = raisedCosineIn(fade, f - from);
+                            float wIn = 1f - wOut;
+                            for (int c = 0; c < ch; c++) {
+                                int idx = f * ch + c;
+                                int o = (f - from) * ch + c;
+                                fBuf[idx] = fBuf[idx] * wIn + origTail[o] * wOut;
+                            }
+                        }
+                    }
+                }
+
                 bb.clear();
                 bb.asFloatBuffer().put(fBuf, 0, want * ch);
                 raf.seek(pos);
@@ -448,6 +511,16 @@ public final class EditEngine {
                 cur += want;
             }
         }
+    }
+
+    /**
+     * Raised-cosine fade-in weight for frame `i` of a `frames`-long window,
+     * matching the crossfade curve used elsewhere in the engine.
+     */
+    private static float raisedCosineIn(int frames, int i) {
+        if (frames <= 1) return 1f;
+        double x = (i + 0.5) / frames;
+        return (float) (0.5 - 0.5 * Math.cos(Math.PI * x));
     }
 
     private static float[] readFloatFrames(RandomAccessFile raf, long bytePos,

@@ -84,6 +84,12 @@ public final class RecordingEngine {
     private boolean cursorExplicit = false;
     private boolean truncateTailOnWrite = false;
     private boolean inPlaceEdited = false;
+    /**
+     * True while a real-time FX chain is enabled but not yet baked into the
+     * raw. The save path must never adopt the incremental .part in that state:
+     * it was encoded from unprocessed microphone frames.
+     */
+    private volatile boolean fxBakeRequired = false;
     private float[] punchInFadeBuf;
     private float[] punchOutFadeBuf;
 
@@ -241,6 +247,7 @@ public final class RecordingEngine {
             cursorExplicit = false;
             truncateTailOnWrite = false;
             inPlaceEdited = false;
+            fxBakeRequired = false;
             state = State.IDLE;
             level = 0f;
         }
@@ -343,6 +350,20 @@ public final class RecordingEngine {
         }
     }
 
+    /**
+     * Marks that a real-time FX chain is enabled but not yet baked into the raw.
+     * Set by the studio whenever the user turns an effect on and cleared again
+     * after {@link EditEngine#applyDspToRange} has committed it, so the save
+     * path can refuse to adopt an incremental part encoded without the FX.
+     */
+    public void setFxBakeRequired(boolean required) {
+        fxBakeRequired = required;
+    }
+
+    public boolean isFxBakeRequired() {
+        return fxBakeRequired;
+    }
+
     // ---- session lifecycle ----
 
     /** Begin a new named session (creates the raw file + pending marker). */
@@ -371,6 +392,7 @@ public final class RecordingEngine {
             cursorExplicit = false;
             truncateTailOnWrite = false;
             inPlaceEdited = false;
+            fxBakeRequired = false;
             punchInFadeBuf = null;
             punchOutFadeBuf = null;
             fellBackToMono = false;
@@ -403,6 +425,7 @@ public final class RecordingEngine {
             cursorExplicit = false;
             truncateTailOnWrite = false;
             inPlaceEdited = false;
+            fxBakeRequired = false;
             punchInFadeBuf = null;
             punchOutFadeBuf = null;
             if (!pendingFor(raw).exists()) writePending(raw, takeName, channels);
@@ -448,6 +471,7 @@ public final class RecordingEngine {
             cursorExplicit = false;
             truncateTailOnWrite = false;
             inPlaceEdited = false;
+            fxBakeRequired = false;
             punchInFadeBuf = null;
             punchOutFadeBuf = null;
             level = 0f;
@@ -813,6 +837,7 @@ public final class RecordingEngine {
             cursorExplicit = false;
             truncateTailOnWrite = false;
             inPlaceEdited = false;
+            fxBakeRequired = false;
             punchInFadeBuf = null;
             punchOutFadeBuf = null;
             level = 0f;

@@ -643,6 +643,16 @@ public final class ConversionJobs {
         StreamingEncoder sess = e.endStreamingDetach();
         SaveFormat eff = format.effective(preset);
         if (eff == SaveFormat.AUTO) eff = SaveFormat.M4A;
+        // An enabled-but-unbaked FX chain invalidates the incremental output:
+        // the pump encoded raw microphone frames, so its .part would ship
+        // without a single effect. Drop it and let the worker convert the
+        // FX-baked raw instead of silently losing the whole chain.
+        if (sess != null && e.isFxBakeRequired()) {
+            try {
+                sess.abort();
+            } catch (Exception ignored) {}
+            sess = null;
+        }
         // framesEncoded() > 0 is NOT evidence that the pump kept up: a
         // format switch restarts the encoder from the top of the raw file, so
         // it reports progress after its first chunk while nearly the whole
