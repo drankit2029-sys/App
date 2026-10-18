@@ -647,11 +647,38 @@ public final class ConversionJobs {
         // the pump encoded raw microphone frames, so its .part would ship
         // without a single effect. Drop it and let the worker convert the
         // FX-baked raw instead of silently losing the whole chain.
-        if (sess != null && e.isFxBakeRequired()) {
+        if (e.isFxBakeRequired()) {
+            if (sess != null) {
+                try {
+                    sess.abort();
+                } catch (Exception ignored) {}
+                sess = null;
+            }
+            // Bake the active FX chain into `raw` here so saves triggered from
+            // the notification shade (RecordingService calls dispatchSave
+            // directly) or any other path that skipped StudioFragment's
+            // doSaveSequence() bake still include the user's unbaked chain
+            // instead of converting dry audio.
             try {
-                sess.abort();
-            } catch (Exception ignored) {}
-            sess = null;
+                if (ctx != null) {
+                    DspChain.Config cfg = DspChain.Config.load(ctx);
+                    if (cfg != null && cfg.isActive()) {
+                        FormatConverter.WavInfo info =
+                                FormatConverter.readFloatWav(raw);
+                        long totalFrames = info.dataBytes / 4
+                                / Math.max(1, info.channels);
+                        if (totalFrames > 0) {
+                            DspChain chain = new DspChain(info.channels, cfg);
+                            EditEngine.applyDspToRange(raw, 0, totalFrames,
+                                    chain, null);
+                            e.dataBytes = RecordingEngine.payloadBytesOf(raw);
+                        }
+                    }
+                }
+            } catch (Exception ex) {
+                CrashLog.breadcrumb(ctx, "dispatchSave fx bake failed: " + ex);
+            }
+            e.setFxBakeRequired(false);
         }
         // framesEncoded() > 0 is NOT evidence that the pump kept up: a
         // format switch restarts the encoder from the top of the raw file, so

@@ -2755,10 +2755,20 @@ public class StudioFragment extends Fragment {
         }
         // Keep the save path honest: while a chain is enabled but not baked,
         // the incremental part must never be adopted.
-        if (engine != null) {
-            engine.setFxBakeRequired(!dspBakedToRaw
-                    && dspConfig != null && dspConfig.isActive());
-        }
+        syncFxBakeRequired();
+    }
+
+    /**
+     * Mirrors the "enabled-but-unbaked FX chain" state into the engine so the
+     * save path can never adopt an incremental part that skipped the chain.
+     * Called from both {@link #paint()} (which runs after Undo/Trim/Replace
+     * reset {@link #dspBakedToRaw}) and {@link #paintFxPanelControls()} so the
+     * flag is never stale when the FX panel happens to be closed.
+     */
+    private void syncFxBakeRequired() {
+        if (engine == null) return;
+        engine.setFxBakeRequired(!dspBakedToRaw
+                && dspConfig != null && dspConfig.isActive());
     }
 
     /**
@@ -3173,16 +3183,33 @@ public class StudioFragment extends Fragment {
             // incremental pump must not keep encoding unprocessed audio, and
             // neither preview nor save may process these samples a second time.
             engine.abortStreaming();
-            engine.setFxBakeRequired(false);
-            dspBakedToRaw = true;
             engine.dataBytes = RecordingEngine.payloadBytesOf(raw);
-            if (hadSel) {
+            if (!hadSel) {
+                // Whole take baked: mark it so preview (livePreviewDsp) and
+                // save never process these samples a second time.
+                dspBakedToRaw = true;
+                waveform.reloadSelectionPeaksFromWav(raw, 0f, 1f);
+            } else {
                 waveform.reloadSelectionPeaksFromWav(raw,
                         waveform.selectionStartFraction(),
                         waveform.selectionEndFraction());
-            } else {
-                waveform.reloadSelectionPeaksFromWav(raw, 0f, 1f);
+                // Only the selected region was baked. Disarm the one-shot
+                // slots so preview and save do not process the selection a
+                // second time while the rest of the take stays untouched;
+                // dspBakedToRaw stays false so a later whole-take or
+                // second-region Apply still works. Re-check any slot to
+                // process another region.
+                for (DspChain.EffectSlot slot : dspConfig.slots) {
+                    slot.enabled = false;
+                }
+                dspConfig.syncLegacyFieldsFromSlots();
+                dspConfig.save(requireContext());
+                dspBakedToRaw = false;
+                if (fxPanelOpen) {
+                    rebuildFxRackList();
+                }
             }
+            syncFxBakeRequired();
             waveform.clearSelection();
             Toast.makeText(requireContext(),
                     hadSel ? "Effects applied to selection (Undo available)"
@@ -3201,6 +3228,7 @@ public class StudioFragment extends Fragment {
 
     private void paint() {
         if (getView() == null || !isAdded()) return;
+        syncFxBakeRequired();
         // A capture paused outside the studio (call, notification, mic
         // disconnect) must park the prompter too — and a resume must
         // release it — even though no studio button was involved.
