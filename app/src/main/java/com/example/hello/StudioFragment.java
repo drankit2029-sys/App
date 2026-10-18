@@ -13,7 +13,10 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.content.res.ColorStateList;
+import android.view.Choreographer;
 import android.view.GestureDetector;
+import androidx.core.widget.TextViewCompat;
 import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
@@ -140,6 +143,42 @@ public class StudioFragment extends Fragment {
     /** True while the "Name this take" modal is up on initial Studio entry. */
     private boolean namingModalOpen;
     private long lastTeleAdvanceMs;
+    private long lastTeleFrameNanos;
+    private boolean teleChoreographerActive;
+
+    private final Choreographer.FrameCallback teleFrameCallback = new Choreographer.FrameCallback() {
+        @Override
+        public void doFrame(long frameTimeNanos) {
+            teleChoreographerActive = false;
+            if (!isAdded() || getView() == null || telePaused || namingModalOpen || fxPanelOpen) {
+                lastTeleFrameNanos = 0L;
+                return;
+            }
+            advanceTeleprompterFrame(frameTimeNanos);
+            if (!telePaused && tele != null && tele.autoScroll
+                    && telePanel != null && telePanel.getVisibility() == View.VISIBLE) {
+                scheduleTeleFrame();
+            }
+        }
+    };
+
+    private void scheduleTeleFrame() {
+        if (teleChoreographerActive || telePaused || namingModalOpen || fxPanelOpen) return;
+        try {
+            Choreographer.getInstance().postFrameCallback(teleFrameCallback);
+            teleChoreographerActive = true;
+        } catch (Throwable ignored) {
+            teleChoreographerActive = false;
+        }
+    }
+
+    private void cancelTeleFrame() {
+        teleChoreographerActive = false;
+        lastTeleFrameNanos = 0L;
+        try {
+            Choreographer.getInstance().removeFrameCallback(teleFrameCallback);
+        } catch (Throwable ignored) {}
+    }
     private ActivityResultLauncher<String[]> scriptPicker;
 
     private String pendingName;
@@ -562,6 +601,7 @@ public class StudioFragment extends Fragment {
         super.onResume();
         handler.removeCallbacks(tick);
         handler.post(tick);
+        if (!telePaused) scheduleTeleFrame();
         paint();
         activity().syncFabWithEngine();
     }
@@ -570,12 +610,14 @@ public class StudioFragment extends Fragment {
     public void onPause() {
         super.onPause();
         handler.removeCallbacks(tick);
+        cancelTeleFrame();
         persistTeleScript();
     }
 
     @Override
     public void onDestroyView() {
         handler.removeCallbacksAndMessages(null);
+        cancelTeleFrame();
         stopDotPulse();
         stopStudioPreview();
         persistTeleScript();
@@ -943,6 +985,50 @@ public class StudioFragment extends Fragment {
      * while the user's finger is actively dragging the script, and resumes
      * immediately on finger lift.
      */
+    /**
+     * Native display refresh-rate (60Hz/90Hz/120Hz) VSYNC callback so the
+     * teleprompter scrolls smoothly every single display frame.
+     */
+    private void advanceTeleprompterFrame(long frameTimeNanos) {
+        if (teleView == null || tele == null) return;
+        long nowMs = SystemClock.elapsedRealtime();
+        if (!tele.autoScroll || telePaused || namingModalOpen) {
+            lastTeleAdvanceMs = 0L;
+            lastTeleFrameNanos = 0L;
+            return;
+        }
+        if (telePanel == null || telePanel.getVisibility() != View.VISIBLE) {
+            lastTeleAdvanceMs = 0L;
+            lastTeleFrameNanos = 0L;
+            return;
+        }
+        if (teleView.isDragging()) {
+            lastTeleAdvanceMs = nowMs;
+            lastTeleFrameNanos = frameTimeNanos;
+            return;
+        }
+        if (teleView.maxScroll() > 0f
+                && teleView.scrollOffset() >= teleView.maxScroll() - 0.5f) {
+            setTelePaused(true);
+            return;
+        }
+        float dt = lastTeleFrameNanos > 0L
+                ? Math.max(0f, (frameTimeNanos - lastTeleFrameNanos) / 1_000_000_000f)
+                : (1f / 60f);
+        dt = Math.min(dt, 0.08f);
+        lastTeleFrameNanos = frameTimeNanos;
+        lastTeleAdvanceMs = nowMs;
+        float px = TeleMath.scrollPxPerSecond(tele.wordsPerMinute,
+                teleView.effectiveWordsPerLine(),
+                teleView.renderedTextSizePx());
+        if (px <= 0f) return;
+        teleView.scrollBy(px * dt);
+    }
+
+    /**
+     * Fallback called from the 50ms tick only when Choreographer has not
+     * already advanced the current frame (e.g. in headless Robolectric tests).
+     */
     private void advanceTeleprompter() {
         if (teleView == null || tele == null) return;
         long now = SystemClock.elapsedRealtime();
@@ -954,9 +1040,16 @@ public class StudioFragment extends Fragment {
             lastTeleAdvanceMs = 0L;
             return;
         }
+        // If Choreographer is actively driving VSYNC frames, let it own the
+        // scroll update so we never step at 20Hz on top of 60/120Hz.
+        if (teleChoreographerActive && lastTeleFrameNanos > 0L
+                && (now - lastTeleAdvanceMs) < 40L) {
+            return;
+        }
+        if (!teleChoreographerActive) {
+            scheduleTeleFrame();
+        }
         if (teleView.isDragging()) {
-            // Yield only while the finger is actively dragging; resume
-            // immediately on lift with zero delay.
             lastTeleAdvanceMs = now;
             return;
         }
@@ -967,7 +1060,7 @@ public class StudioFragment extends Fragment {
         }
         float dt = lastTeleAdvanceMs > 0
                 ? Math.max(0f, (now - lastTeleAdvanceMs) / 1000f)
-                : 0.05f;
+                : (1f / 60f);
         dt = Math.min(dt, 0.25f);
         lastTeleAdvanceMs = now;
         float px = TeleMath.scrollPxPerSecond(tele.wordsPerMinute,
@@ -980,10 +1073,19 @@ public class StudioFragment extends Fragment {
     private void setTelePaused(boolean paused) {
         telePaused = paused;
         lastTeleAdvanceMs = 0L;
-        if (!telePaused) teleManualUntil = 0L;
+        lastTeleFrameNanos = 0L;
+        if (!telePaused) {
+            teleManualUntil = 0L;
+            scheduleTeleFrame();
+        } else {
+            cancelTeleFrame();
+        }
         if (telePauseBtn != null) {
             telePauseBtn.setText(telePaused
                     ? R.string.tele_resume_short : R.string.tele_pause_short);
+            telePauseBtn.setCompoundDrawablesRelativeWithIntrinsicBounds(
+                    telePaused ? R.drawable.ic_tele_play : R.drawable.ic_tele_pause,
+                    0, 0, 0);
             telePauseBtn.setSelected(telePaused);
         }
     }
@@ -1005,6 +1107,8 @@ public class StudioFragment extends Fragment {
         boolean on = tele != null && tele.mirror;
         teleMirrorBtn.setSelected(on);
         teleMirrorBtn.setAlpha(on ? 1f : 0.55f);
+        TextViewCompat.setCompoundDrawableTintList(teleMirrorBtn,
+                ColorStateList.valueOf(on ? 0xFFFF3B30 : 0xFFF2F4F7));
     }
 
     /** Inline size / speed / words-per-line controls, plus zoom. */
@@ -2301,7 +2405,9 @@ public class StudioFragment extends Fragment {
             btnPreviewPlay.setText("Replace");
             btnPreviewPlay.setBackgroundResource(replaceModeArmed
                     ? R.drawable.bg_chip_selected : R.drawable.bg_chip);
-            btnPreviewPlay.setTextColor(replaceModeArmed ? 0xFFFFFFFF : 0xFF9AA3AF);
+            int col = replaceModeArmed ? 0xFFFFFFFF : 0xFF9AA3AF;
+            btnPreviewPlay.setTextColor(col);
+            setChipIconAndTint(btnPreviewPlay, R.drawable.ic_edit_replace, col);
         }
     }
 
@@ -2339,8 +2445,10 @@ public class StudioFragment extends Fragment {
             btnPreviewPlay.setAlpha(canEdit ? 1f : (showReplaceActive ? 0.75f : 0.35f));
             btnPreviewPlay.setBackgroundResource(showReplaceActive
                     ? R.drawable.bg_chip_selected : R.drawable.bg_chip);
-            btnPreviewPlay.setTextColor(showReplaceActive ? 0xFFFFFFFF
-                    : (canEdit ? 0xFF9AA3AF : 0xFF5D6672));
+            int col = showReplaceActive ? 0xFFFFFFFF
+                    : (canEdit ? 0xFF9AA3AF : 0xFF5D6672);
+            btnPreviewPlay.setTextColor(col);
+            setChipIconAndTint(btnPreviewPlay, R.drawable.ic_edit_replace, col);
         }
 
         // 2) Select Button: stays "Select" and turns red ONLY when Select is active;
@@ -2352,8 +2460,10 @@ public class StudioFragment extends Fragment {
             btnSelectRange.setAlpha(othersEnabled ? 1f : 0.35f);
             btnSelectRange.setBackgroundResource(hasSel
                     ? R.drawable.bg_chip_selected : R.drawable.bg_chip);
-            btnSelectRange.setTextColor(!othersEnabled ? 0xFF5D6672
-                    : (hasSel ? 0xFFFFFFFF : 0xFF9AA3AF));
+            int col = !othersEnabled ? 0xFF5D6672
+                    : (hasSel ? 0xFFFFFFFF : 0xFF9AA3AF);
+            btnSelectRange.setTextColor(col);
+            setChipIconAndTint(btnSelectRange, R.drawable.ic_edit_select, col);
         }
 
         // 3) Select & Replace Button: never turns red just because Select is pressed;
@@ -2365,8 +2475,10 @@ public class StudioFragment extends Fragment {
             btnReplaceSeg.setClickable(othersEnabled);
             btnReplaceSeg.setAlpha(othersEnabled ? 1f : 0.35f);
             btnReplaceSeg.setBackgroundResource(R.drawable.bg_chip);
-            btnReplaceSeg.setTextColor(!othersEnabled ? 0xFF5D6672
-                    : (hasSel ? 0xFFF2F4F7 : 0xFF9AA3AF));
+            int col = !othersEnabled ? 0xFF5D6672
+                    : (hasSel ? 0xFFF2F4F7 : 0xFF9AA3AF);
+            btnReplaceSeg.setTextColor(col);
+            setChipIconAndTint(btnReplaceSeg, R.drawable.ic_edit_select_replace, col);
         }
 
         // 4) Trim Button: disabled while Replace mode is on.
@@ -2376,8 +2488,10 @@ public class StudioFragment extends Fragment {
             btnTrimCrop.setClickable(othersEnabled);
             btnTrimCrop.setAlpha(!othersEnabled ? 0.35f : (hasSel ? 1f : 0.75f));
             btnTrimCrop.setBackgroundResource(R.drawable.bg_chip);
-            btnTrimCrop.setTextColor(!othersEnabled ? 0xFF5D6672
-                    : (hasSel ? 0xFFF2F4F7 : 0xFF9AA3AF));
+            int col = !othersEnabled ? 0xFF5D6672
+                    : (hasSel ? 0xFFF2F4F7 : 0xFF9AA3AF);
+            btnTrimCrop.setTextColor(col);
+            setChipIconAndTint(btnTrimCrop, R.drawable.ic_edit_trim, col);
         }
 
         // 5) FX Button: disabled while Replace mode is on.
@@ -2391,8 +2505,10 @@ public class StudioFragment extends Fragment {
             btnDspFx.setAlpha(othersEnabled ? 1f : 0.35f);
             btnDspFx.setBackgroundResource(fxActive
                     ? R.drawable.bg_chip_selected : R.drawable.bg_chip);
-            btnDspFx.setTextColor(!othersEnabled ? 0xFF5D6672
-                    : (fxActive ? 0xFFFFFFFF : 0xFF9AA3AF));
+            int col = !othersEnabled ? 0xFF5D6672
+                    : (fxActive ? 0xFFFFFFFF : 0xFF9AA3AF);
+            btnDspFx.setTextColor(col);
+            setChipIconAndTint(btnDspFx, R.drawable.ic_edit_fx, col);
         }
 
         // 6) Undo Button: disabled while Replace mode is on.
@@ -2402,7 +2518,9 @@ public class StudioFragment extends Fragment {
             btnEditUndo.setEnabled(canUndo);
             btnEditUndo.setClickable(canUndo);
             btnEditUndo.setAlpha(canUndo ? 1f : 0.35f);
-            btnEditUndo.setTextColor(canUndo ? 0xFFF2F4F7 : 0xFF5D6672);
+            int col = canUndo ? 0xFFF2F4F7 : 0xFF5D6672;
+            btnEditUndo.setTextColor(col);
+            setChipIconAndTint(btnEditUndo, R.drawable.ic_edit_undo, col);
         }
 
         if (hintText != null && canEdit) {
@@ -2438,6 +2556,12 @@ public class StudioFragment extends Fragment {
      * - When scrolled back (or selection active) with Replace deselected:
      *   shows Play icon (pressing main button plays preview from playhead).
      */
+    private void setChipIconAndTint(TextView btn, int iconRes, int color) {
+        if (btn == null) return;
+        btn.setCompoundDrawablesRelativeWithIntrinsicBounds(iconRes, 0, 0, 0);
+        TextViewCompat.setCompoundDrawableTintList(btn, ColorStateList.valueOf(color));
+    }
+
     private void syncStudioFabIcon() {
         if (!isAdded()) return;
         try {
@@ -2976,13 +3100,7 @@ public class StudioFragment extends Fragment {
         root.addView(cancelBtn, sLp);
 
         d.setContentView(root);
-        android.view.Window w = d.getWindow();
-        if (w != null) {
-            w.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(
-                    android.graphics.Color.TRANSPARENT));
-            w.setLayout(ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT);
-        }
+        OptionsSheet.styleAsCentered(d);
         d.show();
     }
 

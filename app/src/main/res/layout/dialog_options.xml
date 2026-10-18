@@ -26,12 +26,19 @@
         android:textSize="13sp"
         android:visibility="gone" />
 
-    <LinearLayout
-        android:id="@+id/dialogOptions"
+    <ScrollView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="16dp"
-        android:orientation="vertical" />
+        android:layout_marginTop="14dp"
+        android:layout_weight="1"
+        android:fadeScrollbars="false">
+
+        <LinearLayout
+            android:id="@+id/dialogOptions"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical" />
+    </ScrollView>
 
     <TextView
         android:id="@+id/dialogCancel"

@@ -1476,11 +1476,7 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                 ConversionJobs.removeListener(progressPaint);
             } catch (Exception ignored) {}
         });
-        Window w = dialog.getWindow();
-        if (w != null) {
-            w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
-            w.setDimAmount(0.62f);
-        }
+        OptionsSheet.styleAsCentered(dialog);
         dialog.show();
     }
 
@@ -1685,11 +1681,7 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         ((TextView) root.findViewById(R.id.progressTitle)).setText(title);
         ((TextView) root.findViewById(R.id.progressMessage)).setText(message);
         dialog.setCancelable(false);
-        Window w = dialog.getWindow();
-        if (w != null) {
-            w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
-            w.setDimAmount(0.62f);
-        }
+        OptionsSheet.styleAsCentered(dialog);
         dialog.show();
         return dialog;
     }

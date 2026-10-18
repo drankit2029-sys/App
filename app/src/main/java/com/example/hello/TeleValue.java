@@ -470,20 +470,7 @@ public class TeleValue extends LinearLayout {
     }
 
     private static void styleModalWindow(Dialog dialog) {
-        Window w = dialog.getWindow();
-        if (w == null) return;
-        w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
-        w.setDimAmount(0.62f);
-        WindowManager.LayoutParams lp = w.getAttributes();
-        lp.width = WindowManager.LayoutParams.MATCH_PARENT;
-        lp.height = WindowManager.LayoutParams.WRAP_CONTENT;
-        lp.gravity = Gravity.CENTER;
-        w.setAttributes(lp);
-        View decor = w.getDecorView();
-        if (decor != null) {
-            int m = dp(dialog.getContext(), 28);
-            decor.setPadding(m, 0, m, 0);
-        }
+        OptionsSheet.styleAsCentered(dialog);
     }
 
     private void openPicker() {

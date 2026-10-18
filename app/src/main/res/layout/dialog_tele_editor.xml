@@ -5,7 +5,7 @@
     android:background="@drawable/bg_modal"
     android:elevation="16dp"
     android:orientation="vertical"
-    android:padding="18dp">
+    android:padding="16dp">
 
     <TextView
         android:id="@+id/teleEditorTitle"
@@ -29,13 +29,18 @@
     <EditText
         android:id="@+id/teleEditorInput"
         android:layout_width="match_parent"
-        android:layout_height="260dp"
-        android:layout_marginTop="12dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:layout_weight="1"
         android:background="@drawable/bg_search"
         android:gravity="top|start"
         android:hint="@string/teleprompter_hint"
         android:inputType="textMultiLine|textCapSentences"
+        android:maxHeight="240dp"
+        android:minHeight="96dp"
+        android:overScrollMode="always"
         android:padding="12dp"
+        android:scrollbars="vertical"
         android:textColor="@color/text_primary"
         android:textColorHint="@color/text_hint"
         android:textSize="15sp" />
@@ -49,7 +54,7 @@
         <TextView
             android:id="@+id/teleImportBtn"
             android:layout_width="0dp"
-            android:layout_height="44dp"
+            android:layout_height="42dp"
             android:layout_marginEnd="4dp"
             android:layout_weight="1"
             android:background="@drawable/bg_btn_ghost"
@@ -64,7 +69,7 @@
         <TextView
             android:id="@+id/teleSaveBtn"
             android:layout_width="0dp"
-            android:layout_height="44dp"
+            android:layout_height="42dp"
             android:layout_marginStart="4dp"
             android:layout_weight="1"
             android:background="@drawable/bg_btn_primary"

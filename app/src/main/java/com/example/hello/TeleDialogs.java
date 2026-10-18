@@ -6,15 +6,15 @@ import android.graphics.Color;
 import android.graphics.drawable.ColorDrawable;
 import android.text.Editable;
 import android.text.TextWatcher;
+import android.util.DisplayMetrics;
 import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowManager;
 import android.widget.EditText;
 import android.widget.TextView;
-
-import java.util.Locale;
 
 /**
  * Teleprompter dialogs: the script editor (with .txt/.docx import).
@@ -59,25 +59,29 @@ public final class TeleDialogs {
     }
 
     /**
-     * Window styling only. NOTE: requestWindowFeature is NOT called here —
-     * the framework rejects it once a view has been added, so each factory
-     * must call it immediately after constructing the Dialog.
+     * Window styling with landscape width and height bounds so the editor
+     * modal never overflows the screen or hides its Save/Import action row.
      */
     private static void style(Dialog d) {
         Window w = d.getWindow();
         if (w == null) return;
+        Context ctx = d.getContext();
+        DisplayMetrics dm = ctx.getResources().getDisplayMetrics();
+        boolean isLand = dm.widthPixels > dm.heightPixels;
         w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
         w.setDimAmount(0.62f);
         WindowManager.LayoutParams lp = w.getAttributes();
-        lp.width = WindowManager.LayoutParams.MATCH_PARENT;
+        int maxW = dp(ctx, isLand ? 460 : 400);
+        lp.width = Math.min(dm.widthPixels - dp(ctx, 32), maxW);
         lp.height = WindowManager.LayoutParams.WRAP_CONTENT;
         lp.gravity = Gravity.CENTER;
         w.setAttributes(lp);
+        w.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN
+                | WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         View decor = w.getDecorView();
         if (decor != null) {
-            int m = Math.round(decor.getResources().getDisplayMetrics()
-                    .density * 20);
-            decor.setPadding(m, 0, m, 0);
+            int vPad = dp(ctx, isLand ? 8 : 16);
+            decor.setPadding(0, vPad, 0, vPad);
         }
     }
 
@@ -99,6 +103,20 @@ public final class TeleDialogs {
         TextView meta = root.findViewById(R.id.teleEditorMeta);
         TextView importBtn = root.findViewById(R.id.teleImportBtn);
         TextView saveBtn = root.findViewById(R.id.teleSaveBtn);
+
+        // Bound the script EditText height to the available screen height so
+        // landscape mode never pushes Save/Import off-screen.
+        DisplayMetrics dm = ctx.getResources().getDisplayMetrics();
+        boolean isLand = dm.widthPixels > dm.heightPixels;
+        ViewGroup.LayoutParams ilp = input.getLayoutParams();
+        if (ilp != null) {
+            int targetH = isLand
+                    ? Math.max(dp(ctx, 88), Math.min(dp(ctx, 130), (int) (dm.heightPixels * 0.34f)))
+                    : Math.max(dp(ctx, 160), Math.min(dp(ctx, 240), (int) (dm.heightPixels * 0.34f)));
+            ilp.height = targetH;
+            input.setLayoutParams(ilp);
+        }
+        input.setMaxHeight(isLand ? dp(ctx, 130) : dp(ctx, 240));
 
         input.setText(script == null ? "" : script);
         input.setSelection(input.getText().length());
@@ -148,4 +166,7 @@ public final class TeleDialogs {
         return d;
     }
 
+    private static int dp(Context ctx, int dp) {
+        return Math.round(dp * ctx.getResources().getDisplayMetrics().density);
+    }
 }

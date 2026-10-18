@@ -76,6 +76,7 @@ public class TeleprompterView extends View {
     private void init() {
         textPaint.setTextAlign(Paint.Align.CENTER);
         textPaint.setSubpixelText(true);
+        textPaint.setLinearText(true);
         setWillNotDraw(false);
         // Without this the view never receives touch events for dragging.
         setClickable(true);
@@ -213,7 +214,7 @@ public class TeleprompterView extends View {
 
     public void setScrollOffset(float px) {
         float clamped = Math.max(0f, Math.min(maxScroll, px));
-        if (Math.abs(clamped - scrollOffset) > 0.01f) {
+        if (Math.abs(clamped - scrollOffset) > 0.0005f) {
             scrollOffset = clamped;
             invalidate();
         }

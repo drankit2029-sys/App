@@ -4,31 +4,31 @@
     android:layout_height="match_parent"
     android:background="@color/bg"
     android:orientation="vertical"
-    android:paddingBottom="132dp">
+    android:paddingBottom="114dp">
 
-    <!-- Top bar: Back | Studio + Take Status | Top-Right Preset Button (settingsRow) -->
+    <!-- Unified Top Bar:
+         Left = Back + Studio/Take | Center = Compact State + 32-bit Streaming | Right = Preset Button -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:gravity="center_vertical"
         android:orientation="horizontal"
-        android:paddingLeft="8dp"
+        android:paddingLeft="6dp"
         android:paddingTop="6dp"
-        android:paddingRight="14dp"
-        android:paddingBottom="2dp">
+        android:paddingRight="12dp"
+        android:paddingBottom="4dp">
 
         <ImageView
             android:id="@+id/backBtn"
-            android:layout_width="44dp"
+            android:layout_width="40dp"
             android:layout_height="36dp"
             android:contentDescription="@string/cd_back"
-            android:padding="12dp"
+            android:padding="10dp"
             android:src="@drawable/ic_arrow_left" />
 
         <LinearLayout
-            android:layout_width="0dp"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
             android:orientation="vertical">
 
             <TextView
@@ -37,7 +37,7 @@
                 android:fontFamily="sans-serif-medium"
                 android:text="@string/studio_title"
                 android:textColor="@color/text_primary"
-                android:textSize="18sp" />
+                android:textSize="17sp" />
 
             <TextView
                 android:id="@+id/statusText"
@@ -45,13 +45,69 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="1dp"
                 android:clickable="true"
+                android:ellipsize="end"
                 android:focusable="true"
+                android:maxLines="1"
+                android:maxWidth="92dp"
                 android:text="@string/studio_ready"
                 android:textColor="@color/text_secondary"
-                android:textSize="12sp" />
+                android:textSize="11.5sp" />
         </LinearLayout>
 
-        <!-- Preset Changer Button moved to the top right (where current preset is shown) -->
+        <!-- Compact Center Cluster between Studio title and Preset Selector -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="6dp"
+            android:layout_marginEnd="6dp"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:orientation="vertical">
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <View
+                    android:id="@+id/statusDot"
+                    android:layout_width="6dp"
+                    android:layout_height="6dp"
+                    android:background="@drawable/bg_round_btn" />
+
+                <TextView
+                    android:id="@+id/stateLabel"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="4dp"
+                    android:ellipsize="end"
+                    android:letterSpacing="0.06"
+                    android:maxLines="1"
+                    android:text="@string/studio_ready"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="9.5sp" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/draftBadge"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:background="@drawable/bg_badge"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:paddingLeft="6dp"
+                android:paddingTop="1dp"
+                android:paddingRight="6dp"
+                android:paddingBottom="1dp"
+                android:text="@string/studio_streaming"
+                android:textColor="@color/record"
+                android:textSize="8sp"
+                android:visibility="gone" />
+        </LinearLayout>
+
+        <!-- Preset Changer Button on the top right -->
         <LinearLayout
             android:id="@+id/settingsRow"
             android:layout_width="wrap_content"
@@ -61,9 +117,9 @@
             android:focusable="true"
             android:gravity="center_vertical"
             android:orientation="horizontal"
-            android:paddingLeft="12dp"
+            android:paddingLeft="10dp"
             android:paddingTop="3dp"
-            android:paddingRight="10dp"
+            android:paddingRight="8dp"
             android:paddingBottom="3dp">
 
             <LinearLayout
@@ -91,7 +147,6 @@
                     android:textColor="@color/text_secondary"
                     android:textSize="9.5sp" />
 
-                <!-- Compat badge reference kept gone inside the top-right preset button -->
                 <TextView
                     android:id="@+id/formatBadge"
                     android:layout_width="0dp"
@@ -102,62 +157,19 @@
             <ImageView
                 android:layout_width="14dp"
                 android:layout_height="14dp"
-                android:layout_marginStart="6dp"
+                android:layout_marginStart="5dp"
                 android:alpha="0.7"
                 android:src="@drawable/ic_chevron" />
         </LinearLayout>
     </LinearLayout>
 
-    <!-- State + draft indicator (one compact row) -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:gravity="center_vertical"
-        android:orientation="horizontal"
-        android:paddingLeft="20dp"
-        android:paddingRight="16dp"
-        android:paddingBottom="2dp">
-
-        <View
-            android:id="@+id/statusDot"
-            android:layout_width="8dp"
-            android:layout_height="8dp"
-            android:background="@drawable/bg_round_btn" />
-
-        <TextView
-            android:id="@+id/stateLabel"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="6dp"
-            android:letterSpacing="0.12"
-            android:text="@string/studio_ready"
-            android:textColor="@color/text_secondary"
-            android:textSize="11sp" />
-
-        <TextView
-            android:id="@+id/draftBadge"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="10dp"
-            android:background="@drawable/bg_badge"
-            android:paddingLeft="8dp"
-            android:paddingTop="2dp"
-            android:paddingRight="8dp"
-            android:paddingBottom="2dp"
-            android:text="@string/studio_streaming"
-            android:textColor="@color/record"
-            android:textSize="10sp"
-            android:visibility="gone" />
-    </LinearLayout>
-
-    <!-- Teleprompter: always present (switched with Effects screen via FX button)
-         and expanded now that the bottom preset/teleprompter pill row is removed. -->
+    <!-- Teleprompter: always present (switched with Effects screen via FX button) -->
     <FrameLayout
         android:id="@+id/telePanel"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_marginLeft="14dp"
-        android:layout_marginTop="4dp"
+        android:layout_marginTop="2dp"
         android:layout_marginRight="14dp"
         android:layout_weight="1"
         android:background="@drawable/bg_search"
@@ -183,7 +195,9 @@
                 android:gravity="center_vertical"
                 android:orientation="horizontal"
                 android:paddingLeft="12dp"
-                android:paddingRight="6dp">
+                android:paddingTop="4dp"
+                android:paddingRight="8dp"
+                android:paddingBottom="2dp">
 
                 <TextView
                     android:id="@+id/teleTitle"
@@ -197,21 +211,23 @@
                     android:textColor="@color/text_hint"
                     android:textSize="10sp" />
 
+                <!-- Icon-only teleprompter action buttons (TextView kept for test compat) -->
                 <TextView
                     android:id="@+id/teleEditBtn"
-                    android:layout_width="wrap_content"
+                    android:layout_width="30dp"
                     android:layout_height="30dp"
                     android:background="@drawable/bg_round_btn"
                     android:clickable="true"
+                    android:contentDescription="@string/tele_edit"
+                    android:drawableStart="@drawable/ic_tele_edit"
                     android:focusable="true"
                     android:gravity="center"
-                    android:paddingLeft="12dp"
-                    android:paddingRight="12dp"
+                    android:paddingStart="7dp"
+                    android:paddingEnd="7dp"
                     android:text="@string/tele_edit"
-                    android:textColor="@color/text_primary"
-                    android:textSize="11sp" />
+                    android:textColor="#00000000"
+                    android:textSize="0sp" />
 
-                <!-- Retired hide button kept gone for ID compatibility -->
                 <TextView
                     android:id="@+id/teleHideBtn"
                     android:layout_width="0dp"
@@ -220,37 +236,40 @@
 
                 <TextView
                     android:id="@+id/telePauseBtn"
-                    android:layout_width="wrap_content"
+                    android:layout_width="30dp"
                     android:layout_height="30dp"
-                    android:layout_marginStart="4dp"
+                    android:layout_marginStart="6dp"
                     android:background="@drawable/bg_round_btn"
                     android:clickable="true"
                     android:contentDescription="@string/tele_pause"
+                    android:drawableStart="@drawable/ic_tele_play"
                     android:focusable="true"
                     android:gravity="center"
-                    android:paddingLeft="12dp"
-                    android:paddingRight="12dp"
+                    android:paddingStart="7dp"
+                    android:paddingEnd="7dp"
                     android:text="@string/tele_resume_short"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="11sp" />
+                    android:textColor="#00000000"
+                    android:textSize="0sp" />
 
                 <TextView
                     android:id="@+id/teleMirrorBtn"
-                    android:layout_width="wrap_content"
+                    android:layout_width="30dp"
                     android:layout_height="30dp"
-                    android:layout_marginStart="4dp"
+                    android:layout_marginStart="6dp"
                     android:background="@drawable/bg_round_btn"
                     android:clickable="true"
+                    android:contentDescription="@string/tele_mirror"
+                    android:drawableStart="@drawable/ic_tele_mirror"
                     android:focusable="true"
                     android:gravity="center"
-                    android:paddingLeft="10dp"
-                    android:paddingRight="10dp"
+                    android:paddingStart="7dp"
+                    android:paddingEnd="7dp"
                     android:text="@string/tele_mirror_short"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="11sp" />
+                    android:textColor="#00000000"
+                    android:textSize="0sp" />
             </LinearLayout>
 
-            <!-- Inline prompter controls: no separate tuning dialog -->
+            <!-- Inline prompter controls -->
             <LinearLayout
                 android:id="@+id/teleControls"
                 android:layout_width="match_parent"
@@ -289,7 +308,7 @@
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_marginLeft="14dp"
-        android:layout_marginTop="4dp"
+        android:layout_marginTop="2dp"
         android:layout_marginRight="14dp"
         android:layout_weight="1"
         android:background="@drawable/bg_search"
@@ -298,7 +317,6 @@
         android:padding="10dp"
         android:visibility="gone">
 
-        <!-- Top Header: Title + Premade Presets Dropdown + Close Button -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -345,7 +363,6 @@
                 android:textSize="11sp" />
         </LinearLayout>
 
-        <!-- Single Scrollable Section Like Library: Effect Pills + "+ Add Effect" at Bottom -->
         <ScrollView
             android:id="@+id/fxScroll"
             android:layout_width="match_parent"
@@ -362,7 +379,6 @@
                 android:orientation="vertical" />
         </ScrollView>
 
-        <!-- Bottom Action Row: Preview FX &amp; Apply to Selection (Disabled in Replace Mode) -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -397,12 +413,12 @@
         </LinearLayout>
     </LinearLayout>
 
-    <!-- Recording strip moved down cleanly (no bottom preset/teleprompter pill row) -->
+    <!-- Recording strip moved downwards slightly with icons on all editing buttons -->
     <LinearLayout
         android:id="@+id/recStrip"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="6dp"
+        android:layout_marginTop="8dp"
         android:gravity="center_vertical"
         android:orientation="horizontal"
         android:paddingLeft="16dp"
@@ -447,12 +463,12 @@
                 </LinearLayout>
             </LinearLayout>
 
-            <!-- Non-Linear Editor &amp; FX Console -->
+            <!-- Non-Linear Editor &amp; FX Console with Icons -->
             <HorizontalScrollView
                 android:id="@+id/editorStrip"
                 android:layout_width="match_parent"
                 android:layout_height="32dp"
-                android:layout_marginTop="4dp"
+                android:layout_marginTop="6dp"
                 android:scrollbars="none"
                 android:visibility="gone">
 
@@ -467,9 +483,11 @@
                         android:layout_width="wrap_content"
                         android:layout_height="28dp"
                         android:background="@drawable/bg_chip"
+                        android:drawableStart="@drawable/ic_edit_replace"
+                        android:drawablePadding="5dp"
                         android:gravity="center"
-                        android:paddingLeft="12dp"
-                        android:paddingRight="12dp"
+                        android:paddingLeft="10dp"
+                        android:paddingRight="11dp"
                         android:text="Replace"
                         android:textColor="@color/text_secondary"
                         android:textSize="11sp" />
@@ -480,9 +498,11 @@
                         android:layout_height="28dp"
                         android:layout_marginStart="6dp"
                         android:background="@drawable/bg_chip"
+                        android:drawableStart="@drawable/ic_edit_select"
+                        android:drawablePadding="5dp"
                         android:gravity="center"
-                        android:paddingLeft="12dp"
-                        android:paddingRight="12dp"
+                        android:paddingLeft="10dp"
+                        android:paddingRight="11dp"
                         android:text="Select"
                         android:textColor="@color/text_secondary"
                         android:textSize="11sp" />
@@ -493,9 +513,11 @@
                         android:layout_height="28dp"
                         android:layout_marginStart="6dp"
                         android:background="@drawable/bg_chip"
+                        android:drawableStart="@drawable/ic_edit_select_replace"
+                        android:drawablePadding="5dp"
                         android:gravity="center"
-                        android:paddingLeft="12dp"
-                        android:paddingRight="12dp"
+                        android:paddingLeft="10dp"
+                        android:paddingRight="11dp"
                         android:text="Select &amp; Replace"
                         android:textColor="@color/text_secondary"
                         android:textSize="11sp" />
@@ -506,9 +528,11 @@
                         android:layout_height="28dp"
                         android:layout_marginStart="6dp"
                         android:background="@drawable/bg_chip"
+                        android:drawableStart="@drawable/ic_edit_trim"
+                        android:drawablePadding="5dp"
                         android:gravity="center"
-                        android:paddingLeft="12dp"
-                        android:paddingRight="12dp"
+                        android:paddingLeft="10dp"
+                        android:paddingRight="11dp"
                         android:text="Trim"
                         android:textColor="@color/text_secondary"
                         android:textSize="11sp" />
@@ -525,9 +549,11 @@
                         android:layout_height="28dp"
                         android:layout_marginStart="6dp"
                         android:background="@drawable/bg_chip"
+                        android:drawableStart="@drawable/ic_edit_fx"
+                        android:drawablePadding="5dp"
                         android:gravity="center"
-                        android:paddingLeft="12dp"
-                        android:paddingRight="12dp"
+                        android:paddingLeft="10dp"
+                        android:paddingRight="11dp"
                         android:text="FX"
                         android:textColor="@color/text_secondary"
                         android:textSize="11sp" />
@@ -538,21 +564,23 @@
                         android:layout_height="28dp"
                         android:layout_marginStart="6dp"
                         android:background="@drawable/bg_chip"
+                        android:drawableStart="@drawable/ic_edit_undo"
+                        android:drawablePadding="5dp"
                         android:gravity="center"
-                        android:paddingLeft="12dp"
-                        android:paddingRight="12dp"
+                        android:paddingLeft="10dp"
+                        android:paddingRight="11dp"
                         android:text="Undo"
                         android:textColor="@color/text_hint"
                         android:textSize="11sp" />
                 </LinearLayout>
             </HorizontalScrollView>
 
-            <!-- Lower group: timer moved down into the freed space -->
+            <!-- Lower group: timer moved slightly downwards -->
             <TextView
                 android:id="@+id/timerText"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
+                android:layout_marginTop="6dp"
                 android:fontFamily="sans-serif-light"
                 android:gravity="center"
                 android:text="00:00.00"
