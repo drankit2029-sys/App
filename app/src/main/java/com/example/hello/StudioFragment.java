@@ -235,10 +235,9 @@ public class StudioFragment extends Fragment {
         // Soft variant: plain apply() resets alpha to 1 on release, which
         // would wipe the converting dim. applySoft only touches scale.
         PressAnim.applySoft(settingsRow, 0.97f);
-        teleToggle.setOnClickListener(view -> toggleTeleprompter());
-        PressAnim.applySoft(teleToggle, 0.97f);
-        teleHideBtn.setOnClickListener(view -> setTeleprompterVisible(false));
-        PressAnim.applySoft(teleHideBtn, 0.95f);
+        if (formatBadge != null) {
+            formatBadge.setOnClickListener(view -> showRecordingSettings());
+        }
         teleEditBtn.setOnClickListener(view -> openTeleEditor());
         PressAnim.applySoft(teleEditBtn, 0.95f);
         telePauseBtn.setOnClickListener(view -> toggleTelePaused());
@@ -862,12 +861,20 @@ public class StudioFragment extends Fragment {
 
     private void setTeleprompterVisible(boolean visible) {
         if (telePanel == null) return;
-        telePanel.setVisibility(visible ? View.VISIBLE : View.GONE);
-        setTeleActive(visible);
+        // Teleprompter is always present unless the inline FX screen is open.
+        boolean showTele = visible || !fxPanelOpen;
+        telePanel.setVisibility(showTele ? View.VISIBLE : View.GONE);
+        setTeleActive(showTele);
     }
 
     private void toggleTeleprompter() {
-        setTeleprompterVisible(telePanel.getVisibility() != View.VISIBLE);
+        // Teleprompter is permanently visible when not in the FX screen; if FX is
+        // open, switching back restores the teleprompter.
+        if (fxPanelOpen) {
+            setFxPanelVisible(false);
+        } else {
+            setTeleprompterVisible(true);
+        }
     }
 
     private void setTeleActive(boolean active) {
@@ -1326,6 +1333,10 @@ public class StudioFragment extends Fragment {
     /** Back: idle -> exit; active -> background-or-stop choice. */
     public boolean onBackPressed() {
         if (saving) return true;
+        if (fxPanelOpen) {
+            setFxPanelVisible(false);
+            return true;
+        }
         if (inSelectAndReplaceEditor) {
             if (engine.state == RecordingEngine.State.RECORDING) {
                 engine.pauseCapture();
@@ -1652,6 +1663,9 @@ public class StudioFragment extends Fragment {
             Toast.makeText(requireContext(), R.string.msg_call_active,
                     Toast.LENGTH_SHORT).show();
             return;
+        }
+        if (fxPanelOpen) {
+            setFxPanelVisible(false);
         }
         boolean wasPaused = (engine.state == RecordingEngine.State.PAUSED);
         boolean isEditOrRecovery = (editSourceId != -1 || engine.dataBytes > 0);
@@ -2130,7 +2144,7 @@ public class StudioFragment extends Fragment {
                             Math.min(1f, studioPreviewPlayer.positionFrames()
                                     / (float) total));
                 } else if (engine.hasSession()) {
-                    long shownMs = engine.cursorFrames() > 0
+                    long shownMs = (engine.cursorFrames() > 0 || userScrolledWhilePaused)
                             ? engine.cursorMs() : engine.durationMs();
                     timerText.setText(formatTimer(shownMs));
                 } else {
@@ -2205,17 +2219,28 @@ public class StudioFragment extends Fragment {
             final RawFloatPlayer[] slot = new RawFloatPlayer[1];
             slot[0] = new RawFloatPlayer(raw, completed -> handler.post(() -> {
                 if (studioPreviewPlayer == slot[0]) {
-                    if (completed && engine.hasSession()) {
-                        long endF = waveform != null && waveform.hasSelection()
-                                ? Math.round(waveform.selectionEndFraction() * engine.totalFrames())
-                                : engine.totalFrames();
+                    studioPreviewPlayer = null;
+                    try {
+                        slot[0].stop();
+                    } catch (Exception ignored) {}
+                    if (engine.hasSession() && engine.state != RecordingEngine.State.RECORDING) {
+                        long totalF = Math.max(1L, engine.totalFrames());
+                        long endF = completed
+                                ? (waveform != null && waveform.hasSelection()
+                                        ? Math.round(waveform.selectionEndFraction() * totalF)
+                                        : totalF)
+                                : slot[0].positionFrames();
+                        userScrolledWhilePaused = (endF < totalF - 480);
                         engine.seekCursorFrame(endF);
-                        if (waveform != null && engine.totalFrames() > 0) {
-                            waveform.setPlayheadFraction(endF / (float) engine.totalFrames());
+                        if (waveform != null) {
+                            waveform.setPlayheadFraction(endF / (float) totalF);
+                        }
+                        if (timerText != null) {
+                            timerText.setText(formatTimer(engine.cursorMs()));
                         }
                     }
-                    stopStudioPreview();
                     paintEditorStrip();
+                    paintFxPanelControls();
                 }
             }));
             RawFloatPlayer player = slot[0];
@@ -2258,7 +2283,15 @@ public class StudioFragment extends Fragment {
                 player.stop();
             } catch (Exception ignored) {}
             if (engine.hasSession() && engine.state != RecordingEngine.State.RECORDING) {
+                long totalF = Math.max(1L, engine.totalFrames());
+                userScrolledWhilePaused = (lastFrame < totalF - 480);
                 engine.seekCursorFrame(lastFrame);
+                if (waveform != null) {
+                    waveform.setPlayheadFraction(lastFrame / (float) totalF);
+                }
+                if (timerText != null) {
+                    timerText.setText(formatTimer(engine.cursorMs()));
+                }
             }
         }
         // NOTE: Do NOT set btnPreviewPlay.setText("▶ Preview") or reset its
@@ -2456,18 +2489,25 @@ public class StudioFragment extends Fragment {
             long end = Math.round(
                     waveform.selectionEndFraction() * totalFrames);
             waveform.recordUndoPeaks();
+            EditEngine.UndoJournal uj = activeUndoJournal();
             if (isTrim) {
-                EditEngine.cropToSelection(raw, start, end, undoJournal);
+                EditEngine.cropToSelection(raw, start, end, uj);
                 waveform.cropToSelectionBuckets();
             } else {
-                EditEngine.deleteSelection(raw, start, end, undoJournal);
+                EditEngine.deleteSelection(raw, start, end, uj);
                 waveform.deleteSelectionBuckets();
             }
+            dspBakedToRaw = false;
+            userScrolledWhilePaused = false;
             engine.abortStreaming();
             engine.dataBytes = RecordingEngine.payloadBytesOf(raw);
             long newTotal = engine.totalFrames();
+            waveform.syncFramesPerBar(newTotal);
             long nextCursor = isTrim ? newTotal : Math.min(start, newTotal);
             engine.seekCursorFrame(nextCursor);
+            if (newTotal > 0) {
+                waveform.setPlayheadFraction(nextCursor / (float) newTotal);
+            }
             refreshZoomValue();
             timerText.setText(formatTimer(engine.cursorMs()));
             Toast.makeText(requireContext(),
@@ -2489,16 +2529,25 @@ public class StudioFragment extends Fragment {
         if (!isAdded()) return;
         stopStudioPreview();
         File raw = engine.rawFile;
-        if (raw == null || undoJournal == null || !undoJournal.canUndo()) return;
+        EditEngine.UndoJournal uj = activeUndoJournal();
+        if (raw == null || uj == null || !uj.canUndo()) return;
         try {
-            if (undoJournal.undo(raw)) {
+            if (uj.undo(raw)) {
+                dspBakedToRaw = false;
+                userScrolledWhilePaused = false;
                 engine.abortStreaming();
                 engine.dataBytes = RecordingEngine.payloadBytesOf(raw);
-                engine.seekCursorFrame(engine.totalFrames());
+                long total = engine.totalFrames();
+                engine.seekCursorFrame(total);
                 if (waveform != null) {
                     if (!waveform.popUndoPeaks()) {
-                        waveform.loadFromFloatWavTwentyHz(raw, this::refreshZoomValue);
+                        waveform.loadFromFloatWavTwentyHz(raw, () -> {
+                            waveform.syncFramesPerBar(engine.totalFrames());
+                            refreshZoomValue();
+                        });
                     } else {
+                        waveform.syncFramesPerBar(total);
+                        waveform.setPlayheadFraction(1f);
                         refreshZoomValue();
                     }
                 }
@@ -2532,26 +2581,16 @@ public class StudioFragment extends Fragment {
                 dspConfig.applyPreset(DspChain.Preset.VOICE_POLISH);
                 dspConfig.save(requireContext());
             }
-            teleWasVisibleBeforeFx = (telePanel.getVisibility() == View.VISIBLE);
+            teleWasVisibleBeforeFx = true;
             setTelePaused(true);
             telePanel.setVisibility(View.GONE);
             fxPanel.setVisibility(View.VISIBLE);
-            if (teleToggle != null) {
-                teleToggle.setEnabled(false);
-                teleToggle.setAlpha(0.35f);
-            }
-            if (teleState != null) {
-                teleState.setText("Disabled (FX Open)");
-            }
             rebuildFxRackList();
             paintFxPanelControls();
         } else {
             fxPanel.setVisibility(View.GONE);
-            if (teleToggle != null) {
-                teleToggle.setEnabled(true);
-                teleToggle.setAlpha(1f);
-            }
-            setTeleprompterVisible(teleWasVisibleBeforeFx);
+            telePanel.setVisibility(View.VISIBLE);
+            setTeleActive(true);
         }
         paintEditorStrip();
     }

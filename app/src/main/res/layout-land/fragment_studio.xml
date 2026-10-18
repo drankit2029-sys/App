@@ -6,7 +6,7 @@
     android:orientation="vertical"
     android:paddingBottom="6dp">
 
-    <!-- Compact single-row landscape top bar (38dp) -->
+    <!-- Compact single-row landscape top bar (38dp) with Preset Changer Button on top right -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="38dp"
@@ -85,20 +85,56 @@
             android:textSize="10sp"
             android:visibility="gone" />
 
-        <TextView
-            android:id="@+id/formatBadge"
+        <!-- Preset Changer Button moved to the top right -->
+        <LinearLayout
+            android:id="@+id/settingsRow"
             android:layout_width="wrap_content"
-            android:layout_height="24dp"
-            android:background="@drawable/bg_badge"
-            android:gravity="center"
+            android:layout_height="30dp"
+            android:background="@drawable/bg_search"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
             android:paddingLeft="10dp"
-            android:paddingRight="10dp"
-            android:text="@string/preset_memo"
-            android:textColor="@color/text_secondary"
-            android:textSize="10sp" />
+            android:paddingRight="8dp">
+
+            <TextView
+                android:id="@+id/settingsName"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:fontFamily="sans-serif-medium"
+                android:maxLines="1"
+                android:text="@string/preset_memo"
+                android:textColor="@color/text_primary"
+                android:textSize="10.5sp" />
+
+            <TextView
+                android:id="@+id/settingsSub"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textColor="@color/text_secondary"
+                android:textSize="9.5sp" />
+
+            <TextView
+                android:id="@+id/formatBadge"
+                android:layout_width="0dp"
+                android:layout_height="0dp"
+                android:visibility="gone" />
+
+            <ImageView
+                android:layout_width="13dp"
+                android:layout_height="13dp"
+                android:layout_marginStart="4dp"
+                android:alpha="0.7"
+                android:src="@drawable/ic_chevron" />
+        </LinearLayout>
     </LinearLayout>
 
-    <!-- Main 2-Pane Workspace: Left = Teleprompter, Right = DAW Console -->
+    <!-- Main 2-Pane Workspace: Left = Teleprompter (larger weight 1.25), Right = DAW Console -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
@@ -107,13 +143,13 @@
         android:paddingLeft="12dp"
         android:paddingRight="100dp">
 
-        <!-- Left Pane: Teleprompter (expands to full height; hides cleanly when toggled off) -->
+        <!-- Left Pane: Teleprompter (always present unless FX panel is open) -->
         <FrameLayout
             android:id="@+id/telePanel"
             android:layout_width="0dp"
             android:layout_height="match_parent"
             android:layout_marginEnd="10dp"
-            android:layout_weight="1.15"
+            android:layout_weight="1.25"
             android:background="@drawable/bg_search"
             android:clipChildren="true">
 
@@ -166,19 +202,9 @@
 
                     <TextView
                         android:id="@+id/teleHideBtn"
-                        android:layout_width="wrap_content"
-                        android:layout_height="26dp"
-                        android:layout_marginStart="4dp"
-                        android:background="@drawable/bg_round_btn"
-                        android:clickable="true"
-                        android:contentDescription="@string/tele_hide"
-                        android:focusable="true"
-                        android:gravity="center"
-                        android:paddingLeft="10dp"
-                        android:paddingRight="10dp"
-                        android:text="@string/tele_hide_short"
-                        android:textColor="@color/text_secondary"
-                        android:textSize="10sp" />
+                        android:layout_width="0dp"
+                        android:layout_height="0dp"
+                        android:visibility="gone" />
 
                     <TextView
                         android:id="@+id/telePauseBtn"
@@ -244,27 +270,27 @@
             </LinearLayout>
         </FrameLayout>
 
-        <!-- Pro Effects Rack Panel (opens in place of Teleprompter; both cannot be open at once) -->
+        <!-- Pro Effects Rack Panel (switches with Teleprompter via pressing FX) -->
         <LinearLayout
-                android:id="@+id/fxPanel"
-                android:layout_width="0dp"
-                android:layout_height="match_parent"
-                android:layout_marginEnd="10dp"
-                android:layout_weight="1.15"
-                android:background="@drawable/bg_search"
-                android:clipChildren="true"
-                android:minHeight="150dp"
-                android:orientation="vertical"
-                android:padding="10dp"
-                android:visibility="gone">
-    
+            android:id="@+id/fxPanel"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_marginEnd="10dp"
+            android:layout_weight="1.25"
+            android:background="@drawable/bg_search"
+            android:clipChildren="true"
+            android:minHeight="150dp"
+            android:orientation="vertical"
+            android:padding="10dp"
+            android:visibility="gone">
+
             <!-- Top Header: Title + Premade Presets Dropdown + Close Button -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:gravity="center_vertical"
                 android:orientation="horizontal">
-    
+
                 <TextView
                     android:id="@+id/fxTitle"
                     android:layout_width="wrap_content"
@@ -274,7 +300,7 @@
                     android:text="PRO FX RACK"
                     android:textColor="@color/text_primary"
                     android:textSize="11sp" />
-    
+
                 <TextView
                     android:id="@+id/fxPresetDropdown"
                     android:layout_width="0dp"
@@ -291,7 +317,7 @@
                     android:text="Preset: Voice Polish ▾"
                     android:textColor="@color/text_primary"
                     android:textSize="11sp" />
-    
+
                 <TextView
                     android:id="@+id/fxCloseBtn"
                     android:layout_width="wrap_content"
@@ -304,7 +330,7 @@
                     android:textColor="@color/text_secondary"
                     android:textSize="11sp" />
             </LinearLayout>
-    
+
             <!-- Single Scrollable Section Like Library: Effect Pills + "+ Add Effect" at Bottom -->
             <ScrollView
                 android:id="@+id/fxScroll"
@@ -314,21 +340,21 @@
                 android:layout_marginBottom="6dp"
                 android:layout_weight="1"
                 android:fillViewport="true">
-    
+
                 <LinearLayout
                     android:id="@+id/fxListContainer"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="vertical" />
             </ScrollView>
-    
-            <!-- Bottom Action Row: Preview FX & Apply to Selection (Disabled in Replace Mode) -->
+
+            <!-- Bottom Action Row: Preview FX &amp; Apply to Selection (Disabled in Replace Mode) -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:gravity="center_vertical"
                 android:orientation="horizontal">
-    
+
                 <TextView
                     android:id="@+id/fxPreviewBtn"
                     android:layout_width="0dp"
@@ -341,7 +367,7 @@
                     android:text="▶ Preview FX"
                     android:textColor="@color/text_primary"
                     android:textSize="12sp" />
-    
+
                 <TextView
                     android:id="@+id/fxApplyBtn"
                     android:layout_width="0dp"
@@ -357,7 +383,7 @@
             </LinearLayout>
         </LinearLayout>
 
-        <!-- Right Pane: DAW Console (dB Meter | Waveform + Editor Strip + Timer + Pills) -->
+        <!-- Right Pane: DAW Console (dB Meter | Waveform + Editor Strip + Timer) -->
         <LinearLayout
             android:id="@+id/recStrip"
             android:layout_width="0dp"
@@ -409,7 +435,7 @@
                     </LinearLayout>
                 </LinearLayout>
 
-                <!-- Non-Linear Editor & FX Console (visible when PAUSED; no progress bar) -->
+                <!-- Non-Linear Editor &amp; FX Console -->
                 <HorizontalScrollView
                     android:id="@+id/editorStrip"
                     android:layout_width="match_parent"
@@ -417,14 +443,13 @@
                     android:layout_marginTop="4dp"
                     android:scrollbars="none"
                     android:visibility="gone">
-    
+
                     <LinearLayout
                         android:layout_width="wrap_content"
                         android:layout_height="match_parent"
                         android:gravity="center_vertical"
                         android:orientation="horizontal">
-    
-                        <!-- Formerly Preview; now Replace mode toggle (keeps @+id/btnPreviewPlay) -->
+
                         <TextView
                             android:id="@+id/btnPreviewPlay"
                             android:layout_width="wrap_content"
@@ -436,8 +461,7 @@
                             android:text="Replace"
                             android:textColor="@color/text_secondary"
                             android:textSize="11sp" />
-    
-                        <!-- Select button: stays "Select" and turns red when active -->
+
                         <TextView
                             android:id="@+id/btnSelectRange"
                             android:layout_width="wrap_content"
@@ -450,8 +474,7 @@
                             android:text="Select"
                             android:textColor="@color/text_secondary"
                             android:textSize="11sp" />
-    
-                        <!-- Select & Replace: opens dedicated sub-editor mode -->
+
                         <TextView
                             android:id="@+id/btnReplaceSeg"
                             android:layout_width="wrap_content"
@@ -464,8 +487,7 @@
                             android:text="Select &amp; Replace"
                             android:textColor="@color/text_secondary"
                             android:textSize="11sp" />
-    
-                        <!-- Trim: opens stylized Keep Selected / Delete Selected popup -->
+
                         <TextView
                             android:id="@+id/btnTrimCrop"
                             android:layout_width="wrap_content"
@@ -478,14 +500,13 @@
                             android:text="Trim"
                             android:textColor="@color/text_secondary"
                             android:textSize="11sp" />
-    
-                        <!-- Retired duplicate Cut button kept GONE for ID compatibility -->
+
                         <TextView
                             android:id="@+id/btnCutDelete"
                             android:layout_width="0dp"
                             android:layout_height="0dp"
                             android:visibility="gone" />
-    
+
                         <TextView
                             android:id="@+id/btnDspFx"
                             android:layout_width="wrap_content"
@@ -498,7 +519,7 @@
                             android:text="FX"
                             android:textColor="@color/text_secondary"
                             android:textSize="11sp" />
-    
+
                         <TextView
                             android:id="@+id/btnEditUndo"
                             android:layout_width="wrap_content"
@@ -514,106 +535,38 @@
                     </LinearLayout>
                 </HorizontalScrollView>
 
-                <!-- Timer + Preset/Teleprompter Pills -->
+                <!-- Timer moved down cleanly -->
                 <TextView
                     android:id="@+id/timerText"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="2dp"
+                    android:layout_marginTop="4dp"
                     android:fontFamily="sans-serif-light"
                     android:gravity="center"
                     android:text="00:00.00"
                     android:textColor="@color/text_primary"
-                    android:textSize="28sp" />
+                    android:textSize="30sp" />
 
+                <!-- Retired teleToggle kept gone for ID compatibility -->
                 <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="2dp"
-                    android:orientation="horizontal">
+                    android:id="@+id/teleToggle"
+                    android:layout_width="wrap_content"
+                    android:layout_height="36dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:visibility="gone">
 
-                    <LinearLayout
-                        android:id="@+id/settingsRow"
-                        android:layout_width="0dp"
-                        android:layout_height="36dp"
-                        android:layout_marginEnd="3dp"
-                        android:layout_weight="1"
-                        android:background="@drawable/bg_search"
-                        android:clickable="true"
-                        android:focusable="true"
-                        android:gravity="center_vertical"
-                        android:orientation="horizontal"
-                        android:paddingLeft="8dp"
-                        android:paddingRight="6dp">
+                    <ImageView
+                        android:id="@+id/teleToggleIcon"
+                        android:layout_width="14dp"
+                        android:layout_height="14dp"
+                        android:src="@drawable/ic_pencil" />
 
-                        <LinearLayout
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:orientation="vertical">
-
-                            <TextView
-                                android:id="@+id/settingsName"
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:ellipsize="end"
-                                android:fontFamily="sans-serif-medium"
-                                android:maxLines="1"
-                                android:text="@string/preset_memo"
-                                android:textColor="@color/text_primary"
-                                android:textSize="11sp" />
-
-                            <TextView
-                                android:id="@+id/settingsSub"
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:ellipsize="end"
-                                android:maxLines="1"
-                                android:textColor="@color/text_secondary"
-                                android:textSize="9sp" />
-                        </LinearLayout>
-
-                        <ImageView
-                            android:layout_width="14dp"
-                            android:layout_height="14dp"
-                            android:alpha="0.6"
-                            android:src="@drawable/ic_chevron" />
-                    </LinearLayout>
-
-                    <LinearLayout
-                        android:id="@+id/teleToggle"
-                        android:layout_width="0dp"
-                        android:layout_height="36dp"
-                        android:layout_marginStart="3dp"
-                        android:layout_weight="1"
-                        android:background="@drawable/bg_search"
-                        android:clickable="true"
-                        android:focusable="true"
-                        android:gravity="center_vertical"
-                        android:orientation="horizontal"
-                        android:paddingLeft="8dp"
-                        android:paddingRight="8dp">
-
-                        <ImageView
-                            android:id="@+id/teleToggleIcon"
-                            android:layout_width="14dp"
-                            android:layout_height="14dp"
-                            android:alpha="0.75"
-                            android:src="@drawable/ic_pencil" />
-
-                        <TextView
-                            android:id="@+id/teleState"
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_marginStart="6dp"
-                            android:layout_weight="1"
-                            android:ellipsize="end"
-                            android:fontFamily="sans-serif-medium"
-                            android:maxLines="1"
-                            android:text="@string/tele_show"
-                            android:textColor="@color/text_primary"
-                            android:textSize="11sp" />
-                    </LinearLayout>
+                    <TextView
+                        android:id="@+id/teleState"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/tele_show" />
                 </LinearLayout>
 
                 <!-- Bottom Take Name + Hint Row -->

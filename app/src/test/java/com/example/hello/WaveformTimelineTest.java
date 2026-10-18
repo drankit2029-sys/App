@@ -342,4 +342,65 @@ public class WaveformTimelineTest {
         wv.setLive(false);
         assertEquals(0.5f, wv.peakAtForTest(20), 0.0001f);
     }
+
+    @Test
+    public void scrollingCompletelyLeftReachesZeroAndNeverSnapsTimerToDuration() throws Exception {
+        WaveformView wv = loaded(activity(), 200);
+        wv.setLive(false);
+        wv.setZoom(wv.minimumZoom());
+
+        RecordingEngine engine = RecordingEngine.get();
+        engine.abortAndDelete();
+        java.io.File raw = new java.io.File(activity().getCacheDir(), "left_zero.wav");
+        try (java.io.RandomAccessFile raf = new java.io.RandomAccessFile(raw, "rw")) {
+            int frames = 48000 * 10; // 10.0s take
+            raf.setLength(0);
+            raf.write(Dsp.wavFloatHeader(2, 48000, frames * 8L));
+            raf.setLength(44L + frames * 8L);
+        }
+        engine.attachExisting(activity(), raw, "Left Zero", 2, 48000L * 10 * 8L);
+        engine.state = RecordingEngine.State.PAUSED;
+        engine.seekCursorFrame(engine.totalFrames());
+
+        final boolean[] userScrolledWhilePaused = {false};
+        wv.setTimelineListener(new WaveformView.TimelineListener() {
+            @Override
+            public void onPlayheadScrubbed(int bucketIndex, float fraction) {
+                long totalFrames = engine.totalFrames();
+                long targetFrame = Math.round(fraction * totalFrames);
+                if (fraction >= 0.995f || targetFrame >= totalFrames - 480) {
+                    userScrolledWhilePaused[0] = false;
+                } else {
+                    userScrolledWhilePaused[0] = true;
+                }
+                engine.seekCursorFrame(targetFrame);
+            }
+
+            @Override
+            public void onSelectionChanged(boolean active, float s, float e) {}
+        });
+
+        // Drag waveform to the complete right so playhead reaches the complete left (00:00.00)
+        wv.onTouchEvent(ev(MotionEvent.ACTION_DOWN, 20f, 50f));
+        for (float x = 60f; x <= 380f; x += 40f) {
+            wv.onTouchEvent(ev(MotionEvent.ACTION_MOVE, x, 50f));
+        }
+        wv.onTouchEvent(ev(MotionEvent.ACTION_UP, 380f, 50f));
+
+        assertEquals("playhead must sit at the complete start (0.0)",
+                0.0f, wv.playheadFraction(), 0.0001f);
+        assertEquals("cursorFrames must be 0 at complete left",
+                0L, engine.cursorFrames());
+        assertTrue("userScrolledWhilePaused must be true at 00:00.00",
+                userScrolledWhilePaused[0]);
+
+        // Verify the StudioFragment.tick timer condition at cursorFrames() == 0:
+        long shownMs = (engine.cursorFrames() > 0 || userScrolledWhilePaused[0])
+                ? engine.cursorMs() : engine.durationMs();
+        assertEquals("timer at complete left must be 0 ms (00:00.00), never take duration",
+                0L, shownMs);
+        assertEquals("00:00.00", StudioFragment.formatTimer(shownMs));
+
+        engine.abortAndDelete();
+    }
 }
