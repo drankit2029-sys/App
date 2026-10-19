@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lint>
+    <!--
+      UnsafeFragmentLifecycleObserverDetector ships inside the androidx.fragment AAR's
+      lint.jar and visits Fragment lifecycle methods with a RecursiveMethodVisitor that
+      memoizes only the current path (depth cap 20, siblings re-explore). The Stage-2
+      StudioFragment call graph fans out enough to make lintAnalyzeDebug run forever
+      (CI: 40min-2h+). These three IDs share that visitor; severity=ignore makes
+      Configuration.isEnabled() false so the detector never runs.
+      See tests.txt §37.
+    -->
+    <issue id="FragmentLiveDataObserve" severity="ignore" />
+    <issue id="FragmentBackPressedCallback" severity="ignore" />
+    <issue id="FragmentAddMenuProvider" severity="ignore" />
+</lint>

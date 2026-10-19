@@ -32,6 +32,10 @@ android {
         unitTests.includeAndroidResources = true
         unitTests.returnDefaultValues = true
     }
+
+    lint {
+        lintConfig = file("lint.xml")
+    }
 }
 
 def roomVersion = '2.6.1'
