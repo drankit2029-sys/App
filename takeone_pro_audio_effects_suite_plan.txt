@@ -1,0 +1,1111 @@
+================================================================================
+TAKEONE PROFESSIONAL AUDIO EDITING & DSP EFFECTS SUITE
+COMPLETE MODIFICATION SPECIFICATION, EFFECT CATALOG & STAGE-WISE PLAN
+================================================================================
+
+PROJECT TARGET: TakeOne Android Audio Studio (com.example.hello)
+AUDIO ENGINE BASELINE: 48,000 Hz, 32-Bit IEEE Float WAV (Mono / Stereo)
+REFERENCE STANDARDS: Audacity Built-In Effects Suite & DaVinci Resolve Fairlight
+
+
+================================================================================
+SECTION 1: ROOT CAUSES OF CURRENT FX FAILURES IN TAKEONE
+================================================================================
+
+Before adding new effects, five concrete bugs in the existing codebase prevent
+the current effects panel from working reliably:
+
+1. SILENT ABORT ON FIRST "APPLY" TAP (StudioFragment.java -> commitDspFx)
+   - Current behavior: commitDspFx() executes:
+       boolean hadSel = waveform.hasSelection();
+       if (!hadSel && !ensureSelectionOrAutoEnable("Apply")) {
+           return false;
+       }
+   - Why it fails: If the user opens the FX panel, enables effects, and taps
+     "Apply" without first dragging selection handles on the waveform,
+     ensureSelectionOrAutoEnable("Apply") turns on selection mode, shows a
+     toast, and returns false without processing any audio.
+   - Dead code consequence: Eight lines later in commitDspFx(), the branch
+     `if (!hadSel) { dspBakedToRaw = true; ... }` is 100% unreachable because
+     `!hadSel` always returned false above.
+
+2. DOUBLE-PROCESSING ON PREVIEW AND SAVE (StudioFragment.java)
+   - Current behavior: Because `dspBakedToRaw` is never set to `true` when
+     applying FX to a selection (`hadSel == true`), `dspBakedToRaw` remains
+     `false` while the FX slots remain enabled (`dspConfig.isActive() == true`).
+   - Why it fails:
+     (a) When the user presses Preview (`toggleStudioPreview()`), `livePreviewDsp`
+         is created with `dspConfig` and processes the already-baked audio a
+         second time during playback.
+     (b) When the user presses Stop -> Save (`doSaveSequence()`), the check
+         `if (dspConfig != null && dspConfig.isActive() && !dspBakedToRaw)`
+         runs `EditEngine.applyDspToRange(raw, 0, totalFrames, chain, null)`
+         across the entire file, double-baking the effects.
+
+3. STREAMING ENCODER BYPASSES DSP (RecordingEngine.java / ConversionJobs.java)
+   - Current behavior: While recording, `RecordingEngine.beginStreaming()`
+     encodes raw microphone frames directly into a `.part` container file in
+     parallel.
+   - Why it fails: If `engine.abortStreaming()` is not called whenever the
+     real-time FX chain is active, `ConversionJobs.dispatchSave()` adopts the
+     pre-encoded `.part` file, completely ignoring any enabled FX in `dspConfig`
+     that were not destructively baked into `raw`.
+
+4. SINGLE-VALUE SLOT LIMITATION & HARDCODED PIPELINE ORDER (DspChain.java)
+   - Current behavior: `DspChain.EffectSlot` only stores a single integer
+     `public int value` (0..100%) and copies it into flat legacy fields
+     (`noisePct`, `deEssPct`, `compPct`, etc.) via `syncLegacyFieldsFromSlots()`.
+   - Why it fails:
+     (a) Users cannot customize essential parameters (e.g., Compressor
+         Threshold, Ratio, Attack, Release, Knee, Make-up Gain; or EQ Band
+         Frequency, Gain dB, Q/Bandwidth, Filter Type).
+     (b) Reordering slots in `dspConfig.slots` has zero effect on audio
+         processing because `DspChain.processInPlace()` executes a fixed
+         7-stage hardcoded sequence.
+     (c) You cannot add multiple instances of an effect (e.g., two Notch
+         filters or multiple Parametric EQ bands).
+     (d) Stage 2 (Noise Suppression) and Stage 4 (Warmth/Presence) use crude
+         1st-order single-pole RC smoothing (`y += alpha * (x - y)`) instead of
+         proper biquad filters or STFT spectral processing.
+
+5. MISSING BOUNDARY CROSSFADES & TAIL FLUSHING (EditEngine.java)
+   - Current behavior: `EditEngine.applyDspToRange()` reads and overwrites
+     4,096-frame blocks from `startFrame` to `endFrame` with zero crossfade at
+     the selection boundaries.
+   - Why it fails: Applying gain, EQ, phase, or dynamics changes to a sub-region
+     creates a step discontinuity at `startFrame` and `endFrame` (audible click),
+     and time-based effects (Reverb, Delay, Echo) have their tails abruptly
+     chopped off at `endFrame`.
+
+
+================================================================================
+SECTION 2: FILE-BY-FILE MODIFICATIONS REQUIRED IN EXISTING TAKEONE FILES
+================================================================================
+
+Below is the complete list of existing files in `app/src/main/` that must be
+modified and the exact changes required in each file.
+
+--------------------------------------------------------------------------------
+FILE 1: app/src/main/java/com/example/hello/StudioFragment.java
+--------------------------------------------------------------------------------
+1. Fix `commitDspFx()` Selection vs. Full-Take Behavior:
+   - Remove the forced early return `if (!hadSel && !ensureSelectionOrAutoEnable("Apply")) return false;`.
+   - When `waveform.hasSelection()` is `true`: apply the active FX chain to
+     `[selStartFrame, selEndFrame)` with 240-frame (5 ms) raised-cosine
+     boundary crossfades, reload waveform peaks for that range, and auto-disarm
+     (or prompt to reset) one-shot offline effects so they are not re-applied
+     during preview.
+   - When `waveform.hasSelection()` is `false`: apply the active FX chain to
+     the entire take `[0, totalFrames)`, set `dspBakedToRaw = true`, and reload
+     all waveform peaks (`waveform.reloadSelectionPeaksFromWav(raw, 0f, 1f)`).
+2. Separate "Live Insert Rack" from "Offline Region Apply":
+   - Add a mode switch in `fxPanel`:
+     * Mode A: "Realtime Rack" (Fairlight style) - effects run live inside
+       `RawFloatPlayer` during preview and are rendered once on final Save
+       (non-destructive until Save).
+     * Mode B: "Apply to Selection / Track" (Audacity style) - destructively
+       bakes the selected effect(s) into `engine.rawFile` (with full Undo
+       support via `activeUndoJournal()`) and resets the baked slot so it is
+       never double-applied on Preview or Save.
+3. Upgrade `rebuildFxRackList()` for Multi-Parameter Inspection:
+   - Instead of rendering a single `TeleValue` per `EffectSlot`, iterate over
+     `processor.getParameters()` when a slot is expanded:
+     * Render `FloatParam` / `IntParam` using high-resolution `TeleValue`
+       controls (using `setValueScale()` for 0.1 dB / 0.01 Q / 1 Hz precision).
+     * Render `EnumParam` as horizontal selectable chip rows (e.g., Filter Type:
+       LPF, HPF, Peak, Notch, Low-Shelf, High-Shelf).
+     * Render `BooleanParam` as a compact toggle switch row.
+     * Render custom visual canvases at the top of expanded EQ / Dynamics /
+       Filter-Curve cards (`ParametricEqView`, `GraphicEqView`,
+       `DynamicsGraphView`, `FilterCurveEqView`).
+4. Add Category Tabs in `showAddEffectSearchDialog()`:
+   - Group the searchable "+ Add Effect" modal into 8 filterable categories:
+     `All`, `EQ & Filters`, `Dynamics`, `Restoration`, `Reverb & Delay`,
+     `Pitch & Time`, `Distortion & Mod`, `Fades & Utility`, `Generators & Analyze`.
+5. Add Background Progress Dialog for Heavy Offline Effects:
+   - Offline effects that process large ranges or alter file length (e.g.,
+     Spectral Noise Reduction, EBU R128 Loudness Normalization, Change Pitch,
+     Change Tempo, Paulstretch, Truncate Silence) must run on a background
+     worker thread with `showDeterminateProgress()` rather than blocking the
+     main UI thread.
+
+--------------------------------------------------------------------------------
+FILE 2: app/src/main/java/com/example/hello/EditEngine.java
+--------------------------------------------------------------------------------
+1. Upgrade `applyDspToRange()` with 240-Frame Boundary Crossfades:
+   - Read 240 frames (`Dsp.CROSSFADE_FRAMES` = 5 ms at 48 kHz) before `startFrame`
+     and 240 frames at `endFrame`.
+   - Pre-roll the `AudioProcessor` chain over the 240 frames preceding
+     `startFrame` so IIR filter states (`z1, z2`) and envelope followers settle
+     before the splice point.
+   - Crossfade the dry signal into the wet processed signal over the first 240
+     frames of the selection, and crossfade the wet processed signal back into
+     the dry signal over the last 240 frames using `Dsp.crossfadeFrames()`.
+2. Add `applyLengthChangingEffectToRange()` for Time/Pitch/Repeat/Truncate:
+   - Some Audacity effects change the number of frames in the selection (e.g.,
+     `Change Tempo`, `Change Speed and Pitch`, `Sliding Stretch`, `Paulstretch`,
+     `Repeat`, `Truncate Silence`).
+   - Implement `applyLengthChangingEffectToRange(File raw, long startFrame, long endFrame, OfflineAudioProcessor proc, UndoJournal undo)`:
+     * Snapshot `raw` into `undo`.
+     * Stash the post-selection tail `[endFrame, totalFrames)` using existing
+       `saveTailFrom(raw, endFrame, tailTmp)`.
+     * Stream `[startFrame, endFrame)` through `proc` to write the new
+       variable-length output starting at `startFrame` (with a 240-frame
+       crossfade at `startFrame`).
+     * Call existing `spliceTailAfterReplace(raw, newEndFrame, tailTmp)` to
+       crossfade and append the tail and update the 44-byte WAV header.
+3. Add Two-Pass Analysis + Render Support (`applyTwoPassEffectToRange()`):
+   - Pass 1 scans `[startFrame, endFrame)` in 64 KB float chunks and feeds
+     `processor.analyzeBlock(fBuf, frames, ch)` (used by `Amplify`, `Normalize`,
+     `Loudness Normalization EBU R128`, `Auto Duck`, and `Find Clipping`).
+   - `processor.finishAnalysis()` computes the exact target gain or envelope.
+   - Pass 2 streams `[startFrame, endFrame)` through `processor.processBlock()`
+     and writes the result in-place.
+
+--------------------------------------------------------------------------------
+FILE 3: app/src/main/java/com/example/hello/RawFloatPlayer.java
+--------------------------------------------------------------------------------
+1. Replace Monolithic `DspChain` Field with `FxRackChain`:
+   - Allow `RawFloatPlayer` to hold the modular `FxRackChain` and call
+     `fxRackChain.processBlock(buf, want, channels)` on every 1,024-frame
+     playback chunk.
+2. Add Real-Time FFT Spectrum & Gain-Reduction Telemetry Callback:
+   - Add an optional `TelemetryListener` (`onAudioBlockPlayed(float[] postFxSamples, int frames, int channels, float peakLevel, float gainReductionDb)`)
+     that posts decimated spectrum bins (~30–60 fps) to `ParametricEqView`
+     (live RTA analyzer) and gain reduction values to `DynamicsGraphView`.
+3. Add Dry/Wet Bypass Toggle During Live Playback:
+   - Support atomic toggling of individual effect slots (`slot.setEnabled()`)
+     and global FX bypass while `RawFloatPlayer` is actively streaming so the
+     user can A/B compare Dry vs. Wet in real time without restarting playback.
+
+--------------------------------------------------------------------------------
+FILE 4: app/src/main/java/com/example/hello/Dsp.java
+--------------------------------------------------------------------------------
+1. Add Core Mathematical Primitives (Zero Android Dependencies for Pure JUnit):
+   - `Biquad` coefficient calculators for all 8 Robert Bristow-Johnson (RBJ)
+     Audio EQ Cookbook filter types (`LOWPASS`, `HIGHPASS`, `BANDPASS_CSG`,
+     `BANDPASS_CZPG`, `NOTCH`, `ALLPASS`, `PEAKING_EQ`, `LOW_SHELF`, `HIGH_SHELF`).
+   - Higher-order filter cascade builders:
+     * `butterworthCascade(boolean highpass, double freqHz, int sampleRate, int order)`
+     * `chebyshevCascade(boolean highpass, int type, double freqHz, double rippleDb, int sampleRate, int order)`
+   - In-place Radix-2 Cooley-Tukey Complex FFT (`fftInPlace(float[] real, float[] imag, boolean invert)`)
+     and window generators (`hannWindow(int size)`, `blackmanHarrisWindow(int size)`).
+   - EBU R128 / ITU-R BS.1770-4 K-Weighting filter coefficients (Stage 1 pre-filter
+     high-shelf at 1681.97 Hz +4.0 dB; Stage 2 RLB high-pass at 38.13 Hz) and
+     400 ms gating block loudness integrator.
+   - Cubic Hermite 4-point fractional delay interpolator (`hermiteInterp(float[] ring, int mask, float readPos)`)
+     for Chorus, Flanger, Vibrato, Variable Delay, and Pitch Shifting.
+
+--------------------------------------------------------------------------------
+FILE 5: app/src/main/java/com/example/hello/TeleValue.java
+--------------------------------------------------------------------------------
+1. Support Signed Decibel, Logarithmic Frequency, and Float Formatting:
+   - `TeleValue` already supports `min`, `max`, `step`, `valueScale`, and
+     `StepRule`.
+   - Add a `ValueFormatter` hook (`public interface ValueFormatter { String format(int rawValue); }`)
+     so:
+     * Signed decibel parameters can display `"+6.5 dB"` or `"-18.0 dB"`.
+     * Frequency parameters can display `"85 Hz"` below 1,000 Hz and `"3.50 kHz"`
+       at or above 1,000 Hz.
+     * Ratio parameters can display `"4.0 : 1"`.
+     * Pan parameters can display `"35% L"`, `"Center"`, `"35% R"`.
+   - Allow negative numbers in `showKeyboardInput()` when `min < 0` by adding
+     `InputType.TYPE_NUMBER_FLAG_SIGNED` whenever `min < 0`.
+
+--------------------------------------------------------------------------------
+FILE 6: app/src/main/java/com/example/hello/WaveformView.java
+--------------------------------------------------------------------------------
+1. Add Support for Length-Changing Edits & Label/Clipping Overlays:
+   - Add `replaceSelectionBucketsWithFileRange(File raw, long newStartFrame, long newEndFrame, long newTotalFrames)`
+     so effects that change duration (`Change Tempo`, `Change Speed`,
+     `Truncate Silence`, `Repeat`) smoothly update the waveform bar history.
+   - Add optional clipping marker ticks (`setClippingFrames(long[] frames)`) and
+     silence/beat label markers (`setRegionLabels(List<AudioLabel> labels)`) so
+     Audacity analyzers (`Find Clipping`, `Label Sounds`, `Beat Finder`) can
+     visually annotate the waveform.
+
+--------------------------------------------------------------------------------
+FILE 7: app/src/main/java/com/example/hello/ConversionJobs.java & TakeSaver.java
+--------------------------------------------------------------------------------
+1. Guard Incremental Streaming Adoption When Live FX Are Active:
+   - In `ConversionJobs.dispatchSave()`, check whether an unbaked real-time FX
+     rack is active. If so, call `engine.abortStreaming()`, bake the active
+     `FxRackChain` into `raw` (or stream `raw` through `FxRackChain` inside
+     `FormatConverter`), and then encode the final container file so saved takes
+     always include the user's effects.
+
+
+================================================================================
+SECTION 3: NEW JAVA CLASSES & PACKAGES TO CREATE
+================================================================================
+
+Create a clean subpackage `com.example.hello.fx` (or keep in `com.example.hello`
+to match the flat package structure) containing the following modular classes:
+
+1. `FxParameter.java`
+   - Defines strongly typed, serializable parameter descriptors:
+     * `Type`: `FLOAT`, `INT`, `BOOLEAN`, `ENUM`, `ACTION`, `CURVE_NODES`
+     * `Scale`: `LINEAR`, `LOGARITHMIC`, `DECIBEL`, `PIECEWISE_FREQ`
+     * Fields: `String id`, `String name`, `String unit`, `int minRaw`,
+       `int maxRaw`, `int stepRaw`, `int defaultRaw`, `int scaleDivisor`,
+       `int currentRaw`, `String[] enumLabels`.
+     * Helper methods: `float getFloat()`, `void setFloat(float v)`,
+       `boolean getBoolean()`, `int getEnumIndex()`, `String formatDisplay()`.
+
+2. `AudioProcessor.java`
+   - Base abstract class for all 46+ effects:
+     * `public abstract String getId();`
+     * `public abstract String getTitle();`
+     * `public abstract String getDescription();`
+     * `public abstract FxCategory getCategory();`
+     * `public boolean isEnabled();` / `public void setEnabled(boolean en);`
+     * `public float getWetDryMix();` / `public void setWetDryMix(float mix0to1);`
+     * `public List<FxParameter> getParameters();`
+     * `public abstract void prepare(int sampleRate, int channels);`
+     * `public abstract void reset();`
+     * `public abstract void processInPlace(float[] interleaved, int frames, int channels);`
+     * `public boolean isOfflineOnly()` (default `false`; `true` for 2-pass or
+       duration-changing processors)
+     * `public int getTailFrames()` (default `0`; non-zero for Reverb/Delay/Echo)
+     * `public JSONObject saveState()` / `public void loadState(JSONObject json)`
+
+3. `FxRackChain.java`
+   - Replaces the hardcoded `DspChain` internals while keeping a backwards-
+     compatible facade for existing tests (`DspChainTest`):
+     * Holds `CopyOnWriteArrayList<AudioProcessor> processors`.
+     * Supports `addProcessor(AudioProcessor p)`, `removeProcessor(int idx)`,
+       `moveProcessor(int fromIdx, int toIdx)`, `clear()`, `loadPreset(String id)`.
+     * `processInPlace(float[] buf, int frames)`: loops through all enabled
+       processors in exact rack order. If a processor's `wetDryMix < 1.0f`,
+       blends dry and wet buffers sample-accurately.
+
+4. `BiquadFilter.java`
+   - Per-channel Direct Form II Transposed biquad filter with smoothed
+     coefficient interpolation (prevents zipper noise when dragging EQ nodes
+     live during playback).
+   - Evaluates complex transfer function magnitude $|H(e^{j\omega})|$ at any
+     frequency $f$ so `ParametricEqView` can draw the exact dB response curve:
+     $$|H(e^{j\omega})|^2 = rac{(b_0 + b_1\cos\omega + b_2\cos 2\omega)^2 + (b_1\sin\omega + b_2\sin 2\omega)^2}{(1 + a_1\cos\omega + a_2\cos 2\omega)^2 + (a_1\sin\omega + a_2\sin 2\omega)^2}$$
+
+5. `StftProcessor.java`
+   - Reusable Short-Time Fourier Transform overlap-add framework:
+     * Configurable `fftSize` (512, 1024, 2048, 4096) and `hopSize` (`fftSize / 4`).
+     * Maintains per-channel input/output circular ring buffers and analysis/
+       synthesis Hann windows.
+     * Subclasses only implement `processSpectrum(float[] mag, float[] phase, int bins, int channel)`.
+
+6. `ParametricEqView.java` (Custom Interactive View)
+   - Draws a Fairlight-style dark grid from `20 Hz` to `20 kHz` (logarithmic
+     X-axis with grid lines at `50, 100, 200, 500, 1k, 2k, 5k, 10k Hz`) and
+     `-24 dB` to `+24 dB` (linear Y-axis with `0 dB` center line).
+   - Draws real-time FFT spectrum analyzer fill behind the EQ curve.
+   - Draws individual band curves (translucent fill) and the composite sum
+     curve (bright stroke).
+   - Supports touch-dragging band handles (`1`..`6`) to adjust Frequency and
+     Gain simultaneously, two-finger pinch to adjust $Q$, and double-tap on a
+     node to reset its gain to `0 dB`.
+
+7. `DynamicsGraphView.java` (Custom Interactive View)
+   - Draws the `-60 dBFS` to `0 dBFS` input-vs-output transfer curve showing
+     Threshold, Ratio slope, Soft Knee arc, and Noise Floor gate, plus a live
+     vertical Gain Reduction (`GR`) meter bar in red.
+
+
+================================================================================
+SECTION 4: COMPLETE CATALOG OF EFFECTS TO REPLICATE (AUDACITY + FAIRLIGHT)
+           WITH EXACT PARAMETERS & ALGORITHMS
+================================================================================
+
+--------------------------------------------------------------------------------
+CATEGORY A: EQUALIZERS & FILTERS (9 PROCESSORS)
+--------------------------------------------------------------------------------
+
+A1. 6-Band Parametric Equalizer (DaVinci Fairlight Channel Strip EQ)
+    - Mode: Real-Time & Offline
+    - Parameters:
+      * Band 1 (Low Cut): Enable (bool), Freq (20..500 Hz, default 80 Hz),
+        Slope (12, 24, 36, 48 dB/oct)
+      * Band 2 (Low Shelf / Bell): Enable (bool), Shape (Low Shelf / Peak),
+        Freq (30..600 Hz, default 120 Hz), Gain (-24..+24 dB), Q (0.3..10.0)
+      * Band 3 (Low-Mid Bell): Enable (bool), Freq (100..2000 Hz, default 350 Hz),
+        Gain (-24..+24 dB), Q (0.3..16.0, default 1.2)
+      * Band 4 (High-Mid Bell): Enable (bool), Freq (500..8000 Hz, default 2500 Hz),
+        Gain (-24..+24 dB), Q (0.3..16.0, default 1.2)
+      * Band 5 (High Shelf / Bell): Enable (bool), Shape (High Shelf / Peak),
+        Freq (1500..18000 Hz, default 6500 Hz), Gain (-24..+24 dB), Q (0.3..10.0)
+      * Band 6 (High Cut): Enable (bool), Freq (2000..20000 Hz, default 16000 Hz),
+        Slope (12, 24, 36, 48 dB/oct)
+      * Master Output Gain (-18..+18 dB, default 0.0 dB)
+    - Algorithm: 6 cascaded RBJ Biquad sections per channel; Band 1 & Band 6
+      cascade 1 to 4 Butterworth biquad sections according to selected slope.
+
+A2. Graphic EQ (Audacity 10-Band & 31-Band Graphic EQ)
+    - Mode: Real-Time & Offline
+    - Parameters:
+      * Mode Enum: `10-Band ISO Octave` (`31, 63, 125, 250, 500, 1k, 2k, 4k, 8k, 16k Hz`)
+        or `31-Band ISO 1/3-Octave` (`20, 25, 31.5, 40, 50, 63, 80, 100, 125, 160,
+        200, 250, 315, 400, 500, 630, 800, 1k, 1.25k, 1.6k, 2k, 2.5k, 3.15k, 4k,
+        5k, 6.3k, 8k, 10k, 12.5k, 16k, 20k Hz`)
+      * Band Gains: `-20.0 dB` to `+20.0 dB` per slider (default `0.0 dB`)
+      * Master Gain: `-18.0 dB` to `+18.0 dB`
+    - Algorithm: Series bank of constant-Q RBJ Peaking EQ biquads ($Q = 1.414$
+      for 10-band, $Q = 4.318$ for 31-band) with zero-phase or minimum-phase
+      option.
+
+A3. Filter Curve EQ (Audacity Drawn Envelope EQ)
+    - Mode: Real-Time & Offline
+    - Parameters:
+      * Control Points List: `[(freqHz, gainDb), ...]` up to 32 points
+      * Interpolation: `Logarithmic Spline` / `Linear dB`
+      * Filter Length: `1024`, `2048`, or `4096` taps
+    - Algorithm: Interpolates control points across 1025 FFT bins (0..24 kHz),
+      synthesizes a linear-phase windowed FIR impulse response via IFFT, and
+      convolves via `StftProcessor`.
+
+A4. Bass and Treble (Audacity)
+    - Mode: Real-Time & Offline
+    - Parameters:
+      * Bass Gain (`-30.0 to +30.0 dB`, default `0.0 dB`, corner `250 Hz`)
+      * Treble Gain (`-30.0 to +30.0 dB`, default `0.0 dB`, corner `4000 Hz`)
+      * Level / Volume (`-30.0 to +30.0 dB`, default `0.0 dB`)
+      * Link Volume to prevent clipping (`boolean`, default `true`)
+    - Algorithm: RBJ Low-Shelf biquad at 250 Hz ($S = 0.707$) + RBJ High-Shelf
+      biquad at 4000 Hz ($S = 0.707$) + output gain scalar.
+
+A5. High-Pass Filter (Audacity)
+    - Mode: Real-Time & Offline
+    - Parameters:
+      * Cutoff Frequency (`20..20000 Hz`, default `80 Hz`)
+      * Roll-off Slope (`6, 12, 18, 24, 36, 48 dB/octave`, default `12 dB/oct`)
+    - Algorithm: Cascaded Butterworth high-pass filter sections with exact pole
+      angles $	heta_k = rac{\pi}{2N}(2k + N - 1)$.
+
+A6. Low-Pass Filter (Audacity)
+    - Mode: Real-Time & Offline
+    - Parameters:
+      * Cutoff Frequency (`20..20000 Hz`, default `12000 Hz`)
+      * Roll-off Slope (`6, 12, 18, 24, 36, 48 dB/octave`, default `12 dB/oct`)
+    - Algorithm: Cascaded Butterworth low-pass filter sections.
+
+A7. Notch Filter (Audacity)
+    - Mode: Real-Time & Offline
+    - Parameters:
+      * Frequency (`20..20000 Hz`, default `60 Hz`)
+      * Q Factor (`0.1..50.0`, default `5.0`)
+    - Algorithm: 2nd-order RBJ Notch biquad section.
+
+A8. Shelf Filter (Audacity)
+    - Mode: Real-Time & Offline
+    - Parameters:
+      * Type (`Low Shelf`, `High Shelf`)
+      * Frequency (`20..20000 Hz`, default `200 Hz`)
+      * Gain (`-24.0..+24.0 dB`, default `0.0 dB`)
+      * Slope $S$ (`0.1..2.0`, default `1.0`)
+    - Algorithm: RBJ Low-Shelf / High-Shelf biquad.
+
+A9. Classic Filters (Audacity Butterworth / Chebyshev Type I & II / Bessel)
+    - Mode: Real-Time & Offline
+    - Parameters:
+      * Polynomial (`Butterworth`, `Chebyshev Type I`, `Chebyshev Type II`, `Bessel`)
+      * Passband (`Low-Pass`, `High-Pass`)
+      * Filter Order (`1..10`, default `4`)
+      * Cutoff Frequency (`20..20000 Hz`, default `1000 Hz`)
+      * Passband/Stopband Ripple (`0.1..10.0 dB`, default `1.0 dB`)
+    - Algorithm: Computes analog $s$-plane poles/zeros, applies bilinear
+      transform with $\omega_a = rac{2}{T}	an(\omega_d T / 2)$ pre-warping,
+      and factors into cascaded 2nd-order biquad stages.
+
+--------------------------------------------------------------------------------
+CATEGORY B: VOLUME, DYNAMICS & MASTERING (9 PROCESSORS)
+--------------------------------------------------------------------------------
+
+B1. Amplify (Audacity)
+    - Mode: Offline Two-Pass (or Real-Time Trim when `Auto Peak` is off)
+    - Parameters:
+      * Amplification (`-50.0 to +50.0 dB`, auto-initialized to `-peakDb`)
+      * New Peak Amplitude (`-50.0 to +12.0 dBFS`, linked to Amplification)
+      * Allow Clipping (`boolean`, default `false`)
+    - Algorithm: Pass 1 scans peak amplitude $P = \max |x[n]|$; Pass 2 applies
+      scalar $g = 10^{	ext{dB}/20}$ (clamping $	ext{dB} \le -20\log_{10} P$
+      when `Allow Clipping` is false).
+
+B2. Normalize (Audacity)
+    - Mode: Offline Two-Pass
+    - Parameters:
+      * Remove DC Offset (`boolean`, default `true`)
+      * Normalize Peak Amplitude (`boolean`, default `true`)
+      * Target Peak Level (`-60.0 to 0.0 dBFS`, default `-1.0 dBFS`)
+      * Normalize Stereo Channels Independently (`boolean`, default `false`)
+    - Algorithm: Pass 1 computes per-channel mean $\mu_c = rac{1}{N}\sum x_c[n]$
+      and DC-corrected peak $P_c = \max |x_c[n] - \mu_c|$; Pass 2 subtracts
+      $\mu_c$ and multiplies by $10^{	ext{targetDb}/20} / P$.
+
+B3. Loudness Normalization - EBU R128 / LUFS (Audacity)
+    - Mode: Offline Two-Pass
+    - Parameters:
+      * Normalization Mode (`Perceived Loudness LUFS`, `RMS dBFS`)
+      * Target Loudness (`-70.0 to 0.0 LUFS/dB`, default `-16.0 LUFS` for
+        podcast/mobile, `-23.0 LUFS` for broadcast)
+      * Treat Mono as Dual-Mono (`boolean`, default `true`)
+      * True-Peak Limiter Ceiling (`-3.0 to -0.1 dBFS`, default `-1.0 dBFS`)
+    - Algorithm: Pass 1 runs ITU-R BS.1770-4 K-weighting filter, computes
+      400 ms block energies with 75% overlap, applies `-70 LUFS` absolute gate
+      and `-10 LU` relative gate to find integrated LUFS; Pass 2 applies linear
+      gain and a 2 ms lookahead true-peak limiter so peaks never clip.
+
+B4. Compressor (Audacity + Fairlight Dynamics Compressor)
+    - Mode: Real-Time & Offline
+    - Parameters:
+      * Threshold (`-60.0 to -1.0 dBFS`, default `-18.0 dB`)
+      * Noise Floor (`-80.0 to -20.0 dBFS`, default `-50.0 dB`)
+      * Ratio (`1.1:1 to 20.0:1`, default `3.0:1`)
+      * Knee Width (`0.0 to 12.0 dB`, default `6.0 dB`)
+      * Attack Time (`0.5 to 250.0 ms`, default `12.0 ms`)
+      * Release Time (`10.0 to 2500.0 ms`, default `180.0 ms`)
+      * Detection Mode (`RMS`, `Peak`)
+      * Make-up Gain (`0.0 to +24.0 dB` or `Auto Make-up` bool)
+      * Compress Based on Peaks / Upward Mode (`boolean`, default `false`)
+      * Wet/Dry Mix (`0..100%`, default `100%` for parallel compression)
+    - Algorithm: Log-domain soft-knee gain computer with decoupled attack/release
+      one-pole envelope detector and noise-floor freeze (prevents boosting
+      background noise during pauses).
+
+B5. Multiband Compressor (3-Band Broadcast Vocal Leveler)
+    - Mode: Real-Time & Offline
+    - Parameters:
+      * Low/Mid Crossover (`80..800 Hz`, default `220 Hz`)
+      * Mid/High Crossover (`1500..8000 Hz`, default `3500 Hz`)
+      * Per-Band (Low, Mid, High): Threshold (`dB`), Ratio (`:1`), Attack (`ms`),
+        Release (`ms`), Band Gain (`-12..+12 dB`), Solo/Mute (`bool`)
+    - Algorithm: Linkwitz-Riley 4th-order (24 dB/oct) phase-coherent crossover
+      network splitting audio into 3 bands, independent soft-knee compressor
+      per band, and phase-aligned summation.
+
+B6. Limiter (Audacity + Fairlight Brickwall Limiter)
+    - Mode: Real-Time & Offline
+    - Parameters:
+      * Limiter Type (`Soft Limit`, `Hard Limit`, `Soft Clip`, `Hard Clip`)
+      * Input Gain Left/Linked (`0.0 to +24.0 dB`, default `+3.0 dB`)
+      * Limit / Ceiling (`-15.0 to -0.05 dBFS`, default `-0.3 dBFS`)
+      * Hold (`1.0 to 50.0 ms`, default `10.0 ms`)
+      * Release (`10.0 to 500.0 ms`, default `80.0 ms`)
+      * Apply Make-up Gain (`boolean`, default `false`)
+    - Algorithm: For `Soft/Hard Limit`: 3 ms (144-frame) lookahead delay ring
+      buffer with sliding minimum-gain envelope. For `Soft/Hard Clip`: memoryless
+      polynomial / $	anh$ saturation ceiling.
+
+B7. Noise Gate / Downward Expander (Audacity + Fairlight Gate/Expander)
+    - Mode: Real-Time & Offline
+    - Parameters:
+      * Mode (`Gate`, `Downward Expander`)
+      * Threshold (`-96.0 to -6.0 dBFS`, default `-42.0 dB`)
+      * Hysteresis / Close Offset (`0.0 to 12.0 dB`, default `4.0 dB`)
+      * Level Reduction / Range (`-100.0 to 0.0 dB`, default `-24.0 dB`)
+      * Ratio (`1.2:1 to 10.0:1`, used in Expander mode, default `2.5:1`)
+      * Attack (`0.5 to 250.0 ms`, default `8.0 ms`)
+      * Hold (`0.0 to 1000.0 ms`, default `60.0 ms`)
+      * Decay / Release (`10.0 to 3000.0 ms`, default `220.0 ms`)
+      * Sidechain High-Pass (`20..2000 Hz`, default `120 Hz` so low rumble does
+        not false-trigger the gate)
+    - Algorithm: Sidechain HPF -> Peak envelope detector with hold timer,
+      dual-threshold hysteresis state machine (`CLOSED`, `ATTACK`, `OPEN`,
+      `HOLD`, `RELEASE`), and 2 ms lookahead buffer.
+
+B8. De-Esser (Fairlight Split-Band Sibilance Processor)
+    - Mode: Real-Time & Offline
+    - Parameters:
+      * Center Frequency (`3500..12000 Hz`, default `6800 Hz`)
+      * Bandwidth / Q (`0.5..6.0`, default `1.6`)
+      * Threshold (`-48.0 to 0.0 dB`, default `-18.0 dB`)
+      * Max Reduction (`0.0 to 24.0 dB`, default `10.0 dB`)
+      * Mode (`Split-Band Dynamic EQ`, `Broadband`)
+      * Listen to Sibilance Sidechain (`boolean`, default `false`)
+    - Algorithm: Bandpass biquad extracts sibilance energy $E_{	ext{sib}}$ and
+      compares it in dB against broadband energy $E_{	ext{full}}$ (relative
+      detection so quiet whispers and loud shouts de-ess equally well).
+
+B9. Auto Duck / Voiceover Sidechain Leveler (Audacity)
+    - Mode: Offline Two-Pass / Real-Time Envelope
+    - Parameters:
+      * Duck Amount (`-36.0 to 0.0 dB`, default `-12.0 dB`)
+      * Threshold (`-60.0 to -6.0 dBFS`, default `-30.0 dB`)
+      * Maximum Pause (`50 to 5000 ms`, default `800 ms`)
+      * Fade Down Time (`10 to 2000 ms`, default `200 ms`)
+      * Fade Up Time (`10 to 2000 ms`, default `400 ms`)
+    - Algorithm: Detects active speech intervals above threshold, bridges gaps
+      shorter than `Maximum Pause`, and applies trapezoidal dB gain ramps.
+
+--------------------------------------------------------------------------------
+CATEGORY C: NOISE REMOVAL & AUDIO RESTORATION (6 PROCESSORS)
+--------------------------------------------------------------------------------
+
+C1. Spectral Noise Reduction (Audacity Two-Step Noise Profile + Reduction)
+    - Mode: Real-Time & Offline (with "Capture Noise Profile" action)
+    - Parameters:
+      * Action Button: `Capture Noise Profile from Selection` (or auto-estimate
+        from quietest 300 ms window if no profile captured yet)
+      * Noise Reduction (`0.0 to 48.0 dB`, default `12.0 dB`)
+      * Sensitivity (`0.0 to 24.0`, default `6.0`)
+      * Frequency Smoothing Bands (`0 to 12`, default `3`)
+      * Mode (`Reduce Noise`, `Isolate / Keep Only Noise`)
+    - Algorithm:
+      * Step 1 (Profile): 2048-point Hann STFT (75% overlap) records mean power
+        $\mu_k$ and variance $\sigma_k$ for each of the 1,025 frequency bins.
+      * Step 2 (Reduction): For each STFT frame $t$ and bin $k$, compares local
+        power $|X(t,k)|^2$ against $10^{	ext{Sensitivity}/10} \cdot \mu_k$.
+        Applies time-median lookahead/lookback filtering across 3 frames and
+        frequency-domain moving-average smoothing across $\pm B$ bins to
+        prevent "musical noise" birdies.
+
+C2. Click Removal (Audacity De-Clicker)
+    - Mode: Offline / Real-Time Lookahead
+    - Parameters:
+      * Threshold (`1..900`, default `200`)
+      * Max Spike Width (`1..40 ms`, default `10 ms`)
+    - Algorithm: Computes local energy ratio between a narrow window ($W$) and
+      a surrounding context window ($8W$). When the ratio exceeds threshold,
+      replaces the spike samples via cubic Hermite / LPC interpolation.
+
+C3. Clip Fix (Audacity De-Clipper)
+    - Mode: Offline Two-Pass
+    - Parameters:
+      * Threshold of Clipping (`80..100%`, default `95%`)
+      * Headroom Gain Reduction (`-18.0 to 0.0 dB`, default `-6.0 dB`)
+    - Algorithm: Scales audio down by `Headroom Gain Reduction` to create
+      headroom, identifies contiguous runs where $|x[n]| \ge T_{	ext{clip}} \cdot P_{\max}$,
+      computes boundary derivatives $x'[n_1], x'[n_2]$ from unclipped neighbors,
+      and reconstructs the clipped crest with a cubic Hermite spline.
+
+C4. Repair (Audacity Short Glitch Interpolator)
+    - Mode: Offline Selection (up to 128–512 samples)
+    - Parameters:
+      * Prediction Order (`8..32`, default `16`)
+    - Algorithm: Burg's method Linear Predictive Coding (LPC) fits forward and
+      backward autoregressive models to the 512 samples before and after the
+      selection and crossfades the forward and backward predictions across the
+      selected glitch.
+
+C5. De-Hum (Fairlight Mains 50/60 Hz Harmonic Filter)
+    - Mode: Real-Time & Offline
+    - Parameters:
+      * Base Frequency (`50.0 Hz`, `60.0 Hz`, or fine-tune `45.0..65.0 Hz`)
+      * Number of Harmonics (`1..10`, default `6`)
+      * Notch Q (`5.0..60.0`, default `25.0`)
+      * Attenuation Depth (`-48.0 to 0.0 dB`, default `-36.0 dB`)
+    - Algorithm: Bank of $K$ high-Q RBJ peaking-cut / notch biquads at
+      $k \cdot f_0$ ($k = 1 \dots K$).
+
+C6. Voice Plosive & Breath Suppressor
+    - Mode: Real-Time & Offline
+    - Parameters:
+      * Plosive Cut Sensitivity (`0..100%`, default `50%`, targets `20..140 Hz` bursts)
+      * Breath Attenuation (`0..24 dB`, default `8 dB`)
+    - Algorithm: Dynamic low-shelf/HPF triggered only when sub-140 Hz energy
+      exceeds mid-band vowel energy by $>8	ext{ dB}$ (tames 'P'/'B' mic blasts
+      without thinning normal chest voice).
+
+--------------------------------------------------------------------------------
+CATEGORY D: DELAY, REVERB & SPATIAL PROCESSING (4 PROCESSORS)
+--------------------------------------------------------------------------------
+
+D1. Studio Reverb (Audacity Freeverb / Schroeder-Moorer Stereo Reverb)
+    - Mode: Real-Time & Offline (with `getTailFrames()`)
+    - Parameters:
+      * Room Size (`0..100%`, default `55%`)
+      * Pre-Delay (`0..200 ms`, default `15 ms`)
+      * Reverberance / Decay (`0..100%`, default `50%`)
+      * Damping (`0..100%`, default `50%`)
+      * Tone Low (`-100..+100%`, default `0%`)
+      * Tone High (`-100..+100%`, default `0%`)
+      * Wet Gain (`-36.0 to +6.0 dB`, default `-8.0 dB`)
+      * Dry Gain (`-36.0 to +6.0 dB`, default `0.0 dB`)
+      * Stereo Width (`0..100%`, default `100%`)
+      * Wet Only (`boolean`, default `false`)
+    - Algorithm: Pre-delay circular buffer -> 8 parallel low-pass-feedback comb
+      filters (tuned to mutually prime delay lengths scaled to 48 kHz, offset by
+      23 samples in the right channel for stereo spread) -> 4 series all-pass
+      diffusers -> Low/High shelf tone filters -> Mid/Side stereo width mixer.
+
+D2. Delay (Audacity Configurable Multi-Echo Delay)
+    - Mode: Real-Time & Offline
+    - Parameters:
+      * Delay Type (`Regular`, `Bouncing Ball`, `Reverse Bouncing Ball`)
+      * Delay Level per Echo (`-24.0 to +1.0 dB`, default `-6.0 dB`)
+      * Delay Time (`10 to 3000 ms`, default `300 ms`)
+      * Pitch/Tempo Shift per Echo (`-12.0 to +12.0 semitones`, default `0.0`)
+      * Number of Echoes (`1..30`, default `5`)
+      * High-Cut Damping (`1000..20000 Hz`, default `8000 Hz`)
+      * Allow Duration to Change (`boolean`, default `true`)
+    - Algorithm: Delay line with feedback or discrete multi-tap accumulator
+      where tap $k$ is delayed by $k \cdot T$ (or geometric series for bouncing
+      ball) and scaled by $10^{k \cdot 	ext{levelDb}/20}$.
+
+D3. Echo (Audacity Simple Feedback Echo)
+    - Mode: Real-Time & Offline
+    - Parameters:
+      * Delay Time (`10 to 5000 ms`, default `500 ms`)
+      * Decay Factor (`0.01 to 0.95`, default `0.40`)
+    - Algorithm: Circular buffer of length $D = 	ext{round}(t_{	ext{sec}} \cdot 48000)$:
+      $y[n] = x[n] + 	ext{decay} \cdot y[n - D]$.
+
+D4. Stereo Imaging, Pan & Mid-Side Matrix (Fairlight Stereo Panner)
+    - Mode: Real-Time & Offline
+    - Parameters:
+      * Pan (`-100% Left` to `+100% Right`, default `0% Center`)
+      * Stereo Width (`0% Mono` to `200% Ultra-Wide`, default `100%`)
+      * Invert Left Phase (`bool`), Invert Right Phase (`bool`), Swap L/R (`bool`)
+      * Vocal Center Isolation / Reduction (`-100% Remove Center` to `+100% Isolate Center`)
+    - Algorithm: Constant-power pan law ($\cos	heta, \sin	heta$) + Mid/Side
+      decomposition ($M = (L+R)/2$, $S = (L-R)/2$).
+
+--------------------------------------------------------------------------------
+CATEGORY E: PITCH, SPEED & TIME MANIPULATION (5 PROCESSORS)
+--------------------------------------------------------------------------------
+
+E1. Change Pitch (Audacity Pitch Shifter Without Changing Tempo)
+    - Mode: Offline (Length Preserved) & Real-Time Dual-Delay Pitch Shifter
+    - Parameters:
+      * Semitones (`-24.0 to +24.0`, default `0.0`, step `0.5`)
+      * Cents (`-100 to +100`, default `0`)
+      * Percent Change (`-50.0 to +100.0%`)
+      * Preserve Formants for Voice (`boolean`, default `true`)
+    - Algorithm: WSOLA / Phase Vocoder time-stretches audio by factor
+      $lpha = 2^{	ext{semitones}/12}$, then windowed-sinc resamples by
+      $1/lpha$ back to the exact original frame count. When `Preserve Formants`
+      is enabled, extracts the spectral envelope via cepstral liftering / LPC
+      before pitch shifting and re-imposes it afterward so voices never sound
+      like "chipmunks".
+
+E2. Change Tempo (Audacity Time Stretch Without Changing Pitch)
+    - Mode: Offline Length-Changing
+    - Parameters:
+      * Percent Change (`-75.0% to +300.0%`, default `0.0%`)
+      * BPM From / To (`30..300 BPM`)
+      * High-Quality Speech/Transient Mode (`boolean`, default `true`)
+    - Algorithm: WSOLA (Waveform Similarity Overlap-Add) with 20 ms analysis
+      frames, 10 ms synthesis hops, and normalized cross-correlation search window
+      ($\pm 15	ext{ ms}$) to align pitch periods seamlessly without phaseiness.
+
+E3. Change Speed and Pitch (Audacity Varispeed Resampler)
+    - Mode: Offline Length-Changing
+    - Parameters:
+      * Speed Multiplier (`0.25x to 4.00x`, default `1.00x`)
+      * Percent Change (`-75.0% to +300.0%`)
+    - Algorithm: 32-tap Blackman-windowed sinc fractional resampler.
+
+E4. Sliding Stretch (Audacity Variable Tempo & Pitch Ramp)
+    - Mode: Offline Length-Changing
+    - Parameters:
+      * Initial Tempo Change (`-75% to +300%`, default `0%`)
+      * Final Tempo Change (`-75% to +300%`, default `0%`)
+      * Initial Pitch Shift (`-24 to +24 semitones`, default `0`)
+      * Final Pitch Shift (`-24 to +24 semitones`, default `0`)
+    - Algorithm: Time-varying WSOLA + fractional sinc resampler where local
+      stretch ratio $R(u)$ and pitch factor $P(u)$ interpolate linearly across
+      normalized progress $u \in [0, 1]$.
+
+E5. Paulstretch (Audacity Extreme Ambient Time Stretch)
+    - Mode: Offline Length-Changing
+    - Parameters:
+      * Stretch Factor (`1.5x to 100.0x`, default `8.0x`)
+      * Time Resolution (`0.05 to 1.00 s`, default `0.25 s`)
+    - Algorithm: Large-window STFT ($N = 8192$ or $16384$) where bin amplitudes
+      $|X[k]|$ are preserved, bin phases are replaced with uniform random angles
+      $\phi_k \sim \mathcal{U}(0, 2\pi)$ at each synthesis hop, and windows are
+      blended with $(1 - x^2)^{1.25}$ smooth overlap-add.
+
+--------------------------------------------------------------------------------
+CATEGORY F: DISTORTION, MODULATION & CREATIVE FX (6 PROCESSORS)
+--------------------------------------------------------------------------------
+
+F1. Distortion / Waveshaper (Audacity 11-Mode Distortion)
+    - Mode: Real-Time & Offline
+    - Parameters:
+      * Distortion Type (`Hard Clipping`, `Soft Clipping`, `Soft Overdrive`,
+        `Medium Overdrive`, `Hard Overdrive`, `Cubic Curve`, `Even Harmonics`,
+        `Expand and Compress`, `Leveller`, `Rectifier`, `Hard Limiter 1413`)
+      * Threshold / Clipping Level (`-40.0 to 0.0 dB`, default `-6.0 dB`)
+      * Drive / Hardness (`0..100%`, default `50%`)
+      * Make-up Gain (`0..100%`, default `50%`)
+      * Tone Low-Pass (`1000..20000 Hz`, default `12000 Hz`)
+    - Algorithm: 2x oversampled nonlinear transfer curve (e.g., cubic soft clip
+      $y = x - rac{x^3}{3}$, $	anh(k x)/	anh(k)$, full/half-wave rectifier,
+      or asymmetric tube warmth $y = x + a x^2 - b x^3$) + DC blocker HPF at
+      20 Hz + post low-pass filter.
+
+F2. Phaser (Audacity Multi-Stage All-Pass Phaser)
+    - Mode: Real-Time & Offline
+    - Parameters:
+      * Stages (`2, 4, 6, 8, 10, 12, 16, 24`, default `4`)
+      * Dry/Wet (`0..100%`, default `50%`)
+      * LFO Frequency (`0.05..4.00 Hz`, default `0.40 Hz`)
+      * LFO Start Phase (`0..360 deg`, default `0 deg`)
+      * Depth (`0..100%`, default `70%`)
+      * Feedback (`-95% to +95%`, default `30%`)
+      * Output Gain (`-18.0 to +18.0 dB`, default `0.0 dB`)
+    - Algorithm: Series cascade of $N$ 1st-order all-pass filters
+      $y[n] = a \cdot x[n] + x[n-1] - a \cdot y[n-1]$ whose coefficient
+      $a(t) = rac{1 - 	an(\pi f(t)/f_s)}{1 + 	an(\pi f(t)/f_s)}$ sweeps
+      exponentially via a stereo quadrature LFO.
+
+F3. Chorus & Flanger (Fairlight Modulation)
+    - Mode: Real-Time & Offline
+    - Parameters:
+      * Mode (`Chorus`, `Flanger`, `Doubler`)
+      * Base Delay (`1.0 to 35.0 ms`, default `18.0 ms` Chorus / `2.5 ms` Flanger)
+      * LFO Rate (`0.05 to 8.00 Hz`, default `0.80 Hz`)
+      * Modulation Depth (`0..100%`, default `45%`)
+      * Feedback (`-90% to +90%`, default `15%`)
+      * Wet/Dry Mix (`0..100%`, default `50%`)
+    - Algorithm: Modulated circular delay line read via 4-point cubic Hermite
+      interpolation with $90^\circ$ L/R stereo LFO phase offset.
+
+F4. Tremolo (Audacity Amplitude Modulator)
+    - Mode: Real-Time & Offline
+    - Parameters:
+      * Waveform (`Sine`, `Triangle`, `Sawtooth`, `Inverse Sawtooth`, `Square`)
+      * Starting Phase (`0..360 deg`, default `0 deg`)
+      * Wetness / Depth (`0..100%`, default `40%`)
+      * Frequency (`0.1 to 40.0 Hz`, default `4.0 Hz`)
+    - Algorithm: Multiplies sample amplitude by $1 - d + d \cdot rac{1 + 	ext{LFO}(\phi)}{2}$.
+
+F5. Wahwah (Audacity Swept Resonant Bandpass)
+    - Mode: Real-Time & Offline
+    - Parameters:
+      * LFO Frequency (`0.1 to 4.0 Hz`, default `1.5 Hz`)
+      * LFO Start Phase (`0..360 deg`, default `0 deg`)
+      * Depth (`0..100%`, default `70%`)
+      * Resonance / Q (`0.5 to 10.0`, default `2.5`)
+      * Wah Frequency Offset (`0..100%`, default `30%`)
+      * Envelope Auto-Wah Sensitivity (`0..100%`, default `0%`)
+      * Output Gain (`-18 to +12 dB`, default `-6.0 dB`)
+    - Algorithm: Chamberlin State-Variable Filter (SVF) or RBJ Bandpass whose
+      center frequency sweeps between `350 Hz` and `2800 Hz` via LFO + optional
+      input envelope follower.
+
+F6. Vocoder (Audacity Channel / Internal Carrier Vocoder)
+    - Mode: Offline / Real-Time
+    - Parameters:
+      * Carrier Source (`Internal Synth Saw`, `Internal White Noise`, `Right Channel`, `Radar Needles`)
+      * Carrier Pitch (`50..400 Hz`, default `110 Hz`)
+      * Number of Bands (`8, 16, 24, 32, 40`, default `20`)
+      * Envelope Distance / Release (`1..120`, default `20`)
+      * Original Audio Mix (`0..100%`, default `0%`)
+      * Noise / Sibilance Mix (`0..100%`, default `15%`)
+    - Algorithm: Logarithmically spaced 4th-order bandpass filterbank (`80 Hz`
+      to `12 kHz`). Extracts the amplitude envelope of each modulator band and
+      multiplies the matching carrier band.
+
+--------------------------------------------------------------------------------
+CATEGORY G: FADES, TIMELINE & SPECTRAL EDIT TOOLS (10 PROCESSORS)
+--------------------------------------------------------------------------------
+
+G1. Fade In (Audacity Linear Fade In)
+    - Algorithm: $y[n] = x[n] \cdot \left(rac{n}{N - 1}ight)$ over selected range.
+
+G2. Fade Out (Audacity Linear Fade Out)
+    - Algorithm: $y[n] = x[n] \cdot \left(1 - rac{n}{N - 1}ight)$ over selected range.
+
+G3. Studio Fade Out (Audacity Musical S-Curve + High-Frequency Roll-Off Fade)
+    - Algorithm: Equal-power raised-cosine S-curve gain ramp
+      $g(u) = rac{1 + \cos(\pi u)}{2}$ paired with a dynamic low-pass filter
+      sweeping from `20 kHz` down to `800 Hz` across the tail.
+
+G4. Adjustable Fade (Audacity Custom Curve Fade)
+    - Parameters:
+      * Direction (`Fade Up`, `Fade Down`)
+      * Curve Shape (`Linear`, `Logarithmic`, `Exponential`, `Cosine`, `S-Curve`)
+      * Mid-Fade Boost/Cut (`-100% to +100%`, default `0%`)
+      * Start Gain (`0..100%` or `-96..0 dB`)
+      * End Gain (`0..100%` or `-96..0 dB`)
+    - Algorithm: Parametric power/cosine interpolation between $G_{	ext{start}}$
+      and $G_{	ext{end}}$ with exponent $p = 2^{-	ext{midFade}/50}$.
+
+G5. Invert (Audacity Phase Polarity Flip)
+    - Algorithm: $y[n] = -x[n]$ for all samples in selection.
+
+G6. Reverse (Audacity Time Reversal)
+    - Algorithm: In-place bidirectional chunk swap from selection start and end
+      moving toward the midpoint, with 240-frame boundary crossfades.
+
+G7. Repeat (Audacity Selection Duplicator)
+    - Parameters:
+      * Number of Repeats (`1..50`, default `1`)
+    - Algorithm: Uses `EditEngine.applyLengthChangingEffectToRange()` to append
+      the selected region $K$ times with zero-crossing / 240-frame crossfades.
+
+G8. Truncate Silence (Audacity Automatic Pause Shortener)
+    - Parameters:
+      * Threshold (`-80.0 to -20.0 dBFS`, default `-40.0 dB`)
+      * Minimum Silence Duration (`50 to 5000 ms`, default `400 ms`)
+      * Action (`Truncate Detected Silence`, `Compress Excess Silence`)
+      * Truncate To Duration (`10 to 2000 ms`, default `150 ms`)
+      * Compress To Percentage (`5% to 90%`, default `35%`)
+    - Algorithm: Pass 1 scans 10 ms RMS windows to build a list of silent spans
+      exceeding `Minimum Silence Duration`; Pass 2 rewrites the file keeping
+      only the target duration of each silent span with 5 ms raised-cosine
+      crossfades at every cut.
+
+G9. Spectral Edit Parametric EQ / Shelf / Notch (Audacity Spectral Tools)
+    - Parameters:
+      * Low Frequency $f_1$ (`20..20000 Hz`), High Frequency $f_2$ (`20..20000 Hz`)
+      * Gain (`-36.0 to +24.0 dB`, or `Notch / Delete`)
+    - Algorithm: Computes center frequency $f_0 = \sqrt{f_1 f_2}$ and bandwidth
+      $Q = rac{f_0}{f_2 - f_1}$, and applies an RBJ Peaking/Notch/Shelf biquad
+      to the selected time range with 240-frame edge crossfades.
+
+--------------------------------------------------------------------------------
+CATEGORY H: BUILT-IN GENERATORS & AUDIO ANALYZERS (8 TOOLS)
+--------------------------------------------------------------------------------
+
+H1. Tone & Chirp Generator (Audacity)
+    - Parameters: Waveform (`Sine`, `Square`, `Sawtooth`, `Triangle`,
+      `Square No-Alias`), Start Frequency (`20..20000 Hz`), End Frequency
+      (`20..20000 Hz`), Start Amplitude (`0..100%`), End Amplitude (`0..100%`),
+      Duration (`0.1..600 s`), Interpolation (`Linear`, `Logarithmic`).
+    - Algorithm: PolyBLEP band-limited oscillator writing directly into selection
+      or inserting at playhead.
+
+H2. Noise & Silence Generator (Audacity)
+    - Parameters: Type (`White Noise`, `Pink Noise`, `Brownian Noise`, `Silence`),
+      Amplitude (`-60.0 to 0.0 dBFS`, default `-12.0 dB`), Duration (`s`).
+    - Algorithm: White = PRNG; Pink = Paul Kellet's 3-pole filter; Brownian =
+      leaky integrator ($y[n] = 0.995 y[n-1] + 0.05 w[n]$).
+
+H3. Rhythm Track / Metronome Click & Pluck Generator (Audacity)
+    - Parameters: Tempo (`30..300 BPM`), Beats per Bar (`1..16`), Bars (`1..200`),
+      Click Sound (`Ping`, `Woodblock`, `Stick`), Pluck MIDI Pitch (`24..96`).
+    - Algorithm: Karplus-Strong plucked-string delay line + damped sine bursts
+      at beat intervals.
+
+H4. DTMF Tones Generator (Audacity)
+    - Parameters: Sequence String (`0-9, *, #, A-D`), Tone Duration (`ms`),
+      Silence Gap (`ms`), Amplitude (`dBFS`).
+    - Algorithm: Dual ITU-T row/column sine oscillators.
+
+H5. Plot Spectrum Analyzer (Audacity Welch Periodogram Modal)
+    - Parameters: FFT Size (`256, 512, 1024, 2048, 4096, 8192, 16384`), Window
+      (`Hann`, `Blackman-Harris`, `Hamming`, `Rectangular`), Axis (`Log Frequency`,
+      `Linear Frequency`).
+    - Algorithm: Computes Welch's averaged periodogram across the selected region,
+      renders a full-screen interactive dB-vs-Hz plot, and displays the dominant
+      peak frequency + musical note name under the user's finger.
+
+H6. Measure RMS, LUFS & Contrast Analyzer (Audacity WCAG / Broadcast Analyzer)
+    - Output: Displays a diagnostic card with Peak dBFS, True Peak, Total RMS
+      dBFS, Integrated Loudness (LUFS), Dynamic Range (LU), DC Offset %, and
+      Foreground-vs-Background Contrast dB (WCAG 2.0 AAA speech intelligibility
+      pass/fail check).
+
+H7. Find Clipping Analyzer (Audacity)
+    - Parameters: Start Threshold (`1..10` consecutive clipped samples, default `3`).
+    - Output: Counts all clipped runs where $|x[n]| \ge 0.9999f$, highlights
+      their timestamps, and marks them on `WaveformView`.
+
+
+================================================================================
+SECTION 5: STAGE-WISE IMPLEMENTATION PLAN (7 STAGES)
+================================================================================
+
+Execute the implementation in 7 self-contained, testable stages so the app
+compiles and passes all existing + new unit tests after every single stage.
+
+--------------------------------------------------------------------------------
+STAGE 1: FIX EXISTING FX PIPELINE BUGS & BOUNDARY CROSSFADES
+--------------------------------------------------------------------------------
+Goal: Make the current FX panel work 100% reliably on both selected regions and
+full takes without silent aborts or double-baking.
+
+Files to Modify:
+- `app/src/main/java/com/example/hello/StudioFragment.java`
+- `app/src/main/java/com/example/hello/EditEngine.java`
+- `app/src/main/java/com/example/hello/ConversionJobs.java`
+
+Concrete Tasks:
+1. In `StudioFragment.commitDspFx()`:
+   - Allow applying effects when no selection is active (applies to `[0, totalFrames)`
+     and sets `dspBakedToRaw = true`).
+   - When a selection IS active, apply effects to `[selStart, selEnd)`, reload
+     the selection waveform peaks, and mark baked state cleanly so Preview and
+     Save never re-apply the same effect a second time.
+   - Update `fxApplyBtn` text dynamically: `"Apply to Selection"` when
+     `waveform.hasSelection()` is true, and `"Apply to Entire Take"` when false.
+2. In `EditEngine.applyDspToRange()`:
+   - Add 240-frame (5 ms) raised-cosine crossfades at `startFrame` and `endFrame`
+     and 240-frame pre-roll warm-up of filter states before `startFrame`.
+3. In `ConversionJobs.dispatchSave()`:
+   - Ensure any active unbaked FX chain invalidates incremental streaming and
+     processes `raw` before encoding to M4A/FLAC/OPUS/WAV.
+
+Verification (Stage 1):
+- Run `DspChainTest` and `StudioFlowTest`.
+- Add `FxCommitAndCrossfadeTest` verifying that tapping `fxApplyBtn` with no
+  selection processes the full WAV file once, tapping `Save` does not double-
+  bake, and applying FX to a sub-range `[start, end)` produces zero sample
+  discontinuity at the boundaries.
+
+--------------------------------------------------------------------------------
+STAGE 2: MODULAR `AudioProcessor`, `FxParameter` & MULTI-KNOB UI INSPECTOR
+--------------------------------------------------------------------------------
+Goal: Replace the single-integer `EffectSlot` with the polymorphic
+`AudioProcessor` & `FxParameter` architecture and upgrade the FX panel UI to
+render multi-parameter drawers, enum chips, switches, and slot reordering.
+
+Files to Create / Modify:
+- Create `app/src/main/java/com/example/hello/FxParameter.java`
+- Create `app/src/main/java/com/example/hello/AudioProcessor.java`
+- Create `app/src/main/java/com/example/hello/FxRackChain.java`
+- Modify `app/src/main/java/com/example/hello/TeleValue.java` (add signed number
+  input and custom `ValueFormatter`)
+- Modify `app/src/main/java/com/example/hello/DspChain.java` (delegate to
+  `FxRackChain` while preserving legacy constructors/methods for existing tests)
+- Modify `app/src/main/java/com/example/hello/StudioFragment.java`
+  (`rebuildFxRackList()` dynamically builds controls for all `FxParameter` items
+  + Move Up / Move Down / Wet-Dry Mix / Reset buttons per effect card)
+
+Verification (Stage 2):
+- Unit-test JSON serialization/deserialization of multi-parameter `FxRackChain`,
+  slot reordering, per-slot bypass, and wet/dry blending.
+
+--------------------------------------------------------------------------------
+STAGE 3: BIQUAD FILTER ENGINE, EQUALIZER SUITE & INTERACTIVE `ParametricEqView`
+--------------------------------------------------------------------------------
+Goal: Deliver the full Fairlight + Audacity Equalizer and Filter suite with an
+interactive frequency-response curve and real-time FFT spectrum analyzer.
+
+Files to Create / Modify:
+- Modify `app/src/main/java/com/example/hello/Dsp.java` (add RBJ Biquad math,
+  transfer function magnitude evaluator, and Butterworth/Chebyshev/Bessel
+  cascade builders)
+- Create `app/src/main/java/com/example/hello/BiquadFilter.java`
+- Create `app/src/main/java/com/example/hello/ParametricEqView.java`
+- Create `app/src/main/java/com/example/hello/GraphicEqView.java`
+- Create `app/src/main/java/com/example/hello/FilterCurveEqView.java`
+- Register 9 EQ/Filter processors in `FxRackChain`:
+  1. `ParametricEq6BandProcessor`
+  2. `GraphicEqProcessor` (10-Band & 31-Band)
+  3. `FilterCurveEqProcessor`
+  4. `BassAndTrebleProcessor`
+  5. `HighPassFilterProcessor` (6..48 dB/oct)
+  6. `LowPassFilterProcessor` (6..48 dB/oct)
+  7. `NotchFilterProcessor`
+  8. `ShelfFilterProcessor`
+  9. `ClassicFiltersProcessor` (Butterworth / Chebyshev I & II / Bessel)
+
+Verification (Stage 3):
+- JUnit frequency-sweep tests verifying passband flatness, -3.01 dB cutoff accuracy,
+  notch attenuation (> -40 dB at $f_0$), and shelf gain accuracy within ±0.1 dB.
+
+--------------------------------------------------------------------------------
+STAGE 4: DYNAMICS, LEVELING, EBU R128 LOUDNESS & `DynamicsGraphView`
+--------------------------------------------------------------------------------
+Goal: Deliver professional vocal dynamics, broadcast loudness normalization,
+and real-time Gain Reduction metering.
+
+Files to Create / Modify:
+- Create `app/src/main/java/com/example/hello/DynamicsDetector.java`
+- Create `app/src/main/java/com/example/hello/DynamicsGraphView.java`
+- Modify `app/src/main/java/com/example/hello/EditEngine.java` (add
+  `applyTwoPassEffectToRange()`)
+- Register 9 Dynamics & Volume processors:
+  1. `AmplifyProcessor` (with automatic max non-clipping peak pre-scan)
+  2. `NormalizeProcessor` (DC offset removal + linked/independent stereo peak)
+  3. `LoudnessNormalizationProcessor` (EBU R128 / ITU-R BS.1770-4 LUFS & RMS)
+  4. `CompressorProcessor` (Threshold, Noise Floor, Ratio, Knee, Attack,
+     Release, RMS/Peak, Auto Makeup, Wet/Dry)
+  5. `MultibandCompressorProcessor` (3-band Linkwitz-Riley vocal leveler)
+  6. `BrickwallLimiterProcessor` (Soft/Hard Limit with 3 ms lookahead + Soft/Hard Clip)
+  7. `NoiseGateExpanderProcessor` (Threshold, Hysteresis, Range, Attack, Hold,
+     Release, Sidechain HPF)
+  8. `DeEsserProcessor` (Split-band / Wideband, Freq, Q, Threshold, Max Cut, Listen)
+  9. `AutoDuckProcessor` (Speech-triggered ducking envelope)
+
+Verification (Stage 4):
+- JUnit tests verifying EBU R128 K-weighted loudness integration on a 1 kHz
+  sine reference, zero-overshoot brickwall limiting at -0.3 dBFS, DC offset
+  removal, and soft-knee compressor transfer curve accuracy.
+
+--------------------------------------------------------------------------------
+STAGE 5: STFT SPECTRAL ENGINE & AUDIO RESTORATION SUITE
+--------------------------------------------------------------------------------
+Goal: Implement true FFT overlap-add spectral processing for Audacity-grade
+Noise Reduction (with Noise Profile capture) and audio repair tools.
+
+Files to Create / Modify:
+- Create `app/src/main/java/com/example/hello/StftProcessor.java`
+- Register 6 Restoration processors:
+  1. `SpectralNoiseReductionProcessor` (Capture Noise Profile + Reduction dB +
+     Sensitivity + Frequency Smoothing Bands + Isolate Noise mode)
+  2. `ClickRemovalProcessor` (Threshold + Max Spike Width)
+  3. `ClipFixProcessor` (Cubic spline de-clipper with headroom attenuation)
+  4. `RepairProcessor` (LPC autoregressive short-glitch interpolator)
+  5. `DeHumProcessor` (50/60 Hz fundamental + 10 harmonics notch cascade)
+  6. `PlosiveBreathSuppressorProcessor` (Dynamic sub-140 Hz plosive tamer)
+
+Verification (Stage 5):
+- JUnit tests verifying STFT identity reconstruction (Hann 75% overlap-add SNR
+  > 110 dB), stationary noise floor attenuation (> 18 dB SNR improvement on
+  sine + white noise), and clipped sine crest restoration via `ClipFixProcessor`.
+
+--------------------------------------------------------------------------------
+STAGE 6: REVERB, DELAY, SPATIAL, DISTORTION & MODULATION SUITE
+--------------------------------------------------------------------------------
+Goal: Add spatial ambience, echo/delay, stereo imaging, waveshaper distortion,
+and LFO modulation effects with proper tail rendering.
+
+Files to Create / Modify:
+- Modify `app/src/main/java/com/example/hello/EditEngine.java` (support
+  flushing `processor.getTailFrames()` with crossfade when applying Reverb/Delay)
+- Register 10 Spatial, Distortion & Modulation processors:
+  1. `FreeverbReverbProcessor` (Room Size, Pre-Delay, Reverberance, Damping,
+     Tone Low, Tone High, Wet/Dry Gain, Stereo Width, Wet Only)
+  2. `MultiDelayProcessor` (Regular / Bouncing Ball, Delay Time, Decay, Pitch
+     Shift per Echo, Echo Count, High-Cut Damping)
+  3. `EchoProcessor` (Delay Time, Decay Factor)
+  4. `StereoImagingProcessor` (Pan, Stereo Width, Mid-Side Center Isolation,
+     Phase Invert L/R)
+  5. `DistortionWaveshaperProcessor` (All 11 Audacity waveshaper curves + 2x
+     oversampling)
+  6. `PhaserProcessor` (2..24 stages, LFO Rate, Depth, Phase, Feedback)
+  7. `ChorusFlangerProcessor` (Cubic Hermite fractional delay LFO)
+  8. `TremoloProcessor` (5 LFO waveforms, Rate, Depth, Phase)
+  9. `WahwahProcessor` (Resonant SVF bandpass with LFO + envelope follower)
+  10. `VocoderProcessor` (20-band modulator/carrier filterbank vocoder)
+
+Verification (Stage 6):
+- JUnit tests verifying reverb tail decay, delay tap timing accuracy, Mid-Side
+  width mono compatibility, and non-aliasing oversampled waveshaper output.
+
+--------------------------------------------------------------------------------
+STAGE 7: OFFLINE PITCH/TEMPO, FADES, TRUNCATE SILENCE, GENERATORS & ANALYZERS
+--------------------------------------------------------------------------------
+Goal: Complete the Audacity parity suite with duration-changing time/pitch
+processors, customizable fades, automatic silence truncation, tone/noise
+generators, and spectrum/loudness/clipping analyzers.
+
+Files to Create / Modify:
+- Create `app/src/main/java/com/example/hello/WsolaTimePitchProcessor.java`
+- Modify `app/src/main/java/com/example/hello/WaveformView.java` (support
+  duration updates and analyzer markers)
+- Register 12 Offline / Generator / Analyzer tools:
+  1. `ChangePitchProcessor` (Semitones, Cents, Formant Preservation)
+  2. `ChangeTempoProcessor` (WSOLA time-stretch without pitch change)
+  3. `ChangeSpeedAndPitchProcessor` (Windowed-sinc varispeed resampler)
+  4. `SlidingStretchProcessor` (Continuous tempo & pitch ramp)
+  5. `PaulstretchProcessor` (Extreme random-phase STFT ambient stretch)
+  6. `FadeProcessor` (`Fade In`, `Fade Out`, `Studio Fade Out`, `Adjustable Fade`)
+  7. `TimelineUtilityProcessor` (`Invert`, `Reverse`, `Repeat`)
+  8. `TruncateSilenceProcessor` (Threshold, Min Duration, Truncate/Compress)
+  9. `SpectralEditProcessor` (`Spectral Parametric EQ`, `Spectral Shelves`,
+     `Spectral Delete/Notch`)
+  10. `AudioGeneratorTool` (`Tone`, `Chirp`, `White/Pink/Brown Noise`, `Silence`,
+      `Rhythm Track`, `Pluck`, `DTMF`)
+  11. `PlotSpectrumDialog` (Interactive Welch FFT spectrum analyzer modal with
+      peak note finder)
+  12. `AudioDiagnosticsTool` (`Measure RMS & LUFS`, `WCAG Contrast`, `Find Clipping`)
+
+Verification (Stage 7):
+- JUnit tests verifying WSOLA `Change Tempo` duration scaling without pitch
+  drift, `Change Pitch` fundamental frequency shift without duration change,
+  `Truncate Silence` pause compaction, and `PlotSpectrum` peak bin detection.
+================================================================================

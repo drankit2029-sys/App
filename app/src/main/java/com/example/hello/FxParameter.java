@@ -11,7 +11,7 @@ import org.json.JSONObject;
  * the FX inspector renders one control per parameter, so multi-knob effects
  * need no bespoke UI.
  *
- * <p>Values are stored as integer "raw" counts so that stepping, clamping and
+ * &lt;p&gt;Values are stored as integer &quot;raw&quot; counts so that stepping, clamping and
  * persistence are exact; {@link #getFloat()} rescales by
  * {@link #scaleDivisor} (e.g. raw 350 with divisor 100 is 3.50). Display
  * formatting is scale-aware (dB suffix, enum labels) and can be overridden
@@ -183,7 +183,11 @@ public final class FxParameter {
         double d = currentRaw / (double) scaleDivisor;
         String num;
         if (scale == Scale.DECIBEL) {
-            num = String.format(Locale.US, "%+.1f", d);
+            if (scaleDivisor >= 100 && (Math.abs(currentRaw) % 10) != 0) {
+                num = String.format(Locale.US, "%+.2f", d);
+            } else {
+                num = String.format(Locale.US, "%+.1f", d);
+            }
         } else if (Math.abs(d) >= 10 || currentRaw % scaleDivisor == 0) {
             num = trimTrailingZeros(String.format(Locale.US, "%.1f", d));
         } else {

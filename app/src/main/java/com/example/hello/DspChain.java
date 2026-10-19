@@ -15,26 +15,26 @@ import java.util.Map;
 /**
  * Pro Multi-Effect Rack & Real-Time/Offline 48 kHz Float DSP Engine.
  *
- * <p>All 8 effects in {@link EffectType} are 100% active, parameter-driven,
+ * &lt;p&gt;All 8 effects in {@link EffectType} are 100% active, parameter-driven,
  * and audibly distinct:
- * <ol>
- *   <li><b>Low-Cut Filter (40–160 Hz)</b>: Dynamic 2nd-order Butterworth HPF
+ * &lt;ol&gt;
+ *   &lt;li&gt;&lt;b&gt;Low-Cut Filter (40–160 Hz)&lt;/b&gt;: Dynamic 2nd-order Butterworth HPF
  *       whose biquad coefficients recompute live from the user's Hz setting.</li>
- *   <li><b>Noise Suppression (0–100%)</b>: 3-band adaptive Wiener floor gate
+ *   &lt;li&gt;&lt;b&gt;Noise Suppression (0–100%)&lt;/b&gt;: 3-band adaptive Wiener floor gate
  *       with instant first-block noise calibration and up to -24 dB cut.</li>
- *   <li><b>Expander / Room Gate (0–100%)</b>: Dedicated downward expander that
+ *   &lt;li&gt;&lt;b&gt;Expander / Room Gate (0–100%)&lt;/b&gt;: Dedicated downward expander that
  *       attenuates room noise and breaths below threshold (-52..-18 dBFS).</li>
- *   <li><b>Warmth & Chest Body (0–100%)</b>: 180 Hz low-mid contour boost (up
+ *   &lt;li&gt;&lt;b&gt;Warmth &amp; Chest Body (0–100%)&lt;/b&gt;: 180 Hz low-mid contour boost (up
  *       to +9 dB) for rich broadcast fullness.</li>
- *   <li><b>Vocal Presence & Air (0–100%)</b>: 3.5 kHz articulation & air shelf
+ *   &lt;li&gt;&lt;b&gt;Vocal Presence &amp; Air (0–100%)&lt;/b&gt;: 3.5 kHz articulation &amp; air shelf
  *       boost (up to +10 dB) for crisp intelligibility.</li>
- *   <li><b>De-Esser (4.5–9.5 kHz)</b>: Split-band relative sibilance suppressor
+ *   &lt;li&gt;&lt;b&gt;De-Esser (4.5–9.5 kHz)&lt;/b&gt;: Split-band relative sibilance suppressor
  *       (up to -14 dB cut on harsh 'S'/'T' transients).</li>
- *   <li><b>Compressor & Leveler (0–100%)</b>: Soft-knee vocal compressor (up to
+ *   &lt;li&gt;&lt;b&gt;Compressor &amp; Leveler (0–100%)&lt;/b&gt;: Soft-knee vocal compressor (up to
  *       6:1 ratio) with automatic makeup gain.</li>
- *   <li><b>Brickwall Ceiling Limiter (0–100%)</b>: Dedicated gain drive (up to
+ *   &lt;li&gt;&lt;b&gt;Brickwall Ceiling Limiter (0–100%)&lt;/b&gt;: Dedicated gain drive (up to
  *       +12 dB) into a zero-overshoot -0.2 dBFS soft-clip ceiling.</li>
- * </ol>
+ * &lt;/ol&gt;
  */
 public final class DspChain {
 
@@ -363,14 +363,17 @@ public final class DspChain {
             }
 
             slots.clear();
-            // Preserve user's relative ordering and per-slot wetDry/extraParams
-            // for any slots that were already present in the rack.
+            // Preserve user's relative ordering, bypassed (unchecked) pills,
+            // and per-slot wetDry/extraParams for all slots already in the rack.
             for (EffectType t : previousOrder) {
                 Integer val = activeValues.remove(t);
+                EffectSlot kept = existingByType.get(t);
                 if (val != null) {
-                    EffectSlot kept = existingByType.get(t);
                     kept.enabled = true;
                     kept.value = Math.max(t.minVal, Math.min(t.maxVal, val));
+                    slots.add(kept);
+                } else if (kept != null) {
+                    kept.enabled = false;
                     slots.add(kept);
                 }
             }
@@ -449,6 +452,21 @@ public final class DspChain {
                 this.customCompPct = this.compPct;
             }
             syncSlotsFromLegacyFields();
+        }
+
+        /**
+         * True when both {@link EffectType#WARMTH_BODY} and
+         * {@link EffectType#VOCAL_PRESENCE} are enabled in the rack at once.
+         */
+        public boolean hasBothToneSlotsEnabled() {
+            boolean w = false;
+            boolean p = false;
+            for (EffectSlot s : slots) {
+                if (s == null || !s.enabled || s.value <= 0) continue;
+                if (s.type == EffectType.WARMTH_BODY) w = true;
+                if (s.type == EffectType.VOCAL_PRESENCE) p = true;
+            }
+            return w && p;
         }
 
         public boolean isActive() {
@@ -634,19 +652,27 @@ public final class DspChain {
 
     /**
      * Pushes per-slot wet/dry mixes and any persisted secondary parameters
-     * into the rack. The combined warmth+presence stage is one processor fed
-     * by two slots, so it has no slot-level mix and stays fully wet.
+     * into the rack. When both {@code WARMTH_BODY} and {@code VOCAL_PRESENCE}
+     * are enabled together in the combined tone stage, the tone processor
+     * stays fully wet (1.0f); when only one of the two is active, its slot
+     * {@code wetDry} mix drives the tone processor directly.
      */
     private void applySlotExtras(Config cfg) {
         if (cfg == null) return;
+        boolean bothToneEnabled = cfg.hasBothToneSlotsEnabled();
         for (DspChain.EffectSlot s : cfg.slots) {
             AudioProcessor p = processorForSlot(s.type);
             if (p == null) continue;
-            // When the Brickwall Limiter slot is unchecked, it may still run
-            // as the automatic safety ceiling for upstream gain stages; keep
-            // its mix at 100% when disabled so an unchecked slot's mix never
-            // weakens safety limiting.
-            if (s.type != EffectType.BRICKWALL_LIMITER || s.enabled) {
+            if (s.type == EffectType.WARMTH_BODY
+                    || s.type == EffectType.VOCAL_PRESENCE) {
+                if (!bothToneEnabled && s.enabled && s.value > 0) {
+                    p.setWetDryMix(s.wetDry);
+                }
+            } else if (s.type != EffectType.BRICKWALL_LIMITER || s.enabled) {
+                // When the Brickwall Limiter slot is unchecked, it may still
+                // run as the automatic safety ceiling for upstream gain
+                // stages; keep its mix at 100% when disabled so an unchecked
+                // slot's mix never weakens safety limiting.
                 p.setWetDryMix(s.wetDry);
             }
             for (Map.Entry<String, Integer> e : s.extraParams.entrySet()) {
@@ -673,8 +699,8 @@ public final class DspChain {
                 return rack.getProcessor(rack.indexOf("limiter"));
             case WARMTH_BODY:
             case VOCAL_PRESENCE:
+                return rack.getProcessor(rack.indexOf("tone"));
             default:
-                // Combined tone stage (or unknown type): no slot-level mix.
                 return null;
         }
     }

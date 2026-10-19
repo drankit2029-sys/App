@@ -3,15 +3,18 @@ package com.example.hello;
 /**
  * Stage 2 of the legacy voice chain: 3-band adaptive (minimum-statistics)
  * noise suppressor. Body is a verbatim extraction of the original
- * {@code DspChain} stage so output stays bit-identical, including the
- * per-DECIM-block gain smoothing.
+ * {@code DspChain} stage so output stays bit-identical at 48 kHz, including
+ * the per-DECIM-block gain smoothing, while recomputing crossover alphas when
+ * prepared at a non-48 kHz sample rate.
  */
 final class LegacyNoiseProcessor extends AudioProcessor {
 
     private static final int DECIM = 16;
     private static final float INV_DECIM = 1.0f / DECIM;
-    private static final float NS_ALPHA_LOW = 0.02839f;
-    private static final float NS_ALPHA_HIGH = 0.3919f;
+    private static final float NS_ALPHA_LOW_48K = 0.02839f;
+    private static final float NS_ALPHA_HIGH_48K = 0.3919f;
+    private static final double NS_LOW_CUTOFF_HZ = 220.0;
+    private static final double NS_HIGH_CUTOFF_HZ = 3800.0;
 
     private final FxParameter amt = addParameter(FxParameter.intParam(
             "amt", "Intensity", "%", 0, 100, 1, 50));
@@ -27,6 +30,8 @@ final class LegacyNoiseProcessor extends AudioProcessor {
     private final float[] scratchLow = new float[DECIM * 2];
     private final float[] scratchMid = new float[DECIM * 2];
     private final float[] scratchHigh = new float[DECIM * 2];
+    private volatile float nsAlphaLow = NS_ALPHA_LOW_48K;
+    private volatile float nsAlphaHigh = NS_ALPHA_HIGH_48K;
 
     @Override
     public String getId() {
@@ -50,6 +55,15 @@ final class LegacyNoiseProcessor extends AudioProcessor {
 
     @Override
     public void prepare(int sampleRate, int channels) {
+        if (sampleRate <= 0 || sampleRate == DspChain.SAMPLE_RATE) {
+            nsAlphaLow = NS_ALPHA_LOW_48K;
+            nsAlphaHigh = NS_ALPHA_HIGH_48K;
+        } else {
+            nsAlphaLow = (float) (1.0 - Math.exp(
+                    -2.0 * Math.PI * NS_LOW_CUTOFF_HZ / sampleRate));
+            nsAlphaHigh = (float) (1.0 - Math.exp(
+                    -2.0 * Math.PI * NS_HIGH_CUTOFF_HZ / sampleRate));
+        }
     }
 
     @Override
@@ -87,6 +101,8 @@ final class LegacyNoiseProcessor extends AudioProcessor {
         final int ch = Math.max(1, Math.min(2, channels));
         final float nAmt = amt01();
         if (nAmt <= 0.001f) return;
+        final float aLow = this.nsAlphaLow;
+        final float aHigh = this.nsAlphaHigh;
 
         int offset = 0;
         while (offset < frames) {
@@ -99,8 +115,8 @@ final class LegacyNoiseProcessor extends AudioProcessor {
                 int sIdx = f * ch;
                 for (int c = 0; c < ch; c++) {
                     float x = buf[idx + c];
-                    lp1[c] += NS_ALPHA_LOW * (x - lp1[c]);
-                    lp2[c] += NS_ALPHA_HIGH * (x - lp2[c]);
+                    lp1[c] += aLow * (x - lp1[c]);
+                    lp2[c] += aHigh * (x - lp2[c]);
                     float bLow = lp1[c];
                     float bMid = lp2[c] - bLow;
                     float bHigh = x - lp2[c];

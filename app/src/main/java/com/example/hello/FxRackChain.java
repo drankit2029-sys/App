@@ -1,6 +1,5 @@
 package com.example.hello;
 
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -17,7 +16,7 @@ import org.json.JSONObject;
  * processor is skipped, and a processor whose wet/dry mix is below 1.0 is
  * blended sample-accurately against the dry signal.
  *
- * <p>The legacy voice-chain stages are registered by id so a rack saved as
+ * &lt;p&gt;The legacy voice-chain stages are registered by id so a rack saved as
  * JSON can be rebuilt without knowing the concrete classes.
  */
 public final class FxRackChain {
@@ -28,6 +27,8 @@ public final class FxRackChain {
     }
 
     private static final Map<String, ProcessorFactory> REGISTRY =
+            new LinkedHashMap<>();
+    private static final Map<String, AudioProcessor> PROTOTYPES =
             new LinkedHashMap<>();
 
     private static final String[] CANONICAL_LEGACY_ORDER = {
@@ -45,22 +46,58 @@ public final class FxRackChain {
     }
 
     /** Registers (or overrides) a processor id for JSON round-trips. */
-    public static void register(String id, ProcessorFactory factory) {
+    public static synchronized void register(String id, ProcessorFactory factory) {
         if (id == null || id.isEmpty() || factory == null) return;
         REGISTRY.put(id, factory);
+        PROTOTYPES.remove(id);
     }
 
     /** Instantiates a registered processor, or null when unknown. */
-    public static AudioProcessor createProcessor(String id) {
+    public static synchronized AudioProcessor createProcessor(String id) {
         ProcessorFactory f = REGISTRY.get(id);
         return f == null ? null : f.create();
     }
 
-    private final CopyOnWriteArrayList<AudioProcessor> processors =
+    /**
+     * Returns a cached prototype processor for UI metadata and parameter
+     * inspection without allocating a throwaway DSP instance on the UI thread.
+     */
+    public static synchronized AudioProcessor getPrototypeProcessor(String id) {
+        if (id == null) return null;
+        String lookupId = id;
+        if ("warmth".equals(id) || "presence".equals(id)) {
+            lookupId = "tone";
+        }
+        AudioProcessor p = PROTOTYPES.get(lookupId);
+        if (p == null) {
+            ProcessorFactory f = REGISTRY.get(lookupId);
+            if (f != null) {
+                p = f.create();
+                if (p != null) {
+                    PROTOTYPES.put(lookupId, p);
+                }
+            }
+        }
+        return p;
+    }
+
+    private final CopyOnWriteArrayList&lt;AudioProcessor&gt; processors =
             new CopyOnWriteArrayList<>();
     private final int channels;
     private int sampleRate = 48000;
     private float[] scratch = new float[0];
+
+    /**
+     * Non-null when both {@link DspChain.EffectType#WARMTH_BODY} and
+     * {@link DspChain.EffectType#VOCAL_PRESENCE} are enabled and separated by
+     * at least one other enabled processor in {@code cfg.slots}. When null
+     * (the default/adjacent case), {@link LegacyToneProcessor} runs both in
+     * its single combined pass for 100% bit-identical legacy output.
+     */
+    private DspChain.EffectType splitToneFirstType = null;
+    private String splitToneAfterProcessorId = null;
+    private float splitToneFirstMix = 1.0f;
+    private float splitToneSecondMix = 1.0f;
 
     public FxRackChain(int channels) {
         this.channels = Math.max(1, Math.min(2, channels));
@@ -120,7 +157,7 @@ public final class FxRackChain {
         processors.clear();
     }
 
-    public List<AudioProcessor> processors() {
+    public List&lt;AudioProcessor&gt; processors() {
         return processors;
     }
 
@@ -159,33 +196,71 @@ public final class FxRackChain {
         if (buf == null || frames <= 0) return;
         int n = frames * channels;
         if (n > buf.length) n = buf.length;
+        final DspChain.EffectType firstTone = this.splitToneFirstType;
+        final String splitAfterId = this.splitToneAfterProcessorId;
+        LegacyToneProcessor toneProcRef = null;
+        LegacyLimiterProcessor safetyLimRef = null;
+        if (firstTone != null && splitAfterId != null) {
+            int ti = indexOf("tone");
+            if (ti >= 0 && processors.get(ti) instanceof LegacyToneProcessor) {
+                toneProcRef = (LegacyToneProcessor) processors.get(ti);
+            }
+            int li = indexOf("limiter");
+            if (li >= 0 && processors.get(li) instanceof LegacyLimiterProcessor) {
+                safetyLimRef = (LegacyLimiterProcessor) processors.get(li);
+            }
+        }
+
         for (AudioProcessor p : processors) {
             if (!p.isEnabled() || p.isOfflineOnly() || !p.isAudible()) {
                 continue;
             }
-            float mix = p.getWetDryMix();
-            if (mix >= 1.0f) {
-                p.processInPlace(buf, frames, channels);
-            } else if (mix > 0.0f) {
-                if (scratch.length < buf.length) {
-                    scratch = new float[Math.max(buf.length, n)];
+            if (toneProcRef != null && p == toneProcRef) {
+                if (firstTone == DspChain.EffectType.WARMTH_BODY) {
+                    toneProcRef.processWarmthOnly(
+                            buf, frames, channels, splitToneFirstMix);
+                } else {
+                    toneProcRef.processPresenceOnly(
+                            buf, frames, channels, splitToneFirstMix);
                 }
-                System.arraycopy(buf, 0, scratch, 0, n);
-                p.processInPlace(scratch, frames, channels);
-                float w = mix;
-                float d = 1.0f - mix;
-                for (int i = 0; i < n; i++) {
-                    buf[i] = buf[i] * d + scratch[i] * w;
-                }
-                if (p instanceof LegacyLimiterProcessor
+            } else {
+                float mix = p.getWetDryMix();
+                if (mix >= 1.0f) {
+                    p.processInPlace(buf, frames, channels);
+                } else if (mix > 0.0f) {
+                    if (scratch.length < buf.length) {
+                        scratch = new float[Math.max(buf.length, n)];
+                    }
+                    System.arraycopy(buf, 0, scratch, 0, n);
+                    p.processInPlace(scratch, frames, channels);
+                    float w = mix;
+                    float d = 1.0f - mix;
+                    for (int i = 0; i < n; i++) {
+                        buf[i] = buf[i] * d + scratch[i] * w;
+                    }
+                    if (p instanceof LegacyLimiterProcessor
+                            && ((LegacyLimiterProcessor) p).isSafetyOn()) {
+                        ((LegacyLimiterProcessor) p).enforceSafetyCeiling(
+                                buf, frames, channels);
+                    }
+                } else if (p instanceof LegacyLimiterProcessor
                         && ((LegacyLimiterProcessor) p).isSafetyOn()) {
                     ((LegacyLimiterProcessor) p).enforceSafetyCeiling(
                             buf, frames, channels);
                 }
-            } else if (p instanceof LegacyLimiterProcessor
-                    && ((LegacyLimiterProcessor) p).isSafetyOn()) {
-                ((LegacyLimiterProcessor) p).enforceSafetyCeiling(
-                        buf, frames, channels);
+            }
+
+            if (toneProcRef != null && splitAfterId.equals(p.getId())) {
+                if (firstTone == DspChain.EffectType.WARMTH_BODY) {
+                    toneProcRef.processPresenceOnly(
+                            buf, frames, channels, splitToneSecondMix);
+                } else {
+                    toneProcRef.processWarmthOnly(
+                            buf, frames, channels, splitToneSecondMix);
+                }
+                if (safetyLimRef != null && safetyLimRef.isSafetyOn()) {
+                    safetyLimRef.enforceSafetyCeiling(buf, frames, channels);
+                }
             }
         }
     }
@@ -283,15 +358,62 @@ public final class FxRackChain {
     /**
      * Synchronizes the rack's processor execution order with the user's
      * {@code cfg.slots} order while preserving existing {@link AudioProcessor}
-     * instances and their internal filter/envelope state. Unreferenced
-     * processors keep their canonical relative order (with the safety limiter
-     * anchored at the end unless explicitly moved earlier in {@code cfg.slots}).
+     * instances and their internal filter/envelope state. If only one of
+     * {@code WARMTH_BODY} or {@code VOCAL_PRESENCE} is enabled, the enabled
+     * slot determines where {@code "tone"} sits (so an unchecked sibling slot
+     * earlier in the list never traps the active tone stage). If both are
+     * enabled and separated by another active processor in {@code cfg.slots},
+     * records the split point so {@link #processInPlace} runs the second tone
+     * stage at its exact downstream slot position.
      */
     private void syncOrderFromSlots(DspChain.Config cfg) {
+        this.splitToneFirstType = null;
+        this.splitToneAfterProcessorId = null;
+        this.splitToneFirstMix = 1.0f;
+        this.splitToneSecondMix = 1.0f;
         if (cfg == null || cfg.slots == null || cfg.slots.isEmpty()) return;
-        Set<String> desiredIds = new LinkedHashSet<>();
+
+        boolean anyToneEnabled = false;
+        DspChain.EffectSlot firstToneSlot = null;
+        DspChain.EffectSlot secondToneSlot = null;
+        String lastEnabledBetween = null;
+        for (DspChain.EffectSlot s : cfg.slots) {
+            if (s == null || s.type == null || !s.enabled || s.value <= 0) {
+                continue;
+            }
+            if (s.type == DspChain.EffectType.WARMTH_BODY
+                    || s.type == DspChain.EffectType.VOCAL_PRESENCE) {
+                anyToneEnabled = true;
+                if (firstToneSlot == null) {
+                    firstToneSlot = s;
+                } else if (secondToneSlot == null && s.type != firstToneSlot.type) {
+                    secondToneSlot = s;
+                }
+            } else if (firstToneSlot != null && secondToneSlot == null) {
+                String pid = processorIdForSlotType(s.type);
+                if (pid != null && !"tone".equals(pid)) {
+                    lastEnabledBetween = pid;
+                }
+            }
+        }
+        if (firstToneSlot != null && secondToneSlot != null
+                && lastEnabledBetween != null) {
+            this.splitToneFirstType = firstToneSlot.type;
+            this.splitToneAfterProcessorId = lastEnabledBetween;
+            this.splitToneFirstMix = firstToneSlot.wetDry;
+            this.splitToneSecondMix = secondToneSlot.wetDry;
+        }
+
+        Set&lt;String&gt; desiredIds = new LinkedHashSet<>();
         for (DspChain.EffectSlot s : cfg.slots) {
             if (s == null || s.type == null) continue;
+            if ((s.type == DspChain.EffectType.WARMTH_BODY
+                    || s.type == DspChain.EffectType.VOCAL_PRESENCE)
+                    && anyToneEnabled && (!s.enabled || s.value <= 0)) {
+                // Do not let a disabled tone slot trap the enabled sibling's
+                // rack position.
+                continue;
+            }
             String pid = processorIdForSlotType(s.type);
             if (pid != null && indexOf(pid) >= 0) {
                 desiredIds.add(pid);
@@ -325,6 +447,8 @@ public final class FxRackChain {
      */
     void applyLegacyConfig(DspChain.Config cfg) {
         if (cfg == null) {
+            this.splitToneFirstType = null;
+            this.splitToneAfterProcessorId = null;
             for (AudioProcessor p : processors) p.setEnabled(false);
             return;
         }

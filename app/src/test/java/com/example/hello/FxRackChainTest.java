@@ -626,6 +626,199 @@ public class FxRackChainTest {
         assertTrue("setSampleRate had no effect on HPF biquad coefficients", diff);
     }
 
+    @Test
+    public void singleToneSlotSupportsWetDryMixWhileDualToneStaysFullWet() {
+        DspChain.Config cfg = new DspChain.Config();
+        cfg.applyPreset(DspChain.Preset.CRISP_CLARITY);
+        assertFalse(cfg.hasBothToneSlotsEnabled());
+        for (DspChain.EffectSlot s : cfg.slots) {
+            if (s.type == DspChain.EffectType.VOCAL_PRESENCE) {
+                s.wetDry = 0.45f;
+            }
+        }
+        DspChain chain = new DspChain(2, cfg);
+        AudioProcessor toneProc = chain.getRack().getProcessor(
+                chain.getRack().indexOf("tone"));
+        assertEquals(0.45f, toneProc.getWetDryMix(), 0.0f);
+
+        // Enabling Warmth alongside Presence switches to the combined pass (1.0f)
+        cfg.addOrFocusSlot(DspChain.EffectType.WARMTH_BODY);
+        assertTrue(cfg.hasBothToneSlotsEnabled());
+        chain.updateConfig(cfg);
+        assertEquals(1.0f, toneProc.getWetDryMix(), 0.0f);
+    }
+
+    @Test
+    public void separatingWarmthAndPresenceAroundCompressorChangesAudioOutput() {
+        // Order 1: [WARMTH, PRESENCE, COMPRESSOR] (both before Compressor)
+        DspChain.Config cfg1 = new DspChain.Config();
+        cfg1.applyPreset(DspChain.Preset.CLEAR_ALL);
+        DspChain.EffectSlot w1 = cfg1.addOrFocusSlot(DspChain.EffectType.WARMTH_BODY);
+        DspChain.EffectSlot p1 = cfg1.addOrFocusSlot(DspChain.EffectType.VOCAL_PRESENCE);
+        DspChain.EffectSlot c1 = cfg1.addOrFocusSlot(DspChain.EffectType.COMPRESSOR);
+        w1.value = 85;
+        p1.value = 85;
+        c1.value = 85;
+        cfg1.syncLegacyFieldsFromSlots();
+
+        // Order 2: [WARMTH, COMPRESSOR, PRESENCE] (Presence moved after Compressor)
+        DspChain.Config cfg2 = new DspChain.Config();
+        cfg2.applyPreset(DspChain.Preset.CLEAR_ALL);
+        DspChain.EffectSlot w2 = cfg2.addOrFocusSlot(DspChain.EffectType.WARMTH_BODY);
+        DspChain.EffectSlot c2 = cfg2.addOrFocusSlot(DspChain.EffectType.COMPRESSOR);
+        DspChain.EffectSlot p2 = cfg2.addOrFocusSlot(DspChain.EffectType.VOCAL_PRESENCE);
+        w2.value = 85;
+        p2.value = 85;
+        c2.value = 85;
+        cfg2.syncLegacyFieldsFromSlots();
+
+        float[] sig1 = tone(1024, 1, 0.55f, 0.06f);
+        for (int i = 0; i < sig1.length; i += 5) {
+            sig1[i] += 0.35f * (float) Math.sin(i * 0.65);
+        }
+        float[] sig2 = sig1.clone();
+
+        new DspChain(1, cfg1).processInPlace(sig1, 1024);
+        new DspChain(1, cfg2).processInPlace(sig2, 1024);
+
+        boolean diff = false;
+        for (int i = 0; i < sig1.length; i++) {
+            if (Math.abs(sig1[i] - sig2[i]) > 1e-4f) {
+                diff = true;
+                break;
+            }
+        }
+        assertTrue("Moving Presence after Compressor had no effect on audio", diff);
+    }
+
+    @Test
+    public void disabledToneSlotDoesNotTrapEnabledSiblingPosition() {
+        DspChain.Config cfg = new DspChain.Config();
+        cfg.applyPreset(DspChain.Preset.CLEAR_ALL);
+        DspChain.EffectSlot w = cfg.addOrFocusSlot(DspChain.EffectType.WARMTH_BODY);
+        DspChain.EffectSlot c = cfg.addOrFocusSlot(DspChain.EffectType.COMPRESSOR);
+        DspChain.EffectSlot p = cfg.addOrFocusSlot(DspChain.EffectType.VOCAL_PRESENCE);
+        w.enabled = false;
+        c.enabled = true;
+        p.enabled = true;
+        cfg.syncLegacyFieldsFromSlots();
+
+        DspChain chain = new DspChain(1, cfg);
+        assertTrue("Disabled Warmth at slot 0 must not trap enabled Presence before Compressor",
+                chain.getRack().indexOf("comp") < chain.getRack().indexOf("tone"));
+    }
+
+    @Test
+    public void syncSlotsFromLegacyFieldsPreservesDisabledSlotsAndTheirSettings() {
+        DspChain.Config cfg = new DspChain.Config();
+        cfg.applyPreset(DspChain.Preset.PODCAST_BROADCAST);
+        DspChain.EffectSlot gateSlot = null;
+        for (DspChain.EffectSlot s : cfg.slots) {
+            if (s.type == DspChain.EffectType.ROOM_GATE) gateSlot = s;
+        }
+        assertNotNull(gateSlot);
+        gateSlot.enabled = false;
+        gateSlot.value = 65;
+        gateSlot.wetDry = 0.4f;
+        gateSlot.extraParams.put("hold_ms", 120);
+        cfg.syncLegacyFieldsFromSlots();
+
+        cfg.noisePct = 70;
+        cfg.onManualAdjustment();
+
+        DspChain.EffectSlot preserved = null;
+        for (DspChain.EffectSlot s : cfg.slots) {
+            if (s.type == DspChain.EffectType.ROOM_GATE) preserved = s;
+        }
+        assertNotNull("Disabled ROOM_GATE slot was dropped by syncSlotsFromLegacyFields",
+                preserved);
+        assertFalse(preserved.enabled);
+        assertEquals(65, preserved.value);
+        assertEquals(0.4f, preserved.wetDry, 0.0f);
+        assertEquals(Integer.valueOf(120), preserved.extraParams.get("hold_ms"));
+    }
+
+    @Test
+    public void setSampleRateUpdatesToneAndNoiseCrossoversWhilePreserving48kBitParity() {
+        FxRackChain tone48 = new FxRackChain(1);
+        LegacyToneProcessor tp48 = new LegacyToneProcessor();
+        tp48.setLegacyAmounts(70, 70);
+        tone48.addProcessor(tp48);
+        tone48.setSampleRate(48000);
+
+        FxRackChain tone96 = new FxRackChain(1);
+        LegacyToneProcessor tp96 = new LegacyToneProcessor();
+        tp96.setLegacyAmounts(70, 70);
+        tone96.addProcessor(tp96);
+        tone96.setSampleRate(96000);
+
+        float[] tA = tone(256, 1, 0.6f, 0.04f);
+        float[] tB = tA.clone();
+        tone48.processInPlace(tA, 256);
+        tone96.processInPlace(tB, 256);
+        boolean toneDiff = false;
+        for (int i = 0; i < tA.length; i++) {
+            if (Math.abs(tA[i] - tB[i]) > 1e-4f) {
+                toneDiff = true;
+                break;
+            }
+        }
+        assertTrue("LegacyToneProcessor ignored sample rate change", toneDiff);
+
+        FxRackChain noise48 = new FxRackChain(1);
+        LegacyNoiseProcessor np48 = new LegacyNoiseProcessor();
+        np48.setLegacyAmount(80);
+        noise48.addProcessor(np48);
+        noise48.setSampleRate(48000);
+
+        FxRackChain noise96 = new FxRackChain(1);
+        LegacyNoiseProcessor np96 = new LegacyNoiseProcessor();
+        np96.setLegacyAmount(80);
+        noise96.addProcessor(np96);
+        noise96.setSampleRate(96000);
+
+        float[] nA = tone(256, 1, 0.6f, 0.04f);
+        float[] nB = nA.clone();
+        noise48.processInPlace(nA, 256);
+        noise96.processInPlace(nB, 256);
+        boolean noiseDiff = false;
+        for (int i = 0; i < nA.length; i++) {
+            if (Math.abs(nA[i] - nB[i]) > 1e-4f) {
+                noiseDiff = true;
+                break;
+            }
+        }
+        assertTrue("LegacyNoiseProcessor ignored sample rate change", noiseDiff);
+    }
+
+    @Test
+    public void prototypeProcessorCacheAndSlotSubtitleFormattingWork() {
+        AudioProcessor p1 = FxRackChain.getPrototypeProcessor("noise");
+        AudioProcessor p2 = FxRackChain.getPrototypeProcessor("noise");
+        assertNotNull(p1);
+        assertTrue("getPrototypeProcessor should cache instances", p1 == p2);
+
+        DspChain.Config cfg = new DspChain.Config();
+        cfg.applyPreset(DspChain.Preset.VOICE_POLISH);
+        DspChain.EffectSlot slot = cfg.slots.get(1); // NOISE_SUPPRESSION
+        assertEquals("Enabled • Intensity: 50%  ▾",
+                StudioFragment.formatSlotSubtitle(slot, cfg));
+        slot.wetDry = 0.5f;
+        assertEquals("Enabled • Intensity: 50% • Mix 50%  ▾",
+                StudioFragment.formatSlotSubtitle(slot, cfg));
+    }
+
+    @Test
+    public void decibelParameterFormatDisplayPreservesHundredthsPrecision() {
+        FxParameter db = FxParameter.dbParam("gain", "Gain", -24f, 24f, 0f);
+        db.setCurrentRaw(-350);
+        assertEquals("-3.5 dB", db.formatDisplay());
+        db.setCurrentRaw(-5);
+        assertEquals("-0.05 dB", db.formatDisplay());
+        db.setCurrentRaw(125);
+        assertEquals("+1.25 dB", db.formatDisplay());
+    }
+
     // ----------------------------------------------------- legacy reference
 
     /** Standalone copy of the pre-Stage-2 engine, for bit-parity checks. */

@@ -115,6 +115,7 @@ public class StudioFragment extends Fragment {
      * whenever the user changes any FX setting or records/undos audio.
      */
     private boolean dspBakedToRaw = false;
+    private boolean dspSubRangeBaked = false;
     private EditEngine.UndoJournal undoJournal;
     private DbMeterView dbMeter;
     private View settingsRow;
@@ -197,8 +198,8 @@ public class StudioFragment extends Fragment {
 
     private AudioManager audioManager;
 
-    private ActivityResultLauncher<String> micPermission;
-    private ActivityResultLauncher<String> notifPermission;
+    private ActivityResultLauncher&lt;String&gt; micPermission;
+    private ActivityResultLauncher&lt;String&gt; notifPermission;
     private boolean notifAsked;
 
     private BroadcastReceiver doneReceiver;
@@ -314,6 +315,7 @@ public class StudioFragment extends Fragment {
 
         dspConfig = DspChain.Config.load(requireContext());
         dspBakedToRaw = false;
+        dspSubRangeBaked = false;
         undoJournal = new EditEngine.UndoJournal(RecordingEngine.takesDir(requireContext()));
         subEditorUndoJournal = new EditEngine.UndoJournal(
                 new File(RecordingEngine.takesDir(requireContext()), "sub_undo"));
@@ -1605,6 +1607,7 @@ public class StudioFragment extends Fragment {
             EditEngine.saveTailFrom(raw, endF, replaceSavedTailFile);
             replacingSelectionActive = true;
             dspBakedToRaw = false;
+            dspSubRangeBaked = false;
 
             engine.seekCursorFrame(startF);
             ensurePermissionThenStart();
@@ -1788,6 +1791,7 @@ public class StudioFragment extends Fragment {
                     activeUndoJournal().recordSnapshot(engine.rawFile);
                     waveform.recordUndoPeaks();
                     dspBakedToRaw = false;
+                    dspSubRangeBaked = false;
                 } else {
                     if (replaceModeArmed) {
                         // Already at end of take: deactivate Replace and append
@@ -1931,6 +1935,7 @@ public class StudioFragment extends Fragment {
                         engine.setFxBakeRequired(false);
                         engine.dataBytes = RecordingEngine.payloadBytesOf(raw);
                         dspBakedToRaw = true;
+                        dspSubRangeBaked = false;
                     }
                 }
             } catch (Exception ignored) {}
@@ -2317,9 +2322,12 @@ public class StudioFragment extends Fragment {
             long totalFrames = info.dataBytes / 4 / info.channels;
             if (totalFrames <= 0) return;
             // Only run livePreviewDsp if dspConfig has NOT already been baked
-            // into `raw` (prevents double-applying FX while keeping badge active).
-            DspChain.Config activeCfg = dspBakedToRaw
-                    ? new DspChain.Config() : dspConfig;
+            // into `raw`, or if only a sub-selection was previously baked and
+            // the user has now highlighted a new selection to audition.
+            boolean previewLiveFx = !dspBakedToRaw
+                    || (dspSubRangeBaked && waveform != null && waveform.hasSelection());
+            DspChain.Config activeCfg = previewLiveFx
+                    ? dspConfig : new DspChain.Config();
             livePreviewDsp = new DspChain(info.channels, activeCfg);
             final RawFloatPlayer[] slot = new RawFloatPlayer[1];
             slot[0] = new RawFloatPlayer(raw, completed -> handler.post(() -> {
@@ -2623,6 +2631,7 @@ public class StudioFragment extends Fragment {
                 waveform.deleteSelectionBuckets();
             }
             dspBakedToRaw = false;
+            dspSubRangeBaked = false;
             userScrolledWhilePaused = false;
             engine.abortStreaming();
             engine.dataBytes = RecordingEngine.payloadBytesOf(raw);
@@ -2659,6 +2668,7 @@ public class StudioFragment extends Fragment {
         try {
             if (uj.undo(raw)) {
                 dspBakedToRaw = false;
+                dspSubRangeBaked = false;
                 userScrolledWhilePaused = false;
                 engine.abortStreaming();
                 engine.dataBytes = RecordingEngine.payloadBytesOf(raw);
@@ -2699,10 +2709,15 @@ public class StudioFragment extends Fragment {
         if (fxPanel == null || telePanel == null) return;
         fxPanelOpen = open;
         if (open) {
-            // If no effects are currently enabled when opening the FX rack,
+            // If no effects are currently enabled on initial default state,
             // activate the default Voice Polish rack so Preview & Apply work
-            // immediately out of the box!
-            if (dspConfig != null && !dspConfig.isActive()) {
+            // immediately out of the box without overwriting an intentional
+            // CLEAR_ALL ("Flat / No Effects") or custom unchecked rack!
+            if (dspConfig != null && !dspConfig.isActive()
+                    && (DspChain.Preset.VOICE_POLISH.id.equals(dspConfig.activePresetId)
+                            || (dspConfig.slots.isEmpty()
+                                    && !DspChain.Preset.CLEAR_ALL.id.equals(
+                                            dspConfig.activePresetId)))) {
                 dspConfig.applyPreset(DspChain.Preset.VOICE_POLISH);
                 dspConfig.save(requireContext());
             }
@@ -2804,7 +2819,50 @@ public class StudioFragment extends Fragment {
     private static boolean isPrimaryFxParam(String paramId) {
         return "amt".equals(paramId)
                 || "cutoff".equals(paramId)
-                || "drive".equals(paramId);
+                || "drive".equals(paramId)
+                || "warmth".equals(paramId)
+                || "presence".equals(paramId);
+    }
+
+    static String formatSlotSubtitle(DspChain.EffectSlot slot) {
+        return formatSlotSubtitle(slot, null);
+    }
+
+    static String formatSlotSubtitle(DspChain.EffectSlot slot,
+                                     DspChain.Config cfg) {
+        if (slot == null || slot.type == null) return "";
+        StringBuilder sb = new StringBuilder();
+        sb.append(slot.enabled ? "Enabled • " : "Bypassed • ");
+        sb.append(slot.type.paramLabel).append(": ")
+                .append(slot.value).append(slot.type.unit);
+        boolean isTone = slot.type == DspChain.EffectType.WARMTH_BODY
+                || slot.type == DspChain.EffectType.VOCAL_PRESENCE;
+        boolean mixActive = !isTone || cfg == null
+                || !cfg.hasBothToneSlotsEnabled();
+        int mixPct = Math.round(slot.wetDry * 100f);
+        if (mixActive && mixPct < 100) {
+            sb.append(" • Mix ").append(mixPct).append("%");
+        }
+        if (!slot.extraParams.isEmpty()) {
+            AudioProcessor meta =
+                    FxRackChain.getPrototypeProcessor(slot.type.id);
+            if (meta != null) {
+                for (FxParameter param : meta.getParameters()) {
+                    if (isPrimaryFxParam(param.id)
+                            || param.type == FxParameter.Type.ACTION) {
+                        continue;
+                    }
+                    Integer raw = slot.extraParams.get(param.id);
+                    if (raw != null && raw != param.defaultRaw) {
+                        param.setCurrentRaw(raw);
+                        sb.append(" • ").append(param.name).append(": ")
+                                .append(param.formatDisplay());
+                    }
+                }
+            }
+        }
+        sb.append(slot.expanded ? "  ▴" : "  ▾");
+        return sb.toString();
     }
 
     /**
@@ -2865,9 +2923,7 @@ public class StudioFragment extends Fragment {
                     "sans-serif-medium", android.graphics.Typeface.NORMAL));
 
             TextView subTv = new TextView(ctx);
-            subTv.setText((slot.enabled ? "Enabled • " : "Bypassed • ")
-                    + slot.type.paramLabel + ": " + slot.value + slot.type.unit
-                    + (slot.expanded ? "  ▴" : "  ▾"));
+            subTv.setText(formatSlotSubtitle(slot, dspConfig));
             subTv.setTextSize(10.5f);
             subTv.setTextColor(slot.enabled ? 0xFFFF453A : 0xFF5D6672);
             titleCol.addView(titleTv);
@@ -2917,15 +2973,14 @@ public class StudioFragment extends Fragment {
 
             Runnable onSlotMutated = () -> {
                 dspBakedToRaw = false;
+                dspSubRangeBaked = false;
                 dspConfig.activePresetId = DspChain.Preset.CUSTOM.id;
                 dspConfig.syncLegacyFieldsFromSlots();
                 dspConfig.save(ctx);
                 if (livePreviewDsp != null) {
                     livePreviewDsp.updateConfig(dspConfig);
                 }
-                subTv.setText((slot.enabled ? "Enabled • " : "Bypassed • ")
-                        + slot.type.paramLabel + ": " + slot.value + slot.type.unit
-                        + (slot.expanded ? "  ▴" : "  ▾"));
+                subTv.setText(formatSlotSubtitle(slot, dspConfig));
                 paintEditorStrip();
                 paintFxPanelControls();
             };
@@ -2940,13 +2995,12 @@ public class StudioFragment extends Fragment {
                 slot.expanded = !slot.expanded;
                 body.setVisibility(slot.expanded ? View.VISIBLE : View.GONE);
                 dspConfig.save(ctx);
-                subTv.setText((slot.enabled ? "Enabled • " : "Bypassed • ")
-                        + slot.type.paramLabel + ": " + slot.value + slot.type.unit
-                        + (slot.expanded ? "  ▴" : "  ▾"));
+                subTv.setText(formatSlotSubtitle(slot, dspConfig));
             });
 
             delBtn.setOnClickListener(v -> {
                 dspBakedToRaw = false;
+                dspSubRangeBaked = false;
                 dspConfig.removeSlot(slot);
                 dspConfig.save(ctx);
                 if (livePreviewDsp != null) {
@@ -3030,11 +3084,13 @@ public class StudioFragment extends Fragment {
                 rebuildFxRackList();
             });
 
-            // Wet/dry blend for the 1:1 stages. Warmth and presence share the
-            // combined legacy tone processor, so those two slots stay fully
-            // wet and get no mix control.
-            if (slot.type != DspChain.EffectType.WARMTH_BODY
-                    && slot.type != DspChain.EffectType.VOCAL_PRESENCE) {
+            // Wet/dry blend for all 1:1 stages and for Warmth / Presence when
+            // only one tone slot is active in the rack.
+            boolean showMixControl =
+                    (slot.type != DspChain.EffectType.WARMTH_BODY
+                            && slot.type != DspChain.EffectType.VOCAL_PRESENCE)
+                    || !dspConfig.hasBothToneSlotsEnabled();
+            if (showMixControl) {
                 TextView mixCaption = new TextView(ctx);
                 mixCaption.setText("Wet-Dry Mix");
                 mixCaption.setTextSize(10.5f);
@@ -3072,7 +3128,7 @@ public class StudioFragment extends Fragment {
             // Secondary processor parameters. The legacy stages expose only
             // their primary knob, so nothing extra is rendered for them; new
             // multi-parameter effects get a control per FxParameter here.
-            AudioProcessor meta = FxRackChain.createProcessor(slot.type.id);
+            AudioProcessor meta = FxRackChain.getPrototypeProcessor(slot.type.id);
             if (meta != null) {
                 for (FxParameter param : meta.getParameters()) {
                     if (isPrimaryFxParam(param.id)) continue;
@@ -3207,6 +3263,7 @@ public class StudioFragment extends Fragment {
             boolean checked = p.id.equals(dspConfig.activePresetId);
             items.add(new OptionsSheet.Item(0, p.title, false, checked, () -> {
                 dspBakedToRaw = false;
+                dspSubRangeBaked = false;
                 dspConfig.applyPreset(pick);
                 dspConfig.save(requireContext());
                 if (livePreviewDsp != null) {
@@ -3309,6 +3366,7 @@ public class StudioFragment extends Fragment {
                 PressAnim.applySoft(row, 0.97f);
                 row.setOnClickListener(v -> {
                     dspBakedToRaw = false;
+                    dspSubRangeBaked = false;
                     dspConfig.addOrFocusSlot(t);
                     dspConfig.save(ctx);
                     if (livePreviewDsp != null) {
@@ -3349,17 +3407,10 @@ public class StudioFragment extends Fragment {
 
 
     /**
-     * Applies enabled effects from the FX rack to the selected audio region.
-     * Requires the user to select an area first (auto-enabling Select and
-     * prompting them if nothing is selected). Works identically on both the
-     * normal recording and the Select & Replace sub-editor recording!
-     */
-
-    /**
-     * Applies enabled effects from the FX rack to the selected audio region.
-     * Requires the user to select an area first (auto-enabling Select and
-     * prompting them if nothing is selected). Works identically on both the
-     * normal recording and the Select & Replace sub-editor recording!
+     * Applies enabled effects from the FX rack to the selected audio region
+     * when a selection is active, or to the entire take when no region is
+     * selected. Works identically on both the normal recording and the
+     * Select & Replace sub-editor recording.
      */
     private boolean commitDspFx() {
         if (!ensurePausedForEditing()) return false;
@@ -3411,26 +3462,21 @@ public class StudioFragment extends Fragment {
                 // Whole take baked: mark it so preview (livePreviewDsp) and
                 // save never process these samples a second time.
                 dspBakedToRaw = true;
+                dspSubRangeBaked = false;
                 waveform.reloadSelectionPeaksFromWav(raw, 0f, 1f);
             } else {
                 waveform.reloadSelectionPeaksFromWav(raw,
                         waveform.selectionStartFraction(),
                         waveform.selectionEndFraction());
-                // Only the selected region was baked. Disarm the one-shot
-                // slots so preview and save do not process the selection a
-                // second time while the rest of the take stays untouched;
-                // dspBakedToRaw stays false so a later whole-take or
-                // second-region Apply still works. Re-check any slot to
-                // process another region.
-                for (DspChain.EffectSlot slot : dspConfig.slots) {
-                    slot.enabled = false;
-                }
-                dspConfig.syncLegacyFieldsFromSlots();
-                dspConfig.save(requireContext());
-                dspBakedToRaw = false;
-                if (fxPanelOpen) {
-                    rebuildFxRackList();
-                }
+                // Only the selected region was baked. Keep the user's rack
+                // slots enabled in dspConfig and SharedPreferences so a
+                // second selection or subsequent take can apply the same rack
+                // immediately without re-checking every pill; mark
+                // dspBakedToRaw and dspSubRangeBaked so whole-take preview and
+                // save do not process the take a second time while a new
+                // selection still previews and applies live.
+                dspBakedToRaw = true;
+                dspSubRangeBaked = true;
             }
             syncFxBakeRequired();
             waveform.clearSelection();
@@ -3551,8 +3597,8 @@ public class StudioFragment extends Fragment {
         // A take still converting is not in the repository yet, so counting
         // rows alone handed the next recording the same "Take N" as the one
         // already encoding. Count those and never reuse a live title.
-        List<Take> existing = TakesRepository.all();
-        List<ConversionJob> converting = ConversionJobs.active();
+        List&lt;Take&gt; existing = TakesRepository.all();
+        List&lt;ConversionJob&gt; converting = ConversionJobs.active();
         int n = existing.size() + converting.size() + 1;
         while (true) {
             String candidate = "Take " + n;

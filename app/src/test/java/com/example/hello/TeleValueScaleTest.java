@@ -136,4 +136,16 @@ public class TeleValueScaleTest {
         assertEquals("-24 dB", labels[0]);
         assertEquals("24 dB", labels[labels.length - 1]);
     }
+
+    @Test
+    public void unalignedMaxIsIncludedInSteppedPickerLabels() {
+        TeleValue tv = control();
+        tv.configure(0, 12, 5, 0, "");
+        String[] labels = tv.steppedLabelsForTest();
+        assertEquals(4, labels.length);
+        assertEquals("0", labels[0]);
+        assertEquals("5", labels[1]);
+        assertEquals("10", labels[2]);
+        assertEquals("12", labels[3]);
+    }
 }
