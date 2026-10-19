@@ -60,7 +60,22 @@ jobs:
 
       - name: Run lint
         timeout-minutes: 15
-        run: ./gradlew lintDebug --stacktrace
+        # Diagnostic wrapper: while lintAnalyzeDebug runs (it can hang),
+        # snapshot jstack of every JVM so a hung analysis still yields the
+        # spinning detector's stack in the lint-report artifact.
+        run: |
+          ./gradlew lintDebug --stacktrace &
+          GRADLE_PID=$!
+          mkdir -p lint-jstack
+          for t in 60 120 180 240 300; do
+            if ! kill -0 "$GRADLE_PID" 2>/dev/null; then break; fi
+            sleep 60
+            if ! kill -0 "$GRADLE_PID" 2>/dev/null; then break; fi
+            for p in $(jps -q 2>/dev/null || true); do
+              jstack "$p" > "lint-jstack/jstack-${t}s-p${p}.txt" 2>&1 || true
+            done
+          done
+          wait "$GRADLE_PID"
 
       - name: Print lint errors
         if: failure()
@@ -85,6 +100,7 @@ jobs:
           path: |
             app/build/reports/lint-results-debug.html
             app/build/reports/lint-results-debug.xml
+            lint-jstack/
           if-no-files-found: ignore
 
       - name: Build Debug APK
