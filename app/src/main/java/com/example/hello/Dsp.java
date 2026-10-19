@@ -940,6 +940,11 @@ public final class Dsp {
         return out;
     }
 
+    /** ln(x + sqrt(x^2 + 1)); android.jar exposes no Math.asinh. */
+    private static double asinh(double x) {
+        return Math.log(x + Math.sqrt(x * x + 1.0));
+    }
+
     /**
      * Chebyshev Type I cascade. Passband ripple r dB between -r and 0,
      * edge attenuation -r dB (equal-ripple poles; even orders are scaled by
@@ -950,7 +955,7 @@ public final class Dsp {
                                        boolean highpass) {
         order = Math.max(1, Math.min(10, order));
         double eps = Math.sqrt(Math.pow(10, rippleDb / 10.0) - 1);
-        double xi = Math.asinh(1.0 / eps) / order;
+        double xi = asinh(1.0 / eps) / order;
         double k = 2.0 * sr;
         double w0 = k * Math.tan(Math.PI * f0 / sr);
         float[][] out = new float[order / 2 + (order % 2)][];
@@ -991,7 +996,7 @@ public final class Dsp {
                                        boolean highpass) {
         order = Math.max(1, Math.min(10, order));
         double eps = Math.sqrt(Math.pow(10, rippleDb / 10.0) - 1);
-        double mu = Math.asinh(eps) / order;
+        double mu = asinh(eps) / order;
         double k = 2.0 * sr;
         double w0 = k * Math.tan(Math.PI * f0 / sr);
         float[][] out = new float[order / 2 + (order % 2)][];
