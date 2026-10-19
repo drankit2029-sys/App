@@ -43,6 +43,16 @@ public final class FxRackChain {
         register("deess", LegacyDeEsserProcessor::new);
         register("comp", LegacyCompressorProcessor::new);
         register("limiter", LegacyLimiterProcessor::new);
+        // Stage 3 EQ & filter suite.
+        register("eq6", ParametricEq6BandProcessor::new);
+        register("geq", GraphicEqProcessor::new);
+        register("fcurve", FilterCurveEqProcessor::new);
+        register("basstreble", BassAndTrebleProcessor::new);
+        register("highpass", () -> new SlopeFilterProcessor(true));
+        register("lowpass", () -> new SlopeFilterProcessor(false));
+        register("notch", NotchFilterProcessor::new);
+        register("shelf", ShelfFilterProcessor::new);
+        register("classic", ClassicFiltersProcessor::new);
     }
 
     /** Registers (or overrides) a processor id for JSON round-trips. */

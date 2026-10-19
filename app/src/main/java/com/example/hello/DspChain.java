@@ -66,7 +66,36 @@ public final class DspChain {
                 "Threshold", 0, 100, 5, 40, "%"),
         BRICKWALL_LIMITER("limiter", "Brickwall Ceiling Limiter",
                 " Loudness drive + zero-overshoot ceiling to prevent peaking",
-                "Drive", 0, 100, 5, 50, "%");
+                "Drive", 0, 100, 5, 50, "%"),
+
+        // ---- Stage 3 EQ & filter suite (ids match the processor ids) ----
+        PARAMETRIC_EQ6("eq6", "6-Band Parametric EQ",
+                "Console EQ: low/high cut plus four musical bell/shelf bands",
+                "Output", -1800, 1800, 50, 0, " dB"),
+        GRAPHIC_EQ("geq", "Graphic EQ",
+                "10-band ISO or 31-band 1/3-octave sliders",
+                "Output", -1800, 1800, 50, 0, " dB"),
+        FILTER_CURVE_EQ("fcurve", "Filter Curve EQ",
+                "Draw an arbitrary response curve; linear-phase FIR match",
+                "Output", -1800, 1800, 50, 0, " dB"),
+        BASS_TREBLE("basstreble", "Bass & Treble",
+                "Classic 250 Hz / 3.5 kHz tone stack with volume",
+                "Bass", -3000, 3000, 100, 0, " dB"),
+        HIGH_PASS_FILTER("highpass", "High-Pass Filter",
+                "Rumble & plosive removal, 6-48 dB/oct Butterworth",
+                "Cutoff", 20, 20000, 10, 80, " Hz"),
+        LOW_PASS_FILTER("lowpass", "Low-Pass Filter",
+                "Hiss & harshness taming, 6-48 dB/oct Butterworth",
+                "Cutoff", 20, 20000, 10, 12000, " Hz"),
+        NOTCH_FILTER("notch", "Notch Filter",
+                "Surgical null for mains hum and resonances",
+                "Frequency", 20, 20000, 10, 60, " Hz"),
+        SHELF_FILTER("shelf", "Shelf Filter",
+                "Broad high/low tonal shelf with adjustable slope",
+                "Gain", -2400, 2400, 10, 0, " dB"),
+        CLASSIC_FILTERS("classic", "Classic Filters",
+                "Butterworth / Chebyshev I / Chebyshev II / Bessel",
+                "Cutoff", 20, 20000, 10, 1000, " Hz");
 
         public final String id;
         public final String title;
@@ -97,6 +126,27 @@ public final class DspChain {
                 if (t.id.equals(id)) return t;
             }
             return NOISE_SUPPRESSION;
+        }
+
+        /**
+         * True for the eight legacy voice-chain stages whose state lives in
+         * the {@code Config} percentage fields; Stage 3 suite entries are
+         * rack-local and keep their full state in the slot itself.
+         */
+        public boolean isLegacyStage() {
+            switch (this) {
+                case NOISE_SUPPRESSION:
+                case DE_ESSER:
+                case COMPRESSOR:
+                case LOW_CUT_HPF:
+                case VOCAL_PRESENCE:
+                case WARMTH_BODY:
+                case ROOM_GATE:
+                case BRICKWALL_LIMITER:
+                    return true;
+                default:
+                    return false;
+            }
         }
     }
 
@@ -373,7 +423,9 @@ public final class DspChain {
                     kept.value = Math.max(t.minVal, Math.min(t.maxVal, val));
                     slots.add(kept);
                 } else if (kept != null) {
-                    kept.enabled = false;
+                    // Stage 3 suite slots are rack-local: their state must
+                    // survive every legacy-field resync untouched.
+                    if (t.isLegacyStage()) kept.enabled = false;
                     slots.add(kept);
                 }
             }
@@ -470,14 +522,25 @@ public final class DspChain {
         }
 
         public boolean isActive() {
-            return hpfEnabled || noisePct > 0 || deEssPct > 0 || compPct > 0
-                    || presencePct > 0 || warmthPct > 0 || gatePct > 0 || limiterPct > 0;
+            if (hpfEnabled || noisePct > 0 || deEssPct > 0 || compPct > 0
+                    || presencePct > 0 || warmthPct > 0 || gatePct > 0
+                    || limiterPct > 0) {
+                return true;
+            }
+            for (EffectSlot s : slots) {
+                if (s != null && s.enabled && s.type != null
+                        && !s.type.isLegacyStage()) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         public int enabledSlotCount() {
             int n = 0;
             for (EffectSlot s : slots) {
-                if (s.enabled && s.value > 0) n++;
+                if (s.enabled
+                        && (s.value > 0 || !s.type.isLegacyStage())) n++;
             }
             return n;
         }
@@ -608,6 +671,8 @@ public final class DspChain {
     public DspChain(int channels, Config cfg) {
         this.channels = Math.max(1, Math.min(2, channels));
         this.rack = FxRackChain.fromLegacyConfig(this.channels, cfg);
+        ensureRackSlots(cfg);
+        rack.applyLegacyConfig(cfg);
         applySlotExtras(cfg);
     }
 
@@ -622,8 +687,43 @@ public final class DspChain {
 
     public void updateConfig(Config cfg) {
         resetProcessorSlotExtras();
+        ensureRackSlots(cfg);
         rack.applyLegacyConfig(cfg);
         applySlotExtras(cfg);
+    }
+
+    /**
+     * Creates or drops Stage 3 suite processors so every non-legacy slot owns
+     * exactly one rack processor and deleted slots leave no orphan behind.
+     * Runs before {@code applyLegacyConfig} so slot order can include them.
+     */
+    private void ensureRackSlots(Config cfg) {
+        if (cfg == null) return;
+        java.util.Set<String> wanted = new java.util.HashSet<>();
+        for (EffectSlot s : cfg.slots) {
+            if (s == null || s.type == null || s.type.isLegacyStage()) continue;
+            String pid = FxRackChain.processorIdForSlotType(s.type);
+            if (pid == null) continue;
+            wanted.add(pid);
+            AudioProcessor p = rack.getProcessor(rack.indexOf(pid));
+            if (p == null) {
+                p = FxRackChain.createProcessor(pid);
+                if (p != null) rack.addProcessor(p);
+            }
+            if (p != null) p.setEnabled(s.enabled);
+        }
+        for (int i = rack.size() - 1; i >= 0; i--) {
+            AudioProcessor p = rack.getProcessor(i);
+            if (p == null || isLegacyProcessor(p)) continue;
+            if (!wanted.contains(p.getId())) rack.removeProcessor(i);
+        }
+    }
+
+    private static boolean isLegacyProcessor(AudioProcessor p) {
+        String id = p.getId();
+        return "hpf".equals(id) || "noise".equals(id) || "gate".equals(id)
+                || "tone".equals(id) || "deess".equals(id)
+                || "comp".equals(id) || "limiter".equals(id);
     }
 
     /**
@@ -675,11 +775,37 @@ public final class DspChain {
                 // slot's mix never weakens safety limiting.
                 p.setWetDryMix(s.wetDry);
             }
+            if (!s.type.isLegacyStage()) {
+                p.setEnabled(s.enabled);
+                FxParameter fp = p.getParam(primaryParamId(s.type));
+                if (fp != null) fp.setCurrentRaw(s.value);
+            }
             for (Map.Entry<String, Integer> e : s.extraParams.entrySet()) {
                 if (isPrimaryLegacyParam(e.getKey())) continue;
                 FxParameter fp = p.getParam(e.getKey());
                 if (fp != null) fp.setCurrentRaw(e.getValue());
             }
+        }
+    }
+
+    /** Processor parameter driven by the slot card's main dial. */
+    static String primaryParamId(EffectType type) {
+        switch (type) {
+            case PARAMETRIC_EQ6:
+            case GRAPHIC_EQ:
+            case FILTER_CURVE_EQ:
+                return "out";
+            case BASS_TREBLE:
+                return "bass";
+            case HIGH_PASS_FILTER:
+            case LOW_PASS_FILTER:
+            case NOTCH_FILTER:
+            case CLASSIC_FILTERS:
+                return "freq";
+            case SHELF_FILTER:
+                return "gain";
+            default:
+                return null;
         }
     }
 
@@ -701,7 +827,8 @@ public final class DspChain {
             case VOCAL_PRESENCE:
                 return rack.getProcessor(rack.indexOf("tone"));
             default:
-                return null;
+                // Stage 3 suite ids match their processor ids exactly.
+                return rack.getProcessor(rack.indexOf(type.id));
         }
     }
 

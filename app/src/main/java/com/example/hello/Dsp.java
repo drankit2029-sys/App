@@ -776,6 +776,430 @@ public final class Dsp {
         }
     }
 
+    // ---- Stage 3: biquad engine (RBJ + classic analog prototypes) ----
+
+    /**
+     * RBJ cookbook peaking EQ biquad. Returns {b0,b1,b2,a1,a2} with a0
+     * normalized out. Coefficients are exact at the requested gain; gainDb
+     * of 0 degenerates to unity.
+     */
+    public static float[] rbjPeaking(double sr, double f0, double q,
+                                     double gainDb) {
+        double a = Math.pow(10, gainDb / 40.0);
+        double w = 2.0 * Math.PI * f0 / sr;
+        double cs = Math.cos(w), sn = Math.sin(w);
+        double alpha = sn / (2.0 * q);
+        double b0 = 1 + alpha * a, b1 = -2 * cs, b2 = 1 - alpha * a;
+        double a0 = 1 + alpha / a, a1 = -2 * cs, a2 = 1 - alpha / a;
+        return normBiquad(b0, b1, b2, a0, a1, a2);
+    }
+
+    /** RBJ low-shelf biquad (S = shelf slope; 1.0 is steepest without overshoot). */
+    public static float[] rbjLowShelf(double sr, double f0, double s,
+                                      double gainDb) {
+        double a = Math.pow(10, gainDb / 40.0);
+        double w = 2.0 * Math.PI * f0 / sr;
+        double cs = Math.cos(w), sn = Math.sin(w);
+        double alpha = sn / 2.0 * Math.sqrt((a + 1 / a) * (1 / s - 1) + 2);
+        double ap1 = a + 1, am1 = a - 1;
+        double sq2sa = 2 * Math.sqrt(a) * alpha;
+        double b0 = a * (ap1 - am1 * cs + sq2sa);
+        double b1 = 2 * a * (am1 - ap1 * cs);
+        double b2 = a * (ap1 - am1 * cs - sq2sa);
+        double a0 = ap1 + am1 * cs + sq2sa;
+        double a1 = -2 * (am1 + ap1 * cs);
+        double a2 = ap1 + am1 * cs - sq2sa;
+        return normBiquad(b0, b1, b2, a0, a1, a2);
+    }
+
+    /** RBJ high-shelf biquad. */
+    public static float[] rbjHighShelf(double sr, double f0, double s,
+                                       double gainDb) {
+        double a = Math.pow(10, gainDb / 40.0);
+        double w = 2.0 * Math.PI * f0 / sr;
+        double cs = Math.cos(w), sn = Math.sin(w);
+        double alpha = sn / 2.0 * Math.sqrt((a + 1 / a) * (1 / s - 1) + 2);
+        double ap1 = a + 1, am1 = a - 1;
+        double sq2sa = 2 * Math.sqrt(a) * alpha;
+        double b0 = a * (ap1 + am1 * cs + sq2sa);
+        double b1 = -2 * a * (am1 + ap1 * cs);
+        double b2 = a * (ap1 + am1 * cs - sq2sa);
+        double a0 = ap1 - am1 * cs + sq2sa;
+        double a1 = 2 * (am1 - ap1 * cs);
+        double a2 = ap1 - am1 * cs - sq2sa;
+        return normBiquad(b0, b1, b2, a0, a1, a2);
+    }
+
+    /** RBJ notch biquad: unity elsewhere, deep null at f0. */
+    public static float[] rbjNotch(double sr, double f0, double q) {
+        double w = 2.0 * Math.PI * f0 / sr;
+        double cs = Math.cos(w), sn = Math.sin(w);
+        double alpha = sn / (2.0 * q);
+        return normBiquad(1, -2 * cs, 1, 1 + alpha, -2 * cs, 1 - alpha);
+    }
+
+    /** RBJ band-pass biquad (constant 0 dB peak gain). */
+    public static float[] rbjBandPass(double sr, double f0, double q) {
+        double w = 2.0 * Math.PI * f0 / sr;
+        double cs = Math.cos(w), sn = Math.sin(w);
+        double alpha = sn / (2.0 * q);
+        return normBiquad(alpha, 0, -alpha, 1 + alpha, -2 * cs, 1 - alpha);
+    }
+
+    /** RBJ low-pass biquad (Butterworth Q = 0.7071 gives the maximally flat 2nd-order). */
+    public static float[] rbjLowPass(double sr, double f0, double q) {
+        double w = 2.0 * Math.PI * f0 / sr;
+        double cs = Math.cos(w), sn = Math.sin(w);
+        double alpha = sn / (2.0 * q);
+        double b1 = 1 - cs;
+        return normBiquad(b1 / 2, b1, b1 / 2, 1 + alpha, -2 * cs, 1 - alpha);
+    }
+
+    /** RBJ high-pass biquad. */
+    public static float[] rbjHighPass(double sr, double f0, double q) {
+        double w = 2.0 * Math.PI * f0 / sr;
+        double cs = Math.cos(w), sn = Math.sin(w);
+        double alpha = sn / (2.0 * q);
+        double b0 = (1 + cs) / 2;
+        return normBiquad(b0, -(1 + cs), b0, 1 + alpha, -2 * cs, 1 - alpha);
+    }
+
+    private static float[] normBiquad(double b0, double b1, double b2,
+                                      double a0, double a1, double a2) {
+        return new float[]{
+                (float) (b0 / a0), (float) (b1 / a0), (float) (b2 / a0),
+                (float) (a1 / a0), (float) (a2 / a0)
+        };
+    }
+
+    /** Identity biquad carrying a plain gain: {g,0,0,0,0}. */
+    public static float[] gainBiquad(double gain) {
+        return new float[]{(float) gain, 0f, 0f, 0f, 0f};
+    }
+
+    /**
+     * Analog prototype pole tables for the 3 dB-normalized Bessel filter,
+     * orders 1..10 ({sigma, omega} with sigma negative; omega 0 = real pole).
+     * Generated offline from the reverse Bessel polynomials and verified to
+     * give -3.01 dB at the cutoff for every order (unit test).
+     */
+    private static final double[][][] BESSEL_POLES = {
+            {},
+            {{-1.0, 0.0}},
+            {{-1.10160133, 0.63600982}},
+            {{-1.04740916, 0.99926444}, {-1.32267580, 0.0}},
+            {{-1.37006783, 0.41024972}, {-0.99520876, 1.25710574}},
+            {{-1.38087733, 0.71790959}, {-0.95767655, 1.47112432},
+                    {-1.50231627, 0.0}},
+            {{-1.57149040, 0.32089637}, {-1.38185810, 0.97147189},
+                    {-0.93065652, 1.66186327}},
+            {{-1.61203877, 0.58924451}, {-1.37890322, 1.19156678},
+                    {-0.90986778, 1.83645135}, {-1.68436818, 0.0}},
+            {{-1.75740840, 0.27286758}, {-1.63693942, 0.82279563},
+                    {-1.37384122, 1.38835658}, {-0.89286972, 1.99832584}},
+            {{-1.80717053, 0.51238373}, {-1.65239648, 1.03138957},
+                    {-1.36758831, 1.56773371}, {-0.87839928, 2.14980052},
+                    {-1.85660050, 0.0}},
+            {{-1.92761969, 0.24162347}, {-1.84219624, 0.72725760},
+                    {-1.66181024, 1.22110022}, {-1.36069228, 1.73350574},
+                    {-0.86575690, 2.29260483}}
+    };
+
+    public static int maxBesselOrder() {
+        return BESSEL_POLES.length - 1;
+    }
+
+    /**
+     * Bilinear-transformed Butterworth cascade. Pole angles
+     * {@code pi/2 + (2k+1)pi/(2N)}; -3.01 dB exactly at f0 for every order.
+     */
+    public static float[][] butterworth(int order, double sr, double f0,
+                                        boolean highpass) {
+        order = Math.max(1, Math.min(10, order));
+        double k = 2.0 * sr;
+        double w0 = k * Math.tan(Math.PI * f0 / sr);
+        float[][] out = new float[order / 2 + (order % 2)][];
+        int idx = 0;
+        for (int i = 0; i < order / 2; i++) {
+            double th = Math.PI / 2 + (2 * i + 1) * Math.PI / (2 * order);
+            double sigma = w0 * Math.cos(th), omega = w0 * Math.sin(th);
+            double pS = sigma, pW = omega;
+            if (highpass) {
+                double r2 = sigma * sigma + omega * omega;
+                pS = w0 * w0 * sigma / r2;
+                pW = w0 * w0 * omega / r2;
+                pW = Math.abs(pW);
+            }
+            out[idx++] = secPair(pS, pW, k, highpass, 0);
+        }
+        if (order % 2 == 1) {
+            double a = w0;
+            if (highpass) a = w0;
+            out[idx++] = secReal(a, k, highpass);
+        }
+        return out;
+    }
+
+    /**
+     * Chebyshev Type I cascade. Passband ripple r dB between -r and 0,
+     * edge attenuation -r dB (equal-ripple poles; even orders are scaled by
+     * 1/sqrt(1+eps^2) so the passband never exceeds 0 dB).
+     */
+    public static float[][] chebyshev1(int order, double rippleDb,
+                                       double sr, double f0,
+                                       boolean highpass) {
+        order = Math.max(1, Math.min(10, order));
+        double eps = Math.sqrt(Math.pow(10, rippleDb / 10.0) - 1);
+        double xi = Math.asinh(1.0 / eps) / order;
+        double k = 2.0 * sr;
+        double w0 = k * Math.tan(Math.PI * f0 / sr);
+        float[][] out = new float[order / 2 + (order % 2)][];
+        int idx = 0;
+        for (int i = 0; i < (order + 1) / 2; i++) {
+            double th = (2 * i + 1) * Math.PI / (2 * order);
+            double sigma = -Math.sinh(xi) * Math.sin(th) * w0;
+            double omega = Math.cosh(xi) * Math.cos(th) * w0;
+            if (Math.abs(omega) < 1e-9) {
+                double a = -sigma;
+                if (highpass) a = w0 * w0 / a;
+                out[idx++] = secReal(a, k, highpass);
+            } else {
+                double pS = sigma, pW = Math.abs(omega);
+                if (highpass) {
+                    double r2 = sigma * sigma + omega * omega;
+                    pS = w0 * w0 * sigma / r2;
+                    pW = w0 * w0 * Math.abs(omega) / r2;
+                }
+                out[idx++] = secPair(pS, pW, k, highpass, 0);
+            }
+        }
+        if (order % 2 == 0) {
+            double s = 1.0 / Math.sqrt(1 + eps * eps);
+            scaleSection(out[0], s);
+        }
+        return out;
+    }
+
+    /**
+     * Chebyshev Type II (inverse Chebyshev) cascade. Flat passband, stopband
+     * ripple, edge attenuation exactly -rippleDb; notches at
+     * 1/cos(theta) (LP) / cos(theta) (HP) relative to the prewarped cutoff.
+     * Normalized to unity DC (LP) / Nyquist (HP).
+     */
+    public static float[][] chebyshev2(int order, double rippleDb,
+                                       double sr, double f0,
+                                       boolean highpass) {
+        order = Math.max(1, Math.min(10, order));
+        double eps = Math.sqrt(Math.pow(10, rippleDb / 10.0) - 1);
+        double mu = Math.asinh(eps) / order;
+        double k = 2.0 * sr;
+        double w0 = k * Math.tan(Math.PI * f0 / sr);
+        float[][] out = new float[order / 2 + (order % 2)][];
+        int idx = 0;
+        for (int i = 0; i < (order + 1) / 2; i++) {
+            double th = (2 * i + 1) * Math.PI / (2 * order);
+            double cth = Math.cos(th), sth = Math.sin(th);
+            double pr = -Math.sinh(mu) * sth, pi = Math.cosh(mu) * cth;
+            double d = pr * pr + pi * pi;
+            double sigma = pr / d * w0, omega = -pi / d * w0;
+            double zb = Math.abs(cth) > 1e-12 ? 1.0 / Math.abs(cth) : 0.0;
+            if (Math.abs(omega) < 1e-9 || zb == 0.0) {
+                if (Math.abs(omega) < 1e-9) {
+                    double a = -sigma;
+                    if (highpass) a = w0 * w0 / a;
+                    out[idx++] = secReal(a, k, highpass);
+                }
+            } else {
+                double pS = sigma, pW = Math.abs(omega), zeta;
+                if (highpass) {
+                    double r2 = sigma * sigma + omega * omega;
+                    pS = w0 * w0 * sigma / r2;
+                    pW = w0 * w0 * Math.abs(omega) / r2;
+                    zeta = w0 / zb;
+                } else {
+                    zeta = w0 * zb;
+                }
+                out[idx++] = secPair(pS, pW, k, highpass, zeta);
+            }
+        }
+        double g = Math.abs(gainAtZ(out, highpass ? -1.0 : 1.0));
+        if (g > 1e-12) scaleSection(out[0], 1.0 / g);
+        return out;
+    }
+
+    /** 3 dB-normalized Bessel cascade from the pole tables. */
+    public static float[][] bessel(int order, double sr, double f0,
+                                   boolean highpass) {
+        order = Math.max(1, Math.min(maxBesselOrder(), order));
+        double k = 2.0 * sr;
+        double w0 = k * Math.tan(Math.PI * f0 / sr);
+        double[][] poles = BESSEL_POLES[order];
+        float[][] out = new float[poles.length][];
+        int idx = 0;
+        for (double[] pole : poles) {
+            double sigma = pole[0] * w0, omega = pole[1] * w0;
+            if (omega == 0.0) {
+                double a = -sigma;
+                if (highpass) a = w0 * w0 / a;
+                out[idx++] = secReal(a, k, highpass);
+            } else {
+                double pS = sigma, pW = omega;
+                if (highpass) {
+                    double r2 = sigma * sigma + omega * omega;
+                    pS = w0 * w0 * sigma / r2;
+                    pW = w0 * w0 * omega / r2;
+                }
+                out[idx++] = secPair(pS, pW, k, highpass, 0);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * One analog pole pair (or conjugate pair) through the bilinear
+     * transform. {@code zb} > 0 adds a zero pair at +-j*zb (inverse
+     * Chebyshev); 0 keeps the plain LP/HP numerator.
+     */
+    private static float[] secPair(double sigma, double omega, double k,
+                                   boolean highpass, double zb) {
+        double r2 = sigma * sigma + omega * omega;
+        double a0 = k * k - 2 * sigma * k + r2;
+        double a1 = 2 * (r2 - k * k);
+        double a2 = k * k + 2 * sigma * k + r2;
+        double b0, b1, b2;
+        if (zb > 0) {
+            double zs = zb * zb;
+            b0 = k * k + zs;
+            b1 = 2 * (zs - k * k);
+            b2 = k * k + zs;
+        } else if (highpass) {
+            b0 = k * k;
+            b1 = -2 * k * k;
+            b2 = k * k;
+        } else {
+            b0 = r2;
+            b1 = 2 * r2;
+            b2 = r2;
+        }
+        return new float[]{(float) (b0 / a0), (float) (b1 / a0),
+                (float) (b2 / a0), (float) (a1 / a0), (float) (a2 / a0)};
+    }
+
+    /** First-order section from a real analog pole at s = -a. */
+    private static float[] secReal(double a, double k, boolean highpass) {
+        double a0 = k + a;
+        double a1 = a - k;
+        if (highpass) {
+            return new float[]{(float) (k / a0), (float) (-k / a0), 0f,
+                    (float) (a1 / a0), 0f};
+        }
+        return new float[]{(float) (a / a0), (float) (a / a0), 0f,
+                (float) (a1 / a0), 0f};
+    }
+
+    private static void scaleSection(float[] sec, double s) {
+        sec[0] *= (float) s;
+        sec[1] *= (float) s;
+        sec[2] *= (float) s;
+    }
+
+    /** Cascade gain at z = +1 (DC) or z = -1 (Nyquist). */
+    private static double gainAtZ(float[][] sections, double z) {
+        double g = 1.0;
+        for (float[] c : sections) {
+            double num = c[0] + c[1] * z + c[2] * z * z;
+            double den = 1.0 + c[3] * z + c[4] * z * z;
+            g *= num / den;
+        }
+        return g;
+    }
+
+    /** Magnitude of a biquad cascade at freqHz, in dB (for tests/graphs). */
+    public static double cascadeMagDb(float[][] sections, double freqHz,
+                                      double sr) {
+        double w = 2.0 * Math.PI * freqHz / sr;
+        double cw = Math.cos(w), sw = Math.sin(w);
+        double c2 = Math.cos(2 * w), s2 = Math.sin(2 * w);
+        double g = 1.0;
+        for (float[] c : sections) {
+            double nr = c[0] + c[1] * cw + c[2] * c2;
+            double ni = -(c[1] * sw + c[2] * s2);
+            double dr = 1 + c[3] * cw + c[4] * c2;
+            double di = -(c[3] * sw + c[4] * s2);
+            double n2 = nr * nr + ni * ni;
+            double d2 = dr * dr + di * di;
+            g *= Math.sqrt(n2 / Math.max(1e-30, d2));
+        }
+        return 20.0 * Math.log10(Math.max(1e-12, g));
+    }
+
+    /** dB to linear amplitude, clamped to a sane floor. */
+    public static float dbToLin(double db) {
+        return (float) Math.pow(10, db / 20.0);
+    }
+
+    /** Linear amplitude to dB with a -140 floor. */
+    public static float linToDb(double lin) {
+        double a = Math.abs(lin);
+        return a < 1e-7 ? -140f : (float) (20.0 * Math.log10(a));
+    }
+
+    // ---- FFT (iterative radix-2, in place) ----
+
+    /** In-place complex FFT; {@code n} must be a power of two. */
+    public static void fft(float[] re, float[] im, boolean inverse) {
+        int n = re.length;
+        if (n <= 1) return;
+        if (Integer.bitCount(n) != 1) {
+            throw new IllegalArgumentException("fft size must be power of 2");
+        }
+        for (int i = 1, j = 0; i < n; i++) {
+            int bit = n >> 1;
+            for (; (j & bit) != 0; bit >>= 1) j ^= bit;
+            j ^= bit;
+            if (i < j) {
+                float t = re[i]; re[i] = re[j]; re[j] = t;
+                t = im[i]; im[i] = im[j]; im[j] = t;
+            }
+        }
+        for (int len = 2; len <= n; len <<= 1) {
+            double ang = 2 * Math.PI / len * (inverse ? 1 : -1);
+            float wr = (float) Math.cos(ang), wi = (float) Math.sin(ang);
+            for (int i = 0; i < n; i += len) {
+                float cr = 1f, ci = 0f;
+                for (int j = 0; j < len / 2; j++) {
+                    int u = i + j, v = i + j + len / 2;
+                    float vr = re[v] * cr - im[v] * ci;
+                    float vi = re[v] * ci + im[v] * cr;
+                    re[v] = re[u] - vr;
+                    im[v] = im[u] - vi;
+                    re[u] += vr;
+                    im[u] += vi;
+                    float ncr = cr * wr - ci * wi;
+                    ci = cr * wi + ci * wr;
+                    cr = ncr;
+                }
+            }
+        }
+        if (inverse) {
+            float inv = 1f / n;
+            for (int i = 0; i < n; i++) {
+                re[i] *= inv;
+                im[i] *= inv;
+            }
+        }
+    }
+
+    /** Blackman window of length n (for FIR truncation). */
+    public static float[] blackmanWindow(int n) {
+        float[] w = new float[n];
+        for (int i = 0; i < n; i++) {
+            w[i] = (float) (0.42 - 0.5 * Math.cos(2 * Math.PI * i / (n - 1))
+                    + 0.08 * Math.cos(4 * Math.PI * i / (n - 1)));
+        }
+        return w;
+    }
+
     /**
      * Deletes trash files older than maxAgeMs (storage hygiene for
      * long-forgotten deletes).

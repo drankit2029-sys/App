@@ -2816,7 +2816,12 @@ public class StudioFragment extends Fragment {
      * knob in the expanded drawer, so multi-parameter effects get a full
      * inspector with no bespoke UI.
      */
-    private static boolean isPrimaryFxParam(String paramId) {
+    private static boolean isPrimaryFxParam(DspChain.EffectType type,
+                                            String paramId) {
+        if (type != null && !type.isLegacyStage()) {
+            return paramId != null
+                    && paramId.equals(DspChain.primaryParamId(type));
+        }
         return "amt".equals(paramId)
                 || "cutoff".equals(paramId)
                 || "drive".equals(paramId)
@@ -2833,8 +2838,18 @@ public class StudioFragment extends Fragment {
         if (slot == null || slot.type == null) return "";
         StringBuilder sb = new StringBuilder();
         sb.append(slot.enabled ? "Enabled • " : "Bypassed • ");
-        sb.append(slot.type.paramLabel).append(": ")
-                .append(slot.value).append(slot.type.unit);
+        AudioProcessor meta =
+                FxRackChain.getPrototypeProcessor(slot.type.id);
+        FxParameter primary = (meta != null && !slot.type.isLegacyStage())
+                ? meta.getParam(DspChain.primaryParamId(slot.type)) : null;
+        if (primary != null) {
+            primary.setCurrentRaw(primary.clampRaw(slot.value));
+            sb.append(primary.name).append(": ")
+                    .append(primary.formatDisplay());
+        } else {
+            sb.append(slot.type.paramLabel).append(": ")
+                    .append(slot.value).append(slot.type.unit);
+        }
         boolean isTone = slot.type == DspChain.EffectType.WARMTH_BODY
                 || slot.type == DspChain.EffectType.VOCAL_PRESENCE;
         boolean mixActive = !isTone || cfg == null
@@ -2843,12 +2858,13 @@ public class StudioFragment extends Fragment {
         if (mixActive && mixPct < 100) {
             sb.append(" • Mix ").append(mixPct).append("%");
         }
-        if (!slot.extraParams.isEmpty()) {
-            AudioProcessor meta =
-                    FxRackChain.getPrototypeProcessor(slot.type.id);
+        boolean curveEditor = slot.type == DspChain.EffectType.PARAMETRIC_EQ6
+                || slot.type == DspChain.EffectType.GRAPHIC_EQ
+                || slot.type == DspChain.EffectType.FILTER_CURVE_EQ;
+        if (!slot.extraParams.isEmpty() && !curveEditor) {
             if (meta != null) {
                 for (FxParameter param : meta.getParameters()) {
-                    if (isPrimaryFxParam(param.id)
+                    if (isPrimaryFxParam(slot.type, param.id)
                             || param.type == FxParameter.Type.ACTION) {
                         continue;
                     }
@@ -2961,6 +2977,19 @@ public class StudioFragment extends Fragment {
 
             TeleValue ctl = new TeleValue(ctx);
             ctl.setCaption(slot.type.paramLabel);
+            if (!slot.type.isLegacyStage()) {
+                AudioProcessor dialMeta =
+                        FxRackChain.getPrototypeProcessor(slot.type.id);
+                FxParameter dialParam = dialMeta == null ? null
+                        : dialMeta.getParam(DspChain.primaryParamId(slot.type));
+                if (dialParam != null) {
+                    ctl.setValueScale(Math.max(1, dialParam.scaleDivisor));
+                    ctl.setValueFormatter(raw -> {
+                        dialParam.setCurrentRaw(raw);
+                        return dialParam.formatDisplay();
+                    });
+                }
+            }
             ctl.configure(slot.type.minVal, slot.type.maxVal,
                     slot.type.stepVal, slot.value, slot.type.unit);
             android.widget.LinearLayout.LayoutParams ctlLp =
@@ -2984,6 +3013,28 @@ public class StudioFragment extends Fragment {
                 paintEditorStrip();
                 paintFxPanelControls();
             };
+
+            // Interactive curve editors for the Stage 3 EQ family: drag the
+            // response directly on the canvas (bands, sliders or curve nodes).
+            boolean hasEqView = slot.type == DspChain.EffectType.PARAMETRIC_EQ6
+                    || slot.type == DspChain.EffectType.GRAPHIC_EQ
+                    || slot.type == DspChain.EffectType.FILTER_CURVE_EQ;
+            if (hasEqView) {
+                EqCurveView eqView;
+                if (slot.type == DspChain.EffectType.PARAMETRIC_EQ6) {
+                    eqView = new ParametricEqView(ctx, slot, onSlotMutated);
+                } else if (slot.type == DspChain.EffectType.GRAPHIC_EQ) {
+                    eqView = new GraphicEqView(ctx, slot, onSlotMutated);
+                } else {
+                    eqView = new FilterCurveEqView(ctx, slot, onSlotMutated);
+                }
+                android.widget.LinearLayout.LayoutParams eqLp =
+                        new android.widget.LinearLayout.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                Math.round(170 * density));
+                eqLp.topMargin = Math.round(8 * density);
+                body.addView(eqView, eqLp);
+            }
 
             checkBtn.setOnClickListener(v -> {
                 slot.enabled = !slot.enabled;
@@ -3131,7 +3182,15 @@ public class StudioFragment extends Fragment {
             AudioProcessor meta = FxRackChain.getPrototypeProcessor(slot.type.id);
             if (meta != null) {
                 for (FxParameter param : meta.getParameters()) {
-                    if (isPrimaryFxParam(param.id)) continue;
+                    if (isPrimaryFxParam(slot.type, param.id)) continue;
+                    // Curve editors own these params: graphic bands and
+                    // filter-curve nodes are dragged on the canvas instead.
+                    if (slot.type == DspChain.EffectType.GRAPHIC_EQ
+                            && param.id.matches("g\\d+")) continue;
+                    if (slot.type == DspChain.EffectType.FILTER_CURVE_EQ
+                            && (param.id.startsWith("pf")
+                                    || param.id.startsWith("pg")
+                                    || "npts".equals(param.id))) continue;
                     if (param.type == FxParameter.Type.BOOLEAN) {
                         TextView b = makeFxChip(ctx, param.name, density);
                         final int rawBool = slot.extraParams.containsKey(

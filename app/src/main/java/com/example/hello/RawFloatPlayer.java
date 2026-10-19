@@ -333,6 +333,7 @@ public final class RawFloatPlayer {
                 if (chain != null && chain.isActive()) {
                     chain.processInPlace(buf, want);
                 }
+                FxTelemetry.push(buf, want, channels);
                 // Compute post-FX peak level for the dBFS meter during preview!
                 float chunkPeak = 0f;
                 int totalSamples = want * channels;
