@@ -59,6 +59,7 @@ jobs:
           path: app/build/reports/tests/testDebugUnitTest/
 
       - name: Run lint
+        timeout-minutes: 15
         run: ./gradlew lintDebug --stacktrace
 
       - name: Print lint errors
@@ -77,11 +78,14 @@ jobs:
           EOF
 
       - name: Upload lint report
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: lint-report
-          path: app/build/reports/lint-results-debug.html
+          path: |
+            app/build/reports/lint-results-debug.html
+            app/build/reports/lint-results-debug.xml
+          if-no-files-found: ignore
 
       - name: Build Debug APK
         run: ./gradlew assembleDebug --stacktrace
