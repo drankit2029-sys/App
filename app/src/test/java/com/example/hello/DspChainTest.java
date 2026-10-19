@@ -178,8 +178,20 @@ public class DspChainTest {
         for (DspChain.EffectType type : DspChain.EffectType.values()) {
             DspChain.Config cfg = new DspChain.Config();
             cfg.applyPreset(DspChain.Preset.CLEAR_ALL);
-            cfg.addOrFocusSlot(type);
+            DspChain.EffectSlot slot = cfg.addOrFocusSlot(type);
             assertTrue("Effect " + type.id + " should be active", cfg.isActive());
+            if (!type.isLegacyStage()) {
+                // The Stage 3 suite defaults to a flat response; dial in a
+                // setting that must move the ~229 Hz probe tone.
+                String pid = DspChain.primaryParamId(type);
+                if ("out".equals(pid) || "bass".equals(pid)) {
+                    slot.value = 300;
+                } else if ("gain".equals(pid)) {
+                    slot.value = 600;
+                } else {
+                    slot.value = 229;
+                }
+            }
 
             DspChain chain = new DspChain(2, cfg);
             // A loud sustained tone keeps the physical noise gate fully open

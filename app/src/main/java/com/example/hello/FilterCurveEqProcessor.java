@@ -165,18 +165,11 @@ final class FilterCurveEqProcessor extends AudioProcessor {
             if (k > 0 && k < half) re[size - k] = mag;
         }
         Dsp.fft(re, im, true);
-        int center = size / 2;
         float[] w = Dsp.blackmanWindow(taps);
         ir = new float[taps];
-        double sum = 0;
         for (int t = 0; t < taps; t++) {
-            int src = ((center - taps / 2 + t) % size + size) % size;
+            int src = ((t - taps / 2) % size + size) % size;
             ir[t] = re[src] * w[t];
-            sum += ir[t];
-        }
-        if (Math.abs(sum) > 1e-9) {
-            float norm = (float) (1.0 / sum);
-            for (int t = 0; t < taps; t++) ir[t] *= norm;
         }
         if (hRe.length != size) {
             hRe = new float[size];
@@ -237,9 +230,14 @@ final class FilterCurveEqProcessor extends AudioProcessor {
                 for (int f = 0; f < blk; f++) {
                     buf[(off + f) * c + chn] = inRe[f] + cr[f];
                 }
+                // Shift the pending tail down by this block's length and add
+                // the fresh tail: overwriting would drop earlier blocks'
+                // overlap-add residue and silence the filter.
                 int keep = fftSize - BLOCK;
-                for (int f = 0; f < keep; f++) {
-                    cr[f] = inRe[BLOCK + f];
+                for (int j = 0; j < keep; j++) {
+                    int m = j + blk;
+                    float prev = m < keep ? cr[m] : 0f;
+                    cr[j] = prev + inRe[m];
                 }
             }
             off += blk;

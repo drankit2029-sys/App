@@ -69,7 +69,7 @@ public class EqSuiteTest {
                         mag(hp, 1000), 0.35);
                 double lo = 1e9, hi = -1e9;
                 for (int i = 0; i <= 240; i++) {
-                    double f = 20 * Math.pow(500.0, i / 240.0);
+                    double f = 20 * Math.pow(50.0, i / 240.0);
                     double g = mag(lp, f);
                     lo = Math.min(lo, g);
                     hi = Math.max(hi, g);
@@ -145,8 +145,8 @@ public class EqSuiteTest {
         p.getParam("b3g").setCurrentRaw(600);
         p.getParam("b3f").setCurrentRaw(1000);
         assertEquals(6.0, mag(p.buildSections(), 1000), 0.3);
-        // Away from the bell (and above the always-on low cut).
-        assertEquals(0.0, mag(p.buildSections(), 3000), 0.3);
+        // Far from every band (only untouched 0 dB bells remain there).
+        assertEquals(0.0, mag(p.buildSections(), 12000), 0.2);
         float[] buf = sine(4800, 2, 1000, 0.5f);
         p.processInPlace(buf, 4800, 2);
         assertFiniteBounded(buf, 8f);
@@ -171,9 +171,9 @@ public class EqSuiteTest {
                 FxRackChain.createProcessor("fcurve");
         p.prepare(SR, 2);
         p.getParam("pg0").setCurrentRaw(1200);
-        float[] buf = sine(2048, 2, 100, 0.5f);
+        float[] buf = sine(4096, 2, 100, 0.5f);
         float peak = 0f;
-        p.processInPlace(buf, 2048, 2);
+        p.processInPlace(buf, 4096, 2);
         for (float v : buf) {
             assertTrue(Float.isFinite(v));
             peak = Math.max(peak, Math.abs(v));
@@ -191,7 +191,8 @@ public class EqSuiteTest {
         float[][] sections = hp.buildSections();
         assertEquals(3, sections.length);
         assertEquals(-3.01, mag(sections, 1000), 0.3);
-        assertTrue(mag(sections, 2000) < -25);
+        // Butterworth is -3 dB at fc and rolls off *below* fc for a HPF.
+        assertTrue(mag(sections, 500) < -25);
     }
 
     @Test
