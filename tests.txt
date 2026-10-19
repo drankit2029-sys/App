@@ -880,3 +880,40 @@ aebf38f, bacb2ff).
 Matrix: unit green (314 tests, 0 failures), lint clean (lintAnalyzeDebug 20s),
 80 device executed, 0 failures, 6 env skips.
 CI run 39188277256 green (commits 5586f4c, 002cac3, dd5ed00, fc2de72).
+
+38. PHASE 2 POST-AUDIT FIXES BUG-11..BUG-20 (takeone_phase2_post_audit_fixes.txt,
+    2026-10-19, 9 files +499/-59 area: StudioFragment, FxRackChain, DspChain,
+    LegacyToneProcessor, LegacyNoiseProcessor, FxParameter, TeleValue; 8 new
+    tests)
+- BUG-11 [HIGH] sub-selection commitDspFx() no longer sets slot.enabled=false
+  across dspConfig.slots or overwrites SharedPreferences; tracks
+  dspBakedToRaw=true and dspSubRangeBaked=true so whole-take Preview/Save never
+  double-bake a processed selection, while a second region previews/applies the
+  active rack immediately without re-checking.
+- BUG-12 [HIGH] independent WARMTH_BODY & VOCAL_PRESENCE ordering and single-slot
+  Wet/Dry mix: bit-identical combined pass when adjacent, splits execution at
+  the exact downstream slot position when separated by another active processor,
+  prevents a disabled tone slot trapping its enabled sibling, enables Wet/Dry
+  Mix when only one tone slot is active.
+- BUG-13 [MEDIUM] syncSlotsFromLegacyFields() preserves unchecked (enabled==false)
+  slots in previousOrder with value, wetDry and extraParams intact.
+- BUG-14 [MEDIUM] setFxPanelVisible(true) only auto-seeds VOICE_POLISH on initial
+  default state, never overwriting CLEAR_ALL or custom unchecked rack.
+- BUG-15 [MEDIUM] formatSlotSubtitle() appends " • Mix XX%" when wetDry<1.0f and
+  summarizes non-default extraParams.
+- BUG-16 [MEDIUM] cached FxRackChain.getPrototypeProcessor(id) so rebuildFxRackList
+  and formatSlotSubtitle never allocate throwaway DSP instances on the UI thread.
+- BUG-17 [MEDIUM] prepare(sampleRate, channels) preserves exact 48 kHz crossover
+  alpha literals at DspChain.SAMPLE_RATE (100% bit parity) and recomputes
+  1-exp(-2*pi*fc/sr) at non-48 kHz.
+- BUG-18 [LOW] TeleValue steppedValues() fixed-step branch appends max when
+  (max-first)%step != 0, matching FxParameter.clampRaw().
+- BUG-19 [LOW] FxParameter.formatDisplay() Scale.DECIBEL uses "%+.2f" when
+  scaleDivisor>=100 and (abs(currentRaw)%10)!=0 (e.g. -0.05 dB).
+- BUG-20 [LOW] removed duplicate outdated Javadoc above commitDspFx() and
+  documented both selection and whole-take commits.
+- HTML-entity unescape fix (c9d1eb6) for StudioFragment/FxRackChain/TeleValue
+  drop-in files (the doc was HTML-escaped).
+Matrix: unit green (322 tests, 0 failures), lint clean (lintAnalyzeDebug 19s),
+80 device executed, 0 failures, 6 env skips.
+CI run 39269521014 green (commits c9d1eb6 + earlier).
