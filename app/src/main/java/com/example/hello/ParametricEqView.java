@@ -27,7 +27,8 @@ final class ParametricEqView extends EqCurveView {
         syncFromSlot();
     }
 
-    private void syncFromSlot() {
+    @Override
+    protected void syncFromSlot() {
         for (FxParameter param : scratch.getParameters()) {
             int raw = "out".equals(param.id)
                     ? slot.value
@@ -74,8 +75,13 @@ final class ParametricEqView extends EqCurveView {
         int h = getHeight();
         switch (e.getActionMasked()) {
             case MotionEvent.ACTION_DOWN: {
+                syncFromSlot();
                 active = nearestHandle(e.getX(), e.getY(), w, h);
-                return active >= 0;
+                if (active >= 0) {
+                    disallowParentIntercept(true);
+                    return true;
+                }
+                return false;
             }
             case MotionEvent.ACTION_MOVE: {
                 if (active < 0) return false;
@@ -86,13 +92,18 @@ final class ParametricEqView extends EqCurveView {
                 fq.setCurrentRaw(fq.clampRaw(freq));
                 int gain = Math.round(dbForY(e.getY(), h) * 100f);
                 gn.setCurrentRaw(gn.clampRaw(gain));
+                putExtra(FREQ_IDS[active], fq.getCurrentRaw());
+                putExtra(GAIN_IDS[active], gn.getCurrentRaw());
+                if (!slot.enabled) slot.enabled = true;
+                onMutated.run();
                 invalidate();
                 return true;
             }
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL: {
                 if (active < 0) return false;
-                commit();
+                disallowParentIntercept(false);
+                commitActive(active);
                 active = -1;
                 invalidate();
                 return true;
@@ -120,14 +131,16 @@ final class ParametricEqView extends EqCurveView {
         return best;
     }
 
-    private void commit() {
-        for (int i = 0; i < FREQ_IDS.length; i++) {
-            FxParameter fq = param(FREQ_IDS[i]);
-            FxParameter gn = param(GAIN_IDS[i]);
-            if (fq == null || gn == null) continue;
-            putExtra(FREQ_IDS[i], fq.getCurrentRaw());
-            putExtra(GAIN_IDS[i], gn.getCurrentRaw());
+    private void commitActive(int idx) {
+        if (idx >= 0 && idx < FREQ_IDS.length) {
+            FxParameter fq = param(FREQ_IDS[idx]);
+            FxParameter gn = param(GAIN_IDS[idx]);
+            if (fq != null && gn != null) {
+                putExtra(FREQ_IDS[idx], fq.getCurrentRaw());
+                putExtra(GAIN_IDS[idx], gn.getCurrentRaw());
+            }
         }
+        if (!slot.enabled) slot.enabled = true;
         onMutated.run();
     }
 }

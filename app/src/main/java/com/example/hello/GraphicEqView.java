@@ -30,7 +30,8 @@ final class GraphicEqView extends EqCurveView {
         syncFromSlot();
     }
 
-    private void syncFromSlot() {
+    @Override
+    protected void syncFromSlot() {
         for (FxParameter param : scratch.getParameters()) {
             int raw = "out".equals(param.id)
                     ? slot.value
@@ -87,8 +88,13 @@ final class GraphicEqView extends EqCurveView {
         int h = getHeight();
         switch (e.getActionMasked()) {
             case MotionEvent.ACTION_DOWN: {
+                syncFromSlot();
                 active = nearestBand(e.getX(), w);
-                return active >= 0;
+                if (active >= 0) {
+                    disallowParentIntercept(true);
+                    return true;
+                }
+                return false;
             }
             case MotionEvent.ACTION_MOVE: {
                 if (active < 0) return false;
@@ -96,14 +102,19 @@ final class GraphicEqView extends EqCurveView {
                 if (g == null) return false;
                 int raw = Math.round(dbForY(e.getY(), h) * 100f);
                 g.setCurrentRaw(g.clampRaw(raw));
+                putExtra("g" + active, g.getCurrentRaw());
+                if (!slot.enabled) slot.enabled = true;
+                onMutated.run();
                 invalidate();
                 return true;
             }
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL: {
                 if (active < 0) return false;
+                disallowParentIntercept(false);
                 FxParameter g = param("g" + active);
                 if (g != null) putExtra("g" + active, g.getCurrentRaw());
+                if (!slot.enabled) slot.enabled = true;
                 active = -1;
                 onMutated.run();
                 invalidate();

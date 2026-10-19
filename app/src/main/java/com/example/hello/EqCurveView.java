@@ -109,9 +109,23 @@ abstract class EqCurveView extends View {
         }
         float zero = yForDb(0, h);
         canvas.drawLine(0, zero, w, zero, grid);
+        syncFromSlot();
         drawSpectrum(canvas, w, h);
         drawCurve(canvas, w, h);
         onDrawHandles(canvas, w, h);
+    }
+
+    /** Re-reads slot parameters before painting so TeleValue edits are reflected. */
+    protected void syncFromSlot() {
+    }
+
+    /** Prevents the parent ScrollView from stealing vertical handle drags. */
+    final void disallowParentIntercept(boolean disallow) {
+        android.view.ViewParent parent = getParent();
+        while (parent != null) {
+            parent.requestDisallowInterceptTouchEvent(disallow);
+            parent = parent.getParent();
+        }
     }
 
     private void drawSpectrum(Canvas canvas, int w, int h) {

@@ -446,14 +446,14 @@ public class StudioFragment extends Fragment {
         waveform.setTimelineListener(new WaveformView.TimelineListener() {
             @Override
             public void onScrollStarted() {
-                if (engine.state != RecordingEngine.State.PAUSED) return;
+                if (!isSessionEditable()) return;
                 RawFloatPlayer.warmUpSpeaker(engine.channels);
                 engine.warmUpMic(requireContext(), preset.audioSource, engine.channels);
             }
 
             @Override
             public void onPlayheadScrubbed(int bucketIndex, float fraction) {
-                if (engine.state != RecordingEngine.State.PAUSED) return;
+                if (!isSessionEditable()) return;
                 stopStudioPreview();
                 long totalFrames = engine.totalFrames();
                 long targetFrame = Math.round(fraction * totalFrames);
@@ -1277,8 +1277,20 @@ public class StudioFragment extends Fragment {
 
     /** Main FAB: name -> start -> pause/resume. Debounced in MainActivity. */
     /**
-     * Strictly enforces that editing options can only be used when the Studio
-     * is in the PAUSED state with recorded audio.
+     * True when the attached session holds recorded/imported audio and is not
+     * actively capturing (either PAUSED after recording, or IDLE right after
+     * opening a take via Library -> Edit or crash recovery).
+     */
+    private boolean isSessionEditable() {
+        return engine.hasSession()
+                && engine.dataBytes > 0
+                && (engine.state == RecordingEngine.State.PAUSED
+                        || engine.state == RecordingEngine.State.IDLE);
+    }
+
+    /**
+     * Enforces that editing options can only be used when the Studio has
+     * recorded/imported audio and is not actively capturing.
      */
     private boolean ensurePausedForEditing() {
         if (!isAdded()) return false;
@@ -1288,8 +1300,7 @@ public class StudioFragment extends Fragment {
                     Toast.LENGTH_SHORT).show();
             return false;
         }
-        if (engine.state != RecordingEngine.State.PAUSED
-                || !engine.hasSession() || engine.dataBytes <= 0) {
+        if (!isSessionEditable()) {
             Toast.makeText(requireContext(),
                     "Record and pause first to edit audio",
                     Toast.LENGTH_SHORT).show();
@@ -1336,7 +1347,7 @@ public class StudioFragment extends Fragment {
         }
         if (engine.state == RecordingEngine.State.RECORDING) {
             pauseTake();
-        } else if (engine.state == RecordingEngine.State.PAUSED) {
+        } else if (isSessionEditable()) {
             resumeTake();
         } else {
             ensurePermissionThenStart();
@@ -1344,7 +1355,7 @@ public class StudioFragment extends Fragment {
     }
 
     private void resumeTake() {
-        if (engine.state != RecordingEngine.State.PAUSED || saving) return;
+        if (!isSessionEditable() || saving) return;
         long totalFrames = engine.totalFrames();
         long curFrames = engine.cursorFrames();
         if (waveform != null && totalFrames > 0) {
@@ -1458,10 +1469,13 @@ public class StudioFragment extends Fragment {
             return true;
         }
         // If this is an edit session and the user hasn't recorded any new
-        // audio yet, backing out cancels the edit immediately without nagging.
+        // audio or applied any edits/FX yet, backing out cancels the edit
+        // immediately without nagging.
         if (editSourceId != -1
                 && engine.state == RecordingEngine.State.IDLE
-                && engine.dataBytes <= initialSessionBytes) {
+                && engine.dataBytes == initialSessionBytes
+                && !dspBakedToRaw
+                && (activeUndoJournal() == null || !activeUndoJournal().canUndo())) {
             final Context appCtx = requireContext().getApplicationContext();
             editSourceId = -1;
             editSourceTitle = null;
@@ -1550,6 +1564,8 @@ public class StudioFragment extends Fragment {
             // a later save cannot inherit a previous take's replace choice.
             editSourceId = -1;
             editSourceTitle = null;
+            dspBakedToRaw = false;
+            dspSubRangeBaked = false;
             EditLink.clear(requireContext());
             waveform.clear();
             dbMeter.reset();
@@ -1699,6 +1715,8 @@ public class StudioFragment extends Fragment {
             waveform.enterSubEditorMode();
             engine.enterSelectAndReplaceSubSession(requireContext(), startF, endF);
             inSelectAndReplaceEditor = true;
+            dspBakedToRaw = false;
+            dspSubRangeBaked = false;
             replaceModeArmed = false;
             if (waveform != null) waveform.setSelectionLocked(false);
             userScrolledWhilePaused = false;
@@ -1735,6 +1753,10 @@ public class StudioFragment extends Fragment {
             }
             engine.exitSelectAndReplaceSubSession(hasReplacementAudio, undoJournal);
             inSelectAndReplaceEditor = false;
+            if (hasReplacementAudio) {
+                dspBakedToRaw = false;
+                dspSubRangeBaked = false;
+            }
             replaceModeArmed = false;
             if (waveform != null) waveform.setSelectionLocked(false);
             userScrolledWhilePaused = false;
@@ -1919,27 +1941,15 @@ public class StudioFragment extends Fragment {
                 && engine.state != RecordingEngine.State.RECORDING) {
             finishSelectAndReplaceIfNeeded();
         }
-        // If the user enabled FX (Noise Suppression or Custom) in the FX dialog
-        // and tapped "Done" without tapping "Apply to Take", bake the active
-        // DspChain into `raw` now so the saved file actually contains the FX!
-        if (dspConfig != null && dspConfig.isActive() && !dspBakedToRaw) {
-            try {
-                File raw = engine.rawFile;
-                if (raw != null && raw.exists()) {
-                    FormatConverter.WavInfo info = FormatConverter.readFloatWav(raw);
-                    long totalFrames = info.dataBytes / 4 / Math.max(1, info.channels);
-                    if (totalFrames > 0) {
-                        DspChain chain = new DspChain(info.channels, dspConfig);
-                        EditEngine.applyDspToRange(raw, 0, totalFrames, chain, null);
-                        engine.abortStreaming();
-                        engine.setFxBakeRequired(false);
-                        engine.dataBytes = RecordingEngine.payloadBytesOf(raw);
-                        dspBakedToRaw = true;
-                        dspSubRangeBaked = false;
-                    }
-                }
-            } catch (Exception ignored) {}
+        // Ensure any enabled-but-unbaked FX chain is saved to SharedPreferences
+        // and flagged on the engine so ConversionJobs.dispatchSave() bakes it on
+        // the background worker thread (after the user answers any Edit
+        // Replace-vs-New prompt) without freezing the UI thread!
+        if (dspConfig != null) {
+            dspConfig.syncLegacyFieldsFromSlots();
+            dspConfig.save(requireContext());
         }
+        syncFxBakeRequired();
         final long editId = editSourceId;
         final String editTitle = editSourceTitle;
         if (editId != -1) {
@@ -2429,9 +2439,7 @@ public class StudioFragment extends Fragment {
             editorStrip.setAlpha(1f);
             editorStrip.setTranslationY(0f);
         }
-        boolean canEdit = engine.hasSession()
-                && engine.dataBytes > 0
-                && engine.state == RecordingEngine.State.PAUSED;
+        boolean canEdit = isSessionEditable();
         if (!canEdit && studioPreviewPlayer != null) {
             stopStudioPreview();
         }
@@ -2579,7 +2587,7 @@ public class StudioFragment extends Fragment {
                 act.syncFabWithEngine();
                 return;
             }
-            if (engine.state == RecordingEngine.State.PAUSED && engine.hasSession()) {
+            if (isSessionEditable()) {
                 act.setStopVisible(true);
                 if (studioPreviewPlayer != null) {
                     act.morphFabIcon(R.drawable.ic_pause);
@@ -2718,6 +2726,8 @@ public class StudioFragment extends Fragment {
                             || (dspConfig.slots.isEmpty()
                                     && !DspChain.Preset.CLEAR_ALL.id.equals(
                                             dspConfig.activePresetId)))) {
+                dspBakedToRaw = false;
+                dspSubRangeBaked = false;
                 dspConfig.applyPreset(DspChain.Preset.VOICE_POLISH);
                 dspConfig.save(requireContext());
             }
@@ -2749,7 +2759,7 @@ public class StudioFragment extends Fragment {
         }
         boolean playing = (studioPreviewPlayer != null);
         boolean canUsePreviewAndApply = !replaceModeArmed
-                && engine.state == RecordingEngine.State.PAUSED;
+                && isSessionEditable();
         if (fxPreviewBtn != null) {
             fxPreviewBtn.setText(playing ? "■ Stop Preview" : "▶ Preview");
             fxPreviewBtn.setEnabled(canUsePreviewAndApply);
@@ -2843,9 +2853,8 @@ public class StudioFragment extends Fragment {
         FxParameter primary = (meta != null && !slot.type.isLegacyStage())
                 ? meta.getParam(DspChain.primaryParamId(slot.type)) : null;
         if (primary != null) {
-            primary.setCurrentRaw(primary.clampRaw(slot.value));
             sb.append(primary.name).append(": ")
-                    .append(primary.formatDisplay());
+                    .append(primary.formatRaw(slot.value));
         } else {
             sb.append(slot.type.paramLabel).append(": ")
                     .append(slot.value).append(slot.type.unit);
@@ -2870,9 +2879,8 @@ public class StudioFragment extends Fragment {
                     }
                     Integer raw = slot.extraParams.get(param.id);
                     if (raw != null && raw != param.defaultRaw) {
-                        param.setCurrentRaw(raw);
                         sb.append(" • ").append(param.name).append(": ")
-                                .append(param.formatDisplay());
+                                .append(param.formatRaw(raw));
                     }
                 }
             }
@@ -2984,10 +2992,7 @@ public class StudioFragment extends Fragment {
                         : dialMeta.getParam(DspChain.primaryParamId(slot.type));
                 if (dialParam != null) {
                     ctl.setValueScale(Math.max(1, dialParam.scaleDivisor));
-                    ctl.setValueFormatter(raw -> {
-                        dialParam.setCurrentRaw(raw);
-                        return dialParam.formatDisplay();
-                    });
+                    ctl.setValueFormatter(dialParam::formatRaw);
                 }
             }
             ctl.configure(slot.type.minVal, slot.type.maxVal,
@@ -3000,6 +3005,7 @@ public class StudioFragment extends Fragment {
             body.addView(ctl, ctlLp);
             pill.addView(body, bodyLp);
 
+            final EqCurveView[] eqViewHolder = new EqCurveView[1];
             Runnable onSlotMutated = () -> {
                 dspBakedToRaw = false;
                 dspSubRangeBaked = false;
@@ -3009,6 +3015,16 @@ public class StudioFragment extends Fragment {
                 if (livePreviewDsp != null) {
                     livePreviewDsp.updateConfig(dspConfig);
                 }
+                if (eqViewHolder[0] != null) {
+                    eqViewHolder[0].invalidate();
+                }
+                checkBtn.setText(slot.enabled ? "✓" : "");
+                checkBtn.setBackgroundResource(slot.enabled
+                        ? R.drawable.bg_chip_selected : R.drawable.bg_select_ring);
+                pill.setBackgroundResource(slot.enabled
+                        ? R.drawable.bg_pill_option_selected : R.drawable.bg_card);
+                titleTv.setTextColor(slot.enabled ? 0xFFF2F4F7 : 0xFF9AA3AF);
+                subTv.setTextColor(slot.enabled ? 0xFFFF453A : 0xFF5D6672);
                 subTv.setText(formatSlotSubtitle(slot, dspConfig));
                 paintEditorStrip();
                 paintFxPanelControls();
@@ -3028,6 +3044,7 @@ public class StudioFragment extends Fragment {
                 } else {
                     eqView = new FilterCurveEqView(ctx, slot, onSlotMutated);
                 }
+                eqViewHolder[0] = eqView;
                 android.widget.LinearLayout.LayoutParams eqLp =
                         new android.widget.LinearLayout.LayoutParams(
                                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -3066,13 +3083,18 @@ public class StudioFragment extends Fragment {
                 @Override
                 public void onScrubValueChanged(int value) {
                     slot.value = value;
-                    if (!slot.enabled && value > 0) slot.enabled = true;
+                    boolean engages = slot.type.isLegacyStage()
+                            ? (value > 0) : (value != slot.type.defaultVal);
+                    if (!slot.enabled && engages) slot.enabled = true;
                     onSlotMutated.run();
                 }
 
                 @Override
                 public void onScrubFinished(int value) {
                     slot.value = value;
+                    boolean engages = slot.type.isLegacyStage()
+                            ? (value > 0) : (value != slot.type.defaultVal);
+                    if (!slot.enabled && engages) slot.enabled = true;
                     onSlotMutated.run();
                     rebuildFxRackList();
                 }
@@ -3080,7 +3102,9 @@ public class StudioFragment extends Fragment {
             ctl.setOnScrubListener(scrub);
             ctl.setOnValueChanged(val -> {
                 slot.value = val;
-                if (!slot.enabled && val > 0) slot.enabled = true;
+                boolean engages = slot.type.isLegacyStage()
+                        ? (val > 0) : (val != slot.type.defaultVal);
+                if (!slot.enabled && engages) slot.enabled = true;
                 onSlotMutated.run();
                 rebuildFxRackList();
             });
@@ -3202,6 +3226,7 @@ public class StudioFragment extends Fragment {
                                 + (on ? "On" : "Off"));
                         b.setOnClickListener(v -> {
                             slot.extraParams.put(param.id, on ? 0 : 1);
+                            if (!slot.enabled) slot.enabled = true;
                             onSlotMutated.run();
                             rebuildFxRackList();
                         });
@@ -3216,11 +3241,12 @@ public class StudioFragment extends Fragment {
                                 slot.extraParams.containsKey(param.id)
                                         ? slot.extraParams.get(param.id)
                                         : param.defaultRaw);
-                        param.setEnumIndex(curIdx);
-                        eChip.setText(param.name + ": " + param.getEnumLabel());
+                        eChip.setText(param.name + ": "
+                                + param.getEnumLabel(curIdx));
                         eChip.setOnClickListener(v -> {
                             int nextIdx = (curIdx + 1) % param.enumLabels.length;
                             slot.extraParams.put(param.id, nextIdx);
+                            if (!slot.enabled) slot.enabled = true;
                             onSlotMutated.run();
                             rebuildFxRackList();
                         });
@@ -3233,6 +3259,7 @@ public class StudioFragment extends Fragment {
                             int triggers = slot.extraParams.containsKey(param.id)
                                     ? slot.extraParams.get(param.id) + 1 : 1;
                             slot.extraParams.put(param.id, triggers);
+                            if (!slot.enabled) slot.enabled = true;
                             onSlotMutated.run();
                             rebuildFxRackList();
                         });
@@ -3246,10 +3273,7 @@ public class StudioFragment extends Fragment {
                     TeleValue pc = new TeleValue(ctx);
                     pc.setCaption(param.name);
                     pc.setValueScale(Math.max(1, param.scaleDivisor));
-                    pc.setValueFormatter(rawVal -> {
-                        param.setCurrentRaw(rawVal);
-                        return param.formatDisplay();
-                    });
+                    pc.setValueFormatter(param::formatRaw);
                     pc.configure(param.minRaw, param.maxRaw, param.stepRaw,
                             slot.extraParams.containsKey(param.id)
                                     ? slot.extraParams.get(param.id)
@@ -3265,17 +3289,26 @@ public class StudioFragment extends Fragment {
                         @Override
                         public void onScrubValueChanged(int value) {
                             slot.extraParams.put(param.id, value);
+                            if (!slot.enabled && value != param.defaultRaw) {
+                                slot.enabled = true;
+                            }
                             onSlotMutated.run();
                         }
 
                         @Override
                         public void onScrubFinished(int value) {
                             slot.extraParams.put(param.id, value);
+                            if (!slot.enabled && value != param.defaultRaw) {
+                                slot.enabled = true;
+                            }
                             onSlotMutated.run();
                         }
                     });
                     pc.setOnValueChanged(val -> {
                         slot.extraParams.put(param.id, val);
+                        if (!slot.enabled && val != param.defaultRaw) {
+                            slot.enabled = true;
+                        }
                         onSlotMutated.run();
                     });
                 }

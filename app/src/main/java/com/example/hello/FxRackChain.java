@@ -388,7 +388,10 @@ public final class FxRackChain {
         DspChain.EffectSlot secondToneSlot = null;
         String lastEnabledBetween = null;
         for (DspChain.EffectSlot s : cfg.slots) {
-            if (s == null || s.type == null || !s.enabled || s.value <= 0) {
+            if (s == null || s.type == null || !s.enabled) {
+                continue;
+            }
+            if (s.type.isLegacyStage() && s.value <= 0) {
                 continue;
             }
             if (s.type == DspChain.EffectType.WARMTH_BODY

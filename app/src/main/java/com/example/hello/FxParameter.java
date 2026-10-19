@@ -151,44 +151,57 @@ public final class FxParameter {
     }
 
     public String getEnumLabel() {
-        if (enumLabels == null || currentRaw < 0
-                || currentRaw >= enumLabels.length) {
+        return getEnumLabel(currentRaw);
+    }
+
+    public String getEnumLabel(int rawIndex) {
+        if (enumLabels == null || rawIndex < 0
+                || rawIndex >= enumLabels.length) {
             return "";
         }
-        return enumLabels[currentRaw];
+        return enumLabels[rawIndex];
     }
 
     public void setValueFormatter(ValueFormatter f) {
         this.formatter = f;
     }
 
-    /** Human readable value: enum label, or scaled number plus unit. */
+    /** Human readable value for the current raw setting. */
     public String formatDisplay() {
+        return formatRaw(currentRaw);
+    }
+
+    /**
+     * Stateless display formatter for an arbitrary {@code rawValue}. Safe to
+     * call on shared prototype descriptors without mutating {@link #currentRaw}.
+     */
+    public String formatRaw(int rawValue) {
+        int raw = clampRaw(rawValue);
         if (formatter != null) {
-            return formatter.format(this, currentRaw);
+            return formatter.format(this, raw);
         }
         if (type == Type.BOOLEAN) {
-            return currentRaw != 0 ? "On" : "Off";
+            return raw != 0 ? "On" : "Off";
         }
         if (type == Type.ENUM) {
-            return getEnumLabel();
+            return getEnumLabel(raw);
         }
         if (type == Type.ACTION) {
             return name;
         }
         if (scaleDivisor <= 1) {
-            return unit.isEmpty() ? String.valueOf(currentRaw)
-                    : currentRaw + unit;
+            return unit.isEmpty() ? String.valueOf(raw)
+                    : raw + unit;
         }
-        double d = currentRaw / (double) scaleDivisor;
+        double d = raw / (double) scaleDivisor;
         String num;
         if (scale == Scale.DECIBEL) {
-            if (scaleDivisor >= 100 && (Math.abs(currentRaw) % 10) != 0) {
+            if (scaleDivisor >= 100 && (Math.abs(raw) % 10) != 0) {
                 num = String.format(Locale.US, "%+.2f", d);
             } else {
                 num = String.format(Locale.US, "%+.1f", d);
             }
-        } else if (Math.abs(d) >= 10 || currentRaw % scaleDivisor == 0) {
+        } else if (Math.abs(d) >= 10 || raw % scaleDivisor == 0) {
             num = trimTrailingZeros(String.format(Locale.US, "%.1f", d));
         } else {
             num = trimTrailingZeros(String.format(Locale.US, "%.2f", d));

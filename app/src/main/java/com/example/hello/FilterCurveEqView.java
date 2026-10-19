@@ -103,6 +103,7 @@ final class FilterCurveEqView extends EqCurveView {
                 downY = e.getY();
                 longPressFired = false;
                 active = nearestNode(downX, downY, w, h);
+                disallowParentIntercept(true);
                 handler.postDelayed(longPress, 480);
                 return true;
             }
@@ -121,13 +122,19 @@ final class FilterCurveEqView extends EqCurveView {
                 nodes[active][0] = f;
                 nodes[active][1] = g;
                 writeNodes(nodes);
+                if (!slot.enabled) slot.enabled = true;
+                onMutated.run();
                 invalidate();
                 return true;
             }
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL: {
+                disallowParentIntercept(false);
                 handler.removeCallbacks(longPress);
-                if (active >= 0 && !longPressFired) onMutated.run();
+                if (active >= 0 && !longPressFired) {
+                    if (!slot.enabled) slot.enabled = true;
+                    onMutated.run();
+                }
                 active = -1;
                 invalidate();
                 return true;
@@ -173,6 +180,7 @@ final class FilterCurveEqView extends EqCurveView {
             writeNodes(out);
             active = insert;
         }
+        if (!slot.enabled) slot.enabled = true;
         onMutated.run();
         invalidate();
     }

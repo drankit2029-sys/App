@@ -362,9 +362,17 @@ public final class DspChain {
                         break;
                 }
             }
+            boolean anyStage3Active = false;
+            for (EffectSlot s : slots) {
+                if (s != null && s.enabled && s.type != null
+                        && !s.type.isLegacyStage()) {
+                    anyStage3Active = true;
+                    break;
+                }
+            }
             if (!isActive()) {
                 mode = MODE_OFF;
-            } else if (hpfEnabled && hpfCutoffHz == 80
+            } else if (!anyStage3Active && hpfEnabled && hpfCutoffHz == 80
                     && noisePct == 50 && deEssPct == 45 && compPct == 40
                     && presencePct == 0 && warmthPct == 0 && gatePct == 0 && limiterPct == 0) {
                 mode = MODE_NOISE_SUPPRESSION;
@@ -467,6 +475,11 @@ public final class DspChain {
                 this.warmthPct = 0;
                 this.gatePct = 0;
                 this.limiterPct = 0;
+                for (EffectSlot s : slots) {
+                    if (s != null && s.type != null && !s.type.isLegacyStage()) {
+                        s.enabled = false;
+                    }
+                }
                 syncSlotsFromLegacyFields();
             } else {
                 this.mode = MODE_CUSTOM;
@@ -547,10 +560,18 @@ public final class DspChain {
 
         public String badgeSummary() {
             if (!isActive() || mode == MODE_OFF) return "FX Off";
-            if (mode == MODE_NOISE_SUPPRESSION
+            boolean anyStage3Active = false;
+            for (EffectSlot s : slots) {
+                if (s != null && s.enabled && s.type != null
+                        && !s.type.isLegacyStage()) {
+                    anyStage3Active = true;
+                    break;
+                }
+            }
+            if (!anyStage3Active && (mode == MODE_NOISE_SUPPRESSION
                     || (hpfEnabled && hpfCutoffHz == 80
                     && noisePct == 50 && deEssPct == 45 && compPct == 40
-                    && presencePct == 0 && warmthPct == 0 && gatePct == 0 && limiterPct == 0)) {
+                    && presencePct == 0 && warmthPct == 0 && gatePct == 0 && limiterPct == 0))) {
                 return "FX • Polish";
             }
             return "FX • Custom";
@@ -735,7 +756,8 @@ public final class DspChain {
         for (AudioProcessor p : rack.processors()) {
             p.setWetDryMix(1.0f);
             for (FxParameter fp : p.getParameters()) {
-                if (!isPrimaryLegacyParam(fp.id)) {
+                if (!isPrimaryLegacyParam(fp.id)
+                        && !isStage3PrimaryParam(p.getId(), fp.id)) {
                     fp.resetToDefault();
                 }
             }
@@ -748,6 +770,11 @@ public final class DspChain {
                 || "drive".equals(paramId)
                 || "warmth".equals(paramId)
                 || "presence".equals(paramId);
+    }
+
+    private static boolean isStage3PrimaryParam(String procId, String paramId) {
+        if (procId == null || paramId == null) return false;
+        return paramId.equals(primaryParamId(EffectType.byId(procId)));
     }
 
     /**
@@ -780,9 +807,12 @@ public final class DspChain {
                 FxParameter fp = p.getParam(primaryParamId(s.type));
                 if (fp != null) fp.setCurrentRaw(s.value);
             }
+            String primaryId = primaryParamId(s.type);
             for (Map.Entry<String, Integer> e : s.extraParams.entrySet()) {
-                if (isPrimaryLegacyParam(e.getKey())) continue;
-                FxParameter fp = p.getParam(e.getKey());
+                String key = e.getKey();
+                if (isPrimaryLegacyParam(key)) continue;
+                if (primaryId != null && primaryId.equals(key)) continue;
+                FxParameter fp = p.getParam(key);
                 if (fp != null) fp.setCurrentRaw(e.getValue());
             }
         }
