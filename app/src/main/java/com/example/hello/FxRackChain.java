@@ -16,7 +16,7 @@ import org.json.JSONObject;
  * processor is skipped, and a processor whose wet/dry mix is below 1.0 is
  * blended sample-accurately against the dry signal.
  *
- * &lt;p&gt;The legacy voice-chain stages are registered by id so a rack saved as
+ * <p>The legacy voice-chain stages are registered by id so a rack saved as
  * JSON can be rebuilt without knowing the concrete classes.
  */
 public final class FxRackChain {
@@ -81,7 +81,7 @@ public final class FxRackChain {
         return p;
     }
 
-    private final CopyOnWriteArrayList&lt;AudioProcessor&gt; processors =
+    private final CopyOnWriteArrayList<AudioProcessor> processors =
             new CopyOnWriteArrayList<>();
     private final int channels;
     private int sampleRate = 48000;
@@ -157,7 +157,7 @@ public final class FxRackChain {
         processors.clear();
     }
 
-    public List&lt;AudioProcessor&gt; processors() {
+    public List<AudioProcessor> processors() {
         return processors;
     }
 
@@ -404,7 +404,7 @@ public final class FxRackChain {
             this.splitToneSecondMix = secondToneSlot.wetDry;
         }
 
-        Set&lt;String&gt; desiredIds = new LinkedHashSet<>();
+        Set<String> desiredIds = new LinkedHashSet<>();
         for (DspChain.EffectSlot s : cfg.slots) {
             if (s == null || s.type == null) continue;
             if ((s.type == DspChain.EffectType.WARMTH_BODY

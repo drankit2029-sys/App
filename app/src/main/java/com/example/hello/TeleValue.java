@@ -25,13 +25,13 @@ import java.util.Locale;
 /**
  * Four-way value control: minus, value, plus.
  *
- * &lt;ul&gt;
- *   &lt;li&gt;&lt;b&gt;Tap&lt;/b&gt; minus/plus to step the value.&lt;/li&gt;
- *   &lt;li&gt;&lt;b&gt;Tap the value&lt;/b&gt; to open a vertical scrolling list (NumberPicker).&lt;/li&gt;
- *   &lt;li&gt;&lt;b&gt;Double-tap or long-press the value&lt;/b&gt; to type an exact number.&lt;/li&gt;
- *   &lt;li&gt;&lt;b&gt;Tap and scroll left/right&lt;/b&gt; anywhere on the control to scrub the
+ * <ul>
+ *   <li><b>Tap</b> minus/plus to step the value.</li>
+ *   <li><b>Tap the value</b> to open a vertical scrolling list (NumberPicker).</li>
+ *   <li><b>Double-tap or long-press the value</b> to type an exact number.</li>
+ *   <li><b>Tap and scroll left/right</b> anywhere on the control to scrub the
  *       value continuously, without lifting off.</li>
- * &lt;/ul&gt;
+ * </ul>
  *
  * Used for teleprompter text size / speed / words-per-line and for waveform
  * zoom, so the same muscle memory applies in both places.
@@ -363,7 +363,7 @@ public class TeleValue extends LinearLayout {
 
     /** Values the wheel may show when {@code step > 1}, padded to range. */
     private int[] steppedValues() {
-        java.util.ArrayList&lt;Integer&gt; out = new java.util.ArrayList<>();
+        java.util.ArrayList<Integer> out = new java.util.ArrayList<>();
         if (stepRule != null) {
             int cur = min;
             out.add(cur);
@@ -761,7 +761,7 @@ public class TeleValue extends LinearLayout {
      * clickable, so they consume ACTION_DOWN and the parent would never see
      * the gesture at all.
      *
-     * &lt;p&gt;Only a clean tap reaches the children. Motion beyond touch slop is
+     * <p>Only a clean tap reaches the children. Motion beyond touch slop is
      * consumed here, which also prevents a scrolling finger from tripping the
      * delayed single-tap picker or a pending value hold.
      */

@@ -198,8 +198,8 @@ public class StudioFragment extends Fragment {
 
     private AudioManager audioManager;
 
-    private ActivityResultLauncher&lt;String&gt; micPermission;
-    private ActivityResultLauncher&lt;String&gt; notifPermission;
+    private ActivityResultLauncher<String> micPermission;
+    private ActivityResultLauncher<String> notifPermission;
     private boolean notifAsked;
 
     private BroadcastReceiver doneReceiver;
@@ -3597,8 +3597,8 @@ public class StudioFragment extends Fragment {
         // A take still converting is not in the repository yet, so counting
         // rows alone handed the next recording the same "Take N" as the one
         // already encoding. Count those and never reuse a live title.
-        List&lt;Take&gt; existing = TakesRepository.all();
-        List&lt;ConversionJob&gt; converting = ConversionJobs.active();
+        List<Take> existing = TakesRepository.all();
+        List<ConversionJob> converting = ConversionJobs.active();
         int n = existing.size() + converting.size() + 1;
         while (true) {
             String candidate = "Take " + n;
