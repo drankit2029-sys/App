@@ -120,8 +120,9 @@ public final class FormatConverter {
             w.setLength(0);
             w.write(wav16Header(info.channels, info.sampleRate, 0));
             r.seek(info.dataStart);
-            byte[] in = new byte[CONV_CHUNK * 4];
-            byte[] out = new byte[CONV_CHUNK * 2];
+            int chunk = MemoryBudget.chunkFrames(CONV_CHUNK, info.channels);
+            byte[] in = new byte[chunk * 4];
+            byte[] out = new byte[chunk * 2];
             java.nio.FloatBuffer fb = ByteBuffer.wrap(in)
                     .order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer();
             java.nio.ShortBuffer sb = ByteBuffer.wrap(out)
@@ -129,7 +130,7 @@ public final class FormatConverter {
             long done = 0;
             int lastPct = -1;
             while (done < totalSamples) {
-                int want = (int) Math.min(CONV_CHUNK, totalSamples - done);
+                int want = (int) Math.min(chunk, totalSamples - done);
                 r.readFully(in, 0, want * 4);
                 toInt16(fb, want, sb);
                 w.write(out, 0, want * 2);
@@ -191,15 +192,16 @@ public final class FormatConverter {
             w.setLength(0);
             w.write(Dsp.wav24Header(info.channels, info.sampleRate, 0));
             r.seek(info.dataStart);
-            byte[] in = new byte[CONV_CHUNK * 4];
-            byte[] out = new byte[CONV_CHUNK * 3];
+            int chunk = MemoryBudget.chunkFrames(CONV_CHUNK, info.channels);
+            byte[] in = new byte[chunk * 4];
+            byte[] out = new byte[chunk * 3];
             java.nio.FloatBuffer fb = ByteBuffer.wrap(in)
                     .order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer();
-            int[] ints = new int[CONV_CHUNK];
+            int[] ints = new int[chunk];
             long done = 0;
             int lastPct = -1;
             while (done < totalSamples) {
-                int want = (int) Math.min(CONV_CHUNK, totalSamples - done);
+                int want = (int) Math.min(chunk, totalSamples - done);
                 r.readFully(in, 0, want * 4);
                 toInt24(fb, want, ints);
                 int p = 0;
@@ -276,7 +278,8 @@ public final class FormatConverter {
             muxer = new MediaMuxer(dst.getAbsolutePath(), muxerFormat);
             r = new RandomAccessFile(src, "r");
             r.seek(info.dataStart);
-            byte[] in = new byte[16384 * 4 * 2];
+            int chunk = MemoryBudget.chunkFrames(16384, ch);
+            byte[] in = new byte[chunk * ch * 4];
             java.nio.FloatBuffer fb = ByteBuffer.wrap(in)
                     .order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer();
             long framesDone = 0;
@@ -295,7 +298,7 @@ public final class FormatConverter {
                         long framesLeft = totalFrames - framesDone;
                         // Never read more file bytes than the codec buffer fits.
                         int maxByBuf = dstBuf.remaining() / 2 / Math.max(1, ch);
-                        int wantFrames = (int) Math.min(16384,
+                        int wantFrames = (int) Math.min(chunk,
                                 Math.min(framesLeft, maxByBuf));
                         if (wantFrames <= 0 && framesLeft > 0) {
                             // Codec buffer unexpectedly small: retry next round.
@@ -542,10 +545,11 @@ public final class FormatConverter {
             int samplesWritten = 0;
             int track = -1;
             MediaCodec.BufferInfo bi = new MediaCodec.BufferInfo();
-            byte[] in = new byte[CONV_CHUNK * ch * 4];
+            int chunk = MemoryBudget.chunkFrames(CONV_CHUNK, ch);
+            byte[] in = new byte[chunk * ch * 4];
             java.nio.FloatBuffer fb = ByteBuffer.wrap(in)
                     .order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer();
-            float[] mono = new float[CONV_CHUNK];
+            float[] mono = new float[chunk];
             // NEW-08 fix: removed unused `short[] decOut` allocation.
             // Encoder backlog: decimated shorts awaiting codec room.
             short[] pend = new short[32768];
@@ -570,7 +574,7 @@ public final class FormatConverter {
                         // has room and the file has frames.
                         if (pendLen < pend.length / 2
                                 && readFrames < totalFrames) {
-                            int want = (int) Math.min(CONV_CHUNK,
+                            int want = (int) Math.min(chunk,
                                     totalFrames - readFrames);
                             r.readFully(in, 0, want * ch * 4);
                             fb.clear();
@@ -856,7 +860,8 @@ public final class FormatConverter {
             // STREAMINFO header is written so no audio is lost.
             java.io.ByteArrayOutputStream pending = new java.io.ByteArrayOutputStream();
             RandomAccessFile r = new RandomAccessFile(src, "r");
-            byte[] in = new byte[16384 * 4 * 2];
+            int chunk = MemoryBudget.chunkFrames(16384, ch);
+            byte[] in = new byte[chunk * ch * 4];
             java.nio.FloatBuffer fb = ByteBuffer.wrap(in)
                     .order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer();
             MediaCodec.BufferInfo bi = new MediaCodec.BufferInfo();
@@ -876,7 +881,7 @@ public final class FormatConverter {
                             dstBuf.clear();
                             long framesLeft = totalFrames - framesDone;
                             int maxByBuf = dstBuf.remaining() / 2 / Math.max(1, ch);
-                            int wantFrames = (int) Math.min(16384,
+                            int wantFrames = (int) Math.min(chunk,
                                     Math.min(framesLeft, maxByBuf));
                             if (wantFrames <= 0 && framesLeft > 0) {
                                 enc.queueInputBuffer(idx, 0, 0, 0, 0);

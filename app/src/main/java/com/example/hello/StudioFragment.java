@@ -73,6 +73,7 @@ public class StudioFragment extends Fragment {
 
     // Inline FX Window views (replaces telePanel when open)
     private View fxPanel;
+    private TextView fxTitle;
     private TextView fxPresetDropdown;
     private View fxCloseBtn;
     private android.widget.LinearLayout fxListContainer;
@@ -316,6 +317,7 @@ public class StudioFragment extends Fragment {
         btnEditUndo = v.findViewById(R.id.btnEditUndo);
 
         fxPanel = v.findViewById(R.id.fxPanel);
+        fxTitle = v.findViewById(R.id.fxTitle);
         fxPresetDropdown = v.findViewById(R.id.fxPresetDropdown);
         fxCloseBtn = v.findViewById(R.id.fxCloseBtn);
         fxListContainer = v.findViewById(R.id.fxListContainer);
@@ -2810,6 +2812,18 @@ public class StudioFragment extends Fragment {
 
     private void paintFxPanelControls() {
         if (fxPanel == null || !isAdded()) return;
+        if (fxTitle != null) {
+            int active = 0;
+            if (dspConfig != null) {
+                for (DspChain.EffectSlot slot : dspConfig.slots) {
+                    if (slot.enabled) active++;
+                }
+            }
+            fxTitle.setText(active > 0
+                    ? "PRO FX RACK · " + active + " ON"
+                    : "PRO FX RACK");
+            fxTitle.setTextColor(active > 0 ? 0xFFFF6B6B : 0xFF8A93A0);
+        }
         if (fxPresetDropdown != null) {
             String presetTitle = "Custom";
             for (DspChain.Preset p : DspChain.Preset.values()) {
@@ -2885,6 +2899,79 @@ public class StudioFragment extends Fragment {
         chip.setLayoutParams(lp);
         PressAnim.applySoft(chip, 0.95f);
         return chip;
+    }
+
+    /** Per-effect accent used by the rack cards and their enable dot. */
+    static int fxAccentColor(DspChain.EffectType type) {
+        if (type == null) return 0xFFFF6B6B;
+        switch (type) {
+            case NOISE_SUPPRESSION:
+            case ROOM_GATE:
+                return 0xFF30D158;
+            case DE_ESSER:
+            case WARMTH_BODY:
+                return 0xFFFF9F0A;
+            case COMPRESSOR:
+                return 0xFF0A84FF;
+            case LOW_CUT_HPF:
+            case HIGH_PASS_FILTER:
+                return 0xFF64D2FF;
+            case VOCAL_PRESENCE:
+                return 0xFFFFD60A;
+            case BRICKWALL_LIMITER:
+            case NOTCH_FILTER:
+                return 0xFFFF6B6B;
+            case PARAMETRIC_EQ6:
+                return 0xFFBF5AF2;
+            case GRAPHIC_EQ:
+                return 0xFF5E5CE6;
+            case FILTER_CURVE_EQ:
+                return 0xFFDA8FFF;
+            case BASS_TREBLE:
+                return 0xFFFFB340;
+            case LOW_PASS_FILTER:
+                return 0xFF6AC4FF;
+            case SHELF_FILTER:
+                return 0xFFA0D96A;
+            case CLASSIC_FILTERS:
+                return 0xFFB0B8C4;
+            default:
+                return 0xFFFF6B6B;
+        }
+    }
+
+    private static int withAlpha(int color, int alpha) {
+        return (color & 0x00FFFFFF) | ((alpha & 0xFF) << 24);
+    }
+
+    /** Rounded, accent-bordered rack card; keeps the system ripple. */
+    private static android.graphics.drawable.Drawable fxCardBackground(
+            boolean enabled, int accent, float density) {
+        android.graphics.drawable.GradientDrawable shape =
+                new android.graphics.drawable.GradientDrawable();
+        shape.setCornerRadius(14f * density);
+        shape.setColor(enabled ? 0xFF15191F : 0xFF0F1216);
+        shape.setStroke(Math.max(1, Math.round(density)),
+                enabled ? withAlpha(accent, 0x70) : 0x1AFFFFFF);
+        return new android.graphics.drawable.RippleDrawable(
+                android.content.res.ColorStateList.valueOf(0x18FFFFFF),
+                shape, null);
+    }
+
+    /** Solid accent dot when enabled, hollow ring when bypassed. */
+    private static android.graphics.drawable.Drawable fxToggleBackground(
+            boolean enabled, int accent, float density) {
+        android.graphics.drawable.GradientDrawable g =
+                new android.graphics.drawable.GradientDrawable();
+        g.setShape(android.graphics.drawable.GradientDrawable.OVAL);
+        if (enabled) {
+            g.setColor(accent);
+        } else {
+            g.setColor(0x00000000);
+            g.setStroke(Math.max(1, Math.round(1.4f * density)),
+                    0xFF3E4652);
+        }
+        return g;
     }
 
     /**
@@ -3043,11 +3130,12 @@ public class StudioFragment extends Fragment {
 
         for (int i = 0; i < dspConfig.slots.size(); i++) {
             final DspChain.EffectSlot slot = dspConfig.slots.get(i);
+            final int accent = fxAccentColor(slot.type);
             android.widget.LinearLayout pill = new android.widget.LinearLayout(ctx);
             pill.setOrientation(android.widget.LinearLayout.VERTICAL);
-            pill.setBackgroundResource(slot.enabled
-                    ? R.drawable.bg_pill_option_selected : R.drawable.bg_card);
-            pill.setPadding(pad, Math.round(6 * density), pad, Math.round(6 * density));
+            pill.setBackground(fxCardBackground(slot.enabled, accent, density));
+            pill.setPadding(pad, Math.round(7 * density), pad,
+                    Math.round(7 * density));
 
             android.widget.LinearLayout.LayoutParams pillLp =
                     new android.widget.LinearLayout.LayoutParams(
@@ -3060,14 +3148,26 @@ public class StudioFragment extends Fragment {
             header.setOrientation(android.widget.LinearLayout.HORIZONTAL);
             header.setGravity(android.view.Gravity.CENTER_VERTICAL);
 
+            // 0) Category accent rail: makes effect families recognizable at
+            // a glance while keeping the card quiet when it is bypassed.
+            android.view.View accentBar = new android.view.View(ctx);
+            accentBar.setBackgroundColor(withAlpha(accent,
+                    slot.enabled ? 0xFF : 0x40));
+            int railW = Math.max(2, Math.round(3 * density));
+            int railH = Math.round(22 * density);
+            android.widget.LinearLayout.LayoutParams railLp =
+                    new android.widget.LinearLayout.LayoutParams(railW, railH);
+            railLp.rightMargin = Math.round(9 * density);
+            header.addView(accentBar, railLp);
+
             // 1) Checkmark Enable/Disable Toggle
             TextView checkBtn = new TextView(ctx);
             checkBtn.setText(slot.enabled ? "✓" : "");
             checkBtn.setTextSize(13f);
             checkBtn.setGravity(android.view.Gravity.CENTER);
-            checkBtn.setTextColor(0xFFFFFFFF);
-            checkBtn.setBackgroundResource(slot.enabled
-                    ? R.drawable.bg_chip_selected : R.drawable.bg_select_ring);
+            checkBtn.setTextColor(slot.enabled ? 0xFF0B0D10 : 0x00000000);
+            checkBtn.setBackground(fxToggleBackground(slot.enabled, accent,
+                    density));
             int chkSz = Math.round(24 * density);
             android.widget.LinearLayout.LayoutParams chkLp =
                     new android.widget.LinearLayout.LayoutParams(chkSz, chkSz);
@@ -3087,7 +3187,7 @@ public class StudioFragment extends Fragment {
             TextView subTv = new TextView(ctx);
             subTv.setText(formatSlotSubtitle(slot, dspConfig));
             subTv.setTextSize(10.5f);
-            subTv.setTextColor(slot.enabled ? 0xFFFF453A : 0xFF5D6672);
+            subTv.setTextColor(slot.enabled ? accent : withAlpha(accent, 0x66));
             titleCol.addView(titleTv);
             titleCol.addView(subTv);
             header.addView(titleCol, new android.widget.LinearLayout.LayoutParams(
@@ -3174,12 +3274,17 @@ public class StudioFragment extends Fragment {
                     eqViewHolder[0].invalidate();
                 }
                 checkBtn.setText(slot.enabled ? "✓" : "");
-                checkBtn.setBackgroundResource(slot.enabled
-                        ? R.drawable.bg_chip_selected : R.drawable.bg_select_ring);
-                pill.setBackgroundResource(slot.enabled
-                        ? R.drawable.bg_pill_option_selected : R.drawable.bg_card);
+                checkBtn.setTextColor(slot.enabled
+                        ? 0xFF0B0D10 : 0x00000000);
+                checkBtn.setBackground(fxToggleBackground(slot.enabled,
+                        accent, density));
+                pill.setBackground(fxCardBackground(slot.enabled, accent,
+                        density));
+                accentBar.setBackgroundColor(withAlpha(accent,
+                        slot.enabled ? 0xFF : 0x40));
                 titleTv.setTextColor(slot.enabled ? 0xFFF2F4F7 : 0xFF9AA3AF);
-                subTv.setTextColor(slot.enabled ? 0xFFFF453A : 0xFF5D6672);
+                subTv.setTextColor(slot.enabled ? accent
+                        : withAlpha(accent, 0x66));
                 subTv.setText(formatSlotSubtitle(slot, dspConfig));
                 paintEditorStrip();
                 paintFxPanelControls();

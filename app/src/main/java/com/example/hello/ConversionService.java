@@ -11,6 +11,8 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.PowerManager;
+import android.os.SystemClock;
 import android.widget.Toast;
 
 import java.io.File;
@@ -71,8 +73,26 @@ public class ConversionService extends Service {
     private volatile ConversionJob current;
     /** Set when a startForegroundService() start still owes a foreground. */
     private volatile boolean pendingFg;
+    /** Keeps the CPU awake while an encoder is pumping with the screen off. */
+    private PowerManager.WakeLock wakeLock;
 
-    public static void startJob(Context ctx, String jobId) {
+    /**
+     * Starts (or re-kicks) the conversion service and arms the recovery
+     * watchdog. Returns false when the platform rejected both start paths;
+     * the job sidecar still exists, so the next app launch or watchdog pass
+     * can recover it.
+     */
+    public static boolean startJob(Context ctx, String jobId) {
+        boolean started = kick(ctx, jobId);
+        ConversionWatchdog.arm(ctx);
+        return started;
+    }
+
+    /**
+     * Start path used by the watchdog: no re-arming, so the watchdog cannot
+     * cancel itself while it is running. Package-private for tests.
+     */
+    static boolean kick(Context ctx, String jobId) {
         Intent i = new Intent(ctx, ConversionService.class);
         i.setAction(ACTION_CONVERT);
         i.putExtra(EXTRA_JOB_ID, jobId);
@@ -82,10 +102,20 @@ public class ConversionService extends Service {
             } else {
                 ctx.startService(i);
             }
-        } catch (Exception e) {
+            return true;
+        } catch (Throwable first) {
+            // Android 12+ blocks background FGS starts. The app is usually in
+            // the foreground at save time, but a notification action or a
+            // retry can land in the background; keep the sidecar and let the
+            // watchdog retry with a temporary foreground allowance.
             try {
                 ctx.startService(i);
-            } catch (Exception ignored) {}
+                return true;
+            } catch (Throwable second) {
+                CrashLog.breadcrumb(ctx, "conv start failed: " + first
+                        + " / " + second);
+                return false;
+            }
         }
     }
 
@@ -182,7 +212,54 @@ public class ConversionService extends Service {
     @Override
     public void onDestroy() {
         workerAlive = false;
+        // An unexpected destroy (OEM task-kill, FGS budget, process trim) must
+        // leave a resumable QUEUED job rather than a RUNNING sidecar that no
+        // worker will ever touch again.
+        ConversionJob job = current;
+        if (job != null && !job.cancelled
+                && ConversionJob.RUNNING.equals(job.state)) {
+            job.state = ConversionJob.QUEUED;
+            job.updatedAt = System.currentTimeMillis();
+            job.write();
+        }
+        if (!serviceTimedOut && (job != null || !queue.isEmpty())) {
+            // Service died with work still pending: make sure a watchdog pass
+            // brings it back even if the user never reopens the app. A dataSync
+            // budget timeout is deliberate and must not be retried in a loop.
+            ConversionWatchdog.arm(this);
+        }
+        releaseWakeLock();
         super.onDestroy();
+    }
+
+    // ---- wake lock ----
+
+    /**
+     * A foreground service keeps the process alive but does not keep the CPU
+     * awake. Without a partial wake lock, a screen-off device can suspend the
+     * conversion thread indefinitely, which is exactly the "background
+     * converter stopped" symptom. Acquired for the life of the worker and
+     * released in every exit path (process death releases it automatically).
+     */
+    private void acquireWakeLock() {
+        try {
+            PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+            if (pm == null) return;
+            if (wakeLock == null) {
+                wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,
+                        "takeone:conversion");
+                wakeLock.setReferenceCounted(false);
+            }
+            if (!wakeLock.isHeld()) wakeLock.acquire();
+        } catch (Throwable t) {
+            CrashLog.breadcrumb(this, "conv wake lock failed: " + t);
+        }
+    }
+
+    private void releaseWakeLock() {
+        try {
+            if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
+        } catch (Throwable ignored) {}
     }
 
     // ---- worker ----
@@ -195,7 +272,7 @@ public class ConversionService extends Service {
         // queue (both used to return/stop without ever foregrounding).
         if (pendingFg) {
             pendingFg = false;
-            startFg(resolveCurrent());
+            if (!startFg(resolveCurrent())) return;
         }
         if (workerAlive) return;
         if (queue.isEmpty()) {
@@ -204,8 +281,19 @@ public class ConversionService extends Service {
         }
         workerAlive = true;
         serviceTimedOut = false;
-        startFg(resolveCurrent());
-        worker = new Thread(this::workLoop, "takeone-conv");
+        acquireWakeLock();
+        if (!startFg(resolveCurrent())) {
+            workerAlive = false;
+            releaseWakeLock();
+            return;
+        }
+        worker = new Thread(() -> {
+            // Encoding is never latency-critical. Run below UI, capture and
+            // preview so a conversion cannot make the studio stutter.
+            android.os.Process.setThreadPriority(
+                    android.os.Process.THREAD_PRIORITY_BACKGROUND);
+            workLoop();
+        }, "takeone-conv");
         worker.start();
     }
 
@@ -218,9 +306,6 @@ public class ConversionService extends Service {
         // worker; the progress callback parks the current job as QUEUED so
         // the next launch resumes everything intact.
         serviceTimedOut = true;
-        synchronized (REC_PAUSE_LOCK) {
-            REC_PAUSE_LOCK.notifyAll();
-        }
         try {
             stopForeground(true);
         } catch (Exception ignored) {}
@@ -228,22 +313,18 @@ public class ConversionService extends Service {
         super.onTimeout(startId, fgsType);
     }
 
-    private static final Object REC_PAUSE_LOCK = new Object();
-
     /**
-     * Wakes a worker parked by {@link #awaitRecordingIdle}. Called by
-     * {@link RecordingEngine} whenever capture state changes.
+     * Kept for call-site compatibility. Conversion pacing is now bounded and
+     * polled, so a missed wake-up can never strand a job.
      */
-    public static void onRecordingStateChanged() {
-        synchronized (REC_PAUSE_LOCK) {
-            REC_PAUSE_LOCK.notifyAll();
-        }
-    }
+    public static void onRecordingStateChanged() {}
 
     /**
-     * True while the mic is actually capturing. Background encoding then
-     * yields so a live take never shares CPU, disk and MediaCodec with a
-     * conversion already in flight.
+     * True while the mic is actually capturing. A conversion yields briefly
+     * per progress tick so a live take always wins CPU and codec contention,
+     * but it keeps moving: an edit session or an open raw reader is safe
+     * alongside the append-only raw, and final raw deletion is deferred until
+     * the last reader closes.
      */
     private static boolean recordingInProgress() {
         try {
@@ -253,44 +334,27 @@ public class ConversionService extends Service {
         }
     }
 
-    /**
-     * True while this job must not make progress: while the mic is capturing,
-     * or while the take is open for editing (an edit session holds its raw
-     * open, so finishing the original conversion now would only waste the
-     * work when the user taps Replace).
-     */
-    private boolean shouldPauseWorker(ConversionJob job) {
-        if (recordingInProgress()) return true;
-        if (job == null) return false;
-        if (ConversionJobs.rawIsBeingRead(job.rawPath)) return true;
-        try {
-            if (RecordingEngine.get().hasSession()
-                    && EditLink.id(getApplicationContext()) == job.takeId()) {
-                return true;
-            }
-        } catch (Throwable ignored) {}
-        return false;
-    }
+    /** Longest cooperative pause per progress tick while capture is active. */
+    private static final long CAPTURE_YIELD_MS = 120L;
 
     /**
-     * Parks the worker (polling, so a missed notify cannot wedge it) while
-     * the user is recording.
+     * Briefly steps aside for a live take. Unlike the old park-until-idle
+     * loop, this can never stop a background conversion indefinitely: editing
+     * a take or leaving a raw reader open no longer pauses the worker at all.
      */
-    private void awaitRecordingIdle(ConversionJob job) {
-        if (!shouldPauseWorker(job)) return;
-        handler.post(this::refreshNotif);
-        synchronized (REC_PAUSE_LOCK) {
-            while (workerAlive && !serviceTimedOut && shouldPauseWorker(job)
-                    && (job == null || !job.cancelled)) {
-                try {
-                    REC_PAUSE_LOCK.wait(250L);
-                } catch (InterruptedException ignored) {
-                    Thread.currentThread().interrupt();
-                    break;
-                }
+    private void paceForCapture(ConversionJob job) {
+        if (!recordingInProgress()) return;
+        long until = SystemClock.elapsedRealtime() + CAPTURE_YIELD_MS;
+        while (workerAlive && !serviceTimedOut && recordingInProgress()
+                && (job == null || !job.cancelled)
+                && SystemClock.elapsedRealtime() < until) {
+            try {
+                Thread.sleep(16L);
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+                return;
             }
         }
-        handler.post(this::refreshNotif);
     }
 
     private ConversionJob resolveCurrent() {
@@ -305,7 +369,6 @@ public class ConversionService extends Service {
     private void workLoop() {
         try {
             while (true) {
-                awaitRecordingIdle(null);
                 String id;
                 synchronized (this) {
                     id = queue.pollFirst();
@@ -324,6 +387,7 @@ public class ConversionService extends Service {
         } finally {
             synchronized (this) {
                 workerAlive = false;
+                releaseWakeLock();
                 if (queue.isEmpty()) {
                     handler.removeCallbacksAndMessages(null);
                     try {
@@ -355,9 +419,9 @@ public class ConversionService extends Service {
             TakeSaver.Progress cb = pct -> {
                 if (serviceTimedOut) throw new PausedForTimeoutException();
                 if (job.cancelled) throw new CancellationException();
-                // Yields between chunks too: the encoder must not hold the
-                // codec while the user is capturing a new take.
-                awaitRecordingIdle(job);
+                // Brief yield between chunks while the mic captures; editing
+                // and reading never stop the job.
+                paceForCapture(job);
                 if (job.cancelled) throw new CancellationException();
                 ConversionJobs.updateProgress(job, pct,
                         pct * Math.max(1, job.framesTotal) / 100);
@@ -548,18 +612,19 @@ public class ConversionService extends Service {
             long totalSamples = info.dataBytes / 4;
             long doneSamples = job.framesDone * info.channels;
             w.seek(w.length());
-            byte[] in = new byte[65536 * 4];
+            int chunk = MemoryBudget.chunkFrames(65536, ch);
+            byte[] in = new byte[chunk * 4];
             // Worst case (24-bit packs 3 bytes per sample).
-            byte[] out = new byte[65536 * 3];
+            byte[] out = new byte[chunk * 3];
             java.nio.FloatBuffer fb = java.nio.ByteBuffer.wrap(in)
                     .order(java.nio.ByteOrder.LITTLE_ENDIAN).asFloatBuffer();
-            int[] ints = w24 ? new int[65536] : null;
+            int[] ints = w24 ? new int[chunk] : null;
             java.nio.ShortBuffer sb = w24 ? null : java.nio.ByteBuffer.wrap(out)
                     .order(java.nio.ByteOrder.LITTLE_ENDIAN).asShortBuffer();
             int lastPct = -1;
             while (doneSamples < totalSamples) {
                 if (job.cancelled) throw new CancellationException();
-                int want = (int) Math.min(65536, totalSamples - doneSamples);
+                int want = (int) Math.min(chunk, totalSamples - doneSamples);
                 r.seek(info.dataStart + doneSamples * 4L);
                 r.readFully(in, 0, want * 4);
                 if (w24) {
@@ -677,20 +742,59 @@ public class ConversionService extends Service {
     // ---- notifications ----
 
     private void ensureChannel() {
+        ensureChannel(this);
+    }
+
+    /** Package-private so the recovery watchdog can foreground itself. */
+    static void ensureChannel(Context ctx) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
         try {
             NotificationManager nm = (NotificationManager)
-                    getSystemService(NOTIFICATION_SERVICE);
+                    ctx.getSystemService(NOTIFICATION_SERVICE);
             if (nm == null) return;
             NotificationChannel ch = new NotificationChannel(
-                    CHANNEL, getString(R.string.conv_channel),
+                    CHANNEL, ctx.getString(R.string.conv_channel),
                     NotificationManager.IMPORTANCE_LOW);
-            ch.setDescription(getString(R.string.conv_channel_desc));
+            ch.setDescription(ctx.getString(R.string.conv_channel_desc));
             nm.createNotificationChannel(ch);
         } catch (Exception ignored) {}
     }
 
-    private void startFg(ConversionJob job) {
+    /**
+     * Small ongoing notice used by the watchdog while it obtains a temporary
+     * foreground allowance to restart a stranded conversion. It disappears
+     * as soon as the worker finishes; the conversion service then owns the
+     * real progress notification.
+     */
+    static Notification buildWatchdogNotif(Context ctx) {
+        ensureChannel(ctx);
+        androidx.core.app.NotificationCompat.Builder b =
+                new androidx.core.app.NotificationCompat.Builder(ctx, CHANNEL);
+        b.setSmallIcon(R.drawable.ic_wave);
+        b.setColor(0xFFFF9F0A);
+        b.setContentTitle(ctx.getString(R.string.conv_watchdog_title));
+        b.setContentText(ctx.getString(R.string.conv_watchdog_text));
+        b.setCategory(androidx.core.app.NotificationCompat.CATEGORY_PROGRESS);
+        b.setVisibility(androidx.core.app.NotificationCompat.VISIBILITY_PUBLIC);
+        b.setOngoing(true);
+        b.setOnlyAlertOnce(true);
+        b.setSilent(true);
+        b.setShowWhen(false);
+        try {
+            Intent open = new Intent(ctx, MainActivity.class);
+            PendingIntent content = PendingIntent.getActivity(ctx, 33, open,
+                    PendingIntent.FLAG_UPDATE_CURRENT
+                            | PendingIntent.FLAG_IMMUTABLE);
+            b.setContentIntent(content);
+        } catch (Exception ignored) {}
+        try {
+            return b.build();
+        } catch (Exception e) {
+            return new Notification();
+        }
+    }
+
+    private boolean startFg(ConversionJob job) {
         try {
             if (Build.VERSION.SDK_INT >= 29) {
                 startForeground(NOTIF_ID, buildNotif(job),
@@ -699,11 +803,13 @@ public class ConversionService extends Service {
             } else {
                 startForeground(NOTIF_ID, buildNotif(job));
             }
+            return true;
         } catch (Exception e) {
             CrashLog.breadcrumb(this, "conv startForeground failed: " + e);
             try {
                 stopSelf();
             } catch (Exception ignored) {}
+            return false;
         }
     }
 

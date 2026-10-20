@@ -223,6 +223,8 @@
     <string name="conv_cancelled">Conversion cancelled</string>
     <string name="conv_timeout_title">Conversion paused</string>
     <string name="conv_timeout_msg">System time limits paused “%1$s” — it resumes when you reopen the app.</string>
+    <string name="conv_watchdog_title">Resuming conversion</string>
+    <string name="conv_watchdog_text">Checking queued takes so background saves always finish</string>
     <string name="conv_share_title">Still converting</string>
     <string name="conv_share_msg">“%1$s” is converting to %2$s (%3$d%%). The finished file is not ready to share yet — share the stored 32-bit WAV instead?</string>
     <string name="conv_share_wav">Share WAV</string>

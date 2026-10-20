@@ -296,6 +296,7 @@ public final class StreamingEncoder {
 
     private void pumpWav(boolean w24) throws Exception {
         int frameBytes = channels * (w24 ? 3 : 2);
+        int pumpFrames = MemoryBudget.chunkFrames(PUMP_FRAMES, channels);
         RandomAccessFile w = new RandomAccessFile(partFile, "rw");
         try {
             w.setLength(0);
@@ -303,11 +304,11 @@ public final class StreamingEncoder {
                     : Dsp.wav16Header(channels, sampleRate, 0));
             RandomAccessFile r = new RandomAccessFile(rawFile, "r");
             try {
-                byte[] in = new byte[PUMP_FRAMES * channels * 4];
-                byte[] out = new byte[PUMP_FRAMES * frameBytes];
+                byte[] in = new byte[pumpFrames * channels * 4];
+                byte[] out = new byte[pumpFrames * frameBytes];
                 java.nio.FloatBuffer fb = ByteBuffer.wrap(in)
                         .order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer();
-                int[] ints = w24 ? new int[PUMP_FRAMES * channels] : null;
+                int[] ints = w24 ? new int[pumpFrames * channels] : null;
                 java.nio.ShortBuffer sb = w24 ? null : ByteBuffer.wrap(out)
                         .order(ByteOrder.LITTLE_ENDIAN).asShortBuffer();
                 long done = 0;
@@ -319,7 +320,7 @@ public final class StreamingEncoder {
                         parkForMore();
                         continue;
                     }
-                    int want = (int) Math.min(PUMP_FRAMES, avail - done);
+                    int want = (int) Math.min(pumpFrames, avail - done);
                     r.seek(dataStart + done * channels * 4L);
                     r.readFully(in, 0, want * channels * 4);
                     int samples = want * channels;
@@ -403,7 +404,8 @@ public final class StreamingEncoder {
             } catch (Exception ignored) {}
             throw e;
         }
-        byte[] in = new byte[PUMP_FRAMES * channels * 4];
+        int pumpFrames = MemoryBudget.chunkFrames(PUMP_FRAMES, channels);
+        byte[] in = new byte[pumpFrames * channels * 4];
         java.nio.FloatBuffer fb = ByteBuffer.wrap(in)
                 .order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer();
         try {
@@ -444,7 +446,7 @@ public final class StreamingEncoder {
                             dstBuf.clear();
                             int maxByBuf = dstBuf.remaining() / 2
                                     / Math.max(1, channels);
-                            int want = (int) Math.min(PUMP_FRAMES,
+                            int want = (int) Math.min(pumpFrames,
                                     Math.min(left, maxByBuf));
                             if (want <= 0) {
                                 enc.queueInputBuffer(idx, 0, 0, 0, 0);
@@ -577,7 +579,8 @@ public final class StreamingEncoder {
             boolean wroteInfo = false;
             ByteArrayOutputStream pending = new ByteArrayOutputStream();
             RandomAccessFile r = new RandomAccessFile(rawFile, "r");
-            byte[] in = new byte[PUMP_FRAMES * channels * 4];
+            int pumpFrames = MemoryBudget.chunkFrames(PUMP_FRAMES, channels);
+            byte[] in = new byte[pumpFrames * channels * 4];
             java.nio.FloatBuffer fb = ByteBuffer.wrap(in)
                     .order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer();
             MediaCodec.BufferInfo bi = new MediaCodec.BufferInfo();
@@ -627,7 +630,7 @@ public final class StreamingEncoder {
                                 dstBuf.clear();
                                 int maxByBuf = dstBuf.remaining() / 2
                                         / Math.max(1, channels);
-                                int want = (int) Math.min(PUMP_FRAMES,
+                                int want = (int) Math.min(pumpFrames,
                                         Math.min(left, maxByBuf));
                                 if (want <= 0) {
                                     enc.queueInputBuffer(idx, 0, 0, 0, 0);
@@ -793,10 +796,11 @@ public final class StreamingEncoder {
         int samplesWritten = 0;
         int track = -1;
         MediaCodec.BufferInfo bi = new MediaCodec.BufferInfo();
-        byte[] in = new byte[PUMP_FRAMES * channels * 4];
+        int pumpFrames = MemoryBudget.chunkFrames(PUMP_FRAMES, channels);
+        byte[] in = new byte[pumpFrames * channels * 4];
         java.nio.FloatBuffer fb = ByteBuffer.wrap(in)
                 .order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer();
-        float[] mono = new float[PUMP_FRAMES];
+        float[] mono = new float[pumpFrames];
         // Encoder backlog: decimated shorts awaiting codec room.
         short[] pend = new short[32768];
         int pendLen = 0;
@@ -814,7 +818,7 @@ public final class StreamingEncoder {
                 if (!inEos) {
                     boolean canRead = readAbs < avail;
                     if (pendLen < pend.length / 2 && canRead) {
-                        int want = (int) Math.min(PUMP_FRAMES, avail - readAbs);
+                        int want = (int) Math.min(pumpFrames, avail - readAbs);
                         r.seek(dataStart + readAbs * channels * 4L);
                         r.readFully(in, 0, want * channels * 4);
                         fb.clear();
