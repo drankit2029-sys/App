@@ -170,20 +170,30 @@ public class NoiseSuppressionTest {
         whole.processInPlace(padded, frames + latency, 1);
         float[] expected = Arrays.copyOf(padded, frames);
 
+        // Streamed like EditEngine.applyDspToRange: prime with the first
+        // latency frames, then each chunk reads `latency` ahead and its output
+        // is written at the chunk's own offset.
         NoiseSuppressionProcessor chunked = processor(profile, 80);
-        float[] work = Arrays.copyOf(input, frames + latency);
-        int off = 0;
+        chunked.processInPlace(Arrays.copyOf(input, latency), latency, 1);
+        float[] actual = new float[frames];
+        int cur = 0;
         int[] steps = {1, 37, 512, 2049, 3, 700, 4096};
         int i = 0;
-        while (off < work.length) {
-            int n = Math.min(steps[i % steps.length], work.length - off);
-            float[] chunk = Arrays.copyOfRange(work, off, off + n);
-            chunked.processInPlace(chunk, n, 1);
-            System.arraycopy(chunk, 0, work, off, n);
-            off += n;
+        while (cur < frames) {
+            int want = Math.min(steps[i % steps.length], frames - cur);
+            float[] chunk = new float[want];
+            long inPos = (long) cur + latency;
+            int avail = (int) Math.max(0L,
+                    Math.min((long) want, frames - inPos));
+            if (avail > 0) {
+                System.arraycopy(input, (int) inPos, chunk, 0, avail);
+            }
+            chunked.processInPlace(chunk, want, 1);
+            System.arraycopy(chunk, 0, actual, cur, want);
+            cur += want;
             i++;
         }
-        assertArrayEquals(expected, Arrays.copyOf(work, frames), 0.0f);
+        assertArrayEquals(expected, actual, 0.0f);
         assertEquals(latency, chunked.getLatencyFrames());
     }
 
