@@ -2841,15 +2841,21 @@ public class StudioFragment extends Fragment {
                 && previewPlaysLiveFx;
         boolean canUsePreviewAndApply = !replaceModeArmed
                 && isSessionEditable();
+        boolean anyEnabled = dspConfig != null && dspConfig.isActive();
         if (fxPreviewBtn != null) {
+            // An empty rack has nothing to audition: the old button still
+            // started a dry playback that looked like a broken preview. Keep
+            // Stop enabled while a preview is already running so a rack edit
+            // cannot strand the user in wet playback.
+            boolean canPreview = canUsePreviewAndApply
+                    && (anyEnabled || previewingFx);
             fxPreviewBtn.setText(previewingFx ? "■ Stop Preview" : "▶ Preview FX");
-            fxPreviewBtn.setEnabled(canUsePreviewAndApply);
-            fxPreviewBtn.setAlpha(canUsePreviewAndApply ? 1f : 0.38f);
+            fxPreviewBtn.setEnabled(canPreview);
+            fxPreviewBtn.setAlpha(canPreview ? 1f : 0.38f);
             fxPreviewBtn.setBackgroundResource(previewingFx
                     ? R.drawable.bg_chip_selected : R.drawable.bg_btn_ghost);
         }
         if (fxApplyBtn != null) {
-            boolean anyEnabled = dspConfig != null && dspConfig.isActive();
             // The Apply button always says what it will do: the selection when
             // there is one, the entire take otherwise.
             fxApplyBtn.setText(waveform != null && waveform.hasSelection()
