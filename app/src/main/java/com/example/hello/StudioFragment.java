@@ -106,6 +106,7 @@ public class StudioFragment extends Fragment {
     private long lastPushedCursorFrame = -1L;
     private File replaceSavedTailFile = null;
     private RawFloatPlayer studioPreviewPlayer;
+    private boolean previewPlaysLiveFx = false;
     private DspChain.Config dspConfig = new DspChain.Config();
     private DspChain livePreviewDsp;
     /**
@@ -434,7 +435,7 @@ public class StudioFragment extends Fragment {
                             Toast.LENGTH_SHORT).show();
                     return;
                 }
-                toggleStudioPreview();
+                toggleStudioPreview(true);
                 paintFxPanelControls();
             });
         }
@@ -1414,7 +1415,7 @@ public class StudioFragment extends Fragment {
 
         // 3) Replace is NOT selected and user is scrolled back (or has a selection):
         //    play preview from the playhead!
-        toggleStudioPreview();
+        toggleStudioPreview(false);
         syncStudioFabIcon();
     }
 
@@ -2352,12 +2353,28 @@ public class StudioFragment extends Fragment {
         } catch (Exception ignored) {}
     }
 
-    private void toggleStudioPreview() {
+    /**
+     * Chooses the preview chain. FX Preview asks for the live rack; the main
+     * Play/Pause FAB asks for a dry pass so it always auditions the audio in
+     * its current (already-applied) state. Once a whole take is baked the raw
+     * samples are already wet, so even a live request must not process again;
+     * a fresh selection after a sub-range bake is the one exception.
+     */
+    static DspChain.Config previewConfigFor(boolean withLiveFx, boolean baked,
+                                            boolean subBaked, boolean hasSelection,
+                                            DspChain.Config cfg) {
+        boolean applyLive = withLiveFx
+                && (!baked || (subBaked && hasSelection));
+        return applyLive && cfg != null ? cfg : new DspChain.Config();
+    }
+
+    private void toggleStudioPreview(boolean withLiveFx) {
         if (!isAdded()) return;
         if (studioPreviewPlayer != null) {
+            boolean sameMode = previewPlaysLiveFx == withLiveFx;
             stopStudioPreview();
             paintEditorStrip();
-            return;
+            if (sameMode) return;
         }
         if (engine.state == RecordingEngine.State.RECORDING) return;
         if (RecordingService.isCallActive(requireContext())) {
@@ -2372,18 +2389,16 @@ public class StudioFragment extends Fragment {
             if (info.channels < 1 || info.channels > 2) return;
             long totalFrames = info.dataBytes / 4 / info.channels;
             if (totalFrames <= 0) return;
-            // Only run livePreviewDsp if dspConfig has NOT already been baked
-            // into `raw`, or if only a sub-selection was previously baked and
-            // the user has now highlighted a new selection to audition.
-            boolean previewLiveFx = !dspBakedToRaw
-                    || (dspSubRangeBaked && waveform != null && waveform.hasSelection());
-            DspChain.Config activeCfg = previewLiveFx
-                    ? dspConfig : new DspChain.Config();
+            DspChain.Config activeCfg = previewConfigFor(withLiveFx,
+                    dspBakedToRaw, dspSubRangeBaked,
+                    waveform.hasSelection(), dspConfig);
             livePreviewDsp = new DspChain(info.channels, activeCfg);
             final RawFloatPlayer[] slot = new RawFloatPlayer[1];
             slot[0] = new RawFloatPlayer(raw, completed -> handler.post(() -> {
                 if (studioPreviewPlayer == slot[0]) {
                     studioPreviewPlayer = null;
+                    previewPlaysLiveFx = false;
+                    livePreviewDsp = null;
                     try {
                         slot[0].stop();
                     } catch (Exception ignored) {}
@@ -2410,6 +2425,7 @@ public class StudioFragment extends Fragment {
             RawFloatPlayer player = slot[0];
             player.setDspChain(livePreviewDsp);
             studioPreviewPlayer = player;
+            previewPlaysLiveFx = withLiveFx;
             if (waveform.hasSelection()) {
                 long start = Math.round(
                         waveform.selectionStartFraction() * totalFrames);
@@ -2427,11 +2443,6 @@ public class StudioFragment extends Fragment {
                 }
                 player.playFrom(start);
             }
-            if (btnPreviewPlay != null) {
-                btnPreviewPlay.setText("■ Stop");
-                btnPreviewPlay.setBackgroundResource(R.drawable.bg_chip_selected);
-                btnPreviewPlay.setTextColor(0xFFFFFFFF);
-            }
         } catch (Exception e) {
             stopStudioPreview();
         }
@@ -2441,6 +2452,8 @@ public class StudioFragment extends Fragment {
     private void stopStudioPreview() {
         RawFloatPlayer player = studioPreviewPlayer;
         studioPreviewPlayer = null;
+        previewPlaysLiveFx = false;
+        livePreviewDsp = null;
         if (player != null) {
             long lastFrame = player.positionFrames();
             try {
@@ -2807,14 +2820,18 @@ public class StudioFragment extends Fragment {
             }
             fxPresetDropdown.setText("Preset: " + presetTitle + " ▾");
         }
-        boolean playing = (studioPreviewPlayer != null);
+        // Only a wet run is this button's own playback. A dry run started from
+        // the main FAB still leaves Preview enabled so tapping it switches to
+        // the live rack immediately.
+        boolean previewingFx = studioPreviewPlayer != null
+                && previewPlaysLiveFx;
         boolean canUsePreviewAndApply = !replaceModeArmed
                 && isSessionEditable();
         if (fxPreviewBtn != null) {
-            fxPreviewBtn.setText(playing ? "■ Stop Preview" : "▶ Preview");
+            fxPreviewBtn.setText(previewingFx ? "■ Stop Preview" : "▶ Preview FX");
             fxPreviewBtn.setEnabled(canUsePreviewAndApply);
             fxPreviewBtn.setAlpha(canUsePreviewAndApply ? 1f : 0.38f);
-            fxPreviewBtn.setBackgroundResource(playing
+            fxPreviewBtn.setBackgroundResource(previewingFx
                     ? R.drawable.bg_chip_selected : R.drawable.bg_btn_ghost);
         }
         if (fxApplyBtn != null) {
@@ -3020,8 +3037,8 @@ public class StudioFragment extends Fragment {
         Context ctx = requireContext();
         fxListContainer.removeAllViews();
         float density = getResources().getDisplayMetrics().density;
-        int pad = Math.round(10 * density);
-        int gap = Math.round(6 * density);
+        int pad = Math.round(8 * density);
+        int gap = Math.round(5 * density);
 
         for (int i = 0; i < dspConfig.slots.size(); i++) {
             final DspChain.EffectSlot slot = dspConfig.slots.get(i);
@@ -3029,7 +3046,7 @@ public class StudioFragment extends Fragment {
             pill.setOrientation(android.widget.LinearLayout.VERTICAL);
             pill.setBackgroundResource(slot.enabled
                     ? R.drawable.bg_pill_option_selected : R.drawable.bg_card);
-            pill.setPadding(pad, Math.round(8 * density), pad, Math.round(8 * density));
+            pill.setPadding(pad, Math.round(6 * density), pad, Math.round(6 * density));
 
             android.widget.LinearLayout.LayoutParams pillLp =
                     new android.widget.LinearLayout.LayoutParams(
@@ -3099,8 +3116,10 @@ public class StudioFragment extends Fragment {
 
             TextView descTv = new TextView(ctx);
             descTv.setText(slot.type.description);
-            descTv.setTextSize(10.5f);
+            descTv.setTextSize(9.5f);
             descTv.setTextColor(0xFF8A93A0);
+            descTv.setMaxLines(2);
+            descTv.setEllipsize(android.text.TextUtils.TruncateAt.END);
             body.addView(descTv);
 
             TeleValue ctl = new TeleValue(ctx);
@@ -3117,6 +3136,7 @@ public class StudioFragment extends Fragment {
             }
             ctl.configure(slot.type.minVal, slot.type.maxVal,
                     slot.type.stepVal, slot.value, slot.type.unit);
+            ctl.setCompact(true);
             android.widget.LinearLayout.LayoutParams ctlLp =
                     new android.widget.LinearLayout.LayoutParams(
                             ViewGroup.LayoutParams.MATCH_PARENT,
@@ -3235,7 +3255,7 @@ public class StudioFragment extends Fragment {
                 android.widget.LinearLayout.LayoutParams eqLp =
                         new android.widget.LinearLayout.LayoutParams(
                                 ViewGroup.LayoutParams.MATCH_PARENT,
-                                Math.round(170 * density));
+                                Math.round(132 * density));
                 eqLp.topMargin = Math.round(8 * density);
                 body.addView(eqView, eqLp);
             }
@@ -3379,6 +3399,7 @@ public class StudioFragment extends Fragment {
                 body.addView(mixCaption);
 
                 TeleValue mixCtl = new TeleValue(ctx);
+                mixCtl.setCompact(true);
                 mixCtl.configure(0, 100, 5,
                         Math.round(slot.wetDry * 100f), "%");
                 android.widget.LinearLayout.LayoutParams mixLp =
@@ -3406,9 +3427,11 @@ public class StudioFragment extends Fragment {
                 });
             }
 
-            // Secondary processor parameters. The legacy stages expose only
-            // their primary knob, so nothing extra is rendered for them; new
-            // multi-parameter effects get a control per FxParameter here.
+            // Secondary processor parameters, laid out two per row so the
+            // dense Pro cards stay readable on narrow phones. The legacy
+            // stages only surface their own extra knobs; their primary dial
+            // stays above.
+            java.util.List<View> secondaryViews = new java.util.ArrayList<>();
             AudioProcessor meta = FxRackChain.getPrototypeProcessor(slot.type.id);
             if (meta != null) {
                 for (FxParameter param : meta.getParameters()) {
@@ -3447,7 +3470,7 @@ public class StudioFragment extends Fragment {
                             onSlotMutated.run();
                             rebuildFxRackList();
                         });
-                        body.addView(b);
+                        secondaryViews.add(b);
                         continue;
                     }
                     if (param.type == FxParameter.Type.ENUM
@@ -3472,7 +3495,7 @@ public class StudioFragment extends Fragment {
                             onSlotMutated.run();
                             rebuildFxRackList();
                         });
-                        body.addView(eChip);
+                        secondaryViews.add(eChip);
                         continue;
                     }
                     if (param.type == FxParameter.Type.ACTION) {
@@ -3485,7 +3508,7 @@ public class StudioFragment extends Fragment {
                             onSlotMutated.run();
                             rebuildFxRackList();
                         });
-                        body.addView(actChip);
+                        secondaryViews.add(actChip);
                         continue;
                     }
                     if (param.type != FxParameter.Type.INT
@@ -3501,13 +3524,8 @@ public class StudioFragment extends Fragment {
                                     ? slot.extraParams.get(param.id)
                                     : param.defaultRaw,
                             param.unit);
+                    pc.setCompact(true);
                     extraControls.put(param.id, pc);
-                    android.widget.LinearLayout.LayoutParams pcLp =
-                            new android.widget.LinearLayout.LayoutParams(
-                                    ViewGroup.LayoutParams.MATCH_PARENT,
-                                    ViewGroup.LayoutParams.WRAP_CONTENT);
-                    pcLp.topMargin = Math.round(4 * density);
-                    body.addView(pc, pcLp);
                     java.util.function.IntConsumer syncSecondaryLinks = (int value) -> {
                         slot.extraParams.put(param.id, value);
                         if (slot.type == DspChain.EffectType.BASS_TREBLE
@@ -3538,8 +3556,10 @@ public class StudioFragment extends Fragment {
                         syncSecondaryLinks.accept(val);
                         onSlotMutated.run();
                     });
+                    secondaryViews.add(pc);
                 }
             }
+            addFxExtraGrid(body, secondaryViews, density);
 
             fxListContainer.addView(pill, pillLp);
         }
@@ -3565,6 +3585,40 @@ public class StudioFragment extends Fragment {
         fxListContainer.addView(addBtn, addLp);
     }
 
+    /**
+     * Lays extra FX parameters out in two compact columns. Two-per-row cuts
+     * the vertical run of a Pro card roughly in half on a phone, while a lone
+     * control (or an odd tail) still gets the full width.
+     */
+    private void addFxExtraGrid(android.widget.LinearLayout body,
+                                java.util.List<View> views, float density) {
+        if (body == null || views == null || views.isEmpty()) return;
+        Context ctx = requireContext();
+        int gap = Math.round(5 * density);
+        for (int i = 0; i < views.size(); i += 2) {
+            android.widget.LinearLayout row = new android.widget.LinearLayout(ctx);
+            row.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+            boolean pair = i + 1 < views.size();
+            android.widget.LinearLayout.LayoutParams lp =
+                    new android.widget.LinearLayout.LayoutParams(
+                            0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+            row.addView(views.get(i), lp);
+            if (pair) {
+                android.widget.LinearLayout.LayoutParams rp =
+                        new android.widget.LinearLayout.LayoutParams(
+                                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+                rp.leftMargin = gap;
+                row.addView(views.get(i + 1), rp);
+            }
+            android.widget.LinearLayout.LayoutParams rowLp =
+                    new android.widget.LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT);
+            rowLp.topMargin = Math.round(4 * density);
+            body.addView(row, rowLp);
+        }
+    }
+
     /** Dropdown menu of premade presets (templates of effects and their settings). */
     private void showFxPresetsMenu() {
         if (!isAdded()) return;
@@ -3581,6 +3635,7 @@ public class StudioFragment extends Fragment {
             final DspChain.Preset pick = p;
             boolean checked = p.id.equals(dspConfig.activePresetId);
             items.add(new OptionsSheet.Item(0, p.title, false, checked, () -> {
+                if (!isAdded() || dspConfig == null) return;
                 if (dspSubRangeBaked) lastEditWasSubRangeBake = true;
                 dspBakedToRaw = false;
                 dspSubRangeBaked = false;
@@ -3685,6 +3740,7 @@ public class StudioFragment extends Fragment {
                 row.addView(rSub);
                 PressAnim.applySoft(row, 0.97f);
                 row.setOnClickListener(v -> {
+                    if (!isAdded() || dspConfig == null) return;
                     if (dspSubRangeBaked) lastEditWasSubRangeBake = true;
                     dspBakedToRaw = false;
                     dspSubRangeBaked = false;
@@ -3742,8 +3798,9 @@ public class StudioFragment extends Fragment {
             return false;
         }
         stopStudioPreview();
+        if (dspConfig == null) return false;
         dspConfig.syncLegacyFieldsFromSlots();
-        if (dspConfig == null || !dspConfig.isActive()) {
+        if (!dspConfig.isActive()) {
             Toast.makeText(requireContext(),
                     "Enable at least one effect (checkmark) first",
                     Toast.LENGTH_SHORT).show();
@@ -3752,9 +3809,10 @@ public class StudioFragment extends Fragment {
         // Apply works on the selection when there is one and on the WHOLE TAKE
         // otherwise — the old forced "enable selection first" return aborted
         // silently and made the full-take branch below unreachable.
+        if (waveform == null) return false;
         boolean hadSel = waveform.hasSelection();
         File raw = engine.rawFile;
-        if (raw == null || !raw.exists() || waveform == null) return false;
+        if (raw == null || !raw.exists()) return false;
         if (!hadSel && dspBakedToRaw && !dspSubRangeBaked) {
             Toast.makeText(requireContext(),
                     "Effects already applied to entire take (tap Undo or adjust a parameter first)",
@@ -3830,16 +3888,17 @@ public class StudioFragment extends Fragment {
                 waveform.reloadSelectionPeaksFromWav(raw,
                         waveform.selectionStartFraction(),
                         waveform.selectionEndFraction());
-                // Only the selected region was baked. Keep the user's rack
-                // slots enabled in dspConfig and SharedPreferences so a
-                // second selection or subsequent take can apply the same rack
-                // immediately without re-checking every pill; mark
-                // dspBakedToRaw and dspSubRangeBaked so whole-take preview and
-                // save do not process the take a second time while a new
-                // selection still previews and applies live.
+                // Only the selected region was baked. The raw file now carries
+                // that bake, so preview/save must not process it again even
+                // though the rest of the take remains dry.
                 dspBakedToRaw = true;
                 dspSubRangeBaked = true;
             }
+            // Apply is the single commit point: the raw file and waveform now
+            // carry the processed audio, so start a fresh, blank rack. Keeping
+            // the old slots enabled would leave the UI implying the effects
+            // are still pending and invite a second bake.
+            resetFxRackAfterApply();
             syncFxBakeRequired();
             waveform.clearSelection();
             Toast.makeText(requireContext(),
@@ -3855,6 +3914,24 @@ public class StudioFragment extends Fragment {
         paint();
         paintFxPanelControls();
         return true;
+    }
+
+    /** Empties the FX editor after a successful bake; processed audio stays. */
+    private void resetFxRackAfterApply() {
+        if (dspConfig == null) return;
+        dspConfig.clearRack();
+        try {
+            dspConfig.save(requireContext());
+        } catch (Exception ignored) {}
+        if (livePreviewDsp != null) {
+            livePreviewDsp.updateConfig(dspConfig);
+        }
+        // The baked audio is now the baseline: there is no "same rack" left to
+        // protect from a second bake, so a later whole-take edit must not roll
+        // this Apply back through the sub-range undo snapshot.
+        dspSubRangeBaked = false;
+        lastEditWasSubRangeBake = false;
+        rebuildFxRackList();
     }
 
     private void paint() {

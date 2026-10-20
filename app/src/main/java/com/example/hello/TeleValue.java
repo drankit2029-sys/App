@@ -7,9 +7,7 @@ import android.util.AttributeSet;
 import android.graphics.Color;
 import android.graphics.drawable.ColorDrawable;
 import android.text.InputType;
-import android.graphics.Rect;
 import android.view.Gravity;
-import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
@@ -17,24 +15,23 @@ import android.view.Window;
 import android.view.WindowManager;
 import android.widget.EditText;
 import android.widget.LinearLayout;
-import android.widget.NumberPicker;
 import android.widget.TextView;
 
 import java.util.Locale;
 
 /**
- * Four-way value control: minus, value, plus.
+ * Three-way value control: minus, value, plus.
  *
  * <ul>
  *   <li><b>Tap</b> minus/plus to step the value.</li>
- *   <li><b>Tap the value</b> to open a vertical scrolling list (NumberPicker).</li>
- *   <li><b>Double-tap or long-press the value</b> to type an exact number.</li>
+ *   <li><b>Double-tap the value</b> to type an exact number.</li>
  *   <li><b>Tap and scroll left/right</b> anywhere on the control to scrub the
  *       value continuously, without lifting off.</li>
  * </ul>
  *
- * Used for teleprompter text size / speed / words-per-line and for waveform
- * zoom, so the same muscle memory applies in both places.
+ * A single tap deliberately does nothing: no popup list and no keyboard.
+ * Used for teleprompter text size / speed / words-per-line, the FX rack and
+ * waveform zoom, so the same muscle memory applies everywhere.
  */
 public class TeleValue extends LinearLayout {
 
@@ -53,9 +50,8 @@ public class TeleValue extends LinearLayout {
     }
 
     private static final int DOUBLE_TAP_MS = 280;
-    private static final int PICKER_DELAY_MS = 280;
 
-        private int min;
+    private int min;
     private int max = 100;
     private int step = 1;
     private int value;
@@ -157,24 +153,11 @@ public class TeleValue extends LinearLayout {
     private boolean verticalScrubEnabled;
     private float downY;
     private int activePointerId = -1;
-    private boolean downOnLabel;
     private boolean movedBeyondSlop;
-    private boolean longPressFired;
     private int dragStartValue;
     private float dragStartPos;
     private long lastTapAt = -DOUBLE_TAP_MS - 1;
-    private Runnable pendingPicker;
-    private final Runnable longPressCheck = () -> {
-        // A genuine hold is stationary on the value. Movement cancels this
-        // before it fires, so beginning a scroll cannot summon the keyboard.
-        if (scrubbing || movedBeyondSlop || longPressFired || !downOnLabel) return;
-        longPressFired = true;
-        clearChildPress();
-        if (label != null) {
-            label.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
-        }
-        showKeyboardInput();
-    };
+    private boolean compact;
 
     public TeleValue(Context context) {
         this(context, null);
@@ -243,32 +226,20 @@ public class TeleValue extends LinearLayout {
             setValue(value + s, true);
         });
 
-        // Tap once -> picker. Double-tap -> keyboard.
+        // A single tap is intentionally inert. Only a double-tap opens the
+        // exact-value keyboard; a hold does nothing, so resting a finger on a
+        // control can never cover the panel with a dialog.
         label.setOnClickListener(v -> {
-            // A click can only arrive here when dispatchTouchEvent delivered a
-            // clean tap. Scrubs, long holds, and moved gestures are consumed
-            // before reaching the child.
-            if (scrubbing || movedBeyondSlop || longPressFired) return;
+            if (scrubbing || movedBeyondSlop) return;
             long now = android.os.SystemClock.uptimeMillis();
             if (now - lastTapAt < DOUBLE_TAP_MS) {
                 lastTapAt = 0;
-                cancelPendingPicker();
                 showKeyboardInput();
             } else {
                 lastTapAt = now;
-                cancelPendingPicker();
-                pendingPicker = this::maybeOpenPicker;
-                postDelayed(pendingPicker, PICKER_DELAY_MS);
             }
         });
 
-    }
-
-    private void cancelPendingPicker() {
-        if (pendingPicker != null) {
-            removeCallbacks(pendingPicker);
-            pendingPicker = null;
-        }
     }
 
     private void clearChildPress() {
@@ -284,13 +255,6 @@ public class TeleValue extends LinearLayout {
             label.cancelLongPress();
             label.setPressed(false);
         }
-    }
-
-    private boolean isOnLabel(float x, float y) {
-        if (label == null) return false;
-        Rect hit = new Rect();
-        label.getHitRect(hit);
-        return hit.contains(Math.round(x), Math.round(y));
     }
 
     private TextView button(Context ctx, String glyph) {
@@ -361,6 +325,40 @@ public class TeleValue extends LinearLayout {
         requestLayout();
     }
 
+    /**
+     * Compacts the control for dense FX cards: smaller caption, label and
+     * stepper buttons without changing its gestures. Ignored in stacked mode
+     * because that rail already has its own sizing.
+     */
+    public void setCompact(boolean compact) {
+        this.compact = compact;
+        Context ctx = getContext();
+        if (ctx == null) return;
+        if (caption != null) {
+            caption.setTextSize(compact ? 8f : 8.5f);
+        }
+        if (label != null) {
+            label.setTextSize(compact ? 11f : 12f);
+        }
+        if (!stacked && controlRow != null
+                && minus != null && plus != null) {
+            int size = dp(ctx, compact ? 22 : 26);
+            minus.setLayoutParams(new LayoutParams(size, size));
+            plus.setLayoutParams(new LayoutParams(size, size));
+            if (controlRow.getLayoutParams() instanceof LayoutParams) {
+                LayoutParams rp = (LayoutParams)
+                        controlRow.getLayoutParams();
+                rp.height = size;
+                controlRow.setLayoutParams(rp);
+            }
+        }
+        requestLayout();
+    }
+
+    public boolean isCompact() {
+        return compact;
+    }
+
     /** Values the wheel may show when {@code step > 1}, padded to range. */
     private int[] steppedValues() {
         java.util.ArrayList<Integer> out = new java.util.ArrayList<>();
@@ -415,23 +413,6 @@ public class TeleValue extends LinearLayout {
         return steppedLabels();
     }
 
-    private void maybeOpenPicker() {
-        if (android.os.SystemClock.uptimeMillis() - lastTapAt >= 270) {
-            lastTapAt = 0;
-            openPicker();
-        }
-    }
-
-    /** Test hook: whether a single-tap picker is still scheduled. */
-    boolean hasPendingPickerForTest() {
-        return pendingPicker != null;
-    }
-
-    /** Test hook: runs the pending value-hold check without waiting. */
-    void runPendingLongPressForTest() {
-        longPressCheck.run();
-    }
-
     public void configure(int min, int max, int step, int value, String unit) {
         this.min = min;
         this.max = max;
@@ -483,7 +464,7 @@ public class TeleValue extends LinearLayout {
         if (notify && listener != null) listener.onValueChanged(value);
     }
 
-    // ---- vertical scrolling list ----
+    // ---- keyboard ----
 
     private String captionTitle() {
         CharSequence cap = caption != null ? caption.getText() : null;
@@ -495,104 +476,6 @@ public class TeleValue extends LinearLayout {
 
     private static void styleModalWindow(Dialog dialog) {
         OptionsSheet.styleAsCentered(dialog);
-    }
-
-    private void openPicker() {
-        showValuePicker();
-    }
-
-    /** Overridable presentation hook so gesture routing is unit-testable. */
-    protected void showValuePicker() {
-        final Context ctx = getContext();
-        if (ctx == null) return;
-        try {
-            final int[] vals = steppedValues();
-            final String[] labels = new String[vals.length];
-            int initialIdx = 0;
-            for (int i = 0; i < vals.length; i++) {
-                labels[i] = formatValueText(vals[i]);
-                if (Math.abs(vals[i] - value)
-                        < Math.abs(vals[initialIdx] - value)) {
-                    initialIdx = i;
-                }
-            }
-            NumberPicker np = new NumberPicker(ctx);
-            np.setMinValue(0);
-            np.setMaxValue(Math.max(0, labels.length - 1));
-            np.setDisplayedValues(labels);
-            np.setValue(initialIdx);
-            np.setWrapSelectorWheel(false);
-
-            final Dialog d = new Dialog(ctx, R.style.TakeOneCenterDialog);
-            d.requestWindowFeature(Window.FEATURE_NO_TITLE);
-            LinearLayout box = new LinearLayout(ctx);
-            box.setOrientation(LinearLayout.VERTICAL);
-            box.setBackgroundResource(R.drawable.bg_modal);
-            if (android.os.Build.VERSION.SDK_INT >= 21) {
-                box.setElevation(dp(ctx, 16));
-            }
-            int pad = dp(ctx, 20);
-            box.setPadding(pad, pad, pad, pad);
-
-            final String baseTitle = captionTitle();
-            TextView title = new TextView(ctx);
-            String curLabel = label != null
-                    ? label.getText().toString() : formatValueText(value);
-            title.setText(baseTitle + " • " + curLabel);
-            title.setGravity(Gravity.CENTER);
-            title.setTextColor(0xFFF2F4F7);
-            title.setTextSize(18);
-            title.setTypeface(android.graphics.Typeface.create(
-                    "sans-serif-medium", android.graphics.Typeface.NORMAL));
-            box.addView(title, new LayoutParams(LayoutParams.MATCH_PARENT,
-                    LayoutParams.WRAP_CONTENT));
-
-            LinearLayout pickerWrap = new LinearLayout(ctx);
-            pickerWrap.setOrientation(LinearLayout.VERTICAL);
-            pickerWrap.setGravity(Gravity.CENTER);
-            pickerWrap.setBackgroundResource(R.drawable.bg_search);
-            LayoutParams wrapLp = new LayoutParams(
-                    LayoutParams.MATCH_PARENT, dp(ctx, 180));
-            wrapLp.topMargin = dp(ctx, 14);
-            pickerWrap.addView(np, new LayoutParams(
-                    LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
-            box.addView(pickerWrap, wrapLp);
-
-            TextView ok = new TextView(ctx);
-            ok.setText(R.string.settings_done);
-            ok.setTextSize(14);
-            ok.setTypeface(android.graphics.Typeface.create(
-                    "sans-serif-medium", android.graphics.Typeface.NORMAL));
-            ok.setGravity(Gravity.CENTER);
-            ok.setTextColor(0xFFFFFFFF);
-            ok.setBackgroundResource(R.drawable.bg_btn_primary);
-            LayoutParams okp = new LayoutParams(
-                    LayoutParams.MATCH_PARENT, dp(ctx, 48));
-            okp.topMargin = dp(ctx, 14);
-            box.addView(ok, okp);
-            PressAnim.apply(ok);
-
-            d.setContentView(box);
-            np.setOnValueChangedListener((p, oldIdx, newIdx) -> {
-                if (newIdx >= 0 && newIdx < vals.length) {
-                    setValue(vals[newIdx], true);
-                    String nowLbl = label != null
-                            ? label.getText().toString()
-                            : formatValueText(value);
-                    title.setText(baseTitle + " • " + nowLbl);
-                }
-            });
-            ok.setOnClickListener(v -> d.dismiss());
-            styleModalWindow(d);
-            d.show();
-        } catch (Exception ignored) {
-        }
-    }
-
-    // ---- keyboard ----
-
-    private void promptKeyboard() {
-        showKeyboardInput();
     }
 
     /** Overridable presentation hook so gesture routing is unit-testable. */
@@ -762,32 +645,22 @@ public class TeleValue extends LinearLayout {
      * the gesture at all.
      *
      * <p>Only a clean tap reaches the children. Motion beyond touch slop is
-     * consumed here, which also prevents a scrolling finger from tripping the
-     * delayed single-tap picker or a pending value hold.
+     * consumed here, so a scrolling finger can never turn into a value change
+     * or a stray double-tap.
      */
     @Override
     public boolean dispatchTouchEvent(MotionEvent ev) {
         switch (ev.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
-                cancelPendingPicker();
-                removeCallbacks(longPressCheck);
                 downX = ev.getX();
                 downY = ev.getY();
                 activePointerId = eventPointerId(ev, 0);
-                downOnLabel = isOnLabel(ev.getX(), ev.getY());
                 movedBeyondSlop = false;
                 scrubbing = false;
                 verticalScrubbing = false;
-                longPressFired = false;
-                if (downOnLabel) {
-                    postDelayed(longPressCheck,
-                            ViewConfiguration.getLongPressTimeout());
-                }
                 return super.dispatchTouchEvent(ev);
             case MotionEvent.ACTION_POINTER_DOWN:
-                // A second finger invalidates tap/double-tap/hold semantics.
-                cancelPendingPicker();
-                removeCallbacks(longPressCheck);
+                // A second finger invalidates tap and double-tap semantics.
                 movedBeyondSlop = true;
                 clearChildPress();
                 return true;
@@ -803,8 +676,6 @@ public class TeleValue extends LinearLayout {
                 if (!movedBeyondSlop
                         && Math.max(Math.abs(dx), Math.abs(dy)) > slop) {
                     movedBeyondSlop = true;
-                    removeCallbacks(longPressCheck);
-                    cancelPendingPicker();
                     clearChildPress();
                 }
                 if (!scrubbing && !verticalScrubbing) {
@@ -860,7 +731,6 @@ public class TeleValue extends LinearLayout {
             }
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL:
-                removeCallbacks(longPressCheck);
                 if (scrubbing || verticalScrubbing) {
                     scrubbing = false;
                     verticalScrubbing = false;
@@ -868,14 +738,13 @@ public class TeleValue extends LinearLayout {
                         getParent().requestDisallowInterceptTouchEvent(false);
                     }
                     // A scrub reports through the scrub listener only. The
-                    // discrete listener remains reserved for taps, picker and
-                    // keyboard commits.
+                    // discrete listener remains reserved for +/- and keyboard
+                    // commits.
                     if (scrubListener != null) scrubListener.onScrubFinished(value);
                     performClick();
                     return true;
                 }
-                if (longPressFired || movedBeyondSlop) {
-                    longPressFired = false;
+                if (movedBeyondSlop) {
                     movedBeyondSlop = false;
                     return true;
                 }
@@ -886,8 +755,6 @@ public class TeleValue extends LinearLayout {
     }
 
     private boolean finishInterruptedGesture() {
-        removeCallbacks(longPressCheck);
-        cancelPendingPicker();
         activePointerId = -1;
         if (scrubbing || verticalScrubbing) {
             scrubbing = false;
@@ -944,12 +811,9 @@ public class TeleValue extends LinearLayout {
 
     @Override
     protected void onDetachedFromWindow() {
-        cancelPendingPicker();
-        removeCallbacks(longPressCheck);
         scrubbing = false;
         verticalScrubbing = false;
         movedBeyondSlop = false;
-        longPressFired = false;
         super.onDetachedFromWindow();
     }
 

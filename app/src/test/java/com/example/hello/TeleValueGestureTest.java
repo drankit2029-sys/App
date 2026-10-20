@@ -1,7 +1,6 @@
 package com.example.hello;
 
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import android.app.Activity;
@@ -19,16 +18,15 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * The four value-control behaviours must not leak into each other: a scrub
- * adjusts and finishes without opening the picker or keyboard, while taps and
- * holds retain their own entry points.
+ * The value-control behaviours must not leak into each other: a scrub adjusts
+ * and finishes without opening a dialog, a single tap is inert and only a
+ * double-tap opens the exact-value keyboard.
  */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 34)
 public class TeleValueGestureTest {
 
     private static class RecordingTeleValue extends TeleValue {
-        int pickers;
         int keyboards;
         final List<Integer> live = new ArrayList<>();
         int finished = -1;
@@ -46,10 +44,6 @@ public class TeleValueGestureTest {
                 }
             });
             setOnValueChanged(value -> discrete = value);
-        }
-
-        @Override protected void showValuePicker() {
-            pickers++;
         }
 
         @Override protected void showKeyboardInput() {
@@ -125,7 +119,6 @@ public class TeleValueGestureTest {
 
         assertEquals("scrub did not finish", tv.getValue(), tv.finished);
         assertEquals("scrub leaked into the discrete listener", -1, tv.discrete);
-        assertEquals("scrub opened the picker", 0, tv.pickers);
         assertEquals("scrub opened the keyboard", 0, tv.keyboards);
     }
 
@@ -147,7 +140,6 @@ public class TeleValueGestureTest {
 
         assertEquals(tv.getValue(), tv.finished);
         assertTrue("vertical scrub moved the value down", tv.getValue() > 50);
-        assertEquals(0, tv.pickers);
         assertEquals(0, tv.keyboards);
     }
 
@@ -165,28 +157,20 @@ public class TeleValueGestureTest {
         assertEquals(50, tv.getValue());
         assertTrue("vertical move reported live values", tv.live.isEmpty());
         assertEquals(-1, tv.finished);
-        assertEquals(0, tv.pickers);
         assertEquals(0, tv.keyboards);
     }
 
     @Test
-    public void secondTouchCancelsPendingPicker() {
+    public void singleTapIsInert() {
         RecordingTeleValue tv = control();
         View label = findValueLabel(tv);
         float[] c = centerOf(tv, label);
 
-        // A clean tap schedules the picker through the label callback; the
-        // next touch must cancel it before it can appear during a gesture.
-        ((android.widget.TextView) label).performClick();
-        assertTrue("clean tap did not schedule the picker",
-                tv.hasPendingPickerForTest());
-
         tv.dispatchTouchEvent(event(MotionEvent.ACTION_DOWN, c[0], c[1]));
-        assertFalse("second touch left the picker scheduled",
-                tv.hasPendingPickerForTest());
-        tv.dispatchTouchEvent(event(MotionEvent.ACTION_CANCEL, c[0], c[1]));
-        assertEquals(0, tv.pickers);
-        assertEquals(0, tv.keyboards);
+        tv.dispatchTouchEvent(event(MotionEvent.ACTION_UP, c[0], c[1]));
+
+        assertEquals("a single tap changed the value", 50, tv.getValue());
+        assertEquals("a single tap opened the keyboard", 0, tv.keyboards);
     }
 
     @Test
@@ -198,39 +182,19 @@ public class TeleValueGestureTest {
         ((android.widget.TextView) label).performClick();
 
         assertEquals(1, tv.keyboards);
-        assertEquals(0, tv.pickers);
     }
 
     @Test
-    public void movementCancelsPendingHold() {
+    public void stationaryHoldDoesNotOpenKeyboard() {
         RecordingTeleValue tv = control();
         View label = findValueLabel(tv);
         float[] c = centerOf(tv, label);
 
         tv.dispatchTouchEvent(event(MotionEvent.ACTION_DOWN, c[0], c[1]));
-        for (float x = c[0] + 8f; x <= c[0] + 80f; x += 8f) {
-            tv.dispatchTouchEvent(event(MotionEvent.ACTION_MOVE, x, c[1]));
-        }
-        tv.runPendingLongPressForTest();
-        tv.dispatchTouchEvent(event(MotionEvent.ACTION_UP, c[0] + 80f, c[1]));
-
-        assertEquals("a moved hold still summoned the keyboard",
-                0, tv.keyboards);
-        assertEquals(0, tv.pickers);
-    }
-
-    @Test
-    public void stationaryHoldOpensKeyboard() {
-        RecordingTeleValue tv = control();
-        View label = findValueLabel(tv);
-        float[] c = centerOf(tv, label);
-
-        tv.dispatchTouchEvent(event(MotionEvent.ACTION_DOWN, c[0], c[1]));
-        tv.runPendingLongPressForTest();
         tv.dispatchTouchEvent(event(MotionEvent.ACTION_UP, c[0], c[1]));
 
-        assertEquals(1, tv.keyboards);
-        assertEquals(0, tv.pickers);
+        assertEquals("a hold summoned the keyboard", 0, tv.keyboards);
+        assertEquals(50, tv.getValue());
     }
 
     @Test
@@ -254,7 +218,6 @@ public class TeleValueGestureTest {
         assertTrue("stacked scrub did not report live values",
                 !tv.live.isEmpty());
         assertEquals(tv.getValue(), tv.finished);
-        assertEquals(0, tv.pickers);
         assertEquals(0, tv.keyboards);
     }
 

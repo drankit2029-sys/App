@@ -329,6 +329,19 @@ public final class DspChain {
             syncLegacyFieldsFromSlots();
         }
 
+        /**
+         * Empties the rack after Apply FX so the next edit starts from a clean
+         * slate. The audio already carries the baked chain; keeping the slots
+         * enabled would let a later preview or save process those samples a
+         * second time.
+         */
+        public void clearRack() {
+            slots.clear();
+            activePresetId = Preset.CLEAR_ALL.id;
+            syncLegacyFieldsFromSlots();
+            mode = MODE_OFF;
+        }
+
         public void syncLegacyFieldsFromSlots() {
             hpfEnabled = false;
             hpfCutoffHz = 80;
