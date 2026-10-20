@@ -542,11 +542,58 @@ public final class DspChain {
             }
             for (EffectSlot s : slots) {
                 if (s != null && s.enabled && s.type != null
-                        && !s.type.isLegacyStage()) {
-                    return true;
+                        && !s.type.isLegacyStage() && s.wetDry > 0.001f) {
+                    if (isStage3SlotAudible(s)) {
+                        return true;
+                    }
                 }
             }
             return false;
+        }
+
+        /**
+         * True when a Stage 3 slot's current parameters actually alter the
+         * signal. A flat EQ / 0 dB shelf is enabled but inaudible; treating it
+         * as active would arm save-time baking and push undo state that
+         * {@link DspChain#isActive()} (via the processors' isAudible())
+         * refuses to record.
+         */
+        private static boolean isStage3SlotAudible(EffectSlot s) {
+            switch (s.type) {
+                case PARAMETRIC_EQ6:
+                    if (s.value != 0) return true;
+                    if (s.extraParams.getOrDefault("b1f", 80) > 20) return true;
+                    if (s.extraParams.getOrDefault("b6f", 20000) < 20000) return true;
+                    return s.extraParams.getOrDefault("b2g", 0) != 0
+                            || s.extraParams.getOrDefault("b3g", 0) != 0
+                            || s.extraParams.getOrDefault("b4g", 0) != 0
+                            || s.extraParams.getOrDefault("b5g", 0) != 0;
+                case GRAPHIC_EQ:
+                    if (s.value != 0) return true;
+                    int count = s.extraParams.getOrDefault("bands", 0) == 1 ? 31 : 10;
+                    for (int i = 0; i < count; i++) {
+                        if (s.extraParams.getOrDefault("g" + i, 0) != 0) return true;
+                    }
+                    return false;
+                case FILTER_CURVE_EQ:
+                    if (s.value != 0) return true;
+                    int n = Math.max(2, Math.min(FilterCurveEqProcessor.MAX_NODES,
+                            s.extraParams.getOrDefault("npts", 8)));
+                    for (int i = 0; i < n; i++) {
+                        if (s.extraParams.getOrDefault("pg" + i, 0) != 0) return true;
+                    }
+                    return false;
+                case BASS_TREBLE:
+                    if (s.value != 0 || s.extraParams.getOrDefault("vol", 0) != 0) {
+                        return true;
+                    }
+                    boolean linked = s.extraParams.getOrDefault("link", 0) != 0;
+                    return !linked && s.extraParams.getOrDefault("treble", 0) != 0;
+                case SHELF_FILTER:
+                    return s.value != 0;
+                default:
+                    return true;
+            }
         }
 
         public int enabledSlotCount() {

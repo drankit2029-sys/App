@@ -81,6 +81,11 @@ final class GraphicEqProcessor extends AudioProcessor {
     }
 
     @Override
+    public boolean isAudible() {
+        return isEnabled() && buildSections().length > 0;
+    }
+
+    @Override
     public void processInPlace(float[] buf, int frames, int ch) {
         if (buf == null || frames <= 0) return;
         filter.setSections(buildSections(), channels);

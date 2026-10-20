@@ -20,6 +20,7 @@ final class ShelfFilterProcessor extends AudioProcessor {
     private final BiquadFilter filter = new BiquadFilter();
     private int sampleRate = DspChain.SAMPLE_RATE;
     private int channels = 1;
+    private int lastTopologyKey = -1;
 
     @Override
     public String getId() {
@@ -54,8 +55,18 @@ final class ShelfFilterProcessor extends AudioProcessor {
     }
 
     @Override
+    public boolean isAudible() {
+        return isEnabled() && Math.abs(gain.getFloat()) >= 0.01f;
+    }
+
+    @Override
     public void processInPlace(float[] buf, int frames, int ch) {
         if (buf == null || frames <= 0) return;
+        int topoKey = type.getEnumIndex();
+        if (lastTopologyKey != -1 && lastTopologyKey != topoKey) {
+            filter.reset();
+        }
+        lastTopologyKey = topoKey;
         filter.setSections(buildSections(), channels);
         filter.process(buf, frames, Math.max(1, Math.min(2, ch)));
     }

@@ -154,21 +154,31 @@ final class FilterCurveEqView extends EqCurveView {
         }
     }
 
+    @Override
+    protected void onDetachedFromWindow() {
+        handler.removeCallbacks(longPress);
+        active = -1;
+        longPressFired = false;
+        super.onDetachedFromWindow();
+    }
+
     private void onLongPress() {
-        longPressFired = true;
         int w = getWidth();
         int h = getHeight();
         double[][] nodes = readNodes();
         int hit = nearestNode(downX, downY, w, h);
         if (hit >= 0) {
             if (nodes.length <= 2) return;
+            longPressFired = true;
             double[][] out = new double[nodes.length - 1][2];
             for (int i = 0, j = 0; i < nodes.length; i++) {
                 if (i != hit) out[j++] = nodes[i];
             }
             writeNodes(out);
+            active = -1;
         } else {
             if (nodes.length >= FilterCurveEqProcessor.MAX_NODES) return;
+            longPressFired = true;
             double f = freqForX(downX, w);
             double g = dbForY(downY, h);
             int insert = nodes.length;

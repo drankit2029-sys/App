@@ -68,7 +68,8 @@ final class NotchFilterProcessor extends AudioProcessor {
         double f;
         if (p == 1 && (Math.abs(dialHz - 60.0) < 0.5 || Math.abs(dialHz - 50.0) < 0.5)) {
             f = 50.0;
-        } else if (p == 2 && Math.abs(dialHz - 60.0) < 0.5) {
+        } else if (p == 2 && (Math.abs(dialHz - 60.0) < 0.5
+                || Math.abs(dialHz - 50.0) < 0.5)) {
             f = 60.0;
         } else {
             f = dialHz;

@@ -116,6 +116,14 @@ public class StudioFragment extends Fragment {
      */
     private boolean dspBakedToRaw = false;
     private boolean dspSubRangeBaked = false;
+    /**
+     * True while `raw` still carries a sub-range FX bake whose untouched
+     * pre-bake snapshot is the top of {@link #activeUndoJournal()}, even
+     * after an FX knob tweak cleared {@link #dspSubRangeBaked}. A save that
+     * would bake the whole take must roll that snapshot back first so the
+     * sub-selection is never double-baked.
+     */
+    private boolean lastEditWasSubRangeBake = false;
     private EditEngine.UndoJournal undoJournal;
     private DbMeterView dbMeter;
     private View settingsRow;
@@ -316,6 +324,7 @@ public class StudioFragment extends Fragment {
         dspConfig = DspChain.Config.load(requireContext());
         dspBakedToRaw = false;
         dspSubRangeBaked = false;
+        lastEditWasSubRangeBake = false;
         undoJournal = new EditEngine.UndoJournal(RecordingEngine.takesDir(requireContext()));
         subEditorUndoJournal = new EditEngine.UndoJournal(
                 new File(RecordingEngine.takesDir(requireContext()), "sub_undo"));
@@ -1566,6 +1575,7 @@ public class StudioFragment extends Fragment {
             editSourceTitle = null;
             dspBakedToRaw = false;
             dspSubRangeBaked = false;
+            lastEditWasSubRangeBake = false;
             EditLink.clear(requireContext());
             waveform.clear();
             dbMeter.reset();
@@ -1610,12 +1620,16 @@ public class StudioFragment extends Fragment {
             long endF = Math.round(eFrac * totalFrames);
             if (endF <= startF) return;
 
-            if (undoJournal != null) {
-                undoJournal.recordSnapshot(raw);
+            // Only mirror the audio snapshot into the waveform peak stack when
+            // the snapshot actually landed: recordSnapshot() refuses takes
+            // over 30 MB, and an unconditional peaks push would desynchronise
+            // the two undo stacks on long takes.
+            if (undoJournal != null && undoJournal.recordSnapshot(raw)) {
+                // Snapshot & stash post-selection waveform peaks so the red
+                // waveform stays at 20 bars/sec without reloading 400 bars/sec
+                // from disk!
+                waveform.recordUndoPeaks();
             }
-            // Snapshot & stash post-selection waveform peaks so the red waveform
-            // stays at 20 bars/sec without reloading 400 bars/sec from disk!
-            waveform.recordUndoPeaks();
             waveform.beginReplaceSelection();
 
             replaceSavedTailFile = new File(raw.getParentFile(),
@@ -1624,6 +1638,7 @@ public class StudioFragment extends Fragment {
             replacingSelectionActive = true;
             dspBakedToRaw = false;
             dspSubRangeBaked = false;
+            lastEditWasSubRangeBake = false;
 
             engine.seekCursorFrame(startF);
             ensurePermissionThenStart();
@@ -1717,6 +1732,7 @@ public class StudioFragment extends Fragment {
             inSelectAndReplaceEditor = true;
             dspBakedToRaw = false;
             dspSubRangeBaked = false;
+            lastEditWasSubRangeBake = false;
             replaceModeArmed = false;
             if (waveform != null) waveform.setSelectionLocked(false);
             userScrolledWhilePaused = false;
@@ -1756,6 +1772,7 @@ public class StudioFragment extends Fragment {
             if (hasReplacementAudio) {
                 dspBakedToRaw = false;
                 dspSubRangeBaked = false;
+                lastEditWasSubRangeBake = false;
             }
             replaceModeArmed = false;
             if (waveform != null) waveform.setSelectionLocked(false);
@@ -1810,16 +1827,23 @@ public class StudioFragment extends Fragment {
                     // the waveform bars as new audio is recorded!
                     replacePassStartFrame = curFrames;
                     replaceTargetEndFrame = totalFrames;
-                    activeUndoJournal().recordSnapshot(engine.rawFile);
-                    waveform.recordUndoPeaks();
+                    if (activeUndoJournal().recordSnapshot(engine.rawFile)) {
+                        waveform.recordUndoPeaks();
+                    }
                     dspBakedToRaw = false;
                     dspSubRangeBaked = false;
+                    lastEditWasSubRangeBake = false;
                 } else {
                     if (replaceModeArmed) {
                         // Already at end of take: deactivate Replace and append
                         replaceModeArmed = false;
                         waveform.setSelectionLocked(false);
                     }
+                    // Appending new dry audio invalidates the "whole take is
+                    // baked" flag and any pending sub-range rollback.
+                    dspBakedToRaw = false;
+                    dspSubRangeBaked = false;
+                    lastEditWasSubRangeBake = false;
                     replacePassStartFrame = -1L;
                     replaceTargetEndFrame = -1L;
                 }
@@ -1948,6 +1972,23 @@ public class StudioFragment extends Fragment {
         if (dspConfig != null) {
             dspConfig.syncLegacyFieldsFromSlots();
             dspConfig.save(requireContext());
+        }
+        // Knob tweaks after a sub-range bake clear dspSubRangeBaked, but the
+        // bake itself is still in `raw` and its pre-bake snapshot is on top of
+        // the undo journal. If the save is about to bake the whole take, roll
+        // that snapshot back first so the old selection is not baked twice.
+        if (lastEditWasSubRangeBake && dspConfig != null
+                && dspConfig.isActive()) {
+            File raw = engine.rawFile;
+            EditEngine.UndoJournal uj = activeUndoJournal();
+            if (raw != null && uj != null && uj.canUndo() && uj.undo(raw)) {
+                if (waveform != null) waveform.popUndoPeaks();
+                engine.abortStreaming();
+                engine.dataBytes = RecordingEngine.payloadBytesOf(raw);
+                dspBakedToRaw = false;
+                dspSubRangeBaked = false;
+            }
+            lastEditWasSubRangeBake = false;
         }
         syncFxBakeRequired();
         final long editId = editSourceId;
@@ -2611,6 +2652,7 @@ public class StudioFragment extends Fragment {
         if (engine.state == RecordingEngine.State.RECORDING) return;
         File raw = engine.rawFile;
         if (raw == null || !raw.exists() || waveform == null) return;
+        boolean undoRecorded = false;
         if (!waveform.hasSelection()) {
             // Auto-activate selection on the waveform so the user immediately
             // sees the red [ ] handles instead of a dead error toast!
@@ -2629,8 +2671,14 @@ public class StudioFragment extends Fragment {
                     waveform.selectionStartFraction() * totalFrames);
             long end = Math.round(
                     waveform.selectionEndFraction() * totalFrames);
-            waveform.recordUndoPeaks();
             EditEngine.UndoJournal uj = activeUndoJournal();
+            // Only mirror the edit into the waveform peak stack when the audio
+            // snapshot will actually land (takes over 30 MB are never
+            // snapshotted), otherwise the two undo stacks desynchronise. The
+            // snapshot itself is still taken by crop/delete AFTER they
+            // validate the range, so a rejected edit leaves no orphan.
+            undoRecorded = uj == null || uj.wouldRecord(raw);
+            if (undoRecorded) waveform.recordUndoPeaks();
             if (isTrim) {
                 EditEngine.cropToSelection(raw, start, end, uj);
                 waveform.cropToSelectionBuckets();
@@ -2640,6 +2688,7 @@ public class StudioFragment extends Fragment {
             }
             dspBakedToRaw = false;
             dspSubRangeBaked = false;
+            lastEditWasSubRangeBake = false;
             userScrolledWhilePaused = false;
             engine.abortStreaming();
             engine.dataBytes = RecordingEngine.payloadBytesOf(raw);
@@ -2656,11 +2705,11 @@ public class StudioFragment extends Fragment {
                     isTrim ? "Trimmed to selection" : "Selection removed",
                     Toast.LENGTH_SHORT).show();
         } catch (IllegalArgumentException iae) {
-            waveform.popUndoPeaks();
+            if (undoRecorded) waveform.popUndoPeaks();
             Toast.makeText(requireContext(), iae.getMessage(),
                     Toast.LENGTH_SHORT).show();
         } catch (Exception e) {
-            waveform.popUndoPeaks();
+            if (undoRecorded) waveform.popUndoPeaks();
             Toast.makeText(requireContext(), "Edit failed",
                     Toast.LENGTH_SHORT).show();
         }
@@ -2677,6 +2726,7 @@ public class StudioFragment extends Fragment {
             if (uj.undo(raw)) {
                 dspBakedToRaw = false;
                 dspSubRangeBaked = false;
+                lastEditWasSubRangeBake = false;
                 userScrolledWhilePaused = false;
                 engine.abortStreaming();
                 engine.dataBytes = RecordingEngine.payloadBytesOf(raw);
@@ -3009,6 +3059,10 @@ public class StudioFragment extends Fragment {
             final java.util.Map<String, TeleValue> extraControls =
                     new java.util.LinkedHashMap<>();
             Runnable onSlotMutated = () -> {
+                // Keep the fact that `raw` still has a sub-range bake at the
+                // top of the undo journal: the next whole-take bake/save must
+                // roll it back first or the selection gets baked twice.
+                if (dspSubRangeBaked) lastEditWasSubRangeBake = true;
                 dspBakedToRaw = false;
                 dspSubRangeBaked = false;
                 dspConfig.activePresetId = DspChain.Preset.CUSTOM.id;
@@ -3077,6 +3131,7 @@ public class StudioFragment extends Fragment {
             });
 
             delBtn.setOnClickListener(v -> {
+                if (dspSubRangeBaked) lastEditWasSubRangeBake = true;
                 dspBakedToRaw = false;
                 dspSubRangeBaked = false;
                 dspConfig.removeSlot(slot);
@@ -3396,6 +3451,7 @@ public class StudioFragment extends Fragment {
             final DspChain.Preset pick = p;
             boolean checked = p.id.equals(dspConfig.activePresetId);
             items.add(new OptionsSheet.Item(0, p.title, false, checked, () -> {
+                if (dspSubRangeBaked) lastEditWasSubRangeBake = true;
                 dspBakedToRaw = false;
                 dspSubRangeBaked = false;
                 dspConfig.applyPreset(pick);
@@ -3499,6 +3555,7 @@ public class StudioFragment extends Fragment {
                 row.addView(rSub);
                 PressAnim.applySoft(row, 0.97f);
                 row.setOnClickListener(v -> {
+                    if (dspSubRangeBaked) lastEditWasSubRangeBake = true;
                     dspBakedToRaw = false;
                     dspSubRangeBaked = false;
                     dspConfig.addOrFocusSlot(t);
@@ -3575,17 +3632,36 @@ public class StudioFragment extends Fragment {
             return false;
         }
         try {
+            // Config.isActive() can disagree with the processor chain (e.g. a
+            // Stage 3 slot whose parameters are neutral); probe the real chain
+            // BEFORE any undo bookkeeping so an inaudible rack never pushes a
+            // waveform peak snapshot without a matching audio snapshot.
+            try {
+                FormatConverter.WavInfo preInfo =
+                        FormatConverter.readFloatWav(raw);
+                DspChain probeChain = new DspChain(preInfo.channels, dspConfig);
+                if (!probeChain.isActive()) {
+                    Toast.makeText(requireContext(),
+                            "Adjust an effect parameter away from 0 dB first",
+                            Toast.LENGTH_SHORT).show();
+                    return false;
+                }
+            } catch (Exception e) {
+                return false;
+            }
             EditEngine.UndoJournal uj = activeUndoJournal();
-            // If a sub-selection was just baked with this exact rack and the
-            // user now taps "Apply to Entire Take", restore the pre-sub-bake
-            // snapshot first so the previously selected region is not baked
+            // If a sub-selection was just baked with this exact rack — even if
+            // a knob tweak has since cleared dspSubRangeBaked — restore the
+            // pre-sub-bake snapshot first so the selected region is not baked
             // twice!
-            if (!hadSel && dspSubRangeBaked && uj != null && uj.canUndo()) {
+            if (!hadSel && (dspSubRangeBaked || lastEditWasSubRangeBake)
+                    && uj != null && uj.canUndo()) {
                 if (uj.undo(raw)) {
                     waveform.popUndoPeaks();
                     engine.dataBytes = RecordingEngine.payloadBytesOf(raw);
                     dspBakedToRaw = false;
                     dspSubRangeBaked = false;
+                    lastEditWasSubRangeBake = false;
                 }
             }
             FormatConverter.WavInfo info = FormatConverter.readFloatWav(raw);
@@ -3605,7 +3681,10 @@ public class StudioFragment extends Fragment {
             }
             waveform.recordUndoPeaks();
             DspChain chain = new DspChain(info.channels, dspConfig);
-            EditEngine.applyDspToRange(raw, start, end, chain, uj);
+            boolean snapshotRecorded =
+                    EditEngine.applyDspToRange(raw, start, end, chain, uj);
+            if (!snapshotRecorded) waveform.popUndoPeaks();
+            lastEditWasSubRangeBake = false;
             // The raw now carries the chain for the applied range: the
             // incremental pump must not keep encoding unprocessed audio, and
             // neither preview nor save may process these samples a second time.

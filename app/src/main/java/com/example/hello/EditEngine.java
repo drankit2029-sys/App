@@ -39,10 +39,23 @@ public final class EditEngine {
             return !stack.isEmpty() && stack.peekFirst().exists();
         }
 
-        /** Saves a snapshot of `raw` before a mutating edit if within budget. */
-        public synchronized void recordSnapshot(File raw) {
-            if (raw == null || !raw.exists() || raw.length() > MAX_UNDO_BYTES) {
-                return;
+        /** True when {@link #recordSnapshot(File)} would accept `raw`. */
+        public synchronized boolean wouldRecord(File raw) {
+            return raw != null && raw.exists() && raw.length() <= MAX_UNDO_BYTES;
+        }
+
+        /**
+         * Saves a snapshot of `raw` before a mutating edit if within budget.
+         *
+         * @return true when a snapshot was actually written; false when the
+         *         take is missing or exceeds the 30 MB undo budget. Callers
+         *         that mirror undo state (waveform peak snapshots) must only
+         *         record it when this returns true, or the two undo stacks
+         *         desynchronise on long takes.
+         */
+        public synchronized boolean recordSnapshot(File raw) {
+            if (!wouldRecord(raw)) {
+                return false;
             }
             while (stack.size() >= MAX_UNDO_STEPS) {
                 File old = stack.removeLast();
@@ -57,9 +70,11 @@ public final class EditEngine {
                 int n;
                 while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
                 stack.addFirst(snap);
+                return true;
             } catch (Exception e) {
                 // noinspection ResultOfMethodCallIgnored
                 snap.delete();
+                return false;
             }
         }
 
@@ -421,18 +436,19 @@ public final class EditEngine {
      * </ul>
      * Samples outside the range (including the pre-roll) are never modified.
      */
-    public static void applyDspToRange(File raw, long startFrame, long endFrame,
-                                       DspChain chain, UndoJournal undo)
+    public static boolean applyDspToRange(File raw, long startFrame, long endFrame,
+                                          DspChain chain, UndoJournal undo)
             throws Exception {
-        if (chain == null || !chain.isActive()) return;
+        if (chain == null || !chain.isActive()) return false;
         FormatConverter.WavInfo info = FormatConverter.readFloatWav(raw);
         int ch = info.channels;
         long totalFrames = info.dataBytes / 4 / ch;
         startFrame = Math.max(0, Math.min(totalFrames, startFrame));
         endFrame = Math.max(startFrame, Math.min(totalFrames, endFrame));
         long selFrames = endFrame - startFrame;
-        if (selFrames <= 0) return;
-        if (undo != null) undo.recordSnapshot(raw);
+        if (selFrames <= 0) return false;
+        boolean snapshotRecorded = true;
+        if (undo != null) snapshotRecorded = undo.recordSnapshot(raw);
 
         chain.reset();
         final int latencyFrames = Math.max(0, chain.getLatencyFrames());
@@ -490,19 +506,27 @@ public final class EditEngine {
                 float[] primeBuf = new float[primeChunk * ch];
                 while (primeRemaining > 0) {
                     int step = Math.min(primeChunk, primeRemaining);
-                    int avail = (int) Math.max(0L,
+                    int fromSel = (int) Math.max(0L,
                             Math.min((long) step, endFrame - primePos));
-                    if (avail > 0) {
+                    if (fromSel > 0) {
                         float[] tmp = readFloatFrames(raf,
                                 info.dataStart + primePos * frameBytes,
-                                avail, ch);
-                        System.arraycopy(tmp, 0, primeBuf, 0, avail * ch);
+                                fromSel, ch);
+                        System.arraycopy(tmp, 0, primeBuf, 0, fromSel * ch);
                     }
-                    if (avail < step) {
-                        java.util.Arrays.fill(primeBuf, avail * ch, step * ch, 0f);
+                    if (fromSel < step) {
+                        for (int f = fromSel; f < step; f++) {
+                            long postIdx = (primePos + f) - endFrame;
+                            for (int c = 0; c < ch; c++) {
+                                primeBuf[f * ch + c] = (postContext != null
+                                        && postIdx >= 0 && postIdx < postContextFrames)
+                                        ? postContext[(int) postIdx * ch + c]
+                                        : 0f;
+                            }
+                        }
                     }
                     chain.processInPlace(primeBuf, step);
-                    primePos += avail;
+                    primePos += step;
                     primeRemaining -= step;
                 }
             }
@@ -590,6 +614,7 @@ public final class EditEngine {
                 cur += want;
             }
         }
+        return snapshotRecorded;
     }
 
     private static float[] readFloatFrames(RandomAccessFile raf, long bytePos,
