@@ -2840,9 +2840,10 @@ public class StudioFragment extends Fragment {
             // there is one, the entire take otherwise.
             fxApplyBtn.setText(waveform != null && waveform.hasSelection()
                     ? "Apply to Selection" : "Apply to Entire Take");
-            fxApplyBtn.setEnabled(canUsePreviewAndApply);
-            fxApplyBtn.setAlpha((canUsePreviewAndApply && anyEnabled) ? 1f : 0.38f);
-            fxApplyBtn.setBackgroundResource((canUsePreviewAndApply && anyEnabled)
+            boolean canApply = canUsePreviewAndApply && anyEnabled;
+            fxApplyBtn.setEnabled(canApply);
+            fxApplyBtn.setAlpha(canApply ? 1f : 0.38f);
+            fxApplyBtn.setBackgroundResource(canApply
                     ? R.drawable.bg_btn_primary : R.drawable.bg_btn_ghost);
         }
         // Keep the save path honest: while a chain is enabled but not baked,

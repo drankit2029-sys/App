@@ -49,9 +49,9 @@ import java.nio.ByteOrder;
  *       directions.</li>
  *   <li><b>BUG-07</b>: {@link FxTelemetry} reference-counted view attachment
  *       and Hann-windowed FFT with minimal spectral leakage.</li>
- *   <li><b>BUG-08</b>: Applying FX to a selection followed by "Apply to Entire
- *       Take" restores the pre-sub-bake snapshot before baking the whole take
- *       so the sub-selection is never double-baked.</li>
+ *   <li><b>BUG-08</b>: Apply is a single commit: after baking a selection the
+ *       raw audio carries the processed samples and the FX rack resets to
+ *       blank, so a second tap cannot double-bake the same region.</li>
  * </ul>
  */
 @RunWith(RobolectricTestRunner.class)
@@ -257,11 +257,10 @@ public class Stage3DeepAuditFixTest {
         assertFalse(FxTelemetry.isEnabled());
     }
 
-    // ---- BUG-08: Sub-selection bake followed by full-take bake does not double-bake ----
+    // ---- BUG-08: Apply commits once, resets the rack, and never double-bakes ----
 
     @Test
-    public void subSelectionBakeFollowedByFullTakeBakeRestoresSnapshotBeforeFullBake()
-            throws Exception {
+    public void applyToSelectionCommitsOnceAndResetsTheRack() throws Exception {
         int frames = 4800;
         File raw = writeSineWav("sub_then_full.wav", frames, 1, 440.0, 0.20f);
         engine.attachExisting(ctx, raw, "SubThenFull", 1,
@@ -291,18 +290,20 @@ public class Stage3DeepAuditFixTest {
         btnDspFx.performClick();
 
         TextView fxApplyBtn = root.findViewById(R.id.fxApplyBtn);
-        // 1) Select [0.25, 0.75] and apply FX to selection:
+        // 1) Select [0.25, 0.75] and apply FX to the selection:
         wf.selectRange(0.25f, 0.75f);
         assertEquals("Apply to Selection", fxApplyBtn.getText().toString());
         fxApplyBtn.performClick();
 
-        // Selection auto-clears; button now says "Apply to Entire Take"
+        // 2) The source audio now carries the bake and the rack is blank, so
+        //    there is no pending effect left to double-bake the region with.
         assertFalse(wf.hasSelection());
         assertEquals("Apply to Entire Take", fxApplyBtn.getText().toString());
-
-        // 2) Tap "Apply to Entire Take": must undo the sub-selection bake first
-        //    so [0.25, 0.75] gets +6 dB total, NOT +12 dB!
-        fxApplyBtn.performClick();
+        assertFalse("Apply must be disabled after the rack resets", fxApplyBtn.isEnabled());
+        DspChain.Config saved = DspChain.Config.load(ctx);
+        assertEquals(DspChain.Preset.CLEAR_ALL.id, saved.activePresetId);
+        assertTrue(saved.slots.isEmpty());
+        fxApplyBtn.performClick(); // disabled: must be a no-op
 
         float[] after = readSamples(raw, frames, 1);
         float peakFirstQuarter = 0f;
@@ -313,7 +314,8 @@ public class Stage3DeepAuditFixTest {
         for (int i = 1600; i < 3200; i++) {
             peakMiddleHalf = Math.max(peakMiddleHalf, Math.abs(after[i]));
         }
-        assertEquals("Middle sub-selection was double-baked compared to outer take",
-                peakFirstQuarter, peakMiddleHalf, 0.03f);
+        assertEquals("Outer take must stay dry", 0.20f, peakFirstQuarter, 0.03f);
+        assertEquals("Selected region must be baked exactly once (+6 dB)",
+                0.40f, peakMiddleHalf, 0.05f);
     }
 }
