@@ -57,6 +57,13 @@ final class BassAndTrebleProcessor extends AudioProcessor {
     }
 
     @Override
+    public boolean isAudible() {
+        if (!isEnabled()) return false;
+        if (bass.getCurrentRaw() != 0 || volume.getCurrentRaw() != 0) return true;
+        return !link.getBoolean() && treble.getCurrentRaw() != 0;
+    }
+
+    @Override
     public void processInPlace(float[] buf, int frames, int ch) {
         if (buf == null || frames <= 0) return;
         filter.setSections(buildSections(), channels);

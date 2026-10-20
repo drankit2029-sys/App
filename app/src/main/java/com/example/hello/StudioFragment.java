@@ -3006,6 +3006,8 @@ public class StudioFragment extends Fragment {
             pill.addView(body, bodyLp);
 
             final EqCurveView[] eqViewHolder = new EqCurveView[1];
+            final java.util.Map<String, TeleValue> extraControls =
+                    new java.util.LinkedHashMap<>();
             Runnable onSlotMutated = () -> {
                 dspBakedToRaw = false;
                 dspSubRangeBaked = false;
@@ -3014,6 +3016,14 @@ public class StudioFragment extends Fragment {
                 dspConfig.save(ctx);
                 if (livePreviewDsp != null) {
                     livePreviewDsp.updateConfig(dspConfig);
+                }
+                ctl.setValue(slot.value, false);
+                for (java.util.Map.Entry<String, TeleValue> entry
+                        : extraControls.entrySet()) {
+                    Integer v = slot.extraParams.get(entry.getKey());
+                    if (v != null) {
+                        entry.getValue().setValue(v, false);
+                    }
                 }
                 if (eqViewHolder[0] != null) {
                     eqViewHolder[0].invalidate();
@@ -3079,10 +3089,25 @@ public class StudioFragment extends Fragment {
                 paintFxPanelControls();
             });
 
+            java.util.function.IntConsumer syncPrimaryLinks = (int val) -> {
+                if (slot.type == DspChain.EffectType.NOTCH_FILTER) {
+                    Integer pIdx = slot.extraParams.get("preset");
+                    if (pIdx != null && ((pIdx == 1 && val != 50)
+                            || (pIdx == 2 && val != 60))) {
+                        slot.extraParams.put("preset", 0);
+                    }
+                } else if (slot.type == DspChain.EffectType.BASS_TREBLE) {
+                    Integer linkRaw = slot.extraParams.get("link");
+                    if (linkRaw != null && linkRaw != 0) {
+                        slot.extraParams.put("treble", val);
+                    }
+                }
+            };
             TeleValue.OnScrubListener scrub = new TeleValue.OnScrubListener() {
                 @Override
                 public void onScrubValueChanged(int value) {
                     slot.value = value;
+                    syncPrimaryLinks.accept(value);
                     boolean engages = slot.type.isLegacyStage()
                             ? (value > 0) : (value != slot.type.defaultVal);
                     if (!slot.enabled && engages) slot.enabled = true;
@@ -3092,6 +3117,7 @@ public class StudioFragment extends Fragment {
                 @Override
                 public void onScrubFinished(int value) {
                     slot.value = value;
+                    syncPrimaryLinks.accept(value);
                     boolean engages = slot.type.isLegacyStage()
                             ? (value > 0) : (value != slot.type.defaultVal);
                     if (!slot.enabled && engages) slot.enabled = true;
@@ -3102,6 +3128,7 @@ public class StudioFragment extends Fragment {
             ctl.setOnScrubListener(scrub);
             ctl.setOnValueChanged(val -> {
                 slot.value = val;
+                syncPrimaryLinks.accept(val);
                 boolean engages = slot.type.isLegacyStage()
                         ? (val > 0) : (val != slot.type.defaultVal);
                 if (!slot.enabled && engages) slot.enabled = true;
@@ -3225,7 +3252,12 @@ public class StudioFragment extends Fragment {
                         b.setText(param.name + ": "
                                 + (on ? "On" : "Off"));
                         b.setOnClickListener(v -> {
-                            slot.extraParams.put(param.id, on ? 0 : 1);
+                            boolean nextOn = !on;
+                            slot.extraParams.put(param.id, nextOn ? 1 : 0);
+                            if (nextOn && slot.type == DspChain.EffectType.BASS_TREBLE
+                                    && "link".equals(param.id)) {
+                                slot.extraParams.put("treble", slot.value);
+                            }
                             if (!slot.enabled) slot.enabled = true;
                             onSlotMutated.run();
                             rebuildFxRackList();
@@ -3246,6 +3278,11 @@ public class StudioFragment extends Fragment {
                         eChip.setOnClickListener(v -> {
                             int nextIdx = (curIdx + 1) % param.enumLabels.length;
                             slot.extraParams.put(param.id, nextIdx);
+                            if (slot.type == DspChain.EffectType.NOTCH_FILTER
+                                    && "preset".equals(param.id)) {
+                                if (nextIdx == 1) slot.value = 50;
+                                else if (nextIdx == 2) slot.value = 60;
+                            }
                             if (!slot.enabled) slot.enabled = true;
                             onSlotMutated.run();
                             rebuildFxRackList();
@@ -3279,36 +3316,41 @@ public class StudioFragment extends Fragment {
                                     ? slot.extraParams.get(param.id)
                                     : param.defaultRaw,
                             param.unit);
+                    extraControls.put(param.id, pc);
                     android.widget.LinearLayout.LayoutParams pcLp =
                             new android.widget.LinearLayout.LayoutParams(
                                     ViewGroup.LayoutParams.MATCH_PARENT,
                                     ViewGroup.LayoutParams.WRAP_CONTENT);
                     pcLp.topMargin = Math.round(4 * density);
                     body.addView(pc, pcLp);
+                    java.util.function.IntConsumer syncSecondaryLinks = (int value) -> {
+                        slot.extraParams.put(param.id, value);
+                        if (slot.type == DspChain.EffectType.BASS_TREBLE
+                                && "treble".equals(param.id)) {
+                            Integer linkRaw = slot.extraParams.get("link");
+                            if (linkRaw != null && linkRaw != 0) {
+                                slot.value = value;
+                            }
+                        }
+                        if (!slot.enabled && value != param.defaultRaw) {
+                            slot.enabled = true;
+                        }
+                    };
                     pc.setOnScrubListener(new TeleValue.OnScrubListener() {
                         @Override
                         public void onScrubValueChanged(int value) {
-                            slot.extraParams.put(param.id, value);
-                            if (!slot.enabled && value != param.defaultRaw) {
-                                slot.enabled = true;
-                            }
+                            syncSecondaryLinks.accept(value);
                             onSlotMutated.run();
                         }
 
                         @Override
                         public void onScrubFinished(int value) {
-                            slot.extraParams.put(param.id, value);
-                            if (!slot.enabled && value != param.defaultRaw) {
-                                slot.enabled = true;
-                            }
+                            syncSecondaryLinks.accept(value);
                             onSlotMutated.run();
                         }
                     });
                     pc.setOnValueChanged(val -> {
-                        slot.extraParams.put(param.id, val);
-                        if (!slot.enabled && val != param.defaultRaw) {
-                            slot.enabled = true;
-                        }
+                        syncSecondaryLinks.accept(val);
                         onSlotMutated.run();
                     });
                 }
@@ -3526,7 +3568,26 @@ public class StudioFragment extends Fragment {
         boolean hadSel = waveform.hasSelection();
         File raw = engine.rawFile;
         if (raw == null || !raw.exists() || waveform == null) return false;
+        if (!hadSel && dspBakedToRaw && !dspSubRangeBaked) {
+            Toast.makeText(requireContext(),
+                    "Effects already applied to entire take (tap Undo or adjust a parameter first)",
+                    Toast.LENGTH_SHORT).show();
+            return false;
+        }
         try {
+            EditEngine.UndoJournal uj = activeUndoJournal();
+            // If a sub-selection was just baked with this exact rack and the
+            // user now taps "Apply to Entire Take", restore the pre-sub-bake
+            // snapshot first so the previously selected region is not baked
+            // twice!
+            if (!hadSel && dspSubRangeBaked && uj != null && uj.canUndo()) {
+                if (uj.undo(raw)) {
+                    waveform.popUndoPeaks();
+                    engine.dataBytes = RecordingEngine.payloadBytesOf(raw);
+                    dspBakedToRaw = false;
+                    dspSubRangeBaked = false;
+                }
+            }
             FormatConverter.WavInfo info = FormatConverter.readFloatWav(raw);
             long totalFrames = info.dataBytes / 4 / Math.max(1, info.channels);
             if (totalFrames <= 0) return false;
@@ -3544,7 +3605,7 @@ public class StudioFragment extends Fragment {
             }
             waveform.recordUndoPeaks();
             DspChain chain = new DspChain(info.channels, dspConfig);
-            EditEngine.applyDspToRange(raw, start, end, chain, activeUndoJournal());
+            EditEngine.applyDspToRange(raw, start, end, chain, uj);
             // The raw now carries the chain for the applied range: the
             // incremental pump must not keep encoding unprocessed audio, and
             // neither preview nor save may process these samples a second time.

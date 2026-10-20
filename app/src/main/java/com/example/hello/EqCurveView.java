@@ -52,12 +52,12 @@ abstract class EqCurveView extends View {
     @Override
     protected void onAttachedToWindow() {
         super.onAttachedToWindow();
-        FxTelemetry.setEnabled(true);
+        FxTelemetry.attachView();
     }
 
     @Override
     protected void onDetachedFromWindow() {
-        FxTelemetry.setEnabled(false);
+        FxTelemetry.detachView();
         super.onDetachedFromWindow();
     }
 
@@ -143,6 +143,9 @@ abstract class EqCurveView extends View {
         sp.lineTo(w, h);
         sp.close();
         canvas.drawPath(sp, spectrumFill);
+        if (FxTelemetry.isEnabled()) {
+            postInvalidateDelayed(33);
+        }
     }
 
     private void drawCurve(Canvas canvas, int w, int h) {

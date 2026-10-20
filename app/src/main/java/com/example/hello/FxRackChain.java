@@ -193,6 +193,20 @@ public final class FxRackChain {
         return max;
     }
 
+    /** Total algorithmic latency (frames) summed across active processors. */
+    public int getLatencyFrames() {
+        int total = 0;
+        for (AudioProcessor p : processors) {
+            if (!p.isEnabled() || p.isOfflineOnly() || !p.isAudible()) continue;
+            if (p.getWetDryMix() <= 0.0f && !(p instanceof LegacyLimiterProcessor
+                    && ((LegacyLimiterProcessor) p).isSafetyOn())) {
+                continue;
+            }
+            total += Math.max(0, p.getLatencyFrames());
+        }
+        return total;
+    }
+
     /**
      * Runs every enabled, audible processor in rack order. A processor at
      * full mix is applied in place; a partial mix is applied to a scratch
@@ -235,7 +249,7 @@ public final class FxRackChain {
                 }
             } else {
                 float mix = p.getWetDryMix();
-                if (mix >= 1.0f) {
+                if (mix >= 1.0f || (mix > 0.0f && p.handlesOwnWetDryMix())) {
                     p.processInPlace(buf, frames, channels);
                 } else if (mix > 0.0f) {
                     if (scratch.length < buf.length) {

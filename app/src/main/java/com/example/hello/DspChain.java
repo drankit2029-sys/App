@@ -870,6 +870,11 @@ public final class DspChain {
         rack.reset();
     }
 
+    /** Total algorithmic latency (frames) of the active rack. */
+    public int getLatencyFrames() {
+        return rack.getLatencyFrames();
+    }
+
     public void processInPlace(float[] buf, int frames) {
         rack.processInPlace(buf, frames);
     }

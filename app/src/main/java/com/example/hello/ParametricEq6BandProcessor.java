@@ -91,6 +91,11 @@ final class ParametricEq6BandProcessor extends AudioProcessor {
     }
 
     @Override
+    public boolean isAudible() {
+        return isEnabled() && buildSections().length > 0;
+    }
+
+    @Override
     public void processInPlace(float[] buf, int frames, int ch) {
         if (buf == null || frames <= 0) return;
         filter.setSections(buildSections(), channels);
@@ -102,7 +107,7 @@ final class ParametricEq6BandProcessor extends AudioProcessor {
         double sr = sampleRate;
         List<float[]> secs = new ArrayList<>();
         int lowN = orderForSlope(b1s.getEnumIndex());
-        if (b1f.getCurrentRaw() > 20 || lowN > 0) {
+        if (b1f.getCurrentRaw() > 20) {
             for (float[] s : Dsp.butterworth(lowN, sr, b1f.getFloat(), true)) {
                 secs.add(s);
             }

@@ -51,6 +51,24 @@ public abstract class AudioProcessor {
         return 0;
     }
 
+    /**
+     * Algorithmic group delay / lookahead latency in frames (e.g. {@code taps / 2}
+     * for linear-phase FIR filters). Offline range commits shift and drain by
+     * this offset so processed audio stays sample-aligned with dry boundaries.
+     */
+    public int getLatencyFrames() {
+        return 0;
+    }
+
+    /**
+     * True when the processor blends its own {@link #getWetDryMix()} internally
+     * (e.g. phase-aligned linear-phase FIR blending) so {@link FxRackChain}
+     * does not blend undelayed dry samples against delayed wet samples.
+     */
+    public boolean handlesOwnWetDryMix() {
+        return false;
+    }
+
     public boolean isEnabled() {
         return enabled;
     }

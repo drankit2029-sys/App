@@ -8,6 +8,19 @@ import java.util.Locale;
  * runs through a uniform overlap-add FFT convolution (block 256). Node
  * geometry persists per slot through {@code extraParams} (npts, pf#, pg#),
  * so it survives rack save/load without bespoke serialization.
+ *
+ * <p>Fixes BUG-01 &amp; BUG-02:
+ * <ul>
+ *   <li>Reports its exact linear-phase group delay ({@code taps / 2} frames) via
+ *       {@link #getLatencyFrames()} so offline bakes align and drain the FIR
+ *       without leading silence or tail truncation.</li>
+ *   <li>Blends {@link #getWetDryMix()} phase-coherently inside the linear-phase
+ *       target magnitude ({@code (1 - mix) + mix * wetMag}) and overrides
+ *       {@link #handlesOwnWetDryMix()} so partial wet/dry mixes never comb-filter
+ *       against an undelayed dry copy.</li>
+ *   <li>Spaced default frequencies across all 32 nodes so nodes 8..31 never
+ *       collide at 16 kHz.</li>
+ * </ul>
  */
 final class FilterCurveEqProcessor extends AudioProcessor {
 
@@ -51,11 +64,16 @@ final class FilterCurveEqProcessor extends AudioProcessor {
 
     /**
      * Default node layout: the first eight nodes (the default point count)
-     * span 40 Hz to 16 kHz; additional nodes start at 16 kHz and are placed
-     * by dragging in the editor.
+     * span 40 Hz to 16 kHz logarithmically; additional nodes (8..31) are
+     * strictly increasing from 16,167 Hz up to 20,000 Hz so every node has a
+     * unique default frequency and drag bounds never invert.
      */
     static double defaultFreq(int index) {
-        return Math.round(40.0 * Math.pow(400.0, Math.min(index, 7) / 7.0));
+        if (index <= 7) {
+            return Math.round(40.0 * Math.pow(400.0, Math.max(0, index) / 7.0));
+        }
+        int clamped = Math.min(index, MAX_NODES - 1);
+        return Math.round(16000.0 + (4000.0 * (clamped - 7)) / (MAX_NODES - 8));
     }
 
     @Override
@@ -79,6 +97,32 @@ final class FilterCurveEqProcessor extends AudioProcessor {
     }
 
     @Override
+    public boolean handlesOwnWetDryMix() {
+        return true;
+    }
+
+    @Override
+    public int getLatencyFrames() {
+        return isAudible() ? tapsForIndex(tapsSel.getEnumIndex()) / 2 : 0;
+    }
+
+    @Override
+    public int getTailFrames() {
+        return getLatencyFrames();
+    }
+
+    @Override
+    public boolean isAudible() {
+        if (!isEnabled() || getWetDryMix() <= 0.001f) return false;
+        if (out.getCurrentRaw() != 0) return true;
+        int n = Math.max(2, Math.min(MAX_NODES, npts.getCurrentRaw()));
+        for (int i = 0; i < n; i++) {
+            if (nodeGain[i].getCurrentRaw() != 0) return true;
+        }
+        return false;
+    }
+
+    @Override
     public void prepare(int sr, int ch) {
         sampleRate = Math.max(8000, sr);
         channels = Math.max(1, Math.min(2, ch));
@@ -97,15 +141,11 @@ final class FilterCurveEqProcessor extends AudioProcessor {
     @Override
     public void processInPlace(float[] buf, int frames, int ch) {
         if (buf == null || frames <= 0) return;
+        float mix = getWetDryMix();
+        if (mix <= 0.001f || !isAudible()) return;
         rebuild();
         int c = Math.max(1, Math.min(2, ch));
         offset256(buf, frames, c);
-        float g = Dsp.dbToLin(out.getFloat());
-        if (g != 1.0f) {
-            float[] gain = {g, 0f, 0f, 0f, 0f};
-            outputGain.setSections(new float[][]{gain}, c);
-            outputGain.process(buf, frames, c);
-        }
     }
 
     private void rebuild() {
@@ -120,7 +160,7 @@ final class FilterCurveEqProcessor extends AudioProcessor {
             nodes[i][1] = nodeGain[i].getFloat();
         }
         sortNodes(nodes);
-        designFir(nodes, taps);
+        designFir(nodes, taps, getWetDryMix(), out.getFloat());
         installCarry();
     }
 
@@ -130,7 +170,10 @@ final class FilterCurveEqProcessor extends AudioProcessor {
         h = h * 31 + channels;
         h = h * 31 + npts.getCurrentRaw();
         h = h * 31 + tapsSel.getCurrentRaw();
-        for (int i = 0; i < MAX_NODES; i++) {
+        h = h * 31 + out.getCurrentRaw();
+        h = h * 31 + Math.round(getWetDryMix() * 1000f);
+        int n = Math.max(2, Math.min(MAX_NODES, npts.getCurrentRaw()));
+        for (int i = 0; i < n; i++) {
             h = h * 31 + nodeFreq[i].getCurrentRaw();
             h = h * 31 + nodeGain[i].getCurrentRaw();
         }
@@ -149,27 +192,34 @@ final class FilterCurveEqProcessor extends AudioProcessor {
         }
     }
 
-    /** Builds the windowed impulse response via inverse FFT of the curve. */
-    private void designFir(double[][] nodes, int taps) {
+    /**
+     * Builds the windowed impulse response via inverse FFT of the curve,
+     * blending wet/dry phase-coherently at the identical linear-phase center
+     * ({@code taps / 2}) so partial mixes never comb-filter.
+     */
+    private void designFir(double[][] nodes, int taps, float mix, float outDb) {
         int size = 2;
         while (size < BLOCK + taps - 1) size <<= 1;
         fftSize = size;
         float[] re = new float[size];
         float[] im = new float[size];
         int half = size / 2;
+        float w = Math.max(0f, Math.min(1f, mix));
+        float d = 1f - w;
         for (int k = 0; k <= half; k++) {
             double f = k * (double) sampleRate / size;
-            double db = curveDbAt(nodes, f);
-            float mag = Dsp.dbToLin(db);
+            double db = curveDbAt(nodes, f) + outDb;
+            float wetMag = Dsp.dbToLin(db);
+            float mag = d + w * wetMag;
             re[k] = mag;
             if (k > 0 && k < half) re[size - k] = mag;
         }
         Dsp.fft(re, im, true);
-        float[] w = Dsp.blackmanWindow(taps);
+        float[] win = Dsp.blackmanWindow(taps);
         ir = new float[taps];
         for (int t = 0; t < taps; t++) {
             int src = ((t - taps / 2) % size + size) % size;
-            ir[t] = re[src] * w[t];
+            ir[t] = re[src] * win[t];
         }
         if (hRe.length != size) {
             hRe = new float[size];
@@ -191,8 +241,9 @@ final class FilterCurveEqProcessor extends AudioProcessor {
         for (int i = 0; i < last; i++) {
             double f0 = nodes[i][0], f1 = nodes[i + 1][0];
             if (f >= f0 && f <= f1) {
-                double t = (Math.log(f) - Math.log(f0))
-                        / Math.max(1e-9, Math.log(f1) - Math.log(f0));
+                double denom = Math.log(f1) - Math.log(f0);
+                if (Math.abs(denom) < 1e-9) return nodes[i + 1][1];
+                double t = (Math.log(f) - Math.log(f0)) / denom;
                 return nodes[i][1] + t * (nodes[i + 1][1] - nodes[i][1]);
             }
         }
@@ -230,9 +281,6 @@ final class FilterCurveEqProcessor extends AudioProcessor {
                 for (int f = 0; f < blk; f++) {
                     buf[(off + f) * c + chn] = inRe[f] + cr[f];
                 }
-                // Shift the pending tail down by this block's length and add
-                // the fresh tail: overwriting would drop earlier blocks'
-                // overlap-add residue and silence the filter.
                 int keep = fftSize - BLOCK;
                 for (int j = 0; j < keep; j++) {
                     int m = j + blk;

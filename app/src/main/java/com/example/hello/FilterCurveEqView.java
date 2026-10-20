@@ -38,6 +38,15 @@ final class FilterCurveEqView extends EqCurveView {
             nodes[i][0] = extra("pf" + i, (int) FilterCurveEqProcessor.defaultFreq(i));
             nodes[i][1] = extra("pg" + i, 0) / 100.0;
         }
+        for (int i = 1; i < n; i++) {
+            double[] v = nodes[i];
+            int j = i - 1;
+            while (j >= 0 && nodes[j][0] > v[0]) {
+                nodes[j + 1] = nodes[j];
+                j--;
+            }
+            nodes[j + 1] = v;
+        }
         return nodes;
     }
 
@@ -117,6 +126,7 @@ final class FilterCurveEqView extends EqCurveView {
                 double lo = active > 0 ? nodes[active - 1][0] + 1 : F_MIN;
                 double hi = active < nodes.length - 1
                         ? nodes[active + 1][0] - 1 : F_MAX;
+                if (hi < lo) hi = lo;
                 double f = Math.max(lo, Math.min(hi, freqForX(e.getX(), w)));
                 double g = dbForY(e.getY(), h);
                 nodes[active][0] = f;

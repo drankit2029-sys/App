@@ -435,6 +435,7 @@ public final class EditEngine {
         if (undo != null) undo.recordSnapshot(raw);
 
         chain.reset();
+        final int latencyFrames = Math.max(0, chain.getLatencyFrames());
         long frameBytes = ch * 4L;
         // Never let the fades eat more than half of a very short range, and
         // only crossfade at INTERIOR splices: at the file edges (startFrame 0
@@ -445,17 +446,7 @@ public final class EditEngine {
         int tailFade = (endFrame < totalFrames) ? maxFade : 0;
 
         try (RandomAccessFile raf = new RandomAccessFile(raw, "rw")) {
-            // Pre-roll warm-up over up to 240 frames before startFrame so
-            // filter states and envelope followers settle before the splice.
-            int preRoll = (int) Math.min(Dsp.CROSSFADE_FRAMES, startFrame);
-            if (preRoll > 0) {
-                float[] warm = readFloatFrames(raf,
-                        info.dataStart + (startFrame - preRoll) * frameBytes,
-                        preRoll, ch);
-                chain.processInPlace(warm, preRoll);
-            }
-
-            // Snapshot dry boundary frames for the raised-cosine crossfades.
+            // Snapshot dry boundary frames BEFORE writing anything in-place.
             float[] origHead = headFade > 0
                     ? readFloatFrames(raf,
                             info.dataStart + startFrame * frameBytes,
@@ -467,11 +458,59 @@ public final class EditEngine {
                             tailFade, ch)
                     : null;
 
-            // Stream [startFrame, endFrame) in 4096-frame chunks. Both seam
-            // blends index the ORIGINAL buffers by GLOBAL frame offset so a
-            // fade that straddles a chunk boundary keeps applying on the next
-            // chunk instead of being dropped (or, for the head, re-applied
-            // from frame 0 on every subsequent chunk).
+            // Pre-roll warm-up over up to 240 frames before startFrame so
+            // minimum-phase biquad states and envelope followers settle before
+            // the splice.
+            int preRoll = (int) Math.min(Dsp.CROSSFADE_FRAMES, startFrame);
+            if (preRoll > 0) {
+                float[] warm = readFloatFrames(raf,
+                        info.dataStart + (startFrame - preRoll) * frameBytes,
+                        preRoll, ch);
+                chain.processInPlace(warm, preRoll);
+            }
+
+            // If the chain has linear-phase FIR latency (e.g. FilterCurveEqProcessor
+            // with group delay = taps / 2), prime the pipeline with the first
+            // `latencyFrames` of the selection so output frame 0 aligns with
+            // input `startFrame`, and snapshot up to `latencyFrames` of post-
+            // selection lookahead (or zero-pad at EOF) before in-place writes.
+            float[] postContext = null;
+            int postContextFrames = 0;
+            if (latencyFrames > 0) {
+                postContextFrames = (int) Math.min(latencyFrames,
+                        Math.max(0L, totalFrames - endFrame));
+                if (postContextFrames > 0) {
+                    postContext = readFloatFrames(raf,
+                            info.dataStart + endFrame * frameBytes,
+                            postContextFrames, ch);
+                }
+                int primeRemaining = latencyFrames;
+                long primePos = startFrame;
+                int primeChunk = 1024;
+                float[] primeBuf = new float[primeChunk * ch];
+                while (primeRemaining > 0) {
+                    int step = Math.min(primeChunk, primeRemaining);
+                    int avail = (int) Math.max(0L,
+                            Math.min((long) step, endFrame - primePos));
+                    if (avail > 0) {
+                        float[] tmp = readFloatFrames(raf,
+                                info.dataStart + primePos * frameBytes,
+                                avail, ch);
+                        System.arraycopy(tmp, 0, primeBuf, 0, avail * ch);
+                    }
+                    if (avail < step) {
+                        java.util.Arrays.fill(primeBuf, avail * ch, step * ch, 0f);
+                    }
+                    chain.processInPlace(primeBuf, step);
+                    primePos += avail;
+                    primeRemaining -= step;
+                }
+            }
+
+            // Stream [startFrame, endFrame) in 4096-frame chunks. When
+            // latencyFrames > 0, each chunk reads input from `cur + latencyFrames`
+            // (falling back to `postContext` or zero-padding past `endFrame`)
+            // and writes the latency-compensated output at `cur`.
             int chunkFrames = 4096;
             byte[] rawBuf = new byte[chunkFrames * ch * 4];
             float[] fBuf = new float[chunkFrames * ch];
@@ -481,12 +520,28 @@ public final class EditEngine {
             long tailFadeStartFrame = endFrame - tailFade;
             while (cur < endFrame) {
                 int want = (int) Math.min(chunkFrames, endFrame - cur);
-                long pos = info.dataStart + cur * frameBytes;
-                raf.seek(pos);
-                raf.readFully(rawBuf, 0, want * ch * 4);
-                bb.clear();
-                bb.limit(want * ch * 4);
-                bb.asFloatBuffer().get(fBuf, 0, want * ch);
+                long inStart = cur + latencyFrames;
+                int fromFile = (int) Math.max(0L,
+                        Math.min((long) want, endFrame - inStart));
+                if (fromFile > 0) {
+                    raf.seek(info.dataStart + inStart * frameBytes);
+                    raf.readFully(rawBuf, 0, fromFile * ch * 4);
+                    bb.clear();
+                    bb.limit(fromFile * ch * 4);
+                    bb.asFloatBuffer().get(fBuf, 0, fromFile * ch);
+                }
+                if (fromFile < want) {
+                    for (int f = fromFile; f < want; f++) {
+                        long absFrame = inStart + f;
+                        long postIdx = absFrame - endFrame;
+                        for (int c = 0; c < ch; c++) {
+                            fBuf[f * ch + c] = (postContext != null
+                                    && postIdx >= 0 && postIdx < postContextFrames)
+                                    ? postContext[(int) postIdx * ch + c]
+                                    : 0f;
+                        }
+                    }
+                }
 
                 chain.processInPlace(fBuf, want);
 
@@ -527,9 +582,10 @@ public final class EditEngine {
                     }
                 }
 
+                long outPos = info.dataStart + cur * frameBytes;
                 bb.clear();
                 bb.asFloatBuffer().put(fBuf, 0, want * ch);
-                raf.seek(pos);
+                raf.seek(outPos);
                 raf.write(rawBuf, 0, want * ch * 4);
                 cur += want;
             }
