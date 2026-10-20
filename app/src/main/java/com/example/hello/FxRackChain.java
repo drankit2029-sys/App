@@ -36,13 +36,13 @@ public final class FxRackChain {
     };
 
     static {
-        register("hpf", LegacyHpfProcessor::new);
+        register("hpf", ProHpfProcessor::new);
         register("noise", NoiseSuppressionProcessor::new);
-        register("gate", LegacyGateProcessor::new);
-        register("tone", LegacyToneProcessor::new);
-        register("deess", LegacyDeEsserProcessor::new);
-        register("comp", LegacyCompressorProcessor::new);
-        register("limiter", LegacyLimiterProcessor::new);
+        register("gate", ProGateProcessor::new);
+        register("tone", ProToneProcessor::new);
+        register("deess", ProDeEsserProcessor::new);
+        register("comp", ProCompressorProcessor::new);
+        register("limiter", ProLimiterProcessor::new);
         // Stage 3 EQ & filter suite.
         register("eq6", ParametricEq6BandProcessor::new);
         register("geq", GraphicEqProcessor::new);
@@ -101,8 +101,8 @@ public final class FxRackChain {
      * Non-null when both {@link DspChain.EffectType#WARMTH_BODY} and
      * {@link DspChain.EffectType#VOCAL_PRESENCE} are enabled and separated by
      * at least one other enabled processor in {@code cfg.slots}. When null
-     * (the default/adjacent case), {@link LegacyToneProcessor} runs both in
-     * its single combined pass for 100% bit-identical legacy output.
+     * (the default/adjacent case), {@link ProToneProcessor} runs both in
+     * its single combined shelf pass, so warmth and presence stay in one slot.
      */
     private DspChain.EffectType splitToneFirstType = null;
     private String splitToneAfterProcessorId = null;
@@ -198,8 +198,8 @@ public final class FxRackChain {
         int total = 0;
         for (AudioProcessor p : processors) {
             if (!p.isEnabled() || p.isOfflineOnly() || !p.isAudible()) continue;
-            if (p.getWetDryMix() <= 0.0f && !(p instanceof LegacyLimiterProcessor
-                    && ((LegacyLimiterProcessor) p).isSafetyOn())) {
+            if (p.getWetDryMix() <= 0.0f && !(p instanceof ProLimiterProcessor
+                    && ((ProLimiterProcessor) p).isSafetyOn())) {
                 continue;
             }
             total += Math.max(0, p.getLatencyFrames());
@@ -222,16 +222,16 @@ public final class FxRackChain {
         if (n > buf.length) n = buf.length;
         final DspChain.EffectType firstTone = this.splitToneFirstType;
         final String splitAfterId = this.splitToneAfterProcessorId;
-        LegacyToneProcessor toneProcRef = null;
-        LegacyLimiterProcessor safetyLimRef = null;
+        ProToneProcessor toneProcRef = null;
+        ProLimiterProcessor safetyLimRef = null;
         if (firstTone != null && splitAfterId != null) {
             int ti = indexOf("tone");
-            if (ti >= 0 && processors.get(ti) instanceof LegacyToneProcessor) {
-                toneProcRef = (LegacyToneProcessor) processors.get(ti);
+            if (ti >= 0 && processors.get(ti) instanceof ProToneProcessor) {
+                toneProcRef = (ProToneProcessor) processors.get(ti);
             }
             int li = indexOf("limiter");
-            if (li >= 0 && processors.get(li) instanceof LegacyLimiterProcessor) {
-                safetyLimRef = (LegacyLimiterProcessor) processors.get(li);
+            if (li >= 0 && processors.get(li) instanceof ProLimiterProcessor) {
+                safetyLimRef = (ProLimiterProcessor) processors.get(li);
             }
         }
 
@@ -262,14 +262,14 @@ public final class FxRackChain {
                     for (int i = 0; i < n; i++) {
                         buf[i] = buf[i] * d + scratch[i] * w;
                     }
-                    if (p instanceof LegacyLimiterProcessor
-                            && ((LegacyLimiterProcessor) p).isSafetyOn()) {
-                        ((LegacyLimiterProcessor) p).enforceSafetyCeiling(
+                    if (p instanceof ProLimiterProcessor
+                            && ((ProLimiterProcessor) p).isSafetyOn()) {
+                        ((ProLimiterProcessor) p).enforceSafetyCeiling(
                                 buf, frames, channels);
                     }
-                } else if (p instanceof LegacyLimiterProcessor
-                        && ((LegacyLimiterProcessor) p).isSafetyOn()) {
-                    ((LegacyLimiterProcessor) p).enforceSafetyCeiling(
+                } else if (p instanceof ProLimiterProcessor
+                        && ((ProLimiterProcessor) p).isSafetyOn()) {
+                    ((ProLimiterProcessor) p).enforceSafetyCeiling(
                             buf, frames, channels);
                 }
             }
@@ -337,13 +337,13 @@ public final class FxRackChain {
      */
     public static FxRackChain fromLegacyConfig(int channels, DspChain.Config cfg) {
         FxRackChain rack = new FxRackChain(channels);
-        LegacyHpfProcessor hpf = new LegacyHpfProcessor();
+        ProHpfProcessor hpf = new ProHpfProcessor();
         NoiseSuppressionProcessor noise = new NoiseSuppressionProcessor();
-        LegacyGateProcessor gate = new LegacyGateProcessor();
-        LegacyToneProcessor tone = new LegacyToneProcessor();
-        LegacyDeEsserProcessor deess = new LegacyDeEsserProcessor();
-        LegacyCompressorProcessor comp = new LegacyCompressorProcessor();
-        LegacyLimiterProcessor limiter = new LegacyLimiterProcessor();
+        ProGateProcessor gate = new ProGateProcessor();
+        ProToneProcessor tone = new ProToneProcessor();
+        ProDeEsserProcessor deess = new ProDeEsserProcessor();
+        ProCompressorProcessor comp = new ProCompressorProcessor();
+        ProLimiterProcessor limiter = new ProLimiterProcessor();
         rack.addProcessor(hpf);
         rack.addProcessor(noise);
         rack.addProcessor(gate);
@@ -482,31 +482,31 @@ public final class FxRackChain {
         cfg.syncLegacyFieldsFromSlots();
         syncOrderFromSlots(cfg);
         for (AudioProcessor p : processors) {
-            if (p instanceof LegacyHpfProcessor) {
-                ((LegacyHpfProcessor) p).setLegacyState(
+            if (p instanceof ProHpfProcessor) {
+                ((ProHpfProcessor) p).setLegacyState(
                         cfg.hpfEnabled, cfg.hpfCutoffHz);
             } else if (p instanceof NoiseSuppressionProcessor) {
                 ((NoiseSuppressionProcessor) p).setLegacyAmount(cfg.noisePct);
                 p.setEnabled(cfg.noisePct > 0);
-            } else if (p instanceof LegacyGateProcessor) {
-                ((LegacyGateProcessor) p).setLegacyAmount(cfg.gatePct);
+            } else if (p instanceof ProGateProcessor) {
+                ((ProGateProcessor) p).setLegacyAmount(cfg.gatePct);
                 p.setEnabled(cfg.gatePct > 0);
-            } else if (p instanceof LegacyToneProcessor) {
-                ((LegacyToneProcessor) p).setLegacyAmounts(
+            } else if (p instanceof ProToneProcessor) {
+                ((ProToneProcessor) p).setLegacyAmounts(
                         cfg.warmthPct, cfg.presencePct);
                 p.setEnabled(cfg.warmthPct > 0 || cfg.presencePct > 0);
-            } else if (p instanceof LegacyDeEsserProcessor) {
-                ((LegacyDeEsserProcessor) p).setLegacyAmount(cfg.deEssPct);
+            } else if (p instanceof ProDeEsserProcessor) {
+                ((ProDeEsserProcessor) p).setLegacyAmount(cfg.deEssPct);
                 p.setEnabled(cfg.deEssPct > 0);
-            } else if (p instanceof LegacyCompressorProcessor) {
-                ((LegacyCompressorProcessor) p).setLegacyAmount(cfg.compPct);
+            } else if (p instanceof ProCompressorProcessor) {
+                ((ProCompressorProcessor) p).setLegacyAmount(cfg.compPct);
                 p.setEnabled(cfg.compPct > 0);
-            } else if (p instanceof LegacyLimiterProcessor) {
+            } else if (p instanceof ProLimiterProcessor) {
                 // The limiter doubles as the safety ceiling for every
                 // gain-producing stage, exactly as the original engine did.
                 boolean safety = cfg.compPct > 0 || cfg.warmthPct > 0
                         || cfg.presencePct > 0;
-                ((LegacyLimiterProcessor) p).setLegacyState(
+                ((ProLimiterProcessor) p).setLegacyState(
                         cfg.limiterPct, safety);
                 p.setEnabled(cfg.limiterPct > 0 || safety);
             }

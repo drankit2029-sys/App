@@ -3413,6 +3413,12 @@ public class StudioFragment extends Fragment {
             if (meta != null) {
                 for (FxParameter param : meta.getParameters()) {
                     if (isPrimaryFxParam(slot.type, param.id)) continue;
+                    // The warmth and presence cards share one tone processor;
+                    // each card only edits its own corner frequency.
+                    if (slot.type == DspChain.EffectType.WARMTH_BODY
+                            && "presence_freq".equals(param.id)) continue;
+                    if (slot.type == DspChain.EffectType.VOCAL_PRESENCE
+                            && "warmth_freq".equals(param.id)) continue;
                     // Curve editors own these params: graphic bands and
                     // filter-curve nodes are dragged on the canvas instead.
                     if (slot.type == DspChain.EffectType.GRAPHIC_EQ
