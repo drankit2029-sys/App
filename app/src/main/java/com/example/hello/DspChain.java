@@ -20,8 +20,9 @@ import java.util.Map;
  * &lt;ol&gt;
  *   &lt;li&gt;&lt;b&gt;Low-Cut Filter (40–160 Hz)&lt;/b&gt;: Dynamic 2nd-order Butterworth HPF
  *       whose biquad coefficients recompute live from the user's Hz setting.</li>
- *   &lt;li&gt;&lt;b&gt;Noise Suppression (0–100%)&lt;/b&gt;: 3-band adaptive Wiener floor gate
- *       with instant first-block noise calibration and up to -24 dB cut.</li>
+ *   &lt;li&gt;&lt;b&gt;Noise Suppression Pro (0–100%)&lt;/b&gt;: latency-compensated STFT
+ *       spectral subtraction against a noise profile learned from a selected
+ *       noise-only region (adaptive per-bin fallback when no profile exists).</li>
  *   &lt;li&gt;&lt;b&gt;Expander / Room Gate (0–100%)&lt;/b&gt;: Dedicated downward expander that
  *       attenuates room noise and breaths below threshold (-52..-18 dBFS).</li>
  *   &lt;li&gt;&lt;b&gt;Warmth &amp; Chest Body (0–100%)&lt;/b&gt;: 180 Hz low-mid contour boost (up
@@ -43,8 +44,8 @@ public final class DspChain {
 
     /** Catalog of available effects for the searchable "+ Add Effect" menu. */
     public enum EffectType {
-        NOISE_SUPPRESSION("noise", "Noise Suppression",
-                "3-band adaptive floor gate for hiss & background hum",
+        NOISE_SUPPRESSION("noise", "Noise Suppression Pro",
+                "Learned-profile spectral denoiser: analyze a noise-only selection, then apply",
                 "Intensity", 0, 100, 5, 50, "%"),
         DE_ESSER("deess", "De-Esser (4.5–9.5 kHz)",
                 "Split-band sibilance control for harsh 'S' & 'T' sounds",
@@ -186,6 +187,12 @@ public final class DspChain {
          * only their primary knob, so this stays empty for them).
          */
         public final Map<String, Integer> extraParams = new LinkedHashMap<>();
+        /**
+         * Learned noise power spectrum (linear, one value per FFT bin) for the
+         * Noise Suppression Pro stage; null means adaptive estimation. Captured
+         * from a noise-only waveform selection and persisted with the slot.
+         */
+        public float[] noiseProfile;
 
         public EffectSlot(EffectType type, boolean enabled, int value, boolean expanded) {
             this.type = type;
@@ -668,6 +675,8 @@ public final class DspChain {
                                 slot.extraParams.put(k, pj.optInt(k));
                             }
                         }
+                        slot.noiseProfile = NoiseSuppressionProcessor
+                                .profileFromJson(o.optJSONArray("prof"));
                         c.slots.add(slot);
                     }
                     c.syncLegacyFieldsFromSlots();
@@ -708,6 +717,10 @@ public final class DspChain {
                             p.put(e.getKey(), e.getValue());
                         }
                         o.put("params", p);
+                    }
+                    if (s.noiseProfile != null && s.noiseProfile.length > 0) {
+                        o.put("prof", NoiseSuppressionProcessor
+                                .profileToJson(s.noiseProfile));
                     }
                     arr.put(o);
                 }
@@ -802,6 +815,9 @@ public final class DspChain {
     private void resetProcessorSlotExtras() {
         for (AudioProcessor p : rack.processors()) {
             p.setWetDryMix(1.0f);
+            if (p instanceof NoiseSuppressionProcessor) {
+                ((NoiseSuppressionProcessor) p).setNoiseProfile(null);
+            }
             for (FxParameter fp : p.getParameters()) {
                 if (!isPrimaryLegacyParam(fp.id)
                         && !isStage3PrimaryParam(p.getId(), fp.id)) {
@@ -848,6 +864,11 @@ public final class DspChain {
                 // stages; keep its mix at 100% when disabled so an unchecked
                 // slot's mix never weakens safety limiting.
                 p.setWetDryMix(s.wetDry);
+            }
+            if (s.type == EffectType.NOISE_SUPPRESSION
+                    && p instanceof NoiseSuppressionProcessor) {
+                ((NoiseSuppressionProcessor) p).setNoiseProfile(
+                        s.noiseProfile);
             }
             if (!s.type.isLegacyStage()) {
                 p.setEnabled(s.enabled);

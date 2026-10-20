@@ -1,0 +1,191 @@
+name: Parallel Verify
+
+on:
+  workflow_dispatch:
+    inputs:
+      device_tests:
+        description: 'Run emulator instrumentation tests'
+        type: boolean
+        default: false
+  push:
+    branches-ignore: [master, main]
+    paths:
+      - 'app/src/**'
+      - 'app/build.gradle*'
+      - 'gradle/**'
+      - '.github/workflows/verify.yml'
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+      - name: Setup Android SDK packages
+        run: |
+          sdkmanager --install "platforms;android-35" "build-tools;35.0.0" || true
+          yes | sdkmanager --licenses || true
+      - name: Compile app, unit-test and instrumentation sources
+        run: |
+          chmod +x ./gradlew
+          ./gradlew :app:compileDebugJavaWithJavac \
+            :app:compileDebugUnitTestJavaWithJavac \
+            :app:compileDebugAndroidTestJavaWithJavac --stacktrace
+
+  unit-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+      - name: Setup Android SDK packages
+        run: |
+          sdkmanager --install "platforms;android-35" "build-tools;35.0.0" || true
+          yes | sdkmanager --licenses || true
+      - name: Run unit-test shard ${{ matrix.shard }}
+        env:
+          SHARD: ${{ matrix.shard }}
+          SHARDS: 6
+        run: |
+          chmod +x ./gradlew
+          FILTERS=$(python3 - <<'EOF'
+          import glob, hashlib, os
+          shard = int(os.environ['SHARD'])
+          shards = int(os.environ['SHARDS'])
+          classes = []
+          for path in sorted(glob.glob('app/src/test/java/com/example/hello/*Test.java')):
+              cls = 'com.example.hello.' + os.path.basename(path)[:-5]
+              if int(hashlib.md5(cls.encode()).hexdigest(), 16) % shards == shard:
+                  classes.append(cls)
+          print(' '.join('--tests ' + c for c in classes))
+          EOF
+          )
+          if [ -z "$FILTERS" ]; then FILTERS="--tests com.example.hello.DspTest"; fi
+          for i in 1 2 3; do
+            if eval ./gradlew testDebugUnitTest $FILTERS --stacktrace; then
+              echo "shard $SHARD passed on attempt $i"; exit 0
+            fi
+            echo "shard $SHARD failed on attempt $i; retrying"
+            sleep 15
+          done
+          exit 1
+      - name: Upload shard reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-reports-shard-${{ matrix.shard }}
+          path: app/build/reports/tests/testDebugUnitTest/
+          if-no-files-found: ignore
+
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+      - name: Setup Android SDK packages
+        run: |
+          sdkmanager --install "platforms;android-35" "build-tools;35.0.0" || true
+          yes | sdkmanager --licenses || true
+      - name: Run lint
+        run: |
+          chmod +x ./gradlew
+          ./gradlew lintDebug --stacktrace
+      - name: Print lint errors
+        if: failure()
+        run: |
+          python3 - <<'EOF'
+          import xml.etree.ElementTree as ET
+          t = ET.parse('app/build/reports/lint-results-debug.xml')
+          for issue in t.getroot().iter('issue'):
+              if issue.get('severity') == 'Error':
+                  print(issue.get('id'), '|', issue.get('message', '')[:160])
+                  for l in issue.iter('location'):
+                      print('   at', l.get('file', '') + ':' + l.get('line', '?'))
+          EOF
+      - name: Upload lint report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-report
+          path: |
+            app/build/reports/lint-results-debug.html
+            app/build/reports/lint-results-debug.xml
+          if-no-files-found: ignore
+
+  device-tests:
+    if: github.event_name == 'workflow_dispatch' && inputs.device_tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+      - name: Setup Android SDK packages
+        run: |
+          sdkmanager --install "platform-tools" "platforms;android-35" "build-tools;35.0.0" || true
+          yes | sdkmanager --licenses || true
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Run instrumentation tests on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: aosp_atd
+          arch: x86_64
+          profile: Nexus 6
+          disable-animations: true
+          emulator-options: -no-window -no-snapshot -gpu swiftshader_indirect -no-boot-anim -camera-back none
+          script: |
+            adb shell settings put global stay_on_while_plugged_in 3
+            chmod +x ./gradlew
+            ./gradlew :app:connectedDebugAndroidTest --stacktrace
+      - name: Summarise instrumentation results
+        if: always()
+        run: |
+          python3 - <<'EOF'
+          import glob, xml.etree.ElementTree as ET
+          total = failed = skipped = 0
+          for p in glob.glob('app/build/outputs/androidTest-results/connected/debug/*.xml'):
+              r = ET.parse(p).getroot()
+              total += int(r.get('tests', 0))
+              failed += int(r.get('failures', 0)) + int(r.get('errors', 0))
+              skipped += int(r.get('skipped', 0))
+              for tc in r.iter('testcase'):
+                  for x in list(tc):
+                      if x.tag in ('failure', 'error'):
+                          print('FAIL:', tc.get('classname', '').split('.')[-1],
+                                '::', tc.get('name'), '::', (x.get('message') or '')[:200])
+          print('device tests:', total, 'failures:', failed, 'skipped:', skipped)
+          EOF
+      - name: Upload instrumentation reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: device-test-reports
+          path: app/build/outputs/androidTest-results/connected/
+          if-no-files-found: ignore

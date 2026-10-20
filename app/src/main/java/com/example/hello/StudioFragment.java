@@ -2909,6 +2909,10 @@ public class StudioFragment extends Fragment {
             sb.append(slot.type.paramLabel).append(": ")
                     .append(slot.value).append(slot.type.unit);
         }
+        if (slot.type == DspChain.EffectType.NOISE_SUPPRESSION
+                && slot.noiseProfile != null) {
+            sb.append(" • Profile");
+        }
         boolean isTone = slot.type == DspChain.EffectType.WARMTH_BODY
                 || slot.type == DspChain.EffectType.VOCAL_PRESENCE;
         boolean mixActive = !isTone || cfg == null
@@ -2937,6 +2941,72 @@ public class StudioFragment extends Fragment {
         }
         sb.append(slot.expanded ? "  ▴" : "  ▾");
         return sb.toString();
+    }
+
+    /**
+     * Learns a spectral noise profile from the current waveform selection and
+     * stores it on the Noise Suppression Pro slot. The profile is persisted in
+     * the rack config, so Apply FX, live preview and later sessions all use the
+     * same learned floor.
+     */
+    private void learnNoiseProfile(DspChain.EffectSlot slot,
+                                   Runnable onSlotMutated) {
+        if (slot == null || !ensurePausedForEditing()) return;
+        if (waveform == null || !waveform.hasSelection()) {
+            Toast.makeText(requireContext(),
+                    "Select a noise-only region on the waveform first",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        File rawFile = engine.rawFile;
+        if (rawFile == null || !rawFile.exists()) {
+            Toast.makeText(requireContext(), "No editable audio yet",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        try {
+            FormatConverter.WavInfo info =
+                    FormatConverter.readFloatWav(rawFile);
+            long totalFrames = info.dataBytes / 4
+                    / Math.max(1, info.channels);
+            if (totalFrames <= 0) return;
+            long start = Math.round(
+                    waveform.selectionStartFraction() * totalFrames);
+            long end = Math.round(
+                    waveform.selectionEndFraction() * totalFrames);
+            if (end <= start) {
+                Toast.makeText(requireContext(),
+                        "Select a valid noise-only region first",
+                        Toast.LENGTH_SHORT).show();
+                return;
+            }
+            long maxFrames = 8L * Math.max(8000, info.sampleRate);
+            if (end - start > maxFrames) end = start + maxFrames;
+            float[] samples = EditEngine.readFloatSelection(
+                    rawFile, start, end);
+            float[] profile = NoiseSuppressionProcessor.learnProfile(
+                    samples, info.channels);
+            if (profile == null) {
+                Toast.makeText(requireContext(),
+                        "Select at least 0.1 s of steady noise",
+                        Toast.LENGTH_SHORT).show();
+                return;
+            }
+            slot.noiseProfile = profile;
+            if (slot.value <= 0) slot.value = slot.type.defaultVal;
+            slot.enabled = true;
+            onSlotMutated.run();
+            rebuildFxRackList();
+            double seconds = (end - start)
+                    / (double) Math.max(1, info.sampleRate);
+            Toast.makeText(requireContext(), String.format(Locale.US,
+                    "Noise profile learned from %.1f s — tap Apply FX",
+                    seconds), Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            Toast.makeText(requireContext(),
+                    "Could not analyze the selection",
+                    Toast.LENGTH_SHORT).show();
+        }
     }
 
     /**
@@ -3094,6 +3164,59 @@ public class StudioFragment extends Fragment {
                 paintFxPanelControls();
             };
 
+            if (slot.type == DspChain.EffectType.NOISE_SUPPRESSION) {
+                final boolean hasSelection = waveform != null
+                        && waveform.hasSelection();
+                TextView profileTv = new TextView(ctx);
+                profileTv.setText(slot.noiseProfile != null
+                        ? "Noise profile: learned ("
+                                + slot.noiseProfile.length + " bins)"
+                        : "Noise profile: adaptive — select noise, then Learn");
+                profileTv.setTextSize(10.5f);
+                profileTv.setTextColor(slot.noiseProfile != null
+                        ? 0xFF34C759 : 0xFF8A93A0);
+                android.widget.LinearLayout.LayoutParams profileLp =
+                        new android.widget.LinearLayout.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.WRAP_CONTENT);
+                profileLp.topMargin = Math.round(6 * density);
+                body.addView(profileTv, profileLp);
+
+                android.widget.LinearLayout profileOps =
+                        new android.widget.LinearLayout(ctx);
+                profileOps.setOrientation(
+                        android.widget.LinearLayout.HORIZONTAL);
+                TextView learnBtn = makeFxChip(ctx,
+                        "Learn from selection", density);
+                learnBtn.setAlpha(hasSelection ? 1f : 0.35f);
+                learnBtn.setOnClickListener(v -> {
+                    if (waveform == null || !waveform.hasSelection()) {
+                        Toast.makeText(requireContext(),
+                                "Select a noise-only region on the waveform first",
+                                Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    learnNoiseProfile(slot, onSlotMutated);
+                });
+                profileOps.addView(learnBtn);
+                if (slot.noiseProfile != null) {
+                    TextView clearProfileBtn = makeFxChip(ctx,
+                            "Clear profile", density);
+                    clearProfileBtn.setOnClickListener(v -> {
+                        slot.noiseProfile = null;
+                        onSlotMutated.run();
+                        rebuildFxRackList();
+                    });
+                    profileOps.addView(clearProfileBtn);
+                }
+                android.widget.LinearLayout.LayoutParams profileOpsLp =
+                        new android.widget.LinearLayout.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.WRAP_CONTENT);
+                profileOpsLp.topMargin = Math.round(4 * density);
+                body.addView(profileOps, profileOpsLp);
+            }
+
             // Interactive curve editors for the Stage 3 EQ family: drag the
             // response directly on the canvas (bands, sliders or curve nodes).
             boolean hasEqView = slot.type == DspChain.EffectType.PARAMETRIC_EQ6
@@ -3237,6 +3360,7 @@ public class StudioFragment extends Fragment {
                 slot.value = slot.type.defaultVal;
                 slot.wetDry = 1f;
                 slot.extraParams.clear();
+                slot.noiseProfile = null;
                 onSlotMutated.run();
                 rebuildFxRackList();
             });

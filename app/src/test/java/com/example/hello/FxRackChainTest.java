@@ -45,6 +45,12 @@ public class FxRackChainTest {
         DspChain.Config cfg = new DspChain.Config();
         cfg.applyPreset(DspChain.Preset.PODCAST_BROADCAST);
         cfg.addOrFocusSlot(DspChain.EffectType.VOCAL_PRESENCE);
+        // Noise Suppression Pro is a new spectral stage with its own suite;
+        // the reference engine below still models the removed legacy gate, so
+        // parity covers every remaining legacy stage.
+        cfg.slots.removeIf(s -> s.type
+                == DspChain.EffectType.NOISE_SUPPRESSION);
+        cfg.syncLegacyFieldsFromSlots();
         // 4801 frames is not divisible by the 16-frame stage block, so the
         // final partial block (1 frame) is compared too.
         final int frames = 4801;
@@ -78,6 +84,9 @@ public class FxRackChainTest {
     public void rackMatchesLegacyAfterLiveConfigUpdate() {
         DspChain.Config cfg = new DspChain.Config();
         cfg.applyPreset(DspChain.Preset.VOICE_POLISH);
+        cfg.slots.removeIf(s -> s.type
+                == DspChain.EffectType.NOISE_SUPPRESSION);
+        cfg.syncLegacyFieldsFromSlots();
         final int frames = 1023;
         final int ch = 2;
 
@@ -99,6 +108,9 @@ public class FxRackChainTest {
         // (this is what the FX panel's TeleValue scrub does).
         DspChain.Config live = new DspChain.Config();
         live.applyPreset(DspChain.Preset.NOISY_ROOM);
+        live.slots.removeIf(s -> s.type
+                == DspChain.EffectType.NOISE_SUPPRESSION);
+        live.syncLegacyFieldsFromSlots();
         ref.updateConfig(live);
         chain.updateConfig(live);
 
@@ -135,7 +147,7 @@ public class FxRackChainTest {
     public void moveProcessorReordersRackAndGuardsBounds() {
         FxRackChain rack = new FxRackChain(2);
         rack.addProcessor(new LegacyHpfProcessor());
-        rack.addProcessor(new LegacyNoiseProcessor());
+        rack.addProcessor(new NoiseSuppressionProcessor());
         rack.addProcessor(new LegacyGateProcessor());
         assertEquals("hpf", rack.getProcessor(0).getId());
         assertEquals("noise", rack.getProcessor(1).getId());
@@ -164,7 +176,7 @@ public class FxRackChainTest {
         final int frames = 512;
         float[] input = tone(frames, 2, 0.8f, 0.04f);
 
-        LegacyNoiseProcessor noise = new LegacyNoiseProcessor();
+        NoiseSuppressionProcessor noise = new NoiseSuppressionProcessor();
         noise.setLegacyAmount(80);
         assertTrue(noise.isAudible());
 
@@ -739,7 +751,7 @@ public class FxRackChainTest {
     }
 
     @Test
-    public void setSampleRateUpdatesToneAndNoiseCrossoversWhilePreserving48kBitParity() {
+    public void setSampleRateRetunesLegacyToneStage() {
         FxRackChain tone48 = new FxRackChain(1);
         LegacyToneProcessor tp48 = new LegacyToneProcessor();
         tp48.setLegacyAmounts(70, 70);
@@ -765,30 +777,6 @@ public class FxRackChainTest {
         }
         assertTrue("LegacyToneProcessor ignored sample rate change", toneDiff);
 
-        FxRackChain noise48 = new FxRackChain(1);
-        LegacyNoiseProcessor np48 = new LegacyNoiseProcessor();
-        np48.setLegacyAmount(80);
-        noise48.addProcessor(np48);
-        noise48.setSampleRate(48000);
-
-        FxRackChain noise96 = new FxRackChain(1);
-        LegacyNoiseProcessor np96 = new LegacyNoiseProcessor();
-        np96.setLegacyAmount(80);
-        noise96.addProcessor(np96);
-        noise96.setSampleRate(96000);
-
-        float[] nA = tone(256, 1, 0.6f, 0.04f);
-        float[] nB = nA.clone();
-        noise48.processInPlace(nA, 256);
-        noise96.processInPlace(nB, 256);
-        boolean noiseDiff = false;
-        for (int i = 0; i < nA.length; i++) {
-            if (Math.abs(nA[i] - nB[i]) > 1e-4f) {
-                noiseDiff = true;
-                break;
-            }
-        }
-        assertTrue("LegacyNoiseProcessor ignored sample rate change", noiseDiff);
     }
 
     @Test

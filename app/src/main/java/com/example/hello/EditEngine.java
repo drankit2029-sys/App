@@ -617,6 +617,23 @@ public final class EditEngine {
         return snapshotRecorded;
     }
 
+    /** Reads an interleaved frame range from a 32-bit float WAV for analysis. */
+    static float[] readFloatSelection(File raw, long startFrame, long endFrame)
+            throws Exception {
+        FormatConverter.WavInfo info = FormatConverter.readFloatWav(raw);
+        int ch = info.channels;
+        long totalFrames = info.dataBytes / 4 / Math.max(1, ch);
+        startFrame = Math.max(0L, Math.min(totalFrames, startFrame));
+        endFrame = Math.max(startFrame, Math.min(totalFrames, endFrame));
+        long count = endFrame - startFrame;
+        if (count <= 0) return new float[0];
+        int frames = (int) Math.min(count, Integer.MAX_VALUE / Math.max(1, ch));
+        try (RandomAccessFile raf = new RandomAccessFile(raw, "r")) {
+            return readFloatFrames(raf,
+                    info.dataStart + startFrame * ch * 4L, frames, ch);
+        }
+    }
+
     private static float[] readFloatFrames(RandomAccessFile raf, long bytePos,
                                            int frames, int ch) throws Exception {
         byte[] raw = new byte[frames * ch * 4];

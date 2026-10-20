@@ -37,7 +37,7 @@ public final class FxRackChain {
 
     static {
         register("hpf", LegacyHpfProcessor::new);
-        register("noise", LegacyNoiseProcessor::new);
+        register("noise", NoiseSuppressionProcessor::new);
         register("gate", LegacyGateProcessor::new);
         register("tone", LegacyToneProcessor::new);
         register("deess", LegacyDeEsserProcessor::new);
@@ -338,7 +338,7 @@ public final class FxRackChain {
     public static FxRackChain fromLegacyConfig(int channels, DspChain.Config cfg) {
         FxRackChain rack = new FxRackChain(channels);
         LegacyHpfProcessor hpf = new LegacyHpfProcessor();
-        LegacyNoiseProcessor noise = new LegacyNoiseProcessor();
+        NoiseSuppressionProcessor noise = new NoiseSuppressionProcessor();
         LegacyGateProcessor gate = new LegacyGateProcessor();
         LegacyToneProcessor tone = new LegacyToneProcessor();
         LegacyDeEsserProcessor deess = new LegacyDeEsserProcessor();
@@ -485,8 +485,8 @@ public final class FxRackChain {
             if (p instanceof LegacyHpfProcessor) {
                 ((LegacyHpfProcessor) p).setLegacyState(
                         cfg.hpfEnabled, cfg.hpfCutoffHz);
-            } else if (p instanceof LegacyNoiseProcessor) {
-                ((LegacyNoiseProcessor) p).setLegacyAmount(cfg.noisePct);
+            } else if (p instanceof NoiseSuppressionProcessor) {
+                ((NoiseSuppressionProcessor) p).setLegacyAmount(cfg.noisePct);
                 p.setEnabled(cfg.noisePct > 0);
             } else if (p instanceof LegacyGateProcessor) {
                 ((LegacyGateProcessor) p).setLegacyAmount(cfg.gatePct);
