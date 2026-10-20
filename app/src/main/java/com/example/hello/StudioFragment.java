@@ -3560,7 +3560,36 @@ public class StudioFragment extends Fragment {
                     secondaryViews.add(pc);
                 }
             }
-            addFxExtraGrid(body, secondaryViews, density);
+            if (hasEqView && !secondaryViews.isEmpty()) {
+                // The curve canvas is the primary EQ editor; its numeric
+                // frequency/gain/Q parameters stay one tap away instead of
+                // forming a wall of steppers under the graph.
+                final android.widget.LinearLayout advancedBox =
+                        new android.widget.LinearLayout(ctx);
+                advancedBox.setOrientation(android.widget.LinearLayout.VERTICAL);
+                advancedBox.setVisibility(View.GONE);
+                addFxExtraGrid(advancedBox, secondaryViews, density);
+
+                final TextView advancedToggle = makeFxChip(ctx,
+                        "Show advanced controls (" + secondaryViews.size() + ")",
+                        density);
+                android.widget.LinearLayout.LayoutParams advLp =
+                        new android.widget.LinearLayout.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.WRAP_CONTENT);
+                advLp.topMargin = Math.round(6 * density);
+                body.addView(advancedToggle, advLp);
+                body.addView(advancedBox);
+                advancedToggle.setOnClickListener(v -> {
+                    boolean show = advancedBox.getVisibility() != View.VISIBLE;
+                    advancedBox.setVisibility(show ? View.VISIBLE : View.GONE);
+                    advancedToggle.setText(show
+                            ? "Hide advanced controls"
+                            : "Show advanced controls (" + secondaryViews.size() + ")");
+                });
+            } else {
+                addFxExtraGrid(body, secondaryViews, density);
+            }
 
             fxListContainer.addView(pill, pillLp);
         }
