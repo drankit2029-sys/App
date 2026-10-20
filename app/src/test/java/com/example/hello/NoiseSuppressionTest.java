@@ -12,11 +12,15 @@ import android.content.Context;
 import androidx.test.core.app.ApplicationProvider;
 
 import org.json.JSONArray;
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.TemporaryFolder;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
 
+import java.io.File;
+import java.io.RandomAccessFile;
 import java.util.Arrays;
 
 /**
@@ -27,6 +31,9 @@ import java.util.Arrays;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 34)
 public class NoiseSuppressionTest {
+
+    @Rule
+    public TemporaryFolder tmp = new TemporaryFolder();
 
     private static float[] whiteNoise(int frames, int ch, long seed,
                                       float amp) {
@@ -71,6 +78,29 @@ public class NoiseSuppressionTest {
         p.getParam("amt").setCurrentRaw(amt);
         p.prepare(48000, 1);
         return p;
+    }
+
+    @Test
+    public void readFloatSelectionExtractsTheSelectedFrames() throws Exception {
+        int frames = 5000;
+        float[] samples = new float[frames];
+        for (int i = 0; i < frames; i++) {
+            samples[i] = (float) (Math.sin(i * 0.01) * 0.5);
+        }
+        File wav = tmp.newFile("selection.wav");
+        try (RandomAccessFile w = new RandomAccessFile(wav, "rw")) {
+            w.setLength(0);
+            w.write(Dsp.wavFloatHeader(1, 48000, (long) frames * 4));
+            Dsp.writeFloatsLE(w, samples, 0, frames);
+        }
+
+        float[] sel = EditEngine.readFloatSelection(wav, 1000, 3000);
+        assertEquals(2000, sel.length);
+        for (int i = 0; i < sel.length; i++) {
+            assertEquals(samples[1000 + i], sel[i], 0.0f);
+        }
+        assertEquals(0, EditEngine.readFloatSelection(
+                wav, frames + 10, frames + 90).length);
     }
 
     @Test
