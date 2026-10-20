@@ -325,4 +325,39 @@ public class Stage3FxAuditFixTest {
         assertTrue("Stage 3 processor with negative slot.value failed to split Warmth & Presence",
                 diff);
     }
+
+    // ---- Empty rack must not offer a dry "preview" that looks broken ----
+
+    @Test
+    public void emptyFxRackDisablesPreviewAndApplyUntilAnEffectIsEnabled()
+            throws Exception {
+        File raw = createFloatWav("empty_rack_preview.wav", 2400, 1);
+        DspChain.Config empty = new DspChain.Config();
+        empty.clearRack();
+        empty.save(ctx);
+
+        engine.attachExisting(ctx, raw, "Empty Rack Take", 1,
+                RecordingEngine.payloadBytesOf(raw));
+        MainActivity act = Robolectric.buildActivity(MainActivity.class)
+                .create().start().resume().visible().get();
+        act.openStudioWithEdit(raw, 102L, "Empty Rack Take");
+        Robolectric.flushForegroundThreadScheduler();
+
+        StudioFragment frag = (StudioFragment) act.getSupportFragmentManager()
+                .findFragmentByTag("STU");
+        assertNotNull("StudioFragment not attached", frag);
+        View root = frag.getView();
+        assertNotNull(root);
+
+        root.findViewById(R.id.btnDspFx).performClick();
+        assertEquals(View.VISIBLE,
+                root.findViewById(R.id.fxPanel).getVisibility());
+
+        TextView preview = root.findViewById(R.id.fxPreviewBtn);
+        TextView apply = root.findViewById(R.id.fxApplyBtn);
+        assertFalse("Preview with no active effects would just play dry audio",
+                preview.isEnabled());
+        assertFalse("Apply must stay disabled with an empty rack",
+                apply.isEnabled());
+    }
 }
