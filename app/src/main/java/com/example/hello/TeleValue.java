@@ -137,7 +137,9 @@ public class TeleValue extends LinearLayout {
         }
         String num = formatNumberPart(v);
         return unit.isEmpty() ? num : num + unit;
-    }    private OnValueChanged listener;
+    }
+
+    private OnValueChanged listener;
     private OnScrubListener scrubListener;
 
     private TextView caption;
@@ -158,6 +160,7 @@ public class TeleValue extends LinearLayout {
     private float dragStartPos;
     private long lastTapAt = -DOUBLE_TAP_MS - 1;
     private boolean compact;
+    private Dialog keyboardDialog;
 
     public TeleValue(Context context) {
         this(context, null);
@@ -482,8 +485,13 @@ public class TeleValue extends LinearLayout {
     protected void showKeyboardInput() {
         final Context ctx = getContext();
         if (ctx == null) return;
+        if (keyboardDialog != null && keyboardDialog.isShowing()) return;
         try {
             final Dialog d = new Dialog(ctx, R.style.TakeOneCenterDialog);
+            keyboardDialog = d;
+            d.setOnDismissListener(dd -> {
+                if (keyboardDialog == d) keyboardDialog = null;
+            });
             d.requestWindowFeature(Window.FEATURE_NO_TITLE);
 
             int pad = dp(ctx, 20);
@@ -622,6 +630,7 @@ public class TeleValue extends LinearLayout {
             // Back / outside-tap dismisses WITHOUT committing: cancelling
             // must never mutate the value.
         } catch (Exception ignored) {
+            keyboardDialog = null;
         }
     }
 
@@ -688,6 +697,7 @@ public class TeleValue extends LinearLayout {
                     }
                     if (Math.abs(dx) > Math.abs(dy)) {
                         scrubbing = true;
+                        lastTapAt = 0;
                         dragStartValue = value;
                         dragStartPos = x;
                         if (getParent() != null) {
@@ -695,6 +705,7 @@ public class TeleValue extends LinearLayout {
                         }
                     } else if (verticalScrubEnabled) {
                         verticalScrubbing = true;
+                        lastTapAt = 0;
                         dragStartValue = value;
                         // Anchor at the current position like horizontal
                         // scrub does: anchoring at the touch-down point
