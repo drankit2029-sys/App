@@ -3226,7 +3226,8 @@ public class StudioFragment extends Fragment {
                 ViewGroup.LayoutParams.WRAP_CONTENT));
         android.widget.LinearLayout.LayoutParams scrollLp =
                 new android.widget.LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT);
         scrollLp.topMargin = Math.round(4 * density);
         root.addView(scroll, scrollLp);
 
@@ -3579,8 +3580,16 @@ public class StudioFragment extends Fragment {
                     new android.graphics.drawable.ColorDrawable(0x00000000));
             window.setDimAmount(0.62f);
             android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
-            window.setLayout(Math.round(dm.widthPixels * 0.94f),
-                    Math.round(dm.heightPixels * 0.84f));
+            int dialogWidth = Math.round(dm.widthPixels * 0.94f);
+            int maxHeight = Math.round(dm.heightPixels * 0.84f);
+            int minHeight = Math.round(dm.heightPixels * 0.34f);
+            root.measure(View.MeasureSpec.makeMeasureSpec(
+                            dialogWidth, View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(
+                            maxHeight, View.MeasureSpec.AT_MOST));
+            int dialogHeight = Math.min(maxHeight,
+                    Math.max(minHeight, root.getMeasuredHeight()));
+            window.setLayout(dialogWidth, dialogHeight);
         }
     }
 
