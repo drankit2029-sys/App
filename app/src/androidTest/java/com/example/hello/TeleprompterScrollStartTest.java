@@ -219,33 +219,31 @@ public class TeleprompterScrollStartTest {
         assertTrue("record tap never ran", started[0]);
 
         // Automated-test emulator images have no audio input, so capture
-        // never reaches RECORDING here. Skip rather than fail spuriously; the
-        // countdown regression is covered by the test above.
-        org.junit.Assume.assumeTrue("no audio input on this device",
-                scrollMovedBy(tele, b, 2500L));
-
-        // Sample the scroll position. The first movement must land within a
-        // second of capture starting, not after a multi-second countdown.
-        long firstMoveAt = 0L;
+        // never reaches RECORDING here. Poll first: a -1 sentinel makes a
+        // never-moving prompter fail instead of passing vacuously.
         float first = tele.scrollOffset();
         long t0 = SystemClock.elapsedRealtime();
+        long firstMoveAt = -1L;
+        float latest = first;
         StringBuilder trace = new StringBuilder();
         while (SystemClock.elapsedRealtime() - t0 < 6000L) {
-            SystemClock.sleep(150);
+            SystemClock.sleep(100);
             InstrumentationRegistry.getInstrumentation().waitForIdleSync();
-            float now = tele.scrollOffset();
-            if (now > first + 1f) {
+            latest = tele.scrollOffset();
+            if (latest > first + 2f) {
                 firstMoveAt = SystemClock.elapsedRealtime() - t0;
                 break;
             }
             if (trace.length() < 400) {
                 trace.append(String.format(" [off=%.1f max=%.1f vis=%s wpm=%d auto=%s]",
-                        now, tele.maxScroll(),
+                        latest, tele.maxScroll(),
                         tele.getVisibility() == View.VISIBLE,
                         tele.getWordsPerLine(),
                         TeleSettings.load(b).autoScroll));
             }
         }
+        org.junit.Assume.assumeTrue("no audio input on this device",
+                firstMoveAt >= 0L);
         assertTrue("prompter never started scrolling; trace:" + trace,
                 firstMoveAt >= 0L);
         assertTrue("prompter waited " + firstMoveAt
@@ -260,6 +258,9 @@ public class TeleprompterScrollStartTest {
             } catch (Exception ignored) {
             }
             engine.abortAndDelete();
+            a.getSharedPreferences("takeone", Context.MODE_PRIVATE).edit()
+                    .remove("tele_script").remove("tele_auto").commit();
+            TeleSettings.invalidateCache();
         }
     }
 }

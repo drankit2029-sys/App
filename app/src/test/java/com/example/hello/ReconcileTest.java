@@ -67,6 +67,11 @@ public class ReconcileTest {
                 new File(dir, "poison_empty_20261011_101500.m4a"),
                 new File(dir, "poison_junk_20261011_101500.wav"),
                 new File(dir, "poison_big_20261011_101500.m4a")}) {
+            for (Take t : new java.util.ArrayList<>(TakesRepository.all())) {
+                if (f.getAbsolutePath().equals(t.filePath)) {
+                    TakesRepository.delete(t.id);
+                }
+            }
             // noinspection ResultOfMethodCallIgnored
             f.delete();
         }
@@ -96,6 +101,13 @@ public class ReconcileTest {
             }
         }
         assertTrue(found);
+        if (found) {
+            for (Take t : new java.util.ArrayList<>(TakesRepository.all())) {
+                if (good.getAbsolutePath().equals(t.filePath)) {
+                    TakesRepository.delete(t.id);
+                }
+            }
+        }
         // noinspection ResultOfMethodCallIgnored
         good.delete();
     }

@@ -32,7 +32,6 @@ public class ConversionWatchdogWorker extends Worker {
     @Override
     public Result doWork() {
         Context ctx = getApplicationContext();
-        goForeground(ctx);
         List<ConversionJob> pending;
         try {
             pending = ConversionJobs.sweep(ctx);
@@ -41,7 +40,14 @@ public class ConversionWatchdogWorker extends Worker {
             ConversionWatchdog.retry(ctx);
             return Result.retry();
         }
-        if (pending.isEmpty()) return Result.success();
+        if (pending.isEmpty()) {
+            ConversionWatchdog.cancel(ctx);
+            return Result.success();
+        }
+        // The live service is already doing the work; promoting this worker
+        // to foreground would only consume a second dataSync budget.
+        if (ConversionService.isRunning()) return Result.success();
+        goForeground(ctx);
         boolean kicked = false;
         for (ConversionJob job : pending) {
             if (job == null || job.cancelled) continue;

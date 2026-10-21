@@ -82,29 +82,40 @@ final class GraphicEqProcessor extends AudioProcessor {
 
     @Override
     public boolean isAudible() {
-        return isEnabled() && buildSections().length > 0;
+        if (!isEnabled()) return false;
+        int n = activeBandCount();
+        for (int i = 0; i < n; i++) {
+            if (Math.abs(gains[i].getFloat()) >= 0.01f) return true;
+        }
+        return out.getCurrentRaw() != 0;
     }
 
     @Override
     public void processInPlace(float[] buf, int frames, int ch) {
-        if (buf == null || frames <= 0) return;
-        filter.setSections(buildSections(), channels);
-        filter.process(buf, frames, Math.max(1, Math.min(2, ch)));
+        if (!isEnabled() || buf == null || frames <= 0) return;
+        int c = Math.max(1, Math.min(2, ch));
+        this.channels = c;
+        filter.setSections(buildSections(), c);
+        filter.process(buf, frames, c);
     }
 
     float[][] buildSections() {
+        // Keep the public design view empty while every band/output is flat;
+        // the chain skips an inaudible processor, so no delay lines exist to
+        // preserve. As soon as any stage is audible the fixed-slot layout is
+        // returned, which is what keeps live band edits from shifting state.
+        if (!isAudible()) return new float[0][];
         boolean b31 = bands.getEnumIndex() == 1;
         double q = b31 ? Q_31 : Q_10;
         int n = activeBandCount();
-        List<float[]> secs = new ArrayList<>();
+        float[][] secs = new float[n + 1][];
         for (int i = 0; i < n; i++) {
             double g = gains[i].getFloat();
-            if (Math.abs(g) < 0.01) continue;
-            secs.add(Dsp.rbjPeaking(sampleRate, bandFreq(b31, i), q, g));
+            secs[i] = Math.abs(g) < 0.01
+                    ? new float[]{1f, 0f, 0f, 0f, 0f}
+                    : Dsp.rbjPeaking(sampleRate, bandFreq(b31, i), q, g);
         }
-        if (out.getCurrentRaw() != 0) {
-            secs.add(Dsp.gainBiquad(Dsp.dbToLin(out.getFloat())));
-        }
-        return secs.toArray(new float[0][]);
+        secs[n] = Dsp.gainBiquad(Dsp.dbToLin(out.getFloat()));
+        return secs;
     }
 }

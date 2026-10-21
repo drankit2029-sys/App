@@ -58,10 +58,12 @@ public class WaveformView extends View {
     private boolean followMinZoom = false;
 
     private final Deque<float[]> undoPeakStack = new ArrayDeque<>();
+    private final Deque<Float> undoFramesPerBar = new ArrayDeque<>();
     private float[] savedReplaceTailPeaks = null;
     private float[] stashedParentPeaks = null;
     private int stashedParentSelStart = 0;
     private int stashedParentSelEnd = 0;
+    private float stashedParentFramesPerBar = 2400f;
 
     // Smooth morphing state for in-place Replace & frame-locked live speed
     private int lastMorphIdx = -1;
@@ -174,13 +176,16 @@ public class WaveformView extends View {
             undoPeakStack.removeLast();
         }
         undoPeakStack.addFirst(Arrays.copyOf(history, count));
+        undoFramesPerBar.addFirst(framesPerBar);
     }
 
     /** Restores the most recent in-memory waveform peak snapshot on Undo. */
     public synchronized boolean popUndoPeaks() {
         if (undoPeakStack.isEmpty()) return false;
         float[] snap = undoPeakStack.pollFirst();
+        Float snapFrames = undoFramesPerBar.pollFirst();
         if (snap == null) return false;
+        if (snapFrames != null) framesPerBar = snapFrames;
         if (history.length < snap.length) {
             history = new float[Math.max(COLS, snap.length)];
         }
@@ -264,7 +269,9 @@ public class WaveformView extends View {
         stashedParentPeaks = count > 0 ? Arrays.copyOf(history, count) : new float[0];
         stashedParentSelStart = Math.max(0, Math.min(count, selStartIdx));
         stashedParentSelEnd = Math.max(stashedParentSelStart, Math.min(count, selEndIdx));
+        stashedParentFramesPerBar = framesPerBar;
         undoPeakStack.clear();
+        undoFramesPerBar.clear();
         Arrays.fill(history, 0f);
         count = 0;
         playheadPos = 0f;
@@ -284,6 +291,7 @@ public class WaveformView extends View {
         int e = Math.max(s, Math.min(parent.length, stashedParentSelEnd));
         stashedParentPeaks = null;
         undoPeakStack.clear();
+        undoFramesPerBar.clear();
 
         if (!commitReplacement) {
             if (history.length < parent.length) {
@@ -292,6 +300,7 @@ public class WaveformView extends View {
             Arrays.fill(history, 0f);
             System.arraycopy(parent, 0, history, 0, parent.length);
             count = parent.length;
+            framesPerBar = stashedParentFramesPerBar;
             playheadPos = s;
             playheadIndex = s;
             selectionActive = false;
@@ -300,35 +309,54 @@ public class WaveformView extends View {
         }
 
         int repLen = count;
-        float[] rep = Arrays.copyOf(history, repLen);
+        // The sub-session records at 20 bars/sec; the parent may have been
+        // compacted (framesPerBar > 2400). Convert the replacement into the
+        // parent's bucket scale before splicing, otherwise duration doubles
+        // or halves as soon as the editor closes.
+        float repDensity = Math.max(240f, framesPerBar);
+        int repOutLen = (int) Math.max(0, Math.round(
+                repLen * repDensity / Math.max(240f, stashedParentFramesPerBar)));
+        float[] rep = resamplePeaksMax(
+                Arrays.copyOf(history, repLen), repOutLen);
         int tailLen = Math.max(0, parent.length - e);
-        int newTotal = Math.min(MAX_HISTORY, s + repLen + tailLen);
-        if (history.length < newTotal) {
+        int total = s + rep.length + tailLen;
+        float[] combined = new float[Math.max(total, 1)];
+        if (s > 0) System.arraycopy(parent, 0, combined, 0, s);
+        if (rep.length > 0) {
+            System.arraycopy(rep, 0, combined, s, rep.length);
+            if (s > 0) {
+                combined[s] = 0.35f * parent[s - 1] + 0.65f * combined[s];
+            }
+        }
+        int afterRep = s + rep.length;
+        if (tailLen > 0) {
+            System.arraycopy(parent, e, combined, afterRep, tailLen);
+            if (afterRep > 0) {
+                combined[afterRep] = 0.65f * combined[afterRep]
+                        + 0.35f * combined[afterRep - 1];
+            }
+        }
+        framesPerBar = stashedParentFramesPerBar;
+        int newTotal = total;
+        while (newTotal > MAX_HISTORY) {
+            int half = Math.max(1, newTotal / 2);
+            for (int i = 0; i < half; i++) {
+                combined[i] = Math.max(combined[i * 2],
+                        combined[Math.min(newTotal - 1, i * 2 + 1)]);
+            }
+            newTotal = half;
+            framesPerBar *= 2f;
+        }
+        if (history.length < Math.max(COLS, newTotal)) {
             history = new float[Math.max(COLS, newTotal)];
         }
         Arrays.fill(history, 0f);
-        if (s > 0) {
-            System.arraycopy(parent, 0, history, 0, s);
-        }
-        int copyRep = Math.min(repLen, newTotal - s);
-        if (copyRep > 0) {
-            System.arraycopy(rep, 0, history, s, copyRep);
-            if (s > 0) {
-                history[s] = 0.35f * parent[s - 1] + 0.65f * history[s];
-            }
-        }
-        int afterRep = s + copyRep;
-        int copyTail = Math.min(tailLen, newTotal - afterRep);
-        if (copyTail > 0) {
-            System.arraycopy(parent, e, history, afterRep, copyTail);
-            if (afterRep > 0) {
-                history[afterRep] = 0.65f * history[afterRep]
-                        + 0.35f * history[afterRep - 1];
-            }
-        }
-        count = afterRep + copyTail;
-        playheadPos = afterRep;
-        playheadIndex = afterRep;
+        if (newTotal > 0) System.arraycopy(combined, 0, history, 0, newTotal);
+        count = Math.min(newTotal, history.length);
+        int shownPlayhead = total > 0
+                ? Math.round(afterRep * (float) count / total) : count;
+        playheadPos = Math.max(0, Math.min(count, shownPlayhead));
+        playheadIndex = Math.round(playheadPos);
         selectionActive = false;
         postInvalidateOnAnimation();
     }
@@ -554,6 +582,25 @@ public class WaveformView extends View {
         postInvalidateOnAnimation();
     }
 
+    /** Max-pools peaks so a splice matches the parent's bucket density. */
+    private static float[] resamplePeaksMax(float[] src, int dst) {
+        if (src == null || src.length == 0 || dst <= 0) return new float[0];
+        if (dst == src.length) return src;
+        float[] out = new float[dst];
+        for (int i = 0; i < dst; i++) {
+            int a = (int) ((long) i * src.length / dst);
+            int b = (int) (((long) (i + 1) * src.length + dst - 1) / dst);
+            if (b <= a) b = a + 1;
+            if (b > src.length) b = src.length;
+            float max = 0f;
+            for (int j = a; j < b; j++) {
+                if (src[j] > max) max = src[j];
+            }
+            out[i] = max;
+        }
+        return out;
+    }
+
     /** Calibrates the bucket frame density when a session is loaded or Replace begins. */
     public synchronized void syncFramesPerBar(long totalFrames) {
         if (count > 0 && totalFrames > 0) {
@@ -682,7 +729,12 @@ public class WaveformView extends View {
         if (raw == null) return;
         new Thread(() -> {
             try {
-                float[] peaks = Dsp.loadPeaks(raw, MAX_HISTORY);
+                long payload = RecordingEngine.payloadBytesOf(raw);
+                FormatConverter.WavInfo info = FormatConverter.readFloatWav(raw);
+                long totalFrames = payload / 4 / Math.max(1, info.channels);
+                int buckets20Hz = (int) Math.max(8,
+                        Math.min(MAX_HISTORY, (totalFrames + 1200) / 2400));
+                float[] peaks = loadPeaksExactBuckets(raw, buckets20Hz);
                 if (peaks.length == 0) return;
                 applyLoadedPeaks(peaks, onLoaded);
             } catch (Exception ignored) {}
@@ -708,6 +760,7 @@ public class WaveformView extends View {
                     Arrays.fill(history, 0f);
                     count = Math.min(peaks.length, history.length);
                     System.arraycopy(peaks, 0, history, 0, count);
+                    framesPerBar = 2400f;
                     playheadIndex = count;
                     playheadPos = count;
                     zoom = Math.max(minimumZoom(), Math.min(zoom,
@@ -783,6 +836,9 @@ public class WaveformView extends View {
             }
             playheadIndex = count;
             playheadPos = count;
+            // Loaded peaks are bucketed at 20 bars/sec; re-anchor the live
+            // tail to the same density after a recovery/attach load.
+            framesPerBar = 2400f;
             zoom = Math.max(minimumZoom(), Math.min(zoom,
                     ZOOM_STEPS[ZOOM_STEPS.length - 1]));
         }

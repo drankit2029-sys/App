@@ -36,7 +36,9 @@ final class ProToneProcessor extends AudioProcessor {
     private float cachedWarmMix = -1f;
     private float cachedPresMix = -1f;
     private int cachedWarmFreq = -1;
+    private int cachedWarmRaw = -1;
     private int cachedPresFreq = -1;
+    private int cachedPresRaw = -1;
     private int cachedRate = -1;
     private int cachedPresRate = -1;
 
@@ -97,24 +99,37 @@ final class ProToneProcessor extends AudioProcessor {
     }
 
     void processWarmthOnly(float[] buf, int frames, int channels, float mix) {
-        if (buf == null || frames <= 0) return;
+        if (!isEnabled() || buf == null || frames <= 0) return;
         float m = clampMix(mix);
-        updateTargets(m, 0f);
-        processBand(buf, frames, Math.max(1, Math.min(2, channels)),
-                warmCur, warmTarget, warmZ1, warmZ2);
+        if (m <= 0f) return;
+        float[] dry = m < 1f ? buf.clone() : null;
+        updateTargets(1f, 0f);
+        int ch = Math.max(1, Math.min(2, channels));
+        processBand(buf, frames, ch, warmCur, warmTarget, warmZ1, warmZ2);
+        blendDryWet(buf, dry, frames * ch, m);
     }
 
     void processPresenceOnly(float[] buf, int frames, int channels, float mix) {
-        if (buf == null || frames <= 0) return;
+        if (!isEnabled() || buf == null || frames <= 0) return;
         float m = clampMix(mix);
-        updateTargets(0f, m);
-        processBand(buf, frames, Math.max(1, Math.min(2, channels)),
-                presCur, presTarget, presZ1, presZ2);
+        if (m <= 0f) return;
+        float[] dry = m < 1f ? buf.clone() : null;
+        updateTargets(0f, 1f);
+        int ch = Math.max(1, Math.min(2, channels));
+        processBand(buf, frames, ch, presCur, presTarget, presZ1, presZ2);
+        blendDryWet(buf, dry, frames * ch, m);
+    }
+
+    private static void blendDryWet(float[] wet, float[] dry, int n, float mix) {
+        if (dry == null || mix >= 1f) return;
+        float d = 1f - mix;
+        int count = Math.min(Math.min(n, wet.length), dry.length);
+        for (int i = 0; i < count; i++) wet[i] = dry[i] * d + wet[i] * mix;
     }
 
     @Override
     public void processInPlace(float[] buf, int frames, int channels) {
-        if (buf == null || frames <= 0) return;
+        if (!isEnabled() || buf == null || frames <= 0) return;
         int ch = Math.max(1, Math.min(2, channels));
         updateTargets(1f, 1f);
         if (warmth.getCurrentRaw() > 0) {
@@ -176,18 +191,22 @@ final class ProToneProcessor extends AudioProcessor {
         float pMix = clampMix(presMix);
         int wf = Math.max(120, Math.min(300, warmthFreq.getCurrentRaw()));
         int pf = Math.max(2500, Math.min(6000, presenceFreq.getCurrentRaw()));
+        int warmRaw = warmth.getCurrentRaw();
+        int presRaw = presence.getCurrentRaw();
         if (wMix != cachedWarmMix || wf != cachedWarmFreq
-                || sampleRate != cachedRate) {
+                || warmRaw != cachedWarmRaw || sampleRate != cachedRate) {
             cachedWarmMix = wMix;
             cachedWarmFreq = wf;
+            cachedWarmRaw = warmRaw;
             cachedRate = sampleRate;
             writeShelf(warmTarget, true, wf,
                     warmth.getCurrentRaw() / 100f * 9f * wMix);
         }
         if (pMix != cachedPresMix || pf != cachedPresFreq
-                || sampleRate != cachedPresRate) {
+                || presRaw != cachedPresRaw || sampleRate != cachedPresRate) {
             cachedPresMix = pMix;
             cachedPresFreq = pf;
+            cachedPresRaw = presRaw;
             cachedPresRate = sampleRate;
             writeShelf(presTarget, false, pf,
                     presence.getCurrentRaw() / 100f * 10f * pMix);

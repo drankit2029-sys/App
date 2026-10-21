@@ -775,6 +775,11 @@ public final class DspChain {
      * The legacy engine's eight stages are now {@link AudioProcessor}s in an
      * ordered rack; this chain is a backwards-compatible facade.
      */
+    /** Processor id after which the second tone stage runs (split mode). */
+    String getSplitToneAfterId() {
+        return rack.getSplitToneAfterId();
+    }
+
     public FxRackChain getRack() {
         return rack;
     }

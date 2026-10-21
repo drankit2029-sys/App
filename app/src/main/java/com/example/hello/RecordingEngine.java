@@ -250,6 +250,7 @@ public final class RecordingEngine {
             fxBakeRequired = false;
             state = State.IDLE;
             level = 0f;
+            writePendingMarker(subFile, takeName, channels);
         }
     }
 
@@ -285,9 +286,12 @@ public final class RecordingEngine {
             dataBytes = parentDataBytes;
             parentRawFile = null;
             parentTakeName = null;
+            parentChannels = 2;
+            parentDataBytes = 0L;
         }
         try {
             if (commit && sub != null && sub.exists() && payloadBytesOf(sub) > 0) {
+                deletePendingMarker(sub);
                 long newBytes = EditEngine.spliceReplacementFile(
                         parent, sFrame, eFrame, sub, undo);
                 synchronized (lock) {
@@ -307,6 +311,7 @@ public final class RecordingEngine {
             }
         } finally {
             if (sub != null && sub.exists()) {
+                deletePendingMarker(sub);
                 // noinspection ResultOfMethodCallIgnored
                 sub.delete();
             }
@@ -347,6 +352,13 @@ public final class RecordingEngine {
         synchronized (lock) {
             inPlaceEdited = true;
             endStreamingAbortLocked();
+        }
+    }
+
+    /** True once an edit/DSP bake or undo changed the raw in place. */
+    public boolean isInPlaceEdited() {
+        synchronized (lock) {
+            return inPlaceEdited;
         }
     }
 
@@ -409,6 +421,13 @@ public final class RecordingEngine {
     /** Marker that a raw file is streamed but not yet finalised. */
     public static void writePendingMarker(File raw, String name, int ch) {
         writePending(raw, name, ch);
+    }
+
+    /** Removes the unfinished-session marker for a raw file. */
+    public static void deletePendingMarker(File raw) {
+        if (raw == null) return;
+        // noinspection ResultOfMethodCallIgnored
+        pendingFor(raw).delete();
     }
 
     /** Attach to an existing unfinalised file (recovery continue). */
@@ -475,6 +494,10 @@ public final class RecordingEngine {
             punchInFadeBuf = null;
             punchOutFadeBuf = null;
             level = 0f;
+            parentRawFile = null;
+            parentTakeName = null;
+            parentChannels = 2;
+            parentDataBytes = 0L;
         }
         ConversionService.onRecordingStateChanged();
         RecordingService.onRecordingStateChanged();
@@ -805,6 +828,7 @@ public final class RecordingEngine {
     /** Stop capture and delete everything (returns true if gone). */
     public boolean abortAndDelete() {
         File raw;
+        File parent;
         StreamingEncoder sess;
         synchronized (lock) {
             capRun = false;
@@ -817,6 +841,11 @@ public final class RecordingEngine {
             recorder = null;
             capThread = null;
             raw = rawFile;
+            parent = parentRawFile;
+            parentRawFile = null;
+            parentTakeName = null;
+            parentChannels = 2;
+            parentDataBytes = 0L;
             sess = streaming;
             streaming = null;
         }
@@ -847,6 +876,13 @@ public final class RecordingEngine {
             // noinspection ResultOfMethodCallIgnored
             pendingFor(raw).delete();
             if (raw.exists() && !raw.delete()) ok = false;
+        }
+        if (parent != null && !parent.equals(raw)) {
+            // Cancel during Select & Replace must discard the parent too;
+            // otherwise its .pending marker keeps isInSubSession() stuck and
+            // leaves an orphan that recovery can never finish.
+            pendingFor(parent).delete();
+            if (parent.exists() && !parent.delete()) ok = false;
         }
         ConversionService.onRecordingStateChanged();
         RecordingService.onRecordingStateChanged();

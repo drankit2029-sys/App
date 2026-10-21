@@ -579,10 +579,20 @@ public final class FormatConverter {
                             r.readFully(in, 0, want * ch * 4);
                             fb.clear();
                             fb.limit(want * ch);
-                            if (ch > 1) {
+                            if (ch == 2) {
                                 for (int f = 0; f < want; f++) {
                                     mono[f] = (fb.get(f * 2)
                                             + fb.get(f * 2 + 1)) * 0.5f;
+                                }
+                            } else if (ch > 2) {
+                                float inv = 1f / ch;
+                                for (int f = 0; f < want; f++) {
+                                    float sum = 0f;
+                                    int base = f * ch;
+                                    for (int c = 0; c < ch; c++) {
+                                        sum += fb.get(base + c);
+                                    }
+                                    mono[f] = sum * inv;
                                 }
                             } else {
                                 for (int f = 0; f < want; f++) {

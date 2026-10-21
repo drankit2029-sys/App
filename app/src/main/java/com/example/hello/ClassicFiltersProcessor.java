@@ -62,14 +62,16 @@ final class ClassicFiltersProcessor extends AudioProcessor {
 
     @Override
     public void processInPlace(float[] buf, int frames, int ch) {
-        if (buf == null || frames <= 0) return;
+        if (!isEnabled() || buf == null || frames <= 0) return;
+        int c = Math.max(1, Math.min(2, ch));
+        this.channels = c;
         int topoKey = (type.getEnumIndex() << 4) | mode.getEnumIndex();
         if (lastTopologyKey != -1 && lastTopologyKey != topoKey) {
             filter.reset();
         }
         lastTopologyKey = topoKey;
-        filter.setSections(buildSections(), channels);
-        filter.process(buf, frames, Math.max(1, Math.min(2, ch)));
+        filter.setSections(buildSections(), c);
+        filter.process(buf, frames, c);
     }
 
     float[][] buildSections() {

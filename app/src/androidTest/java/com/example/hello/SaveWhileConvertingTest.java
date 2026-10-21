@@ -85,6 +85,8 @@ public class SaveWhileConvertingTest {
         RecordingEngine.get().startNewSession(ctx, "Conv Flow", 2);
         // Write real audio so the pump has actual frames to encode.
         File raw = RecordingEngine.get().rawFile;
+        Take finished = null;
+        try {
         int frames = 48000 * 12; // 12 s: long enough that the pump lags
         java.io.RandomAccessFile w = new java.io.RandomAccessFile(raw, "rw");
         try {
@@ -151,7 +153,6 @@ public class SaveWhileConvertingTest {
                 !a.isFinishing() && !a.isDestroyed());
 
         // Look for our own take: a fresh install also seeds demo rows.
-        Take finished = null;
         StringBuilder titles = new StringBuilder();
         for (Take t : TakesRepository.all()) {
             titles.append(t.title).append('/');
@@ -166,11 +167,23 @@ public class SaveWhileConvertingTest {
         assertNotNull("finished take never landed; takes=[" + titles
                 + "] activeJobs=[" + jobs + "]", finished);
         assertTrue("finished take has no file", finished.hasFile());
-        assertTrue("conversion job should be gone once finished",
-                ConversionJobs.forRaw(
-                        ConversionJob.sidecarFor(new File(finished.filePath))
-                                .getAbsolutePath().replace(".conv.json", ""))
-                        == null);
+        assertTrue("sidecar left behind",
+                ConversionJobs.forRaw(raw.getAbsolutePath()) == null
+                        && !ConversionJob.sidecarFor(raw).exists());
+        } finally {
+            RecordingEngine.get().abortAndDelete();
+            if (raw != null) {
+                ConversionJob.sidecarFor(raw).delete();
+                ConversionJob.partFor(raw).delete();
+                raw.delete();
+            }
+            for (Take t : new java.util.ArrayList<>(TakesRepository.all())) {
+                if ("Conv Flow".equals(t.title)) {
+                    TakesRepository.delete(t.id);
+                    if (t.filePath != null) new File(t.filePath).delete();
+                }
+            }
+        }
     }
 
     /**

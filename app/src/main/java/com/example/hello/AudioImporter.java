@@ -37,6 +37,7 @@ public final class AudioImporter {
             return h.audioFormat == 3 && h.bits == 32
                     && h.sampleRate == RecordingEngine.SAMPLE_RATE
                     && (h.channels == 1 || h.channels == 2)
+                    && h.dataStart == 44L
                     && Math.max(0, r.length() - h.dataStart) > 0;
         } catch (Exception e) {
             return false;
@@ -246,6 +247,41 @@ public final class AudioImporter {
         }
     }
 
+
+    private static int pcmBytesPerSample(int encoding) {
+        switch (encoding) {
+            case android.media.AudioFormat.ENCODING_PCM_8BIT:
+                return 1;
+            case android.media.AudioFormat.ENCODING_PCM_24BIT_PACKED:
+                return 3;
+            case android.media.AudioFormat.ENCODING_PCM_32BIT:
+            case android.media.AudioFormat.ENCODING_PCM_FLOAT:
+                return 4;
+            default:
+                return 2;
+        }
+    }
+
+    private static float readPcmSample(ByteBuffer b, int encoding) {
+        switch (encoding) {
+            case android.media.AudioFormat.ENCODING_PCM_8BIT:
+                return ((b.get() & 0xff) - 128) / 128f;
+            case android.media.AudioFormat.ENCODING_PCM_24BIT_PACKED: {
+                int b0 = b.get() & 0xff;
+                int b1 = b.get() & 0xff;
+                int b2 = b.get();
+                int v = (b2 << 16) | (b1 << 8) | b0;
+                return v / 8388608f;
+            }
+            case android.media.AudioFormat.ENCODING_PCM_32BIT:
+                return b.getInt() / 2147483648f;
+            case android.media.AudioFormat.ENCODING_PCM_FLOAT:
+                return b.getFloat();
+            default:
+                return b.getShort() / 32768f;
+        }
+    }
+
     // ---- compressed sources (M4A/AAC/MP3/…) via platform decoder ----
 
     private static void compressedToFloatWav(File src, File dst, Progress cb)
@@ -355,23 +391,17 @@ public final class AudioImporter {
                             // 4-byte samples; reading them as shorts byte-swaps
                             // and doubles the apparent duration.
                             final int pcmEnc = pcmEncoding;
-                            final boolean pcmFloat = pcmEnc
-                                    == android.media.AudioFormat
-                                    .ENCODING_PCM_FLOAT;
-                            final int bytesPerSample = pcmFloat ? 4 : 2;
+                            final int bytesPerSample = pcmBytesPerSample(pcmEnc);
                             int samples = bi.size / bytesPerSample;
                             int frames = samples / Math.max(1, srcCh);
                             int fpos = 0;
                             for (int f = 0; f < frames; f++) {
-                                float s0 = pcmFloat
-                                        ? ob.getFloat() : ob.getShort() / 32768f;
+                                float s0 = readPcmSample(ob, pcmEnc);
                                 float s1 = srcCh > 1
-                                        ? (pcmFloat ? ob.getFloat()
-                                        : ob.getShort() / 32768f) : s0;
+                                        ? readPcmSample(ob, pcmEnc) : s0;
                                 // Skip any extra channels beyond stereo.
                                 for (int c = 2; c < srcCh; c++) {
-                                    if (pcmFloat) ob.getFloat();
-                                    else ob.getShort();
+                                    readPcmSample(ob, pcmEnc);
                                 }
                                 if (outCh == 1) {
                                     fbuf[fpos++] = srcCh > 1

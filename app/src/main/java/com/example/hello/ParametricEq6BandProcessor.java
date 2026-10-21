@@ -92,55 +92,74 @@ final class ParametricEq6BandProcessor extends AudioProcessor {
 
     @Override
     public boolean isAudible() {
-        return isEnabled() && buildSections().length > 0;
+        if (!isEnabled()) return false;
+        return b1f.getCurrentRaw() > 20 || b6f.getCurrentRaw() < 20000
+                || out.getCurrentRaw() != 0
+                || Math.abs(b2g.getFloat()) >= 0.01f
+                || Math.abs(b3g.getFloat()) >= 0.01f
+                || Math.abs(b4g.getFloat()) >= 0.01f
+                || Math.abs(b5g.getFloat()) >= 0.01f;
     }
 
     @Override
     public void processInPlace(float[] buf, int frames, int ch) {
-        if (buf == null || frames <= 0) return;
-        filter.setSections(buildSections(), channels);
-        filter.process(buf, frames, Math.max(1, Math.min(2, ch)));
+        if (!isEnabled() || buf == null || frames <= 0) return;
+        int c = Math.max(1, Math.min(2, ch));
+        this.channels = c;
+        filter.setSections(buildSections(), c);
+        filter.process(buf, frames, c);
     }
 
-    /** Cascade: low cut, four bands, high cut, output trim. */
+    private static final float[] IDENTITY = {1f, 0f, 0f, 0f, 0f};
+    private static final int LOW_SLOTS = 8;
+    private static final int HIGH_SLOTS = 8;
+
+    /** Cascade with fixed slots so changing a band never shifts biquad state. */
     float[][] buildSections() {
+        // Keep the public design view empty while every band/output is flat;
+        // the chain skips an inaudible processor, so no delay lines exist to
+        // preserve. As soon as any stage is audible the fixed-slot layout is
+        // returned, which is what keeps live band edits from shifting state.
+        if (!isAudible()) return new float[0][];
         double sr = sampleRate;
-        List<float[]> secs = new ArrayList<>();
-        int lowN = orderForSlope(b1s.getEnumIndex());
-        if (b1f.getCurrentRaw() > 20) {
-            for (float[] s : Dsp.butterworth(lowN, sr, b1f.getFloat(), true)) {
-                secs.add(s);
-            }
+        float[][] secs = new float[LOW_SLOTS + 4 + HIGH_SLOTS + 1][];
+        int lowN = b1f.getCurrentRaw() > 20
+                ? orderForSlope(b1s.getEnumIndex()) : 0;
+        float[][] low = lowN > 0
+                ? Dsp.butterworth(lowN, sr, b1f.getFloat(), true)
+                : new float[0][];
+        for (int i = 0; i < LOW_SLOTS; i++) {
+            secs[i] = i < low.length ? low[i] : IDENTITY;
         }
-        addBand(secs, sr, b2t.getEnumIndex() == 1, false, b2f.getFloat(),
-                b2g.getFloat(), b2q.getFloat());
-        addBand(secs, sr, false, false, b3f.getFloat(), b3g.getFloat(),
-                b3q.getFloat());
-        addBand(secs, sr, false, false, b4f.getFloat(), b4g.getFloat(),
-                b4q.getFloat());
-        addBand(secs, sr, b5t.getEnumIndex() == 1, true, b5f.getFloat(),
-                b5g.getFloat(), b5q.getFloat());
-        int highN = orderForSlope(b6s.getEnumIndex());
-        if (b6f.getCurrentRaw() < 20000) {
-            for (float[] s : Dsp.butterworth(highN, sr, b6f.getFloat(), false)) {
-                secs.add(s);
-            }
+        secs[LOW_SLOTS] = bandSection(b2t.getEnumIndex() == 1, false,
+                b2f.getFloat(), b2g.getFloat(), b2q.getFloat());
+        secs[LOW_SLOTS + 1] = bandSection(false, false,
+                b3f.getFloat(), b3g.getFloat(), b3q.getFloat());
+        secs[LOW_SLOTS + 2] = bandSection(false, false,
+                b4f.getFloat(), b4g.getFloat(), b4q.getFloat());
+        secs[LOW_SLOTS + 3] = bandSection(b5t.getEnumIndex() == 1, true,
+                b5f.getFloat(), b5g.getFloat(), b5q.getFloat());
+        int highOff = LOW_SLOTS + 4;
+        int highN = b6f.getCurrentRaw() < 20000
+                ? orderForSlope(b6s.getEnumIndex()) : 0;
+        float[][] high = highN > 0
+                ? Dsp.butterworth(highN, sr, b6f.getFloat(), false)
+                : new float[0][];
+        for (int i = 0; i < HIGH_SLOTS; i++) {
+            secs[highOff + i] = i < high.length ? high[i] : IDENTITY;
         }
-        if (out.getCurrentRaw() != 0) {
-            secs.add(Dsp.gainBiquad(Dsp.dbToLin(out.getFloat())));
-        }
-        return secs.toArray(new float[0][]);
+        secs[highOff + HIGH_SLOTS] = Dsp.gainBiquad(Dsp.dbToLin(out.getFloat()));
+        return secs;
     }
 
-    private void addBand(List<float[]> secs, double sr, boolean shelf,
-                         boolean highShelf, double f, double g, double q) {
-        if (Math.abs(g) < 0.01) return;
+    private float[] bandSection(boolean shelf, boolean highShelf,
+                                double f, double g, double q) {
+        if (Math.abs(g) < 0.01) return IDENTITY;
         if (shelf) {
-            secs.add(highShelf ? Dsp.rbjHighShelf(sr, f, 1.0, g)
-                    : Dsp.rbjLowShelf(sr, f, 1.0, g));
-        } else {
-            secs.add(Dsp.rbjPeaking(sr, f, q, g));
+            return highShelf ? Dsp.rbjHighShelf(sampleRate, f, 1.0, g)
+                    : Dsp.rbjLowShelf(sampleRate, f, 1.0, g);
         }
+        return Dsp.rbjPeaking(sampleRate, f, q, g);
     }
 
     private static int orderForSlope(int slopeIndex) {

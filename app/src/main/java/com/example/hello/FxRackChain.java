@@ -235,8 +235,19 @@ public final class FxRackChain {
             }
         }
 
+        boolean splitSecondDone = false;
         for (AudioProcessor p : processors) {
-            if (!p.isEnabled() || p.isOfflineOnly() || !p.isAudible()) {
+            if (!p.isEnabled() || p.isOfflineOnly()) {
+                continue;
+            }
+            boolean splitAnchor = toneProcRef != null && splitAfterId != null
+                    && splitAfterId.equals(p.getId());
+            if (!p.isAudible()) {
+                if (splitAnchor && !splitSecondDone) {
+                    runSplitToneSecondStage(toneProcRef, firstTone,
+                            buf, frames, channels);
+                    splitSecondDone = true;
+                }
                 continue;
             }
             if (toneProcRef != null && p == toneProcRef) {
@@ -274,18 +285,33 @@ public final class FxRackChain {
                 }
             }
 
-            if (toneProcRef != null && splitAfterId.equals(p.getId())) {
-                if (firstTone == DspChain.EffectType.WARMTH_BODY) {
-                    toneProcRef.processPresenceOnly(
-                            buf, frames, channels, splitToneSecondMix);
-                } else {
-                    toneProcRef.processWarmthOnly(
-                            buf, frames, channels, splitToneSecondMix);
-                }
+            if (splitAnchor) {
+                runSplitToneSecondStage(toneProcRef, firstTone,
+                        buf, frames, channels);
+                splitSecondDone = true;
                 if (safetyLimRef != null && safetyLimRef.isSafetyOn()) {
                     safetyLimRef.enforceSafetyCeiling(buf, frames, channels);
                 }
             }
+        }
+        if (toneProcRef != null && !splitSecondDone) {
+            runSplitToneSecondStage(toneProcRef, firstTone,
+                    buf, frames, channels);
+        }
+    }
+
+    /** Test/diagnostic access to the processor that anchors the split point. */
+    String getSplitToneAfterId() {
+        return splitToneAfterProcessorId;
+    }
+
+    private void runSplitToneSecondStage(ProToneProcessor tone,
+                                         DspChain.EffectType firstTone,
+                                         float[] buf, int frames, int channels) {
+        if (firstTone == DspChain.EffectType.WARMTH_BODY) {
+            tone.processPresenceOnly(buf, frames, channels, splitToneSecondMix);
+        } else {
+            tone.processWarmthOnly(buf, frames, channels, splitToneSecondMix);
         }
     }
 

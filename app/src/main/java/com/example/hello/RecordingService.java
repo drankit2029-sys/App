@@ -339,6 +339,14 @@ public class RecordingService extends Service {
             String title = e.takeName != null ? e.takeName : "";
             try {
                 Context appCtx = getApplicationContext();
+                if (e.isInSubSession()) {
+                    // The notification saved while a Select & Replace
+                    // sub-session was open: splice first, then save the parent
+                    // instead of exporting only the temporary snippet.
+                    boolean commitSub = e.rawFile != null
+                            && RecordingEngine.payloadBytesOf(e.rawFile) > 0;
+                    e.exitSelectAndReplaceSubSession(commitSub, null);
+                }
                 RecordPreset preset = RecordPreset.load(this);
                 SaveFormat save = SaveFormat.load(this);
                 // NEW-06 fix: honour and clear stashed EditLink when saving

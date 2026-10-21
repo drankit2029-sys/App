@@ -235,6 +235,8 @@ public class ConversionConcurrencyTest {
             // noinspection ResultOfMethodCallIgnored
             pending.delete();
             // noinspection ResultOfMethodCallIgnored
+            live.delete();
+            // noinspection ResultOfMethodCallIgnored
             livePart.delete();
             // noinspection ResultOfMethodCallIgnored
             raw2.delete();
@@ -288,6 +290,12 @@ public class ConversionConcurrencyTest {
                     ConversionJob.partFor(raw).exists());
         } finally {
             ConversionJobs.cancel(job.jobId, false);
+            for (Take t : new java.util.ArrayList<>(TakesRepository.all())) {
+                if ("Dedupe".equals(t.title)) {
+                    TakesRepository.delete(t.id);
+                    if (t.filePath != null) new File(t.filePath).delete();
+                }
+            }
             // noinspection ResultOfMethodCallIgnored
             raw.delete();
         }
@@ -358,12 +366,17 @@ public class ConversionConcurrencyTest {
     }
 
     private void writeRaw(File f, int frames) throws Exception {
-        byte[] payload = new byte[frames * 4 * 2];
         try (RandomAccessFile w = new RandomAccessFile(f, "rw")) {
             w.setLength(0);
             w.write(Dsp.wavFloatHeader(2, RecordingEngine.SAMPLE_RATE,
                     frames * 4L * 2));
-            w.write(payload);
+            byte[] chunk = new byte[65536];
+            long rem = (long) frames * 4L * 2L;
+            while (rem > 0) {
+                int n = (int) Math.min(chunk.length, rem);
+                w.write(chunk, 0, n);
+                rem -= n;
+            }
         }
     }
 

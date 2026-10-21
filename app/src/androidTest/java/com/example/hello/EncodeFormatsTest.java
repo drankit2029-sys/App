@@ -143,8 +143,12 @@ public class EncodeFormatsTest {
                 RecordPreset.MUSIC, SaveFormat.WAV16, null);
         Log.i(TAG, "PASS pipeline file=" + r.file.getName()
                 + " bytes=" + r.file.length() + " dur=" + r.durationMs);
-        assertTrue(r.file.exists());
-        engine.clearSession();
+        try {
+            assertTrue(r.file.exists());
+        } finally {
+            engine.clearSession();
+            r.file.delete();
+        }
     }
 
     /** Real 24-bit encode: our own pure-Java path, fully testable on device. */
@@ -190,10 +194,14 @@ public class EncodeFormatsTest {
         TakeSaver.Result r = TakeSaver.finalizeAndConvert(ctx,
                 RecordPreset.MUSIC, SaveFormat.AUTO, null);
         Log.i(TAG, "LOSSLESS label=" + r.label + " bytes=" + r.file.length());
-        assertTrue("music auto must not be lossy: " + r.label,
-                r.label.equals("FLAC") || r.label.equals("WAV24"));
-        assertTrue(r.file.exists());
-        assertFalse("raw must be cleaned up", raw.exists());
-        engine.clearSession();
+        try {
+            assertTrue("music auto must not be lossy: " + r.label,
+                    r.label.equals("FLAC") || r.label.equals("WAV24"));
+            assertTrue(r.file.exists());
+            assertFalse("raw must be cleaned up", raw.exists());
+        } finally {
+            engine.clearSession();
+            r.file.delete();
+        }
     }
 }

@@ -132,6 +132,9 @@ public class TeleprompterScrollBoundsTest {
         v.layout(0, 0, w, h);
         v.setScript(manyWords(400));
 
+        v.scrollBy(150f);
+        assertTrue("could not scroll down before dragging back",
+                v.scrollOffset() > 100f);
         v.onTouchEvent(motion(MotionEvent.ACTION_DOWN, 450f, 150f));
         for (float y = 450f; y <= 550f; y += 20f) {
             v.onTouchEvent(motion(MotionEvent.ACTION_MOVE, 450f, y));
@@ -190,6 +193,10 @@ public class TeleprompterScrollBoundsTest {
                 tele.getHeight() * 3 >= panel.getHeight());
         } finally {
             engine.abortAndDelete();
+            ctx.getSharedPreferences("takeone",
+                    android.content.Context.MODE_PRIVATE).edit()
+                    .remove("tele_script").remove("tele_auto").commit();
+            TeleSettings.invalidateCache();
         }
     }
 

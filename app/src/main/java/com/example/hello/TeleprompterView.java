@@ -475,8 +475,7 @@ public class TeleprompterView extends View {
      * True when the whole script is shorter than the viewport.
      */
     private boolean totalLinesFits(int count) {
-        return count > 0 && segments.size() <= count
-                && scrollOffset <= 0.01f;
+        return segments.size() <= 1 && scrollOffset <= 0.01f;
     }
 
     // ---- dragging the script by hand ----

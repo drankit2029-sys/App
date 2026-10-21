@@ -34,6 +34,17 @@ public class FxRackChainTest {
         return buf;
     }
 
+    private static float[] sineAt(int frames, float amp, double hz) {
+        return tone(frames, 1, amp, (float) (2 * Math.PI * hz / 48000.0));
+    }
+
+    private static double rmsTail(float[] buf) {
+        int from = buf.length / 2;
+        double sum = 0;
+        for (int i = from; i < buf.length; i++) sum += buf[i] * buf[i];
+        return Math.sqrt(sum / Math.max(1, buf.length - from));
+    }
+
     // -------------------------------------------------------- rack mechanics
 
     @Test
@@ -716,5 +727,43 @@ public class FxRackChainTest {
         assertEquals("-0.05 dB", db.formatDisplay());
         db.setCurrentRaw(125);
         assertEquals("+1.25 dB", db.formatDisplay());
+    }
+
+    @Test
+    public void toneTargetsFollowLegacyAmountsChangedAfterPrepare() {
+        ProToneProcessor tone = new ProToneProcessor();
+        tone.prepare(48000, 1);
+        tone.setLegacyAmounts(0, 90);
+
+        float[] high = sineAt(4096, 0.2f, 5000.0);
+        double before = rmsTail(high);
+        tone.processInPlace(high, 4096, 1);
+        double after = rmsTail(high);
+        assertTrue("post-prepare presence change was ignored: "
+                        + before + " -> " + after,
+                after > before * 1.15);
+    }
+
+    @Test
+    public void splitPresenceStillRunsWhenMiddleEqIsInaudible() {
+        DspChain.Config cfg = new DspChain.Config();
+        cfg.applyPreset(DspChain.Preset.CLEAR_ALL);
+        cfg.addOrFocusSlot(DspChain.EffectType.WARMTH_BODY).value = 40;
+        DspChain.EffectSlot eq =
+                cfg.addOrFocusSlot(DspChain.EffectType.PARAMETRIC_EQ6);
+        eq.value = 0;
+        cfg.addOrFocusSlot(DspChain.EffectType.VOCAL_PRESENCE).value = 90;
+        cfg.syncLegacyFieldsFromSlots();
+
+        DspChain chain = new DspChain(1, cfg);
+        assertEquals("eq6", chain.getSplitToneAfterId());
+
+        float[] high = sineAt(2048, 0.2f, 5000.0);
+        double before = rmsTail(high);
+        chain.getRack().processInPlace(high, 2048);
+        double after = rmsTail(high);
+        assertTrue("second tone stage skipped across an inaudible eq6: "
+                        + before + " -> " + after,
+                after > before * 1.15);
     }
 }

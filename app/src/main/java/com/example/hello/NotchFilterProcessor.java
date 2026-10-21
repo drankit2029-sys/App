@@ -53,9 +53,11 @@ final class NotchFilterProcessor extends AudioProcessor {
 
     @Override
     public void processInPlace(float[] buf, int frames, int ch) {
-        if (buf == null || frames <= 0) return;
-        filter.setSections(buildSections(), channels);
-        filter.process(buf, frames, Math.max(1, Math.min(2, ch)));
+        if (!isEnabled() || buf == null || frames <= 0) return;
+        int c = Math.max(1, Math.min(2, ch));
+        this.channels = c;
+        filter.setSections(buildSections(), c);
+        filter.process(buf, frames, c);
     }
 
     /**
@@ -66,10 +68,9 @@ final class NotchFilterProcessor extends AudioProcessor {
         int p = preset.getEnumIndex();
         double dialHz = freq.getFloat();
         double f;
-        if (p == 1 && (Math.abs(dialHz - 60.0) < 0.5 || Math.abs(dialHz - 50.0) < 0.5)) {
+        if (p == 1) {
             f = 50.0;
-        } else if (p == 2 && (Math.abs(dialHz - 60.0) < 0.5
-                || Math.abs(dialHz - 50.0) < 0.5)) {
+        } else if (p == 2) {
             f = 60.0;
         } else {
             f = dialHz;

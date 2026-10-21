@@ -161,7 +161,10 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -no-snapshot -gpu swiftshader_indirect -no-boot-anim -camera-back none
           script: |
+            adb emu avd hostmicon || true
+            adb emu avd rewindaudio || true
             adb shell settings put global stay_on_while_plugged_in 3
+            adb shell input keyevent 82 || true
             chmod +x ./gradlew
             ./gradlew :app:connectedDebugAndroidTest --stacktrace
       - name: Summarise instrumentation results

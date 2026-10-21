@@ -130,7 +130,10 @@ abstract class EqCurveView extends View {
 
     private void drawSpectrum(Canvas canvas, int w, int h) {
         float[] spec = FxTelemetry.spectrum();
-        if (spec == null) return;
+        if (spec == null) {
+            if (FxTelemetry.isEnabled()) postInvalidateDelayed(120);
+            return;
+        }
         Path sp = new Path();
         sp.moveTo(0, h);
         for (int i = 0; i < spec.length; i++) {

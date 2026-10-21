@@ -37,6 +37,17 @@ final class ConversionWatchdog {
         schedule(ctx, RETRY_DELAY_MINUTES);
     }
 
+    /** Stops the chain once the queue has drained cleanly. */
+    static void cancel(Context ctx) {
+        if (ctx == null) return;
+        try {
+            WorkManager.getInstance(ctx.getApplicationContext())
+                    .cancelUniqueWork(UNIQUE);
+        } catch (Throwable t) {
+            CrashLog.breadcrumb(ctx, "conv watchdog cancel failed: " + t);
+        }
+    }
+
     private static void schedule(Context ctx, long delayMinutes) {
         if (ctx == null) return;
         try {

@@ -159,9 +159,14 @@ public final class ScriptImporter {
         StringBuilder out = new StringBuilder();
         boolean firstPara = true;
         int event;
+        try {
         while ((event = p.next()) != XmlPullParser.END_DOCUMENT) {
             if (event == XmlPullParser.START_TAG) {
                 String tag = p.getName();
+                if (tag != null) {
+                    int colon = tag.indexOf(':');
+                    if (colon >= 0) tag = tag.substring(colon + 1);
+                }
                 if ("p".equals(tag)) {
                     // Every paragraph after the first starts a new line,
                     // unconditionally: empty paragraphs (<w:p/>) then
@@ -182,6 +187,11 @@ public final class ScriptImporter {
                     out.append('\n');
                 }
             }
+        }
+        } catch (org.xmlpull.v1.XmlPullParserException e) {
+            // A capped read of word/document.xml can end mid-tag; keep the
+            // text decoded so far instead of failing the whole import.
+            if (out.length() == 0) throw e;
         }
         return out.toString();
     }

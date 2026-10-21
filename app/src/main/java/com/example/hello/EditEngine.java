@@ -158,6 +158,7 @@ public final class EditEngine {
         if (savedTail == null || !savedTail.exists()) {
             return RecordingEngine.payloadBytesOf(raw);
         }
+        normalizeFloatDataStart(raw);
         FormatConverter.WavInfo rawInfo = FormatConverter.readFloatWav(raw);
         FormatConverter.WavInfo tailInfo = FormatConverter.readFloatWav(savedTail);
         int ch = rawInfo.channels;
@@ -222,6 +223,7 @@ public final class EditEngine {
     public static long spliceReplacementFile(File parentRaw, long selStartFrame,
                                              long selEndFrame, File repWav,
                                              UndoJournal undo) throws Exception {
+        normalizeFloatDataStart(parentRaw);
         FormatConverter.WavInfo pInfo = FormatConverter.readFloatWav(parentRaw);
         FormatConverter.WavInfo rInfo = FormatConverter.readFloatWav(repWav);
         int ch = pInfo.channels;
@@ -285,6 +287,34 @@ public final class EditEngine {
         }
     }
 
+
+    /**
+     * Moves a float WAV payload down to offset 44 so the fixed-offset header
+     * rewrites performed by splice() cannot orphan or misread it.
+     */
+    static void normalizeFloatDataStart(File raw) throws Exception {
+        if (raw == null || !raw.exists()) return;
+        FormatConverter.WavInfo info = FormatConverter.readFloatWav(raw);
+        if (info.dataStart <= 44L) return;
+        long payload = info.dataBytes;
+        try (RandomAccessFile raf = new RandomAccessFile(raw, "rw")) {
+            byte[] buf = new byte[CHUNK_BYTES];
+            long moved = 0;
+            while (moved < payload) {
+                int want = (int) Math.min(buf.length, payload - moved);
+                raf.seek(info.dataStart + moved);
+                raf.readFully(buf, 0, want);
+                raf.seek(44L + moved);
+                raf.write(buf, 0, want);
+                moved += want;
+            }
+            raf.setLength(44L + payload);
+            raf.seek(0);
+            raf.write(Dsp.wavFloatHeader(info.channels, info.sampleRate,
+                    payload));
+        }
+    }
+
     /**
      * Crops `raw` in-place so only `[startFrame, endFrame)` remains, with
      * zero-crossing snap and 5 ms raised-cosine fade-in/fade-out at the edges.
@@ -303,10 +333,15 @@ public final class EditEngine {
         if (undo != null) undo.recordSnapshot(raw);
 
         try (RandomAccessFile raf = new RandomAccessFile(raw, "rw")) {
-            startFrame = Dsp.snapToZeroCrossing(raf, info.dataStart, ch,
+            long snappedStart = Dsp.snapToZeroCrossing(raf, info.dataStart, ch,
                     startFrame, totalFrames, Dsp.CROSSFADE_FRAMES);
-            endFrame = Dsp.snapToZeroCrossing(raf, info.dataStart, ch,
+            long snappedEnd = Dsp.snapToZeroCrossing(raf, info.dataStart, ch,
                     endFrame, totalFrames, Dsp.CROSSFADE_FRAMES);
+            if (snappedStart < snappedEnd
+                    && snappedEnd - snappedStart >= 480) {
+                startFrame = snappedStart;
+                endFrame = snappedEnd;
+            }
             long keepFrames = endFrame - startFrame;
             long frameBytes = ch * 4L;
             long keepBytes = keepFrames * frameBytes;
@@ -356,10 +391,18 @@ public final class EditEngine {
         if (undo != null) undo.recordSnapshot(raw);
 
         try (RandomAccessFile raf = new RandomAccessFile(raw, "rw")) {
-            startFrame = Dsp.snapToZeroCrossing(raf, info.dataStart, ch,
+            long snappedStart = Dsp.snapToZeroCrossing(raf, info.dataStart, ch,
                     startFrame, totalFrames, Dsp.CROSSFADE_FRAMES);
-            endFrame = Dsp.snapToZeroCrossing(raf, info.dataStart, ch,
+            long snappedEnd = Dsp.snapToZeroCrossing(raf, info.dataStart, ch,
                     endFrame, totalFrames, Dsp.CROSSFADE_FRAMES);
+            if (snappedStart < snappedEnd) {
+                startFrame = snappedStart;
+                endFrame = snappedEnd;
+            }
+            delFrames = endFrame - startFrame;
+            if (delFrames >= totalFrames - 480) {
+                throw new IllegalArgumentException("cannot delete entire take");
+            }
             long frameBytes = ch * 4L;
             int fade = (int) Math.min(Dsp.CROSSFADE_FRAMES,
                     Math.min(startFrame, totalFrames - endFrame));

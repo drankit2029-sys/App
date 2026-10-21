@@ -8,6 +8,7 @@ import android.content.Context;
 
 import androidx.test.core.app.ApplicationProvider;
 
+import org.junit.After;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
@@ -20,6 +21,15 @@ import org.robolectric.annotation.Config;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 34)
 public class TeleSettingsTest {
+
+    @After
+    public void clearTakeonePrefs() {
+        ApplicationProvider.getApplicationContext()
+                .getSharedPreferences("takeone", Context.MODE_PRIVATE)
+                .edit().clear().commit();
+        TeleSettings.invalidateCache();
+    }
+
 
     private Context ctx() {
         return ApplicationProvider.getApplicationContext();

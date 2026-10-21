@@ -593,6 +593,14 @@ public final class TakesRepository {
         List<TakeEntity> adopted = new ArrayList<>();
         for (File f : files) {
             if (!f.isFile() || !isAudioFile(f.getName())) continue;
+            if (f.getName().contains("_subrep_")) {
+                // A crashed Select & Replace snippet is never a standalone
+                // take; the parent raw remains the only source of truth.
+                RecordingEngine.deletePendingMarker(f);
+                // noinspection ResultOfMethodCallIgnored
+                f.delete();
+                continue;
+            }
             String abs = f.getAbsolutePath();
             if (referenced.contains(abs)) continue;
             if (pendingStems.contains(stemOf(f.getName()))) continue;

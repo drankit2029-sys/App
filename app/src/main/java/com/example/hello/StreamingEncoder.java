@@ -823,10 +823,20 @@ public final class StreamingEncoder {
                         r.readFully(in, 0, want * channels * 4);
                         fb.clear();
                         fb.limit(want * channels);
-                        if (channels > 1) {
+                        if (channels == 2) {
                             for (int f = 0; f < want; f++) {
                                 mono[f] = (fb.get(f * 2)
                                         + fb.get(f * 2 + 1)) * 0.5f;
+                            }
+                        } else if (channels > 2) {
+                            float inv = 1f / channels;
+                            for (int f = 0; f < want; f++) {
+                                float sum = 0f;
+                                int base = f * channels;
+                                for (int c = 0; c < channels; c++) {
+                                    sum += fb.get(base + c);
+                                }
+                                mono[f] = sum * inv;
                             }
                         } else {
                             for (int f = 0; f < want; f++) {

@@ -32,6 +32,7 @@ public final class FxTelemetry {
     private static volatile int writePos = 0;
     private static volatile boolean explicitEnabled = false;
     private static volatile boolean fresh = false;
+    private static volatile long lastPushUptimeMs = 0L;
 
     static {
         for (int i = 0; i < FFT_SIZE; i++) {
@@ -82,6 +83,7 @@ public final class FxTelemetry {
             }
             writePos = p;
             fresh = true;
+            lastPushUptimeMs = android.os.SystemClock.uptimeMillis();
         }
     }
 
@@ -91,6 +93,11 @@ public final class FxTelemetry {
      */
     public static float[] spectrum() {
         if (!fresh) return null;
+        if (lastPushUptimeMs > 0L
+                && android.os.SystemClock.uptimeMillis() - lastPushUptimeMs > 250L) {
+            fresh = false;
+            return null;
+        }
         synchronized (LOCK) {
             if (!fresh) return null;
             int p = writePos;

@@ -55,7 +55,7 @@ public final class RawFloatPlayer {
                     built.play();
                     float[] silence = new float[128 * ch];
                     built.write(silence, 0, silence.length, AudioTrack.WRITE_NON_BLOCKING);
-                    built.pause();
+                    built.stop();
                     built.flush();
                 } else {
                     built.release();

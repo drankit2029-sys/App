@@ -103,6 +103,7 @@ public final class Dsp {
 
     /** Hamming-windowed sinc lowpass; cutoff in cycles/sample (0..0.5). */
     public static float[] firLowpass(double cutoffNorm, int taps) {
+        if (taps <= 1) return new float[]{1.0f};
         float[] h = new float[taps];
         // Center as a double: integer (taps-1)/2 truncates for even tap
         // counts and silently breaks symmetry (caught by unit test).
@@ -606,6 +607,12 @@ public final class Dsp {
                 float s2 = (i2 >= baseAbs && i2 < baseAbs + bufLen)
                         ? buf[(int) (i2 - baseAbs)] : 0f;
                 acc += s1 * fir[k] + s2 * fir[taps - 1 - k];
+            }
+            if ((taps & 1) != 0) {
+                long mid = center + half;
+                float s = (mid >= baseAbs && mid < baseAbs + bufLen)
+                        ? buf[(int) (mid - baseAbs)] : 0f;
+                acc += s * fir[half];
             }
             if (acc > 1f) acc = 1f;
             else if (acc < -1f) acc = -1f;
@@ -1197,6 +1204,7 @@ public final class Dsp {
 
     /** Blackman window of length n (for FIR truncation). */
     public static float[] blackmanWindow(int n) {
+        if (n <= 1) return new float[]{1.0f};
         float[] w = new float[n];
         for (int i = 0; i < n; i++) {
             w[i] = (float) (0.42 - 0.5 * Math.cos(2 * Math.PI * i / (n - 1))

@@ -44,6 +44,7 @@ import com.google.android.material.snackbar.Snackbar;
 
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayList;
@@ -382,9 +383,13 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                     String sig = new java.util.TreeSet<>(live).toString();
                     if (!sig.equals(lastStructuralSig)) {
                         lastStructuralSig = sig;
-                        if (rawMode && playingId < 0
-                                && ConversionJobs.forTakeId(playingId) == null) {
-                            stopPlayback();
+                        if (rawMode && playingId != -1) {
+                            Take cur = findVisible(playingId);
+                            if (cur != null && cur.converting
+                                    && ConversionJobs.forTakeId(
+                                            playingId) == null) {
+                                stopPlayback();
+                            }
                         }
                         refreshImmediate();
                     }
@@ -447,8 +452,15 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                             ConversionService.EXTRA_MESSAGE);
                     handler.post(() -> {
                         if (!isAdded()) return;
-                        // A finished raw preview must stop: its file is gone.
-                        if (rawMode) stopPlayback();
+                        // Stop only when this job's own raw preview ends; an
+                        // unrelated completed conversion must not interrupt
+                        // playback of another take's raw.
+                        if (rawMode && jobId != null) {
+                            Take cur = findVisible(playingId);
+                            if (cur != null && jobId.equals(cur.convJobId)) {
+                                stopPlayback();
+                            }
+                        }
                         requestStructuralRefresh();
                         if (ok) {
                             snackText(getString(R.string.conv_saved_bg, title,
@@ -683,9 +695,12 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         // animations against a holder that is never rebound, which is what
         // took the process down. Structural changes are rare and the list
         // rebinds in one pass anyway.
-        if (rawMode && playingId < 0
-                && ConversionJobs.forTakeId(playingId) == null) {
-            stopPlayback();
+        if (rawMode && playingId != -1) {
+            Take cur = findVisible(playingId);
+            if (cur != null && cur.converting
+                    && ConversionJobs.forTakeId(playingId) == null) {
+                stopPlayback();
+            }
         }
         adapter.setTakesAndState(out, playingId, playPaused,
                 selection, selectionMode);
@@ -1440,10 +1455,7 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                 snackText(getString(R.string.edit_no_audio));
                 return;
             }
-            Take rawTake = new Take(take.id, take.title + " (WAV)",
-                    take.durationMs, System.currentTimeMillis(),
-                    take.sizeLabel, "WAV", false, raw.getAbsolutePath());
-            shareFiles(singleton(rawTake));
+            shareRawSnapshot(raw, take);
         });
         TextView viewAll = warnButton(getString(R.string.conv_view_all));
         viewAll.setOnClickListener(v -> {
@@ -1478,6 +1490,43 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         });
         OptionsSheet.styleAsCentered(dialog);
         dialog.show();
+    }
+
+    /**
+     * Shares a stable copy of a converting take's raw WAV. The raw is deleted
+     * as soon as the conversion finishes, so handing its FileProvider URI to
+     * another app can race that deletion; a cache copy keeps the share valid.
+     */
+    private void shareRawSnapshot(File raw, Take take) {
+        final Context app = requireContext().getApplicationContext();
+        final File dir = new File(app.getCacheDir(), "shared");
+        final File copy = new File(dir, "take_" + take.id + ".wav");
+        new Thread(() -> {
+            boolean ok = false;
+            try {
+                if (!dir.exists()) //noinspection ResultOfMethodCallIgnored
+                    dir.mkdirs();
+                try (java.io.InputStream in = new FileInputStream(raw);
+                     java.io.OutputStream out = new FileOutputStream(copy)) {
+                    byte[] buf = new byte[65536];
+                    int n;
+                    while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                }
+                ok = copy.length() > 0;
+            } catch (Exception ignored) {}
+            final boolean success = ok;
+            handler.post(() -> {
+                if (!isAdded()) return;
+                if (!success) {
+                    snackText(getString(R.string.edit_no_audio));
+                    return;
+                }
+                Take wav = new Take(take.id, take.title + " (WAV)",
+                        take.durationMs, System.currentTimeMillis(),
+                        take.sizeLabel, "WAV", false, copy.getAbsolutePath());
+                shareFiles(singleton(wav));
+            });
+        }, "share-raw-copy").start();
     }
 
     private TextView warnButton(String text) {

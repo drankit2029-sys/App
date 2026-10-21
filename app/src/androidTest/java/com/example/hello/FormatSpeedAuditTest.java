@@ -197,8 +197,9 @@ public class FormatSpeedAuditTest {
             // import it back and confirm the tone survived.
             File amrOut = TakeSaver.convertRaw(ctx, raw, "Speed amr back",
                     RecordPreset.MEMO, SaveFormat.AMR_NB, null).file;
+            File back = null;
             try {
-                File back = AudioImporter.takeToFloatWav(amrOut,
+                back = AudioImporter.takeToFloatWav(amrOut,
                         RecordingEngine.takesDir(ctx), "Speed back", null);
                 FormatConverter.WavInfo info =
                         FormatConverter.readFloatWav(back);
@@ -219,6 +220,7 @@ public class FormatSpeedAuditTest {
                 assertTrue("AMR import is silent (peak " + peak + ", frames "
                         + n + ")", peak > 0.05f);
             } finally {
+                if (back != null) back.delete();
                 // noinspection ResultOfMethodCallIgnored
                 amrOut.delete();
             }

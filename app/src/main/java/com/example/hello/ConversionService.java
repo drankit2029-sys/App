@@ -57,6 +57,7 @@ public class ConversionService extends Service {
     private final Deque<String> queue = new ConcurrentLinkedDeque<>();
     private Thread worker;
     private volatile boolean workerAlive;
+    private static volatile boolean running;
     /**
      * Set when the platform enforces the foreground-service time budget
      * (onTimeout). The worker parks instead of cancelling so every job
@@ -119,6 +120,11 @@ public class ConversionService extends Service {
         }
     }
 
+    /** True while a live service instance owns the conversion queue. */
+    static boolean isRunning() {
+        return running;
+    }
+
     public static void cancelJob(Context ctx, String jobId) {
         ConversionJob job = ConversionJobs.get(jobId);
         if (job != null) job.cancelled = true;
@@ -134,6 +140,7 @@ public class ConversionService extends Service {
     public void onCreate() {
         CrashLog.install(this);
         super.onCreate();
+        running = true;
         ensureChannel();
         // Death-resume: rebuild the queue from sidecars before doing any
         // work, so a redelivered intent can never strand a job.
@@ -211,6 +218,7 @@ public class ConversionService extends Service {
 
     @Override
     public void onDestroy() {
+        running = false;
         workerAlive = false;
         // An unexpected destroy (OEM task-kill, FGS budget, process trim) must
         // leave a resumable QUEUED job rather than a RUNNING sidecar that no
@@ -276,6 +284,7 @@ public class ConversionService extends Service {
         }
         if (workerAlive) return;
         if (queue.isEmpty()) {
+            ConversionWatchdog.cancel(this);
             stopSelf();
             return;
         }
@@ -306,6 +315,9 @@ public class ConversionService extends Service {
         // worker; the progress callback parks the current job as QUEUED so
         // the next launch resumes everything intact.
         serviceTimedOut = true;
+        // onTimeout does not stop WorkManager's own chain; re-arm it so the
+        // queued sidecars are resumed after the dataSync budget resets.
+        ConversionWatchdog.retry(this);
         try {
             stopForeground(true);
         } catch (Exception ignored) {}
@@ -389,6 +401,7 @@ public class ConversionService extends Service {
                 workerAlive = false;
                 releaseWakeLock();
                 if (queue.isEmpty()) {
+                    ConversionWatchdog.cancel(ConversionService.this);
                     handler.removeCallbacksAndMessages(null);
                     try {
                         stopForeground(true);

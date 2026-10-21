@@ -558,6 +558,8 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
 
     /** Direct progress paint without rebind (called ~10x/sec while playing). */
     public void paintProgress(RecyclerView list, long id, long posMs) {
+        if (id != -1) progressMap.put(id, posMs);
+        if (list == null) return;
         RecyclerView.ViewHolder vh = list.findViewHolderForItemId(id);
         if (vh instanceof Vh) {
             ((Vh) vh).applyProgress(posMs);

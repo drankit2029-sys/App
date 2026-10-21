@@ -223,9 +223,12 @@ public class Stage3DeepAuditFixTest {
         NotchFilterProcessor np = (NotchFilterProcessor) chain.getRack()
                 .getProcessor(chain.getRack().indexOf("notch"));
         assertNotNull(np);
+        double gainAt50 = Dsp.cascadeMagDb(np.buildSections(), 50.0, 48000);
         double gainAt120 = Dsp.cascadeMagDb(np.buildSections(), 120.0, 48000);
-        assertTrue("Notch filter must null 120 Hz when dial is set to 120 Hz: " + gainAt120,
-                gainAt120 < -30.0);
+        assertTrue("50 Hz quick-pick must notch 50 Hz even with the dial at "
+                        + "120 Hz: " + gainAt50, gainAt50 < -30.0);
+        assertTrue("50 Hz quick-pick must ignore the stale 120 Hz dial: "
+                        + gainAt120, gainAt120 > -6.0);
     }
 
     // ---- BUG-07: FxTelemetry reference counting & Hann-window sidelobe suppression ----
