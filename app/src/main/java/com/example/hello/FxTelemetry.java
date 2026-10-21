@@ -33,6 +33,8 @@ public final class FxTelemetry {
     private static volatile boolean explicitEnabled = false;
     private static volatile boolean fresh = false;
     private static volatile long lastPushUptimeMs = 0L;
+    /** Latest gain reduction in dB (0 = no reduction, negative = ducked). */
+    private static final AtomicInteger LAST_GR_DB = new AtomicInteger(0);
 
     static {
         for (int i = 0; i < FFT_SIZE; i++) {
@@ -65,6 +67,20 @@ public final class FxTelemetry {
 
     public static boolean isEnabled() {
         return explicitEnabled || ATTACHED_VIEWS.get() > 0;
+    }
+
+    /**
+     * Publishes the latest gain reduction in dB (0 = unity, negative values
+     * mean the dynamics stage is pulling the signal down). The dynamics
+     * canvas reads it to drive its live GR meter.
+     */
+    public static void publishGainReductionDb(float db) {
+        LAST_GR_DB.set((int) Math.round(db * 10f));
+    }
+
+    /** Latest published gain reduction in dB (0 when nothing was published). */
+    public static float lastGainReductionDb() {
+        return LAST_GR_DB.get() / 10f;
     }
 
     /** Copies the tail of a preview block into the ring (mono downmix). */

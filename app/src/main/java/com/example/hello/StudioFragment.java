@@ -2969,6 +2969,34 @@ public class StudioFragment extends Fragment {
             case CLASSIC_FILTERS:
                 return 0xFFB0B8C4;
             default:
+                return fxCategoryAccent(DspChain.categoryOf(type));
+        }
+    }
+
+    /**
+     * Accent color for a whole catalog category, so the Stage 4-7 effects
+     * read as families instead of one undifferentiated red.
+     */
+    static int fxCategoryAccent(FxCategory category) {
+        if (category == null) return 0xFFFF6B6B;
+        switch (category) {
+            case EQUALIZER:
+                return 0xFF5E5CE6;
+            case DYNAMICS:
+                return 0xFF0A84FF;
+            case RESTORATION:
+                return 0xFF30D158;
+            case SPATIAL:
+                return 0xFF64D2FF;
+            case TIME:
+                return 0xFFFF9F0A;
+            case CREATIVE:
+                return 0xFFBF5AF2;
+            case TOOLS:
+                return 0xFFA0D96A;
+            case ANALYZER:
+                return 0xFFB0B8C4;
+            default:
                 return 0xFFFF6B6B;
         }
     }
@@ -3862,6 +3890,19 @@ public class StudioFragment extends Fragment {
                 body.addView(eqView, eqLp);
             }
 
+            // Stage 4 dynamics card: the transfer curve and the live gain
+            // reduction meter explain what the compressor is doing.
+            if (slot.type == DspChain.EffectType.DYNAMIC_COMPRESSOR
+                    || slot.type == DspChain.EffectType.MULTIBAND_COMPRESSOR) {
+                DynamicsGraphView dynView = new DynamicsGraphView(ctx, slot);
+                android.widget.LinearLayout.LayoutParams dynLp =
+                        new android.widget.LinearLayout.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                Math.round(140 * density));
+                dynLp.topMargin = Math.round(8 * density);
+                body.addView(dynView, dynLp);
+            }
+
             checkBtn.setOnClickListener(v -> {
                 slot.enabled = !slot.enabled;
                 onSlotMutated.run();
@@ -4348,10 +4389,41 @@ public class StudioFragment extends Fragment {
         scLp.topMargin = Math.round(10 * density);
         root.addView(listScroll, scLp);
 
+        // Category filter chips: the catalog now spans eight families, so a
+        // search box alone is not enough to find an effect quickly.
+        final FxCategory[] categories = {
+                null, FxCategory.EQUALIZER, FxCategory.DYNAMICS,
+                FxCategory.RESTORATION, FxCategory.SPATIAL, FxCategory.TIME,
+                FxCategory.CREATIVE, FxCategory.TOOLS, FxCategory.ANALYZER};
+        final String[] categoryLabels = {
+                "All", "EQ & Filters", "Dynamics", "Restoration",
+                "Spatial", "Pitch & Time", "Creative", "Tools", "Analyzers"};
+        final FxCategory[] selected = {null};
+        final android.widget.HorizontalScrollView chipScroll =
+                new android.widget.HorizontalScrollView(ctx);
+        chipScroll.setHorizontalScrollBarEnabled(false);
+        android.widget.LinearLayout chipRow =
+                new android.widget.LinearLayout(ctx);
+        chipRow.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+        chipScroll.addView(chipRow);
+        android.widget.LinearLayout.LayoutParams chipLp =
+                new android.widget.LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT);
+        chipLp.topMargin = Math.round(8 * density);
+        root.addView(chipScroll, chipLp);
+        final android.widget.TextView[] chipViews =
+                new android.widget.TextView[categories.length];
+
         Runnable populateList = () -> {
             String q = searchBox.getText().toString().trim().toLowerCase(Locale.US);
+            FxCategory filter = selected[0];
             listCol.removeAllViews();
             for (DspChain.EffectType t : DspChain.EffectType.values()) {
+                if (filter != null
+                        && DspChain.categoryOf(t) != filter) {
+                    continue;
+                }
                 if (!q.isEmpty()
                         && !t.title.toLowerCase(Locale.US).contains(q)
                         && !t.description.toLowerCase(Locale.US).contains(q)) {
@@ -4400,6 +4472,32 @@ public class StudioFragment extends Fragment {
                 listCol.addView(row, rLp);
             }
         };
+
+        for (int i = 0; i < categories.length; i++) {
+            final int index = i;
+            TextView chip = makeFxChip(ctx, categoryLabels[i], density);
+            chipViews[i] = chip;
+            android.widget.LinearLayout.LayoutParams clp =
+                    new android.widget.LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.WRAP_CONTENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT);
+            clp.rightMargin = Math.round(5 * density);
+            chipRow.addView(chip, clp);
+            chip.setOnClickListener(v -> {
+                selected[0] = categories[index];
+                for (int k = 0; k < chipViews.length; k++) {
+                    boolean on = k == index;
+                    chipViews[k].setTextColor(on ? 0xFF0B0D10 : 0xFF9AA3AF);
+                    chipViews[k].setBackgroundResource(on
+                            ? R.drawable.bg_pill_option_selected
+                            : R.drawable.bg_pill_option);
+                }
+                populateList.run();
+            });
+        }
+        // "All" starts selected.
+        chipViews[0].setTextColor(0xFF0B0D10);
+        chipViews[0].setBackgroundResource(R.drawable.bg_pill_option_selected);
         populateList.run();
 
         searchBox.addTextChangedListener(new android.text.TextWatcher() {
@@ -4514,6 +4612,50 @@ public class StudioFragment extends Fragment {
             waveform.recordUndoPeaks();
             peaksPushed = true;
             DspChain chain = new DspChain(info.channels, dspConfig);
+            // Duration-changing tools (Change Tempo, Change Speed, Repeat,
+            // Truncate Silence, ...) render the region offline and rewrite the
+            // file, so they take a different path than the in-place chain.
+            // They run first; the in-place chain then processes whatever
+            // region came out of them.
+            java.util.List<AudioProcessor> offline =
+                    chain.offlineProcessors();
+            if (!offline.isEmpty()) {
+                long regionEnd = end;
+                for (AudioProcessor proc : offline) {
+                    long newTotal = EditEngine.applyLengthChangingEffectToRange(
+                            raw, start, regionEnd, proc, uj);
+                    if (newTotal < 0) {
+                        waveform.popUndoPeaks();
+                        peaksPushed = false;
+                        Toast.makeText(requireContext(),
+                                "This effect could not be applied here",
+                                Toast.LENGTH_SHORT).show();
+                        return false;
+                    }
+                    regionEnd = start + (newTotal - (totalFrames - regionEnd));
+                }
+                // The offline pass rewrote the region: run the remaining
+                // in-place processors over the new boundaries.
+                if (chain.hasInPlaceProcessors()) {
+                    DspChain inPlace = new DspChain(info.channels, dspConfig);
+                    inPlace.clearOfflineProcessors();
+                    EditEngine.applyDspToRange(raw, start, regionEnd, inPlace, null);
+                }
+                engine.abortStreaming();
+                engine.dataBytes = RecordingEngine.payloadBytesOf(raw);
+                dspBakedToRaw = true;
+                dspSubRangeBaked = hadSel;
+                lastEditWasSubRangeBake = false;
+                waveform.loadFromFloatWav(raw);
+                resetFxRackAfterApply();
+                syncFxBakeRequired();
+                Toast.makeText(requireContext(),
+                        "Effect applied (Undo available)",
+                        Toast.LENGTH_SHORT).show();
+                paint();
+                paintFxPanelControls();
+                return true;
+            }
             boolean snapshotRecorded =
                     EditEngine.applyDspToRange(raw, start, end, chain, uj);
             if (!snapshotRecorded) {

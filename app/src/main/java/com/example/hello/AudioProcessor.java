@@ -37,6 +37,17 @@ public abstract class AudioProcessor {
     /** Clears all filter/envelope state (start of a new edit region). */
     public abstract void reset();
 
+    /**
+     * Optional offline pre-scan over the exact range about to be rendered.
+     * Level tools (amplify, normalize, loudness) use this to measure peak,
+     * DC offset or integrated loudness before the first sample is written.
+     * The default is a no-op, so real-time processors need no extra work.
+     */
+    public void prepareOffline(java.io.File raw, long startFrame,
+                               long endFrame, int sampleRate, int channels)
+            throws Exception {
+    }
+
     /** Processes {@code frames} interleaved frames in place. */
     public abstract void processInPlace(float[] interleaved, int frames,
                                         int channels);
@@ -44,6 +55,18 @@ public abstract class AudioProcessor {
     /** True for processors that need a second pass or alter duration. */
     public boolean isOfflineOnly() {
         return false;
+    }
+
+    /**
+     * Renders an entire region offline and returns the interleaved result.
+     *
+     * <p>The returned array may be longer or shorter than the input when the
+     * effect changes duration (Change Tempo, Change Speed, Paulstretch,
+     * Repeat, Truncate Silence). {@code null} means "this processor has no
+     * offline renderer", and the caller then keeps the region untouched.
+     */
+    public float[] processOfflineRegion(float[] in, int frames, int channels) {
+        return null;
     }
 
     /** Latency/tail in frames after the input ends (reverb, delay). */

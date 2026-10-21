@@ -6,6 +6,7 @@ import android.content.SharedPreferences;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.File;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.LinkedHashMap;
@@ -96,7 +97,120 @@ public final class DspChain {
                 "Gain", -2400, 2400, 10, 0, " dB"),
         CLASSIC_FILTERS("classic", "Classic Filters",
                 "Butterworth / Chebyshev I / Chebyshev II / Bessel",
-                "Cutoff", 20, 20000, 10, 1000, " Hz");
+                "Cutoff", 20, 20000, 10, 1000, " Hz"),
+
+        // ---- Stage 4 dynamics & leveling suite ----
+        AMPLIFY("amplify", "Amplify",
+                "Two-pass gain with an automatic non-clipping peak scan",
+                "Gain", -5000, 5000, 100, 0, " dB"),
+        NORMALIZE("normalize", "Normalize",
+                "Peak or RMS normalization with DC-offset removal",
+                "Target", -6000, 0, 100, -100, " dBFS"),
+        LOUDNESS_NORMALIZATION("loudness", "Loudness Normalization",
+                "EBU R128 K-weighted LUFS normalization with true-peak ceiling",
+                "Target", -7000, 0, 100, -1600, " LUFS"),
+        DYNAMIC_COMPRESSOR("dyncomp", "Compressor",
+                "Soft-knee dynamics compressor with noise-floor freeze",
+                "Threshold", -6000, -100, 100, -1800, " dB"),
+        MULTIBAND_COMPRESSOR("mbcomp", "Multiband Compressor",
+                "3-band Linkwitz-Riley vocal leveler",
+                "Amount", 0, 100, 1, 40, " %"),
+        BRICKWALL_LIMITER_STAGE4("bricklim", "Brickwall Limiter",
+                "3 ms look-ahead limiter with soft/hard ceiling",
+                "Ceiling", -1500, -5, 5, -30, " dBFS"),
+        NOISE_GATE_EXPANDER("gateexp", "Gate / Expander",
+                "Hysteresis gate and downward expander with sidechain HPF",
+                "Threshold", -9600, -600, 100, -4200, " dB"),
+        DEESSER_SPLIT("deesssplit", "De-Esser (Split Band)",
+                "Relative sibilance detection across the 3.5-12 kHz band",
+                "Threshold", -4800, 0, 100, -1800, " dB"),
+        AUTO_DUCK("autoduck", "Auto Duck",
+                "Speech-triggered ducking envelope with pause bridging",
+                "Duck", -3600, 0, 100, -1200, " dB"),
+
+        // ---- Stage 5 restoration suite ----
+        SPECTRAL_NOISE_REDUCTION("specnr", "Spectral Noise Reduction",
+                "STFT spectral subtraction against a learned noise profile",
+                "Reduction", 0, 4800, 100, 1200, " dB"),
+        CLICK_REMOVAL("declick", "Click Removal",
+                "Detects and repairs isolated digital clicks and pops",
+                "Threshold", 1, 900, 1, 200, ""),
+        CLIP_FIX("clipfix", "Clip Fix",
+                "Cubic-spline de-clipper with headroom attenuation",
+                "Threshold", 80, 100, 1, 95, " %"),
+        REPAIR("repair", "Repair",
+                "LPC short-glitch interpolator for dropouts and damage",
+                "Order", 8, 32, 1, 16, ""),
+        DE_HUM("dehum", "De-Hum",
+                "Notch cascade at the mains frequency and its harmonics",
+                "Frequency", 45, 65, 1, 50, " Hz"),
+        PLOSIVE_SUPPRESSOR("plosive", "Plosive & Breath Suppressor",
+                "Dynamic sub-140 Hz plosive tamer with breath attenuation",
+                "Sensitivity", 0, 100, 1, 50, " %"),
+
+        // ---- Stage 6 spatial, distortion & modulation suite ----
+        FREEVERB_REVERB("reverb", "Studio Reverb",
+                "Freeverb-style stereo reverb with damping and width",
+                "Room Size", 0, 100, 1, 55, " %"),
+        MULTI_DELAY("multidelay", "Multi-Echo Delay",
+                "Regular, bouncing-ball or reverse multi-tap echo",
+                "Delay", 10, 3000, 10, 300, " ms"),
+        ECHO("echo", "Echo",
+                "Simple feedback echo with adjustable decay",
+                "Delay", 10, 5000, 10, 500, " ms"),
+        STEREO_IMAGING("stereoimg", "Stereo Imaging",
+                "Pan, mid/side width and phase controls",
+                "Pan", -100, 100, 1, 0, " %"),
+        DISTORTION("distort", "Distortion",
+                "11-mode waveshaper with oversampling and tone control",
+                "Drive", 0, 100, 1, 50, " %"),
+        PHASER("phaser", "Phaser",
+                "Multi-stage all-pass phaser with LFO and feedback",
+                "Mix", 0, 100, 1, 50, " %"),
+        CHORUS_FLANGER("chorus", "Chorus & Flanger",
+                "Modulated delay with cubic Hermite fractional reads",
+                "Mix", 0, 100, 1, 50, " %"),
+        TREMOLO("tremolo", "Tremolo",
+                "Amplitude modulation with five LFO waveforms",
+                "Depth", 0, 100, 1, 40, " %"),
+        WAHWAH("wah", "Wahwah",
+                "Swept resonant band-pass with envelope auto-wah",
+                "Depth", 0, 100, 1, 70, " %"),
+        VOCODER("vocoder", "Vocoder",
+                "Band-filterbank vocoder with an internal carrier",
+                "Pitch", 50, 400, 1, 110, " Hz"),
+
+        // ---- Stage 7 time, utility, generator & analyzer suite ----
+        CHANGE_PITCH("changepitch", "Change Pitch",
+                "WSOLA pitch shift that keeps the tempo",
+                "Semitones", -2400, 2400, 50, 0, ""),
+        CHANGE_TEMPO("tempo", "Change Tempo",
+                "WSOLA time stretch without changing the pitch",
+                "Change", -7500, 30000, 100, 0, " %"),
+        CHANGE_SPEED_AND_PITCH("speedpitch", "Change Speed and Pitch",
+                "Varispeed resampler: duration and pitch change together",
+                "Speed", 25, 400, 5, 100, " %"),
+        SLIDING_STRETCH("slidestretch", "Sliding Stretch",
+                "Continuous tempo and pitch ramp across the region",
+                "Initial", -7500, 30000, 100, 0, " %"),
+        PAULSTRETCH("paulstretch", "Paulstretch",
+                "Extreme random-phase ambient time stretch",
+                "Factor", 150, 10000, 50, 800, " %"),
+        FADE("fade", "Fade",
+                "Fade in, fade out, studio fade or custom curve",
+                "Length", 1, 100, 1, 20, " %"),
+        TIMELINE_UTILITY("timeline", "Timeline Utility",
+                "Invert polarity, reverse the region or repeat it",
+                "Repeats", 1, 50, 1, 2, ""),
+        TRUNCATE_SILENCE("truncsil", "Truncate Silence",
+                "Automatic pause shortener with truncate or compress",
+                "Threshold", -8000, -2000, 100, -4000, " dB"),
+        SPECTRAL_EDIT("spectraledit", "Spectral Edit",
+                "Parametric, shelf or notch EQ applied in the STFT domain",
+                "Gain", -3600, 2400, 100, 0, " dB"),
+        AUDIO_GENERATOR("generator", "Audio Generator",
+                "Tone, chirp, noise, rhythm or DTMF generator",
+                "Amplitude", 0, 100, 1, 50, " %");
 
         public final String id;
         public final String title;
@@ -612,8 +726,31 @@ public final class DspChain {
                 case SHELF_FILTER:
                     return s.value != 0;
                 default:
-                    return true;
+                    return isProcessorAudible(s);
             }
+        }
+
+        /**
+         * Asks the effect's own processor whether its current settings would
+         * change the audio. A newly added effect sitting on its neutral
+         * defaults (0 dB gain, 0 % depth, ...) must not count as an active
+         * stage, otherwise the rack would look armed before the user touched
+         * anything.
+         */
+        private static boolean isProcessorAudible(EffectSlot s) {
+            AudioProcessor p = FxRackChain.createProcessor(s.type.id);
+            if (p == null) return true;
+            p.setEnabled(s.enabled);
+            String primaryId = primaryParamId(s.type);
+            if (primaryId != null) {
+                FxParameter fp = p.getParam(primaryId);
+                if (fp != null) fp.setCurrentRaw(s.value);
+            }
+            for (Map.Entry<String, Integer> e : s.extraParams.entrySet()) {
+                FxParameter fp = p.getParam(e.getKey());
+                if (fp != null) fp.setCurrentRaw(e.getValue());
+            }
+            return p.isAudible();
         }
 
         public int enabledSlotCount() {
@@ -920,6 +1057,80 @@ public final class DspChain {
                 return "freq";
             case SHELF_FILTER:
                 return "gain";
+            // Stage 4 dynamics suite.
+            case AMPLIFY:
+                return "amp_gain";
+            case NORMALIZE:
+                return "norm_target";
+            case LOUDNESS_NORMALIZATION:
+                return "loud_target";
+            case DYNAMIC_COMPRESSOR:
+                return "dyncomp_thresh";
+            case MULTIBAND_COMPRESSOR:
+                return "mb_amount";
+            case BRICKWALL_LIMITER_STAGE4:
+                return "lim_ceiling";
+            case NOISE_GATE_EXPANDER:
+                return "gate_thresh";
+            case DEESSER_SPLIT:
+                return "deess_thresh";
+            case AUTO_DUCK:
+                return "duck_amount";
+            // Stage 5 restoration suite.
+            case SPECTRAL_NOISE_REDUCTION:
+                return "snr_reduction";
+            case CLICK_REMOVAL:
+                return "click_thresh";
+            case CLIP_FIX:
+                return "clip_thresh";
+            case REPAIR:
+                return "repair_order";
+            case DE_HUM:
+                return "hum_freq";
+            case PLOSIVE_SUPPRESSOR:
+                return "plosive_sens";
+            // Stage 6 spatial / creative suite.
+            case FREEVERB_REVERB:
+                return "rv_size";
+            case MULTI_DELAY:
+                return "md_time";
+            case ECHO:
+                return "echo_time";
+            case STEREO_IMAGING:
+                return "st_pan";
+            case DISTORTION:
+                return "dist_drive";
+            case PHASER:
+                return "ph_mix";
+            case CHORUS_FLANGER:
+                return "ch_mix";
+            case TREMOLO:
+                return "tr_depth";
+            case WAHWAH:
+                return "wah_depth";
+            case VOCODER:
+                return "vc_pitch";
+            // Stage 7 time / utility / generator suite.
+            case CHANGE_PITCH:
+                return "pitch_semitones";
+            case CHANGE_TEMPO:
+                return "tempo_percent";
+            case CHANGE_SPEED_AND_PITCH:
+                return "speed_mult";
+            case SLIDING_STRETCH:
+                return "slide_init";
+            case PAULSTRETCH:
+                return "paul_factor";
+            case FADE:
+                return "fade_len";
+            case TIMELINE_UTILITY:
+                return "tl_repeats";
+            case TRUNCATE_SILENCE:
+                return "ts_thresh";
+            case SPECTRAL_EDIT:
+                return "se_gain";
+            case AUDIO_GENERATOR:
+                return "gen_amp";
             default:
                 return null;
         }
@@ -959,6 +1170,86 @@ public final class DspChain {
     /** Total algorithmic latency (frames) of the active rack. */
     public int getLatencyFrames() {
         return rack.getLatencyFrames();
+    }
+
+    /**
+     * The catalog category an effect belongs to. Derived from the
+     * registered processor so the "+ Add Effect" dialog can group the whole
+     * catalog without a second hand-maintained table.
+     */
+    public static FxCategory categoryOf(EffectType type) {
+        if (type == null) return FxCategory.EQUALIZER;
+        AudioProcessor p = FxRackChain.getPrototypeProcessor(type.id);
+        if (p != null) return p.getCategory();
+        // Legacy stages share a handful of processors.
+        switch (type) {
+            case NOISE_SUPPRESSION:
+            case ROOM_GATE:
+            case DE_ESSER:
+                return FxCategory.RESTORATION;
+            case COMPRESSOR:
+            case BRICKWALL_LIMITER:
+                return FxCategory.DYNAMICS;
+            case LOW_CUT_HPF:
+            case VOCAL_PRESENCE:
+            case WARMTH_BODY:
+                return FxCategory.EQUALIZER;
+            default:
+                return FxCategory.EQUALIZER;
+        }
+    }
+
+    /** Longest tail (frames) reported by any enabled processor. */
+    public int getTailFrames() {
+        return rack.getTailFrames();
+    }
+
+    /**
+     * Runs the two-pass analysis hook on every enabled processor so the
+     * level tools can measure the exact range that is about to be rendered.
+     */
+    public void prepareOffline(File raw, long startFrame, long endFrame,
+                               int sampleRate, int channels) throws Exception {
+        rack.prepareOffline(raw, startFrame, endFrame, sampleRate, channels);
+    }
+
+    /** The first enabled processor that renders its region offline. */
+    public AudioProcessor findOfflineProcessor() {
+        for (AudioProcessor p : rack.processors()) {
+            if (!p.isEnabled()) continue;
+            if (!p.isOfflineOnly()) continue;
+            return p;
+        }
+        return null;
+    }
+
+    /** Every enabled processor that renders its region offline, in order. */
+    public java.util.List<AudioProcessor> offlineProcessors() {
+        java.util.List<AudioProcessor> out = new java.util.ArrayList<>();
+        for (AudioProcessor p : rack.processors()) {
+            if (!p.isEnabled() || !p.isOfflineOnly()) continue;
+            out.add(p);
+        }
+        return out;
+    }
+
+    /** True when the rack still has processors that run in place. */
+    public boolean hasInPlaceProcessors() {
+        for (AudioProcessor p : rack.processors()) {
+            if (!p.isEnabled() || p.isOfflineOnly()) continue;
+            if (p.isAudible()) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Disables every offline processor so the remaining chain can be applied
+     * in place over a region that an offline effect already rewrote.
+     */
+    public void clearOfflineProcessors() {
+        for (AudioProcessor p : rack.processors()) {
+            if (p.isOfflineOnly()) p.setEnabled(false);
+        }
     }
 
     public void processInPlace(float[] buf, int frames) {

@@ -61,11 +61,21 @@ public final class BiquadFilter {
 
     /** Processes interleaved frames in place. */
     public void process(float[] buf, int frames, int ch) {
+        process(buf, frames, ch, 0);
+    }
+
+    /**
+     * Processes interleaved frames in place, starting at {@code frameOffset}.
+     * The offset variant lets a caller sweep the coefficients over a block
+     * without copying the samples out of the buffer.
+     */
+    public void process(float[] buf, int frames, int ch, int frameOffset) {
         if (buf == null || frames <= 0 || sections.length == 0) return;
         final int c = Math.max(1, Math.min(2, Math.min(ch, channels)));
         final int secs = sections.length;
         for (int f = 0; f < frames; f++) {
-            int idx = f * c;
+            int idx = (f + frameOffset) * c;
+            if (idx + c > buf.length) break;
             for (int chn = 0; chn < c; chn++) {
                 float x = buf[idx + chn];
                 for (int s = 0; s < secs; s++) {

@@ -464,6 +464,69 @@ public final class EditEngine {
     }
 
     /**
+     * Applies a duration-changing effect (Change Tempo, Change Speed,
+     * Paulstretch, Repeat, Truncate Silence, ...) to `[startFrame, endFrame)`
+     * of `raw`.
+     *
+     * <p>The region is rendered to a temporary buffer, then spliced back into
+     * the file. Because the rendered region can be longer or shorter than
+     * the original, the post-selection tail is stashed first and re-attached
+     * afterwards with a 5 ms raised-cosine crossfade.
+     *
+     * @return the new total frame count of the file, or -1 when the effect
+     *         produced no output
+     */
+    public static long applyLengthChangingEffectToRange(
+            File raw, long startFrame, long endFrame,
+            AudioProcessor processor, UndoJournal undo) throws Exception {
+        if (raw == null || processor == null) return -1;
+        FormatConverter.WavInfo info = FormatConverter.readFloatWav(raw);
+        int ch = info.channels;
+        long totalFrames = info.dataBytes / 4 / ch;
+        startFrame = Math.max(0, Math.min(totalFrames, startFrame));
+        endFrame = Math.max(startFrame, Math.min(totalFrames, endFrame));
+        long selFrames = endFrame - startFrame;
+        if (selFrames <= 0) return -1;
+
+        float[] region = readFloatSelection(raw, startFrame, endFrame);
+        if (region == null || region.length == 0) return -1;
+        int regionFrames = region.length / ch;
+
+        processor.prepare(info.sampleRate, ch);
+        float[] rendered = processor.processOfflineRegion(region, regionFrames, ch);
+        if (rendered == null || rendered.length == 0) return -1;
+        int newFrames = rendered.length / ch;
+        if (newFrames <= 0) return -1;
+
+        if (undo != null) undo.recordSnapshot(raw);
+
+        // Stash the tail so the file can be rewritten with a different
+        // region length.
+        File tailTmp = new File(raw.getParentFile(), raw.getName() + ".lctail");
+        try {
+            long tailFrames = saveTailFrom(raw, endFrame, tailTmp);
+            try (RandomAccessFile raf = new RandomAccessFile(raw, "rw")) {
+                long writePos = info.dataStart + startFrame * ch * 4L;
+                raf.seek(writePos);
+                Dsp.writeFloatsLE(raf, rendered, 0, rendered.length);
+                long newEndFrame = startFrame + newFrames;
+                raf.setLength(info.dataStart + newEndFrame * ch * 4L);
+                raf.seek(0);
+                raf.write(Dsp.wavFloatHeader(ch, info.sampleRate,
+                        newEndFrame * ch * 4L));
+            }
+            long newTotal = startFrame + newFrames + tailFrames;
+            spliceTailAfterReplace(raw, startFrame + newFrames, tailTmp);
+            return newTotal;
+        } finally {
+            if (tailTmp.exists()) {
+                // noinspection ResultOfMethodCallIgnored
+                tailTmp.delete();
+            }
+        }
+    }
+
+    /**
      * Applies `chain` in-place to `[startFrame, endFrame)` of `raw`.
      *
      * <p>Two details make an offline bake inaudible at the seams:
@@ -492,6 +555,11 @@ public final class EditEngine {
         if (selFrames <= 0) return false;
         boolean snapshotRecorded = true;
         if (undo != null) snapshotRecorded = undo.recordSnapshot(raw);
+
+        // Two-pass processors (Amplify, Normalize, Loudness) measure the
+        // exact range that is about to be rendered before the first sample
+        // is written.
+        chain.prepareOffline(raw, startFrame, endFrame, info.sampleRate, ch);
 
         chain.reset();
         final int latencyFrames = Math.max(0, chain.getLatencyFrames());
@@ -656,8 +724,100 @@ public final class EditEngine {
                 raf.write(rawBuf, 0, want * ch * 4);
                 cur += want;
             }
+
+            // ---- Tail flushing ------------------------------------------------
+            // Time-based effects (reverb, delay, echo) keep ringing after the
+            // last input sample. Their decay is rendered into the audio that
+            // follows the selection (or appended at the end of the take) so
+            // the effect never gets chopped off abruptly.
+            int tailFrames = chain.getTailFrames();
+            if (tailFrames > 0) {
+                long tailStart = endFrame;
+                long tailEnd = Math.min(totalFrames, endFrame + tailFrames);
+                if (tailEnd > tailStart) {
+                    flushTailIntoRange(raf, info, chain, tailStart, tailEnd, ch);
+                } else if (endFrame >= totalFrames && info.dataStart == 44L) {
+                    appendTailAtEnd(raf, info, chain, tailFrames, ch);
+                }
+            }
         }
         return snapshotRecorded;
+    }
+
+    /**
+     * Renders the chain's decaying tail into `[tailStart, tailEnd)` and adds
+     * it to the audio that is already there.
+     *
+     * <p>Only the wet contribution is added (processed minus dry), so the
+     * original audio underneath is preserved and the reverb simply bleeds
+     * into the following material. The contribution is ramped in over 5 ms
+     * so the seam cannot click.
+     */
+    private static void flushTailIntoRange(RandomAccessFile raf,
+                                           FormatConverter.WavInfo info,
+                                           DspChain chain, long tailStart,
+                                           long tailEnd, int ch)
+            throws Exception {
+        long frameBytes = ch * 4L;
+        long frames = tailEnd - tailStart;
+        int chunk = 4096;
+        float[] dry = new float[chunk * ch];
+        float[] wet = new float[chunk * ch];
+        long pos = tailStart;
+        while (pos < tailEnd) {
+            int want = (int) Math.min(chunk, tailEnd - pos);
+            raf.seek(info.dataStart + pos * frameBytes);
+            raf.readFully(Dsp.toBytes(dry, 0, want * ch));
+            System.arraycopy(dry, 0, wet, 0, want * ch);
+            chain.processInPlace(wet, want);
+            for (int f = 0; f < want; f++) {
+                long absFrame = pos + f;
+                // 5 ms ramp-in so the tail never steps at the boundary.
+                float ramp = 1f;
+                if (absFrame < tailStart + Dsp.CROSSFADE_FRAMES) {
+                    float u = (absFrame - tailStart) / (float) Dsp.CROSSFADE_FRAMES;
+                    ramp = 0.5f * (1f - (float) Math.cos(Math.PI * u));
+                }
+                for (int c = 0; c < ch; c++) {
+                    int idx = f * ch + c;
+                    wet[idx] = dry[idx] + (wet[idx] - dry[idx]) * ramp;
+                }
+            }
+            raf.seek(info.dataStart + pos * frameBytes);
+            Dsp.writeFloatsLE(raf, wet, 0, want * ch);
+            pos += want;
+        }
+    }
+
+    /**
+     * Appends the chain's decaying tail to the end of the take so a reverb
+     * applied to a whole recording still rings out.
+     */
+    private static void appendTailAtEnd(RandomAccessFile raf,
+                                        FormatConverter.WavInfo info,
+                                        DspChain chain, int tailFrames, int ch)
+            throws Exception {
+        int chunk = 4096;
+        float[] zeros = new float[chunk * ch];
+        long written = 0;
+        long newPayloadBytes;
+        try {
+            while (written < tailFrames) {
+                int want = (int) Math.min(chunk, tailFrames - written);
+                float[] wet = new float[want * ch];
+                chain.processInPlace(wet, want);
+                raf.seek(info.dataStart + (info.dataBytes / (ch * 4L) + written)
+                        * ch * 4L);
+                Dsp.writeFloatsLE(raf, wet, 0, want * ch);
+                written += want;
+            }
+            newPayloadBytes = info.dataBytes + written * ch * 4L;
+            raf.setLength(44L + newPayloadBytes);
+            raf.seek(0);
+            raf.write(Dsp.wavFloatHeader(ch, info.sampleRate, newPayloadBytes));
+        } catch (Exception ignored) {
+            // A failed tail append must never lose the processed audio.
+        }
     }
 
     /** Reads an interleaved frame range from a 32-bit float WAV for analysis. */

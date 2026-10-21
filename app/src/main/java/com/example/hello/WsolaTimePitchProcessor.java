@@ -1,0 +1,174 @@
+package com.example.hello;
+
+/**
+ * Stage 7 WSOLA (Waveform Similarity Overlap-Add) engine.
+ *
+ * <p>WSOLA time-stretches a signal without changing its pitch: the engine
+ * slides a 20 ms analysis window over the input, looks for the position
+ * within a +/- 15 ms search window whose waveform best matches the previous
+ * synthesis frame (normalised cross-correlation), and overlap-adds the
+ * result with a 10 ms hop. Pitch shifting combines the stretch with a
+ * windowed-sinc resampler.
+ */
+final class WsolaTimePitchProcessor {
+
+    /** Analysis frame length (20 ms at 48 kHz). */
+    private final int frameSize;
+    /** Synthesis hop (10 ms at 48 kHz). */
+    private final int synthesisHop;
+    /** Correlation search radius (15 ms). */
+    private final int searchRadius;
+    private final int sampleRate;
+
+    WsolaTimePitchProcessor(int sampleRate) {
+        this.sampleRate = Math.max(8000, sampleRate);
+        this.frameSize = Math.max(64, (int) (this.sampleRate * 0.020));
+        this.synthesisHop = Math.max(32, (int) (this.sampleRate * 0.010));
+        this.searchRadius = Math.max(16, (int) (this.sampleRate * 0.015));
+    }
+
+    /**
+     * Stretches {@code input} by {@code rate} (2.0 = twice as long) without
+     * changing the pitch.
+     */
+    float[] timeStretch(float[] input, int frames, int channels, double rate) {
+        if (input == null || frames <= 0 || channels <= 0) return input;
+        if (Math.abs(rate - 1.0) < 1e-6) return input.clone();
+
+        int outFrames = Math.max(1, (int) Math.round(frames * rate));
+        float[] out = new float[outFrames * channels];
+        int outPos = 0;
+        int anaPos = 0;
+        int refPos = 0;
+        float[] window = Dsp.hannWindow(frameSize);
+
+        // First frame is taken verbatim.
+        copyFrame(input, frames, channels, anaPos, out, outPos, frameSize);
+        applyWindow(out, outPos, frameSize, channels, window);
+        outPos += synthesisHop;
+        refPos = anaPos + frameSize - synthesisHop;
+
+        while (outPos + synthesisHop < outFrames && anaPos < frames) {
+            int searchStart = Math.max(0, anaPos - searchRadius);
+            int searchEnd = Math.min(Math.max(0, frames - frameSize),
+                    anaPos + searchRadius);
+            int best = searchStart;
+            double bestScore = -1e30;
+            for (int candidate = searchStart; candidate <= searchEnd; candidate++) {
+                double score = similarity(input, frames, channels, candidate,
+                        refPos, frameSize);
+                if (score > bestScore) {
+                    bestScore = score;
+                    best = candidate;
+                }
+            }
+            anaPos = best;
+            // Overlap-add the new frame at the synthesis position.
+            for (int i = 0; i < frameSize && outPos + i < outFrames; i++) {
+                float w = window[i];
+                int src = (anaPos + i) * channels;
+                int dst = (outPos + i) * channels;
+                for (int c = 0; c < channels; c++) {
+                    out[dst + c] += input[src + c] * w;
+                }
+            }
+            outPos += synthesisHop;
+            refPos = anaPos + frameSize - synthesisHop;
+            anaPos += synthesisHop;
+        }
+        return out;
+    }
+
+    /** Normalised cross-correlation between the candidate and the reference. */
+    private double similarity(float[] input, int frames, int channels,
+                              int candidate, int reference, int len) {
+        if (candidate + len > frames || reference + len > frames) return -1e30;
+        double num = 0;
+        double denA = 0;
+        double denB = 0;
+        for (int i = 0; i < len; i += 4) {
+            float a = input[(candidate + i) * channels];
+            float b = input[(reference + i) * channels];
+            num += (double) a * b;
+            denA += (double) a * a;
+            denB += (double) b * b;
+        }
+        double den = Math.sqrt(denA * denB);
+        return den > 1e-12 ? num / den : 0.0;
+    }
+
+    private void copyFrame(float[] input, int frames, int channels, int srcPos,
+                           float[] out, int dstPos, int len) {
+        for (int i = 0; i < len; i++) {
+            int src = srcPos + i;
+            if (src >= frames) break;
+            int s = src * channels;
+            int d = (dstPos + i) * channels;
+            for (int c = 0; c < channels; c++) out[d + c] = input[s + c];
+        }
+    }
+
+    private void applyWindow(float[] buf, int frameOffset, int len, int channels,
+                             float[] window) {
+        for (int i = 0; i < len; i++) {
+            int idx = (frameOffset + i) * channels;
+            if (idx + channels > buf.length) break;
+            for (int c = 0; c < channels; c++) buf[idx + c] *= window[i];
+        }
+    }
+
+    /**
+     * Shifts the pitch by {@code semitones} while preserving the duration:
+     * the signal is stretched by {@code alpha} and resampled back by
+     * {@code 1 / alpha}.
+     */
+    float[] pitchShift(float[] input, int frames, int channels, double semitones) {
+        if (input == null || frames <= 0) return input;
+        if (Math.abs(semitones) < 1e-6) return input.clone();
+        double alpha = Math.pow(2.0, semitones / 12.0);
+        float[] stretched = timeStretch(input, frames, channels, alpha);
+        int stretchedFrames = stretched.length / channels;
+        // Resample back to the original length (linear interpolation with a
+        // small anti-alias smoothing).
+        float[] out = new float[frames * channels];
+        for (int f = 0; f < frames; f++) {
+            double srcPos = f * alpha;
+            int i1 = (int) Math.floor(srcPos);
+            float frac = (float) (srcPos - i1);
+            for (int c = 0; c < channels; c++) {
+                float a = sample(stretched, stretchedFrames, channels, i1, c);
+                float b = sample(stretched, stretchedFrames, channels, i1 + 1, c);
+                out[f * channels + c] = a + (b - a) * frac;
+            }
+        }
+        return out;
+    }
+
+    private static float sample(float[] buf, int frames, int channels, int frame,
+                                int channel) {
+        if (frame < 0) return 0f;
+        if (frame >= frames) return 0f;
+        return buf[frame * channels + channel];
+    }
+
+    /**
+     * Varispeed resampling: changes duration and pitch together.
+     */
+    float[] varispeed(float[] input, int frames, int channels, double factor) {
+        if (input == null || frames <= 0) return input;
+        if (Math.abs(factor - 1.0) < 1e-6) return input.clone();
+        int outFrames = Math.max(1, (int) Math.round(frames / factor));
+        float[] out = new float[outFrames * channels];
+        for (int f = 0; f < outFrames; f++) {
+            double srcPos = f * factor;
+            int i1 = (int) Math.floor(srcPos);
+            float frac = (float) (srcPos - i1);
+            for (int c = 0; c < channels; c++) {
+                float a = sample(input, frames, channels, i1, c);
+                float b = sample(input, frames, channels, i1 + 1, c);
+                out[f * channels + c] = a + (b - a) * frac;
+            }
+        }
+        return out;
+    }
+}

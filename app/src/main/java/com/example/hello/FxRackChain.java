@@ -53,6 +53,45 @@ public final class FxRackChain {
         register("notch", NotchFilterProcessor::new);
         register("shelf", ShelfFilterProcessor::new);
         register("classic", ClassicFiltersProcessor::new);
+        // Stage 4 dynamics & leveling suite.
+        register("amplify", AmplifyProcessor::new);
+        register("normalize", NormalizeProcessor::new);
+        register("loudness", LoudnessNormalizationProcessor::new);
+        register("dyncomp", CompressorProcessor::new);
+        register("mbcomp", MultibandCompressorProcessor::new);
+        register("bricklim", BrickwallLimiterProcessor::new);
+        register("gateexp", NoiseGateExpanderProcessor::new);
+        register("deesssplit", DeEsserProcessor::new);
+        register("autoduck", AutoDuckProcessor::new);
+        // Stage 5 restoration suite.
+        register("specnr", SpectralNoiseReductionProcessor::new);
+        register("declick", ClickRemovalProcessor::new);
+        register("clipfix", ClipFixProcessor::new);
+        register("repair", RepairProcessor::new);
+        register("dehum", DeHumProcessor::new);
+        register("plosive", PlosiveBreathSuppressorProcessor::new);
+        // Stage 6 spatial, distortion & modulation suite.
+        register("reverb", FreeverbReverbProcessor::new);
+        register("multidelay", MultiDelayProcessor::new);
+        register("echo", EchoProcessor::new);
+        register("stereoimg", StereoImagingProcessor::new);
+        register("distort", DistortionWaveshaperProcessor::new);
+        register("phaser", PhaserProcessor::new);
+        register("chorus", ChorusFlangerProcessor::new);
+        register("tremolo", TremoloProcessor::new);
+        register("wah", WahwahProcessor::new);
+        register("vocoder", VocoderProcessor::new);
+        // Stage 7 time, utility, generator & analyzer suite.
+        register("changepitch", ChangePitchProcessor::new);
+        register("tempo", ChangeTempoProcessor::new);
+        register("speedpitch", ChangeSpeedAndPitchProcessor::new);
+        register("slidestretch", SlidingStretchProcessor::new);
+        register("paulstretch", PaulstretchProcessor::new);
+        register("fade", FadeProcessor::new);
+        register("timeline", TimelineUtilityProcessor::new);
+        register("truncsil", TruncateSilenceProcessor::new);
+        register("spectraledit", SpectralEditProcessor::new);
+        register("generator", AudioGeneratorTool::new);
     }
 
     /** Registers (or overrides) a processor id for JSON round-trips. */
@@ -64,8 +103,19 @@ public final class FxRackChain {
 
     /** Instantiates a registered processor, or null when unknown. */
     public static synchronized AudioProcessor createProcessor(String id) {
-        ProcessorFactory f = REGISTRY.get(id);
+        if (id == null) return null;
+        ProcessorFactory f = REGISTRY.get(resolveId(id));
         return f == null ? null : f.create();
+    }
+
+    /**
+     * Maps an effect id onto the processor that implements it. The warmth
+     * and presence slots share one tone processor, so their ids resolve to
+     * it.
+     */
+    static String resolveId(String id) {
+        if ("warmth".equals(id) || "presence".equals(id)) return "tone";
+        return id;
     }
 
     /**
@@ -74,10 +124,7 @@ public final class FxRackChain {
      */
     public static synchronized AudioProcessor getPrototypeProcessor(String id) {
         if (id == null) return null;
-        String lookupId = id;
-        if ("warmth".equals(id) || "presence".equals(id)) {
-            lookupId = "tone";
-        }
+        String lookupId = resolveId(id);
         AudioProcessor p = PROTOTYPES.get(lookupId);
         if (p == null) {
             ProcessorFactory f = REGISTRY.get(lookupId);
@@ -181,6 +228,16 @@ public final class FxRackChain {
 
     public void reset() {
         for (AudioProcessor p : processors) p.reset();
+    }
+
+    /** Runs the optional two-pass analysis hook on every enabled processor. */
+    public void prepareOffline(java.io.File raw, long startFrame,
+                               long endFrame, int sampleRate, int channels)
+            throws Exception {
+        for (AudioProcessor p : processors) {
+            if (!p.isEnabled() || !p.isAudible()) continue;
+            p.prepareOffline(raw, startFrame, endFrame, sampleRate, channels);
+        }
     }
 
     /** Longest tail (frames) reported by any enabled processor. */

@@ -263,7 +263,17 @@ public final class Dsp {
 
     /** 240 frames @ 48 kHz = 5.0 ms raised-cosine crossfade window. */
     public static final int CROSSFADE_FRAMES = 240;
-    private static final float[] COS_FADE_IN = new float[CROSSFADE_FRAMES];
+
+    /**
+     * Packs {@code n} floats into little-endian bytes for a direct file
+     * read. The returned array is exactly {@code n * 4} bytes long.
+     */
+    public static byte[] toBytes(float[] v, int off, int n) {
+        byte[] out = new byte[n * 4];
+        ByteBuffer bb = ByteBuffer.wrap(out).order(ByteOrder.LITTLE_ENDIAN);
+        for (int i = 0; i < n; i++) bb.putFloat(v[off + i]);
+        return out;
+    }    private static final float[] COS_FADE_IN = new float[CROSSFADE_FRAMES];
     static {
         for (int i = 0; i < CROSSFADE_FRAMES; i++) {
             COS_FADE_IN[i] = 0.5f * (1.0f - (float) Math.cos(
@@ -879,6 +889,23 @@ public final class Dsp {
         };
     }
 
+    /**
+     * RBJ all-pass biquad. The phaser chain and the Linkwitz-Riley
+     * crossover network both need a phase-flat magnitude section.
+     */
+    public static float[] rbjAllPass(double sr, double f0, double q) {
+        double w0 = 2.0 * Math.PI * f0 / sr;
+        double alpha = Math.sin(w0) / (2.0 * q);
+        double a0 = 1.0 + alpha;
+        double b0 = (1.0 - alpha) / a0;
+        double b1 = (-2.0 * Math.cos(w0)) / a0;
+        double b2 = (1.0 - alpha) / a0;
+        double a1 = (-2.0 * Math.cos(w0)) / a0;
+        double a2 = (1.0 - alpha) / a0;
+        return new float[]{(float) b0, (float) b1, (float) b2,
+                (float) a1, (float) a2};
+    }
+
     /** Identity biquad carrying a plain gain: {g,0,0,0,0}. */
     public static float[] gainBiquad(double gain) {
         return new float[]{(float) gain, 0f, 0f, 0f, 0f};
@@ -1211,6 +1238,51 @@ public final class Dsp {
                     + 0.08 * Math.cos(4 * Math.PI * i / (n - 1)));
         }
         return w;
+    }
+
+    /** Hann window of length n (periodic-free, symmetric). */
+    public static float[] hannWindow(int n) {
+        if (n <= 1) return new float[]{1.0f};
+        float[] w = new float[n];
+        for (int i = 0; i < n; i++) {
+            w[i] = (float) (0.5 - 0.5 * Math.cos(2 * Math.PI * i / (n - 1)));
+        }
+        return w;
+    }
+
+    /** Blackman-Harris window of length n (low side lobes for analysis). */
+    public static float[] blackmanHarrisWindow(int n) {
+        if (n <= 1) return new float[]{1.0f};
+        float[] w = new float[n];
+        for (int i = 0; i < n; i++) {
+            double x = 2.0 * Math.PI * i / (n - 1);
+            w[i] = (float) (0.35875 - 0.48829 * Math.cos(x)
+                    + 0.14128 * Math.cos(2 * x) - 0.01168 * Math.cos(3 * x));
+        }
+        return w;
+    }
+
+    /**
+     * Four-point cubic Hermite fractional-delay interpolation over a ring
+     * buffer. {@code readPos} is the fractional read position in samples
+     * (0 = oldest sample in the window).
+     */
+    public static float hermiteInterp(float[] ring, int mask, float readPos) {
+        int size = mask + 1;
+        int i1 = (int) Math.floor(readPos);
+        float frac = readPos - i1;
+        int i0 = i1 - 1;
+        int i2 = i1 + 1;
+        int i3 = i1 + 2;
+        float p0 = ring[i0 & mask];
+        float p1 = ring[i1 & mask];
+        float p2 = ring[i2 & mask];
+        float p3 = ring[i3 & mask];
+        float c0 = p1;
+        float c1 = 0.5f * (p2 - p0);
+        float c2 = p0 - 2.5f * p1 + 2f * p2 - 0.5f * p3;
+        float c3 = 0.5f * (p3 - p0) + 1.5f * (p1 - p2);
+        return ((c3 * frac + c2) * frac + c1) * frac + c0;
     }
 
     /**
