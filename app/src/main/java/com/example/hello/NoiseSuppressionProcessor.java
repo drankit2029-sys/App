@@ -105,9 +105,15 @@ final class NoiseSuppressionProcessor extends AudioProcessor {
         return isAudible() ? FFT_SIZE : 0;
     }
 
+    /**
+     * The spectral stage has no decaying tail: its FFT_SIZE is the analysis
+     * latency, which is already reported by {@link #getLatencyFrames()} and
+     * compensated by the offline range commit. Reporting it as a tail too
+     * would make the engine flush a phantom decay after every apply.
+     */
     @Override
     public int getTailFrames() {
-        return FFT_SIZE;
+        return 0;
     }
 
     @Override

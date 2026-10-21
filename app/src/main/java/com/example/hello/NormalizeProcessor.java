@@ -25,6 +25,11 @@ final class NormalizeProcessor extends AudioProcessor {
     private float[] dcOffset = new float[2];
     private float[] gainLin = new float[]{1f, 1f};
     private boolean scanned = false;
+    // Real-time fallback state (no pre-scan available).
+    private float[] realtimePeak = new float[2];
+    private float[] realtimeGain = new float[]{1f, 1f};
+    private float[] dcState = new float[2];
+    private float[] prevIn = new float[2];
 
     NormalizeProcessor() {
     }
@@ -60,6 +65,10 @@ final class NormalizeProcessor extends AudioProcessor {
         gainLin[1] = 1f;
         dcOffset[0] = 0f;
         dcOffset[1] = 0f;
+        realtimePeak[0] = realtimePeak[1] = 0f;
+        realtimeGain[0] = realtimeGain[1] = 1f;
+        dcState[0] = dcState[1] = 0f;
+        prevIn[0] = prevIn[1] = 0f;
     }
 
     @Override
@@ -126,9 +135,10 @@ final class NormalizeProcessor extends AudioProcessor {
         if (buf == null || frames <= 0) return;
         int ch = Math.max(1, Math.min(2, channels));
         if (!scanned) {
-            // No analysis available (real-time preview): apply nothing but
-            // keep the DC offset removal, which needs no pre-scan.
-            if (!removeDc.getBoolean()) return;
+            // No pre-scan available (live preview): normalise against a
+            // running peak estimate so the effect still does something.
+            runRealtime(buf, frames, ch);
+            return;
         }
         for (int f = 0; f < frames; f++) {
             int idx = f * ch;
@@ -136,6 +146,51 @@ final class NormalizeProcessor extends AudioProcessor {
                 float v = buf[idx + c] - dcOffset[c];
                 buf[idx + c] = v * gainLin[c];
             }
+        }
+    }
+
+    /**
+     * Real-time fallback: tracks a decaying peak estimate per channel and
+     * eases the gain towards {@code target / peak}. The DC offset is
+     * removed with a one-pole high-pass so it works without a pre-scan.
+     */
+    private void runRealtime(float[] buf, int frames, int ch) {
+        float targetLin = Dsp.dbToLin(target.getFloat());
+        final int block = 64;
+        int offset = 0;
+        while (offset < frames) {
+            int n = Math.min(block, frames - offset);
+            float[] peak = new float[ch];
+            for (int f = 0; f < n; f++) {
+                for (int c = 0; c < ch; c++) {
+                    float v = buf[(offset + f) * ch + c];
+                    float a = Math.abs(v);
+                    if (a > peak[c]) peak[c] = a;
+                }
+            }
+            for (int c = 0; c < ch; c++) {
+                // The peak estimate decays so a transient does not pin the
+                // gain down for the rest of the take.
+                realtimePeak[c] = Math.max(peak[c], realtimePeak[c] * 0.9995f);
+                float target = realtimePeak[c] > 1e-6f
+                        ? targetLin / realtimePeak[c] : 1f;
+                if (!normalizePeak.getBoolean() && !normalizeRms.getBoolean()) {
+                    target = 1f;
+                }
+                realtimeGain[c] += (target - realtimeGain[c]) * 0.05f;
+            }
+            for (int f = 0; f < n; f++) {
+                int idx = (offset + f) * ch;
+                for (int c = 0; c < ch; c++) {
+                    float v = buf[idx + c];
+                    // One-pole DC blocker.
+                    dcState[c] = 0.995f * (dcState[c] + v - prevIn[c]);
+                    prevIn[c] = v;
+                    float out = removeDc.getBoolean() ? dcState[c] : v;
+                    buf[idx + c] = out * realtimeGain[c];
+                }
+            }
+            offset += n;
         }
     }
 }

@@ -43,8 +43,9 @@ final class WsolaTimePitchProcessor {
         float[] window = Dsp.hannWindow(frameSize);
 
         // First frame is taken verbatim.
-        copyFrame(input, frames, channels, anaPos, out, outPos, frameSize);
-        applyWindow(out, outPos, frameSize, channels, window);
+        copyFrame(input, frames, channels, anaPos, out, outPos, frameSize,
+                outFrames);
+        applyWindow(out, outPos, frameSize, channels, window, outFrames);
         outPos += synthesisHop;
         refPos = anaPos + frameSize - synthesisHop;
 
@@ -65,8 +66,10 @@ final class WsolaTimePitchProcessor {
             anaPos = best;
             // Overlap-add the new frame at the synthesis position.
             for (int i = 0; i < frameSize && outPos + i < outFrames; i++) {
+                int srcFrame = anaPos + i;
+                if (srcFrame >= frames) break;
                 float w = window[i];
-                int src = (anaPos + i) * channels;
+                int src = srcFrame * channels;
                 int dst = (outPos + i) * channels;
                 for (int c = 0; c < channels; c++) {
                     out[dst + c] += input[src + c] * w;
@@ -98,10 +101,11 @@ final class WsolaTimePitchProcessor {
     }
 
     private void copyFrame(float[] input, int frames, int channels, int srcPos,
-                           float[] out, int dstPos, int len) {
+                           float[] out, int dstPos, int len, int outFrames) {
         for (int i = 0; i < len; i++) {
             int src = srcPos + i;
             if (src >= frames) break;
+            if (dstPos + i >= outFrames) break;
             int s = src * channels;
             int d = (dstPos + i) * channels;
             for (int c = 0; c < channels; c++) out[d + c] = input[s + c];
@@ -109,8 +113,9 @@ final class WsolaTimePitchProcessor {
     }
 
     private void applyWindow(float[] buf, int frameOffset, int len, int channels,
-                             float[] window) {
+                             float[] window, int outFrames) {
         for (int i = 0; i < len; i++) {
+            if (frameOffset + i >= outFrames) break;
             int idx = (frameOffset + i) * channels;
             if (idx + channels > buf.length) break;
             for (int c = 0; c < channels; c++) buf[idx + c] *= window[i];

@@ -186,6 +186,10 @@ public class DspChainTest {
     @Test
     public void allEightEffectsModifySignalWhenEnabled() {
         for (DspChain.EffectType type : DspChain.EffectType.values()) {
+            // The Stages 4-7 families need their own engagement (level tools
+            // need a pre-scan, the time tools render offline), so they are
+            // covered by their own suites.
+            if (!type.isLegacyStage() && !type.isStage3Suite()) continue;
             DspChain.Config cfg = new DspChain.Config();
             cfg.applyPreset(DspChain.Preset.CLEAR_ALL);
             DspChain.EffectSlot slot = cfg.addOrFocusSlot(type);

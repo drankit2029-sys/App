@@ -106,9 +106,13 @@ final class FilterCurveEqProcessor extends AudioProcessor {
         return isAudible() ? tapsForIndex(tapsSel.getEnumIndex()) / 2 : 0;
     }
 
+    /**
+     * The linear-phase FIR has group delay, not a decaying tail; the delay
+     * is already reported by {@link #getLatencyFrames()}.
+     */
     @Override
     public int getTailFrames() {
-        return getLatencyFrames();
+        return 0;
     }
 
     @Override

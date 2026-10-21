@@ -60,8 +60,10 @@ public class Stage4DynamicsTest {
         p.prepare(SR, 1);
         float[] copy = buf.clone();
         p.processInPlace(copy, frames, 1);
-        // No offline scan yet: the processor must not alter the signal.
-        assertEquals(1.0f, peak(copy) / peak(buf), 0.001f);
+        // Without a pre-scan the processor falls back to its real-time
+        // loudness follower, so it must still move the signal.
+        assertTrue("Real-time loudness follower did not act",
+                Math.abs(peak(copy) - peak(buf)) > 1e-4f);
 
         // The measurement path is exercised through the analyzer helper,
         // which uses the same K-weighting coefficients.

@@ -28,6 +28,9 @@ final class LoudnessNormalizationProcessor extends AudioProcessor {
     private float appliedGainDb = 0f;
     private float measuredLufs = -70f;
     private boolean scanned = false;
+    // Real-time fallback state (no pre-scan available).
+    private float realtimeLufs = -70f;
+    private float realtimeGainDb = 0f;
 
     private BiquadFilter kWeight = new BiquadFilter();
     private int sampleRate = DspChain.SAMPLE_RATE;
@@ -67,6 +70,8 @@ final class LoudnessNormalizationProcessor extends AudioProcessor {
     public void reset() {
         kWeight.reset();
         scanned = false;
+        realtimeLufs = -70f;
+        realtimeGainDb = 0f;
     }
 
     @Override
@@ -193,7 +198,11 @@ final class LoudnessNormalizationProcessor extends AudioProcessor {
     public void processInPlace(float[] buf, int frames, int channels) {
         if (buf == null || frames <= 0) return;
         int ch = Math.max(1, Math.min(2, channels));
-        float gain = Dsp.dbToLin(scanned ? appliedGainDb : 0f);
+        if (!scanned) {
+            runRealtime(buf, frames, ch);
+            return;
+        }
+        float gain = Dsp.dbToLin(appliedGainDb);
         if (gain == 1f) return;
         int n = Math.min(buf.length, frames * ch);
         for (int i = 0; i < n; i++) buf[i] *= gain;
@@ -209,6 +218,47 @@ final class LoudnessNormalizationProcessor extends AudioProcessor {
                 float shaped = ceilLin + over / (1f + over / (ceilLin + 1e-6f));
                 buf[i] = v < 0 ? -shaped : shaped;
             }
+        }
+    }
+
+    /**
+     * Real-time fallback: tracks a decaying K-weighted loudness estimate
+     * and eases the gain towards {@code target - measured}. The ceiling is
+     * still enforced, so the live preview can never clip.
+     */
+    private void runRealtime(float[] buf, int frames, int ch) {
+        float ceilLin = Dsp.dbToLin(ceiling.getFloat());
+        float targetLufs = target.getFloat();
+        final int block = 1024;
+        int offset = 0;
+        while (offset < frames) {
+            int n = Math.min(block, frames - offset);
+            float[] weighted = new float[n * ch];
+            System.arraycopy(buf, offset * ch, weighted, 0, weighted.length);
+            kWeight.reset();
+            kWeight.process(weighted, n, ch);
+            double sum = 0;
+            for (int i = 0; i < n * ch; i++) {
+                sum += (double) weighted[i] * weighted[i];
+            }
+            double mean = sum / (n * (double) ch);
+            float blockLufs = (float) (-0.691 + 10 * Math.log10(Math.max(1e-12, mean)));
+            // The estimate decays so a loud passage does not pin the gain.
+            realtimeLufs = Math.max(blockLufs, realtimeLufs - 0.05f);
+            float wanted = targetLufs - realtimeLufs;
+            realtimeGainDb += (wanted - realtimeGainDb) * 0.02f;
+            float gain = Dsp.dbToLin(realtimeGainDb);
+            for (int i = 0; i < n * ch; i++) {
+                float v = buf[offset * ch + i] * gain;
+                float a = Math.abs(v);
+                if (a > ceilLin) {
+                    float over = a - ceilLin;
+                    float shaped = ceilLin + over / (1f + over / (ceilLin + 1e-6f));
+                    v = v < 0 ? -shaped : shaped;
+                }
+                buf[offset * ch + i] = v;
+            }
+            offset += n;
         }
     }
 }

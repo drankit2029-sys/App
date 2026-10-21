@@ -728,16 +728,15 @@ public final class EditEngine {
             // ---- Tail flushing ------------------------------------------------
             // Time-based effects (reverb, delay, echo) keep ringing after the
             // last input sample. Their decay is rendered into the audio that
-            // follows the selection (or appended at the end of the take) so
-            // the effect never gets chopped off abruptly.
+            // already follows the selection, so the effect never gets
+            // chopped off abruptly. The file is never grown: a take that
+            // ends with the selection simply ends with the tail's crossfade.
             int tailFrames = chain.getTailFrames();
             if (tailFrames > 0) {
                 long tailStart = endFrame;
                 long tailEnd = Math.min(totalFrames, endFrame + tailFrames);
                 if (tailEnd > tailStart) {
                     flushTailIntoRange(raf, info, chain, tailStart, tailEnd, ch);
-                } else if (endFrame >= totalFrames && info.dataStart == 44L) {
-                    appendTailAtEnd(raf, info, chain, tailFrames, ch);
                 }
             }
         }
@@ -786,37 +785,6 @@ public final class EditEngine {
             raf.seek(info.dataStart + pos * frameBytes);
             Dsp.writeFloatsLE(raf, wet, 0, want * ch);
             pos += want;
-        }
-    }
-
-    /**
-     * Appends the chain's decaying tail to the end of the take so a reverb
-     * applied to a whole recording still rings out.
-     */
-    private static void appendTailAtEnd(RandomAccessFile raf,
-                                        FormatConverter.WavInfo info,
-                                        DspChain chain, int tailFrames, int ch)
-            throws Exception {
-        int chunk = 4096;
-        float[] zeros = new float[chunk * ch];
-        long written = 0;
-        long newPayloadBytes;
-        try {
-            while (written < tailFrames) {
-                int want = (int) Math.min(chunk, tailFrames - written);
-                float[] wet = new float[want * ch];
-                chain.processInPlace(wet, want);
-                raf.seek(info.dataStart + (info.dataBytes / (ch * 4L) + written)
-                        * ch * 4L);
-                Dsp.writeFloatsLE(raf, wet, 0, want * ch);
-                written += want;
-            }
-            newPayloadBytes = info.dataBytes + written * ch * 4L;
-            raf.setLength(44L + newPayloadBytes);
-            raf.seek(0);
-            raf.write(Dsp.wavFloatHeader(ch, info.sampleRate, newPayloadBytes));
-        } catch (Exception ignored) {
-            // A failed tail append must never lose the processed audio.
         }
     }
 

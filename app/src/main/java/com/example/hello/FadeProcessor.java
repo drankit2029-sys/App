@@ -89,6 +89,9 @@ final class FadeProcessor extends AudioProcessor {
     @Override
     public float[] processOfflineRegion(float[] in, int frames, int channels) {
         if (in == null || frames <= 0) return in;
+        // The fade is rendered into a copy so the caller keeps the original
+        // region untouched, exactly like the other offline tools.
+        float[] out = in.clone();
         int typeIdx = type.getEnumIndex();
         int fadeFrames = Math.max(1,
                 (int) Math.round(frames * length.getCurrentRaw() / 100.0));
@@ -96,23 +99,23 @@ final class FadeProcessor extends AudioProcessor {
 
         switch (typeIdx) {
             case 0: { // Fade In
-                applyRamp(in, frames, channels, fadeFrames, true);
+                applyRamp(out, frames, channels, fadeFrames, true);
                 break;
             }
             case 1: { // Fade Out
-                applyRamp(in, frames, channels, fadeFrames, false);
+                applyRamp(out, frames, channels, fadeFrames, false);
                 break;
             }
             case 2: { // Studio Fade Out
-                applyStudioFade(in, frames, channels, fadeFrames);
+                applyStudioFade(out, frames, channels, fadeFrames);
                 break;
             }
             default: { // Adjustable Fade
-                applyAdjustable(in, frames, channels, fadeFrames);
+                applyAdjustable(out, frames, channels, fadeFrames);
                 break;
             }
         }
-        return in;
+        return out;
     }
 
     /** Linear ramp in or out over the first/last {@code fadeFrames}. */

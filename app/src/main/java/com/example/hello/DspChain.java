@@ -263,6 +263,30 @@ public final class DspChain {
                     return false;
             }
         }
+
+        /**
+         * True for the Stage 3 EQ and filter suite. Together with
+         * {@link #isLegacyStage()} this covers every effect that was in the
+         * catalog before Stages 4-7; the newer families each need their own
+         * engagement (some are offline-only, some are level tools that need
+         * a pre-scan), so they are covered by their own suites.
+         */
+        public boolean isStage3Suite() {
+            switch (this) {
+                case PARAMETRIC_EQ6:
+                case GRAPHIC_EQ:
+                case FILTER_CURVE_EQ:
+                case BASS_TREBLE:
+                case HIGH_PASS_FILTER:
+                case LOW_PASS_FILTER:
+                case NOTCH_FILTER:
+                case SHELF_FILTER:
+                case CLASSIC_FILTERS:
+                    return true;
+                default:
+                    return false;
+            }
+        }
     }
 
     /** Premade templates of effects and their settings for the Presets dropdown. */
