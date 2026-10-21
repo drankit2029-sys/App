@@ -185,6 +185,54 @@ public class Stage3FxAuditFixTest {
     }
 
     @Test
+    public void parametricEqViewExposesAndMovesAllSixBandHandles() {
+        DspChain.Config cfg = new DspChain.Config();
+        cfg.applyPreset(DspChain.Preset.CLEAR_ALL);
+        DspChain.EffectSlot slot = cfg.addOrFocusSlot(
+                DspChain.EffectType.PARAMETRIC_EQ6);
+        final int[] mutations = {0};
+        ParametricEqView view = new ParametricEqView(ctx, slot,
+                () -> mutations[0]++);
+        view.measure(
+                View.MeasureSpec.makeMeasureSpec(400, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(180, View.MeasureSpec.EXACTLY));
+        view.layout(0, 0, 400, 180);
+        assertEquals("6-band EQ must expose six band handles",
+                6, ParametricEqView.bandCount());
+
+        float zero = view.yForDb(0f, 180);
+        long now = SystemClock.uptimeMillis();
+
+        // Band 1 (low cut) has no gain handle; dragging horizontally must
+        // move its corner frequency instead of selecting band 2.
+        float lowStart = view.xForFreq(80f, 400);
+        float lowEnd = view.xForFreq(140f, 400);
+        view.onTouchEvent(MotionEvent.obtain(now, now,
+                MotionEvent.ACTION_DOWN, lowStart, zero, 0));
+        view.onTouchEvent(MotionEvent.obtain(now, now + 16,
+                MotionEvent.ACTION_MOVE, lowEnd, zero, 0));
+        view.onTouchEvent(MotionEvent.obtain(now, now + 32,
+                MotionEvent.ACTION_UP, lowEnd, zero, 0));
+        assertTrue("Low-cut handle must move band 1 frequency",
+                slot.extraParams.getOrDefault("b1f", 80) >= 120);
+        assertEquals("Low-cut drag must not move a bell band",
+                350, slot.extraParams.getOrDefault("b2f", 350).intValue());
+
+        // Band 6 (high cut) is the sixth handle at the right edge.
+        float highStart = view.xForFreq(20000f, 400);
+        float highEnd = view.xForFreq(12000f, 400);
+        view.onTouchEvent(MotionEvent.obtain(now, now + 48,
+                MotionEvent.ACTION_DOWN, highStart, zero, 0));
+        view.onTouchEvent(MotionEvent.obtain(now, now + 64,
+                MotionEvent.ACTION_MOVE, highEnd, zero, 0));
+        view.onTouchEvent(MotionEvent.obtain(now, now + 80,
+                MotionEvent.ACTION_UP, highEnd, zero, 0));
+        assertTrue("High-cut handle must move band 6 frequency",
+                slot.extraParams.getOrDefault("b6f", 20000) <= 13000);
+        assertTrue("All six band drags must fire onMutated", mutations[0] >= 2);
+    }
+
+    @Test
     public void graphicEqViewAndFilterCurveEqViewCommitLiveOnDrag() {
         DspChain.Config cfg = new DspChain.Config();
         cfg.applyPreset(DspChain.Preset.CLEAR_ALL);
