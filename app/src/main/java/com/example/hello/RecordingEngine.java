@@ -57,6 +57,7 @@ public final class RecordingEngine {
     private final Object lock = new Object();
 
     public State state = State.IDLE;
+    private volatile boolean saveInProgress;
     public String takeName;
     public File rawFile;
     /** Output channels of the streamed float WAV (1 mono / 2 stereo). */
@@ -127,6 +128,15 @@ public final class RecordingEngine {
         synchronized (lock) {
             return rawFile != null && rawFile.exists();
         }
+    }
+
+    /** True while a save/discard is finalizing this session. */
+    public boolean isSaving() {
+        return saveInProgress;
+    }
+
+    public void setSaving(boolean saving) {
+        saveInProgress = saving;
     }
 
     public boolean isCapturing() {
@@ -580,6 +590,7 @@ public final class RecordingEngine {
     // ---- capture ----
 
     public void startCapture(Context ctx, int requestedSource) throws Exception {
+        if (saveInProgress) throw new IllegalStateException("save in progress");
         // Release any pre-warmed low-latency speaker AudioTrack before opening
         // AudioRecord so the output HAL never conflicts with mic capture.
         RawFloatPlayer.releaseWarmSpeaker();

@@ -51,6 +51,8 @@ public class StudioFragment extends Fragment {
 
     private final RecordingEngine engine = RecordingEngine.get();
     private final Handler handler = new Handler(Looper.getMainLooper());
+    private final Handler completionHandler =
+            new Handler(Looper.getMainLooper());
     private ObjectAnimator dotPulse;
 
     private TextView timerText;
@@ -1295,6 +1297,7 @@ public class StudioFragment extends Fragment {
      */
     private boolean isSessionEditable() {
         return engine.hasSession()
+                && !engine.isSaving()
                 && engine.dataBytes > 0
                 && (engine.state == RecordingEngine.State.PAUSED
                         || engine.state == RecordingEngine.State.IDLE);
@@ -1343,7 +1346,7 @@ public class StudioFragment extends Fragment {
 
     /** Main FAB: name -> start -> pause / play-preview / replace-record. */
     public void onFabPressed() {
-        if (saving) return;
+        if (saving || engine.isSaving()) return;
         // If preview playback is currently running while paused, tapping the
         // main FAB pauses the preview playback!
         if (studioPreviewPlayer != null) {
@@ -1461,7 +1464,7 @@ public class StudioFragment extends Fragment {
 
     /** Back: idle -> exit; active -> background-or-stop choice. */
     public boolean onBackPressed() {
-        if (saving) return true;
+        if (saving || engine.isSaving()) return true;
         if (fxPanelOpen) {
             setFxPanelVisible(false);
             return true;
@@ -1549,7 +1552,7 @@ public class StudioFragment extends Fragment {
     }
 
     private void beginCapture() {
-        if (!isAdded() || saving) return;
+        if (!isAdded() || saving || engine.isSaving()) return;
         if (engine.hasSession()) {
             startOrResumeCapture();
             return;
@@ -2026,7 +2029,7 @@ public class StudioFragment extends Fragment {
      */
     private void runSaveDispatch(long editId, String replaceTitle,
                                  boolean replacing) {
-        if (saving || !engine.hasSession()) return;
+        if (saving || engine.isSaving() || !engine.hasSession()) return;
         // Only now that the user actually chose Replace/Save-as-new is it safe
         // to roll back the pre-sub-bake snapshot; doing it before the modal
         // destroyed the edit when the sheet was dismissed.
@@ -2045,6 +2048,7 @@ public class StudioFragment extends Fragment {
             syncFxBakeRequired();
         }
         saving = true;
+        engine.setSaving(true);
         final RecordPreset p = preset;
         final SaveFormat s = saveFormat;
         // A4-02: resolve the application context while still attached; the
@@ -2069,9 +2073,10 @@ public class StudioFragment extends Fragment {
             }
             final ConversionJobs.SaveResult res = r;
             final String failure = fail;
-            handler.post(() -> {
+            completionHandler.post(() -> {
                 try {
                     saving = false;
+                    engine.setSaving(false);
                     if (res == null) {
                         try {
                             if (saveRaw != null && saveRaw.exists()) {
@@ -2178,8 +2183,9 @@ public class StudioFragment extends Fragment {
     }
 
     private void doDiscardSequence() {
-        if (saving) return;
+        if (saving || engine.isSaving()) return;
         saving = true;
+        engine.setSaving(true);
         // Discarding abandons any in-flight Select & Replace: drop the flag
         // and its orphan tail file so nothing leaks or resurrects later.
         replacingSelectionActive = false;
@@ -2196,8 +2202,9 @@ public class StudioFragment extends Fragment {
             editSourceId = -1;
             editSourceTitle = null;
             EditLink.clear(appCtx);
-            handler.post(() -> {
+            completionHandler.post(() -> {
                 saving = false;
+                engine.setSaving(false);
                 RecordingService.stopService(appCtx);
                 if (!isAdded()) return;
                 activity().syncFabWithEngine();

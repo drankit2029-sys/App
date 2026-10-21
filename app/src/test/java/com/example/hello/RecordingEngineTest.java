@@ -65,6 +65,26 @@ public class RecordingEngineTest {
     }
 
     @Test
+    public void savingBlocksNewCapture() throws Exception {
+        RecordingEngine e = RecordingEngine.get();
+        e.abortAndDelete();
+        assertFalse(e.isSaving());
+        e.setSaving(true);
+        try {
+            boolean threw = false;
+            try {
+                e.startCapture(ctx(), 0);
+            } catch (IllegalStateException expected) {
+                threw = true;
+            }
+            assertTrue("capture must be blocked while save finalizes", threw);
+        } finally {
+            e.setSaving(false);
+            e.abortAndDelete();
+        }
+    }
+
+    @Test
     public void durationTracksWrittenBytes() throws Exception {
         RecordingEngine e = RecordingEngine.get();
         e.abortAndDelete();

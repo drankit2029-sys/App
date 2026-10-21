@@ -329,6 +329,8 @@ public class RecordingService extends Service {
             stopSelf();
             return;
         }
+        if (e.isSaving()) return;
+        e.setSaving(true);
         busy = true;
         convertingPct = 0;
         lastPctPush = 0;
@@ -393,6 +395,7 @@ public class RecordingService extends Service {
             final String text = msg;
             final String t = title;
             handler.post(() -> {
+                e.setSaving(false);
                 try {
                     toast(text);
                     convertingPct = -1;
@@ -428,6 +431,7 @@ public class RecordingService extends Service {
 
     private void doCancel() {
         if (busy) return;
+        if (RecordingEngine.get().isSaving()) return;
         busy = true;
         new Thread(() -> {
             RecordingEngine e = RecordingEngine.get();
