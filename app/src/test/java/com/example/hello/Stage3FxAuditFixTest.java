@@ -408,4 +408,118 @@ public class Stage3FxAuditFixTest {
         assertFalse("Apply must stay disabled with an empty rack",
                 apply.isEnabled());
     }
+
+    @Test
+    public void effectExpandButtonOpensDedicatedModalOverlay()
+            throws Exception {
+        File raw = createFloatWav("effect_modal.wav", 2400, 1);
+        DspChain.Config cfg = new DspChain.Config();
+        cfg.clearRack();
+        cfg.slots.add(new DspChain.EffectSlot(
+                DspChain.EffectType.PARAMETRIC_EQ6, true,
+                DspChain.EffectType.PARAMETRIC_EQ6.defaultVal, true));
+        cfg.save(ctx);
+
+        engine.attachExisting(ctx, raw, "Modal Take", 1,
+                RecordingEngine.payloadBytesOf(raw));
+        MainActivity act = Robolectric.buildActivity(MainActivity.class)
+                .create().start().resume().visible().get();
+        act.openStudioWithEdit(raw, 103L, "Modal Take");
+        Robolectric.flushForegroundThreadScheduler();
+
+        StudioFragment frag = (StudioFragment) act.getSupportFragmentManager()
+                .findFragmentByTag("STU");
+        assertNotNull(frag);
+        View root = frag.getView();
+        assertNotNull(root);
+        root.findViewById(R.id.btnDspFx).performClick();
+
+        View expand = findViewByContentDescription(root, "Expand effect");
+        assertNotNull("Every effect pill must expose an expand button", expand);
+        expand.performClick();
+
+        android.app.Dialog dialog = org.robolectric.shadows.ShadowDialog
+                .getLatestDialog();
+        assertNotNull("Expand must open a modal", dialog);
+        assertTrue(dialog.isShowing());
+        View decor = dialog.getWindow() == null
+                ? null : dialog.getWindow().getDecorView();
+        assertNotNull(decor);
+        assertNotNull("Dedicated inspector missing its close action",
+                findTextStartingWith(decor, "Close"));
+        assertNotNull("Dedicated inspector missing its parameter section",
+                findTextStartingWith(decor, "All parameters"));
+        dialog.dismiss();
+    }
+
+    @Test
+    public void changingGraphicEqLayoutKeepsAdvancedControlsExpanded()
+            throws Exception {
+        File raw = createFloatWav("graphic_layout.wav", 2400, 1);
+        DspChain.Config cfg = new DspChain.Config();
+        cfg.clearRack();
+        cfg.slots.add(new DspChain.EffectSlot(
+                DspChain.EffectType.GRAPHIC_EQ, true,
+                DspChain.EffectType.GRAPHIC_EQ.defaultVal, true));
+        cfg.save(ctx);
+
+        engine.attachExisting(ctx, raw, "Graphic Layout Take", 1,
+                RecordingEngine.payloadBytesOf(raw));
+        MainActivity act = Robolectric.buildActivity(MainActivity.class)
+                .create().start().resume().visible().get();
+        act.openStudioWithEdit(raw, 104L, "Graphic Layout Take");
+        Robolectric.flushForegroundThreadScheduler();
+
+        StudioFragment frag = (StudioFragment) act.getSupportFragmentManager()
+                .findFragmentByTag("STU");
+        assertNotNull(frag);
+        View root = frag.getView();
+        assertNotNull(root);
+        root.findViewById(R.id.btnDspFx).performClick();
+
+        TextView showAdvanced = findTextStartingWith(root,
+                "Show advanced controls");
+        assertNotNull(showAdvanced);
+        showAdvanced.performClick();
+
+        TextView layout = findTextStartingWith(root, "Layout: 10 bands");
+        assertNotNull(layout);
+        layout.performClick();
+
+        assertNotNull("Changing the layout must not collapse the advanced editor",
+                findTextStartingWith(root, "Hide advanced controls"));
+        assertNotNull("Layout control must still be visible after the edit",
+                findTextStartingWith(root, "Layout: 31 bands"));
+    }
+
+    private static View findViewByContentDescription(View root, String text) {
+        if (root == null) return null;
+        CharSequence desc = root.getContentDescription();
+        if (desc != null && text.contentEquals(desc)) return root;
+        if (!(root instanceof android.view.ViewGroup)) return null;
+        android.view.ViewGroup group = (android.view.ViewGroup) root;
+        for (int i = 0; i < group.getChildCount(); i++) {
+            View found = findViewByContentDescription(
+                    group.getChildAt(i), text);
+            if (found != null) return found;
+        }
+        return null;
+    }
+
+    private static TextView findTextStartingWith(View root, String prefix) {
+        if (root == null) return null;
+        if (root instanceof TextView) {
+            CharSequence value = ((TextView) root).getText();
+            if (value != null && value.toString().startsWith(prefix)) {
+                return (TextView) root;
+            }
+        }
+        if (!(root instanceof android.view.ViewGroup)) return null;
+        android.view.ViewGroup group = (android.view.ViewGroup) root;
+        for (int i = 0; i < group.getChildCount(); i++) {
+            TextView found = findTextStartingWith(group.getChildAt(i), prefix);
+            if (found != null) return found;
+        }
+        return null;
+    }
 }

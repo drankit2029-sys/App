@@ -83,6 +83,9 @@ public class StudioFragment extends Fragment {
     private TextView fxApplyBtn;
     private boolean fxPanelOpen = false;
     private boolean teleWasVisibleBeforeFx = true;
+    private final java.util.Set<DspChain.EffectSlot> fxAdvancedOpen =
+            java.util.Collections.newSetFromMap(
+                    new java.util.IdentityHashMap<DspChain.EffectSlot, Boolean>());
 
     /**
      * False by default when scrolling in PAUSED state -> Resume FAB plays audio
@@ -3144,6 +3147,443 @@ public class StudioFragment extends Fragment {
         }
     }
 
+    private void commitFxSlotEdit(DspChain.EffectSlot slot) {
+        if (slot == null || !isAdded()) return;
+        if (dspSubRangeBaked) lastEditWasSubRangeBake = true;
+        dspBakedToRaw = false;
+        dspSubRangeBaked = false;
+        dspConfig.activePresetId = DspChain.Preset.CUSTOM.id;
+        dspConfig.syncLegacyFieldsFromSlots();
+        dspConfig.save(requireContext());
+        if (livePreviewDsp != null) {
+            livePreviewDsp.updateConfig(dspConfig);
+        }
+        paintEditorStrip();
+        paintFxPanelControls();
+    }
+
+    /**
+     * Opens one effect in an expanded, self-contained inspector. The pill body
+     * stays compact; this modal gives the same slot a large curve canvas, a
+     * full-width primary control and every secondary parameter without the
+     * inline card's "advanced" fold.
+     */
+    private void showEffectDetailModal(DspChain.EffectSlot slot) {
+        if (slot == null || slot.type == null || !isAdded()) return;
+        final Context ctx = requireContext();
+        final float density = getResources().getDisplayMetrics().density;
+
+        final android.app.Dialog dialog = new android.app.Dialog(ctx,
+                R.style.TakeOneCenterDialog);
+        dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE);
+
+        android.widget.LinearLayout root = new android.widget.LinearLayout(ctx);
+        root.setOrientation(android.widget.LinearLayout.VERTICAL);
+        root.setBackgroundResource(R.drawable.bg_modal);
+        int pad = Math.round(16 * density);
+        root.setPadding(pad, pad, pad, Math.round(12 * density));
+
+        android.widget.LinearLayout header =
+                new android.widget.LinearLayout(ctx);
+        header.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+        header.setGravity(android.view.Gravity.CENTER_VERTICAL);
+
+        TextView title = new TextView(ctx);
+        title.setText(slot.type.title);
+        title.setTextSize(17f);
+        title.setTextColor(0xFFF2F4F7);
+        title.setTypeface(android.graphics.Typeface.create(
+                "sans-serif-medium", android.graphics.Typeface.NORMAL));
+        title.setPadding(0, 0, Math.round(8 * density), 0);
+        header.addView(title, new android.widget.LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView enableChip = makeFxChip(ctx, "", density);
+        TextView closeChip = makeFxChip(ctx, "Close", density);
+        header.addView(enableChip);
+        header.addView(closeChip);
+        root.addView(header);
+
+        TextView desc = new TextView(ctx);
+        desc.setText(slot.type.description);
+        desc.setTextSize(11f);
+        desc.setTextColor(0xFF8A93A0);
+        desc.setLineSpacing(0f, 1.08f);
+        android.widget.LinearLayout.LayoutParams descLp =
+                new android.widget.LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT);
+        descLp.topMargin = Math.round(6 * density);
+        root.addView(desc, descLp);
+
+        android.widget.ScrollView scroll = new android.widget.ScrollView(ctx);
+        scroll.setFillViewport(true);
+        android.widget.LinearLayout body =
+                new android.widget.LinearLayout(ctx);
+        body.setOrientation(android.widget.LinearLayout.VERTICAL);
+        scroll.addView(body, new android.widget.FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+        android.widget.LinearLayout.LayoutParams scrollLp =
+                new android.widget.LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
+        scrollLp.topMargin = Math.round(4 * density);
+        root.addView(scroll, scrollLp);
+
+        final java.util.List<Runnable> refreshers = new java.util.ArrayList<>();
+        final Runnable onChanged = () -> {
+            commitFxSlotEdit(slot);
+            for (Runnable refresh : refreshers) refresh.run();
+        };
+
+        EqCurveView[] eqHolder = new EqCurveView[1];
+        boolean hasEqView = slot.type == DspChain.EffectType.PARAMETRIC_EQ6
+                || slot.type == DspChain.EffectType.GRAPHIC_EQ
+                || slot.type == DspChain.EffectType.FILTER_CURVE_EQ;
+        if (hasEqView) {
+            EqCurveView eqView;
+            if (slot.type == DspChain.EffectType.PARAMETRIC_EQ6) {
+                eqView = new ParametricEqView(ctx, slot, onChanged);
+            } else if (slot.type == DspChain.EffectType.GRAPHIC_EQ) {
+                eqView = new GraphicEqView(ctx, slot, onChanged);
+            } else {
+                eqView = new FilterCurveEqView(ctx, slot, onChanged);
+            }
+            eqHolder[0] = eqView;
+            android.widget.LinearLayout.LayoutParams eqLp =
+                    new android.widget.LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            Math.round(210 * density));
+            eqLp.topMargin = Math.round(10 * density);
+            body.addView(eqView, eqLp);
+        }
+
+        TeleValue primary = new TeleValue(ctx);
+        primary.setCaption(slot.type.paramLabel);
+        if (!slot.type.isLegacyStage()) {
+            AudioProcessor dialMeta =
+                    FxRackChain.getPrototypeProcessor(slot.type.id);
+            FxParameter dialParam = dialMeta == null ? null
+                    : dialMeta.getParam(DspChain.primaryParamId(slot.type));
+            if (dialParam != null) {
+                primary.setValueScale(Math.max(1, dialParam.scaleDivisor));
+                primary.setValueFormatter(dialParam::formatRaw);
+            }
+        }
+        primary.setCompact(false);
+        primary.configure(slot.type.minVal, slot.type.maxVal,
+                slot.type.stepVal, slot.value, slot.type.unit);
+        android.widget.LinearLayout.LayoutParams primaryLp =
+                new android.widget.LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT);
+        primaryLp.topMargin = Math.round(10 * density);
+        body.addView(primary, primaryLp);
+        refreshers.add(() -> primary.setValue(slot.value, false));
+
+        java.util.function.IntConsumer syncPrimaryLinks = (int val) -> {
+            if (slot.type == DspChain.EffectType.NOTCH_FILTER) {
+                Integer preset = slot.extraParams.get("preset");
+                if (preset != null && ((preset == 1 && val != 50)
+                        || (preset == 2 && val != 60))) {
+                    slot.extraParams.put("preset", 0);
+                }
+            } else if (slot.type == DspChain.EffectType.BASS_TREBLE) {
+                Integer link = slot.extraParams.get("link");
+                if (link != null && link != 0) {
+                    slot.extraParams.put("treble", val);
+                }
+            }
+        };
+        java.util.function.IntConsumer applyPrimary = (int value) -> {
+            slot.value = value;
+            syncPrimaryLinks.accept(value);
+            boolean engages = slot.type.isLegacyStage()
+                    ? (value > 0) : (value != slot.type.defaultVal);
+            if (!slot.enabled && engages) slot.enabled = true;
+            onChanged.run();
+        };
+        primary.setOnScrubListener(new TeleValue.OnScrubListener() {
+            @Override
+            public void onScrubValueChanged(int value) {
+                applyPrimary.accept(value);
+            }
+
+            @Override
+            public void onScrubFinished(int value) {
+                applyPrimary.accept(value);
+            }
+        });
+        primary.setOnValueChanged(applyPrimary::accept);
+
+        if (slot.type == DspChain.EffectType.NOISE_SUPPRESSION) {
+            TextView profileTv = new TextView(ctx);
+            profileTv.setTextSize(11f);
+            profileTv.setTextColor(0xFF8A93A0);
+            android.widget.LinearLayout.LayoutParams profileLp =
+                    new android.widget.LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT);
+            profileLp.topMargin = Math.round(8 * density);
+            body.addView(profileTv, profileLp);
+            Runnable refreshProfile = () -> {
+                boolean learned = slot.noiseProfile != null;
+                profileTv.setText(learned
+                        ? "Noise profile: learned ("
+                                + slot.noiseProfile.length + " bins)"
+                        : "Noise profile: adaptive — select noise, then Learn");
+                profileTv.setTextColor(learned
+                        ? 0xFF34C759 : 0xFF8A93A0);
+            };
+            refreshProfile.run();
+            refreshers.add(refreshProfile);
+
+            android.widget.LinearLayout profileOps =
+                    new android.widget.LinearLayout(ctx);
+            profileOps.setOrientation(
+                    android.widget.LinearLayout.HORIZONTAL);
+            TextView learn = makeFxChip(ctx, "Learn from selection", density);
+            learn.setOnClickListener(v ->
+                    learnNoiseProfile(slot, onChanged));
+            profileOps.addView(learn);
+            if (slot.noiseProfile != null) {
+                TextView clear = makeFxChip(ctx, "Clear profile", density);
+                clear.setOnClickListener(v -> {
+                    slot.noiseProfile = null;
+                    onChanged.run();
+                });
+                profileOps.addView(clear);
+            }
+            android.widget.LinearLayout.LayoutParams profileOpsLp =
+                    new android.widget.LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT);
+            profileOpsLp.topMargin = Math.round(4 * density);
+            body.addView(profileOps, profileOpsLp);
+        }
+
+        TextView extrasTitle = new TextView(ctx);
+        extrasTitle.setText("All parameters");
+        extrasTitle.setTextSize(11f);
+        extrasTitle.setTextColor(0xFF8A93A0);
+        extrasTitle.setTypeface(android.graphics.Typeface.create(
+                "sans-serif-medium", android.graphics.Typeface.NORMAL));
+        android.widget.LinearLayout.LayoutParams extrasLp =
+                new android.widget.LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT);
+        extrasLp.topMargin = Math.round(12 * density);
+        body.addView(extrasTitle, extrasLp);
+
+        AudioProcessor meta = FxRackChain.getPrototypeProcessor(slot.type.id);
+        if (meta != null) {
+            for (FxParameter param : meta.getParameters()) {
+                if (isPrimaryFxParam(slot.type, param.id)) continue;
+                if (slot.type == DspChain.EffectType.WARMTH_BODY
+                        && "presence_freq".equals(param.id)) continue;
+                if (slot.type == DspChain.EffectType.VOCAL_PRESENCE
+                        && "warmth_freq".equals(param.id)) continue;
+                if (slot.type == DspChain.EffectType.GRAPHIC_EQ
+                        && param.id.matches("g\\d+")) continue;
+                if (slot.type == DspChain.EffectType.FILTER_CURVE_EQ
+                        && (param.id.startsWith("pf")
+                                || param.id.startsWith("pg")
+                                || "npts".equals(param.id))) continue;
+
+                if (param.type == FxParameter.Type.BOOLEAN) {
+                    TextView chip = makeFxChip(ctx, "", density);
+                    android.widget.LinearLayout.LayoutParams chipLp =
+                            new android.widget.LinearLayout.LayoutParams(
+                                    ViewGroup.LayoutParams.MATCH_PARENT,
+                                    ViewGroup.LayoutParams.WRAP_CONTENT);
+                    chipLp.topMargin = Math.round(4 * density);
+                    body.addView(chip, chipLp);
+                    Runnable refresh = () -> {
+                        int raw = slot.extraParams.containsKey(param.id)
+                                ? slot.extraParams.get(param.id)
+                                : param.defaultRaw;
+                        chip.setText(param.name + ": "
+                                + (raw != 0 ? "On" : "Off"));
+                        chip.setAlpha(raw != 0 ? 1f : 0.72f);
+                    };
+                    refresh.run();
+                    refreshers.add(refresh);
+                    chip.setOnClickListener(v -> {
+                        int raw = slot.extraParams.containsKey(param.id)
+                                ? slot.extraParams.get(param.id)
+                                : param.defaultRaw;
+                        boolean nextOn = raw == 0;
+                        slot.extraParams.put(param.id, nextOn ? 1 : 0);
+                        if (nextOn && slot.type == DspChain.EffectType.BASS_TREBLE
+                                && "link".equals(param.id)) {
+                            slot.extraParams.put("treble", slot.value);
+                        }
+                        if (!slot.enabled) slot.enabled = true;
+                        onChanged.run();
+                    });
+                    continue;
+                }
+                if (param.type == FxParameter.Type.ENUM
+                        && param.enumLabels != null
+                        && param.enumLabels.length > 0) {
+                    TextView chip = makeFxChip(ctx, "", density);
+                    android.widget.LinearLayout.LayoutParams chipLp =
+                            new android.widget.LinearLayout.LayoutParams(
+                                    ViewGroup.LayoutParams.MATCH_PARENT,
+                                    ViewGroup.LayoutParams.WRAP_CONTENT);
+                    chipLp.topMargin = Math.round(4 * density);
+                    body.addView(chip, chipLp);
+                    Runnable refresh = () -> {
+                        int cur = param.clampRaw(
+                                slot.extraParams.containsKey(param.id)
+                                        ? slot.extraParams.get(param.id)
+                                        : param.defaultRaw);
+                        chip.setText(param.name + ": "
+                                + param.getEnumLabel(cur));
+                    };
+                    refresh.run();
+                    refreshers.add(refresh);
+                    chip.setOnClickListener(v -> {
+                        int cur = param.clampRaw(
+                                slot.extraParams.containsKey(param.id)
+                                        ? slot.extraParams.get(param.id)
+                                        : param.defaultRaw);
+                        int next = (cur + 1) % param.enumLabels.length;
+                        slot.extraParams.put(param.id, next);
+                        if (slot.type == DspChain.EffectType.NOTCH_FILTER
+                                && "preset".equals(param.id)) {
+                            if (next == 1) slot.value = 50;
+                            else if (next == 2) slot.value = 60;
+                        }
+                        if (!slot.enabled) slot.enabled = true;
+                        onChanged.run();
+                    });
+                    continue;
+                }
+                if (param.type == FxParameter.Type.ACTION) {
+                    TextView chip = makeFxChip(ctx, param.name, density);
+                    android.widget.LinearLayout.LayoutParams chipLp =
+                            new android.widget.LinearLayout.LayoutParams(
+                                    ViewGroup.LayoutParams.MATCH_PARENT,
+                                    ViewGroup.LayoutParams.WRAP_CONTENT);
+                    chipLp.topMargin = Math.round(4 * density);
+                    body.addView(chip, chipLp);
+                    chip.setOnClickListener(v -> {
+                        int triggers = slot.extraParams.containsKey(param.id)
+                                ? slot.extraParams.get(param.id) + 1 : 1;
+                        slot.extraParams.put(param.id, triggers);
+                        if (!slot.enabled) slot.enabled = true;
+                        onChanged.run();
+                    });
+                    continue;
+                }
+                if (param.type != FxParameter.Type.INT
+                        && param.type != FxParameter.Type.FLOAT) {
+                    continue;
+                }
+
+                TeleValue pc = new TeleValue(ctx);
+                pc.setCaption(param.name);
+                pc.setValueScale(Math.max(1, param.scaleDivisor));
+                pc.setValueFormatter(param::formatRaw);
+                pc.configure(param.minRaw, param.maxRaw, param.stepRaw,
+                        slot.extraParams.containsKey(param.id)
+                                ? slot.extraParams.get(param.id)
+                                : param.defaultRaw,
+                        param.unit);
+                android.widget.LinearLayout.LayoutParams pcLp =
+                        new android.widget.LinearLayout.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.WRAP_CONTENT);
+                pcLp.topMargin = Math.round(6 * density);
+                body.addView(pc, pcLp);
+                refreshers.add(() -> {
+                    Integer raw = slot.extraParams.get(param.id);
+                    pc.setValue(raw != null ? raw : param.defaultRaw, false);
+                });
+                java.util.function.IntConsumer applyExtra = (int value) -> {
+                    slot.extraParams.put(param.id, value);
+                    if (slot.type == DspChain.EffectType.BASS_TREBLE
+                            && "treble".equals(param.id)) {
+                        Integer link = slot.extraParams.get("link");
+                        if (link != null && link != 0) {
+                            slot.value = value;
+                        }
+                    }
+                    if (!slot.enabled && value != param.defaultRaw) {
+                        slot.enabled = true;
+                    }
+                    onChanged.run();
+                };
+                pc.setOnScrubListener(new TeleValue.OnScrubListener() {
+                    @Override
+                    public void onScrubValueChanged(int value) {
+                        applyExtra.accept(value);
+                    }
+
+                    @Override
+                    public void onScrubFinished(int value) {
+                        applyExtra.accept(value);
+                    }
+                });
+                pc.setOnValueChanged(applyExtra::accept);
+            }
+        }
+
+        Runnable refreshHeader = () -> {
+            enableChip.setText(slot.enabled ? "Bypass" : "Enable");
+            enableChip.setAlpha(slot.enabled ? 1f : 0.75f);
+            title.setTextColor(slot.enabled ? 0xFFF2F4F7
+                    : 0xFF9AA3AF);
+        };
+        refreshHeader.run();
+        refreshers.add(refreshHeader);
+        enableChip.setOnClickListener(v -> {
+            slot.enabled = !slot.enabled;
+            onChanged.run();
+        });
+        closeChip.setOnClickListener(v -> dialog.dismiss());
+
+        android.widget.LinearLayout footer =
+                new android.widget.LinearLayout(ctx);
+        footer.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+        footer.setGravity(android.view.Gravity.END);
+        TextView reset = makeFxChip(ctx, "Reset effect", density);
+        TextView done = makeFxChip(ctx, "Done", density);
+        reset.setOnClickListener(v -> {
+            slot.value = slot.type.defaultVal;
+            slot.wetDry = 1f;
+            slot.extraParams.clear();
+            slot.noiseProfile = null;
+            onChanged.run();
+        });
+        done.setOnClickListener(v -> dialog.dismiss());
+        footer.addView(reset);
+        footer.addView(done);
+        android.widget.LinearLayout.LayoutParams footerLp =
+                new android.widget.LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT);
+        footerLp.topMargin = Math.round(8 * density);
+        root.addView(footer, footerLp);
+
+        dialog.setOnDismissListener(d -> {
+            if (eqHolder[0] != null) eqHolder[0].invalidate();
+            if (isAdded()) rebuildFxRackList();
+        });
+        dialog.setContentView(root);
+        dialog.show();
+        android.view.Window window = dialog.getWindow();
+        if (window != null) {
+            window.setBackgroundDrawable(
+                    new android.graphics.drawable.ColorDrawable(0x00000000));
+            window.setDimAmount(0.62f);
+            android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+            window.setLayout(Math.round(dm.widthPixels * 0.94f),
+                    Math.round(dm.heightPixels * 0.84f));
+        }
+    }
+
     /**
      * Populates the single scrollable FX section with collapsible effect pills
      * (each having a checkmark enable/disable toggle, collapsible TeleValue
@@ -3223,7 +3663,24 @@ public class StudioFragment extends Fragment {
             header.addView(titleCol, new android.widget.LinearLayout.LayoutParams(
                     0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-            // 3) Delete Button (removes effect from menu)
+            // 3) Expand Button (opens this effect in its own full inspector)
+            android.widget.ImageView expandBtn =
+                    new android.widget.ImageView(ctx);
+            expandBtn.setImageResource(R.drawable.ic_expand);
+            expandBtn.setColorFilter(0xFF9AA3AF);
+            expandBtn.setContentDescription("Expand effect");
+            int expandSz = Math.round(28 * density);
+            int expandPad = Math.round(6 * density);
+            expandBtn.setPadding(expandPad, expandPad,
+                    expandPad, expandPad);
+            expandBtn.setBackgroundResource(R.drawable.bg_round_btn);
+            android.widget.LinearLayout.LayoutParams expandLp =
+                    new android.widget.LinearLayout.LayoutParams(
+                            expandSz, expandSz);
+            expandLp.rightMargin = Math.round(2 * density);
+            header.addView(expandBtn, expandLp);
+
+            // 4) Delete Button (removes effect from menu)
             android.widget.ImageView delBtn = new android.widget.ImageView(ctx);
             delBtn.setImageResource(R.drawable.ic_trash);
             delBtn.setColorFilter(0xFF9AA3AF);
@@ -3409,10 +3866,13 @@ public class StudioFragment extends Fragment {
                 subTv.setText(formatSlotSubtitle(slot, dspConfig));
             });
 
+            expandBtn.setOnClickListener(v -> showEffectDetailModal(slot));
+
             delBtn.setOnClickListener(v -> {
                 if (dspSubRangeBaked) lastEditWasSubRangeBake = true;
                 dspBakedToRaw = false;
                 dspSubRangeBaked = false;
+                fxAdvancedOpen.remove(slot);
                 dspConfig.removeSlot(slot);
                 dspConfig.save(ctx);
                 if (livePreviewDsp != null) {
@@ -3702,11 +4162,15 @@ public class StudioFragment extends Fragment {
                 final android.widget.LinearLayout advancedBox =
                         new android.widget.LinearLayout(ctx);
                 advancedBox.setOrientation(android.widget.LinearLayout.VERTICAL);
-                advancedBox.setVisibility(View.GONE);
+                final boolean advancedOpen = fxAdvancedOpen.contains(slot);
+                advancedBox.setVisibility(advancedOpen
+                        ? View.VISIBLE : View.GONE);
                 addFxExtraGrid(advancedBox, secondaryViews, density);
 
                 final TextView advancedToggle = makeFxChip(ctx,
-                        "Show advanced controls (" + secondaryViews.size() + ")",
+                        advancedOpen ? "Hide advanced controls"
+                                : "Show advanced controls ("
+                                        + secondaryViews.size() + ")",
                         density);
                 android.widget.LinearLayout.LayoutParams advLp =
                         new android.widget.LinearLayout.LayoutParams(
@@ -3718,6 +4182,11 @@ public class StudioFragment extends Fragment {
                 advancedToggle.setOnClickListener(v -> {
                     boolean show = advancedBox.getVisibility() != View.VISIBLE;
                     advancedBox.setVisibility(show ? View.VISIBLE : View.GONE);
+                    if (show) {
+                        fxAdvancedOpen.add(slot);
+                    } else {
+                        fxAdvancedOpen.remove(slot);
+                    }
                     advancedToggle.setText(show
                             ? "Hide advanced controls"
                             : "Show advanced controls (" + secondaryViews.size() + ")");
