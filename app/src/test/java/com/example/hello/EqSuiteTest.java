@@ -166,6 +166,22 @@ public class EqSuiteTest {
     }
 
     @Test
+    public void clearingOneBandDoesNotLeakItsBiquadState() {
+        BiquadFilter filter = new BiquadFilter();
+        filter.setSections(new float[][]{
+                Dsp.rbjPeaking(SR, 1000, 1.0, 6.0)}, 1);
+        float[] loud = sine(512, 1, 1000, 0.5f);
+        filter.process(loud, 512, 1);
+
+        filter.setSections(new float[][]{{1f, 0f, 0f, 0f, 0f}}, 1);
+        float[] silence = new float[4];
+        filter.process(silence, 4, 1);
+        for (float v : silence) {
+            assertEquals("removed band leaked filter state", 0f, v, 1e-6f);
+        }
+    }
+
+    @Test
     public void filterCurveEqDesignsAndConvolves() {
         FilterCurveEqProcessor p = (FilterCurveEqProcessor)
                 FxRackChain.createProcessor("fcurve");

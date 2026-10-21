@@ -741,7 +741,7 @@ public class FxRackChainTest {
         double after = rmsTail(high);
         assertTrue("post-prepare presence change was ignored: "
                         + before + " -> " + after,
-                after > before * 1.15);
+                after > before * 1.8);
     }
 
     @Test
@@ -757,6 +757,13 @@ public class FxRackChainTest {
 
         DspChain chain = new DspChain(1, cfg);
         assertEquals("eq6", chain.getSplitToneAfterId());
+        ParametricEq6BandProcessor eqProc =
+                (ParametricEq6BandProcessor) chain.getRack().getProcessor(
+                        chain.getRack().indexOf("eq6"));
+        assertNotNull(eqProc);
+        eqProc.getParam("b1f").setCurrentRaw(20);
+        assertFalse("test must exercise the inaudible anchor path",
+                eqProc.isAudible());
 
         float[] high = sineAt(2048, 0.2f, 5000.0);
         double before = rmsTail(high);
@@ -765,5 +772,33 @@ public class FxRackChainTest {
         assertTrue("second tone stage skipped across an inaudible eq6: "
                         + before + " -> " + after,
                 after > before * 1.15);
+    }
+
+    @Test
+    public void splitPresenceAfterLimiterStillHonoursSafetyCeiling() {
+        DspChain.Config cfg = new DspChain.Config();
+        cfg.applyPreset(DspChain.Preset.CLEAR_ALL);
+        cfg.addOrFocusSlot(DspChain.EffectType.WARMTH_BODY).value = 100;
+        cfg.addOrFocusSlot(DspChain.EffectType.BRICKWALL_LIMITER).value = 50;
+        cfg.addOrFocusSlot(DspChain.EffectType.PARAMETRIC_EQ6).value = 0;
+        cfg.addOrFocusSlot(DspChain.EffectType.VOCAL_PRESENCE).value = 100;
+        cfg.syncLegacyFieldsFromSlots();
+
+        DspChain chain = new DspChain(1, cfg);
+        assertEquals("eq6", chain.getSplitToneAfterId());
+        ParametricEq6BandProcessor eqProc =
+                (ParametricEq6BandProcessor) chain.getRack().getProcessor(
+                        chain.getRack().indexOf("eq6"));
+        assertNotNull(eqProc);
+        eqProc.getParam("b1f").setCurrentRaw(20);
+        assertFalse(eqProc.isAudible());
+
+        float[] hot = sineAt(2048, 0.95f, 5000.0);
+        chain.getRack().processInPlace(hot, 2048);
+        for (int i = 0; i < hot.length; i++) {
+            assertTrue("split second stage bypassed safety ceiling at "
+                            + i + ": " + hot[i],
+                    Math.abs(hot[i]) < 0.99f);
+        }
     }
 }

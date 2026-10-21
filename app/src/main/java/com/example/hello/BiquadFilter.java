@@ -20,12 +20,32 @@ public final class BiquadFilter {
         boolean realloc = this.sections.length != newSections.length
                 || this.channels != ch
                 || z1.length != newSections.length * ch;
+        if (!realloc) {
+            int n = Math.min(this.sections.length, newSections.length);
+            for (int s = 0; s < n; s++) {
+                if (isIdentity(newSections[s]) && !isIdentity(this.sections[s])) {
+                    for (int c = 0; c < ch; c++) {
+                        z1[s * ch + c] = 0f;
+                        z2[s * ch + c] = 0f;
+                    }
+                }
+            }
+        }
         this.sections = newSections;
         this.channels = ch;
         if (realloc) {
             z1 = new float[newSections.length * ch];
             z2 = new float[newSections.length * ch];
         }
+    }
+
+    private static boolean isIdentity(float[] c) {
+        if (c == null || c.length < 5) return false;
+        return Math.abs(c[0] - 1f) < 1e-6f
+                && Math.abs(c[1]) < 1e-6f
+                && Math.abs(c[2]) < 1e-6f
+                && Math.abs(c[3]) < 1e-6f
+                && Math.abs(c[4]) < 1e-6f;
     }
 
     public int sectionCount() {

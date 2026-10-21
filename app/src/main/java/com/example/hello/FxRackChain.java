@@ -247,6 +247,10 @@ public final class FxRackChain {
                     runSplitToneSecondStage(toneProcRef, firstTone,
                             buf, frames, channels);
                     splitSecondDone = true;
+                    if (safetyLimRef != null && safetyLimRef.isSafetyOn()) {
+                        safetyLimRef.enforceSafetyCeiling(
+                                buf, frames, channels);
+                    }
                 }
                 continue;
             }
@@ -297,6 +301,9 @@ public final class FxRackChain {
         if (toneProcRef != null && !splitSecondDone) {
             runSplitToneSecondStage(toneProcRef, firstTone,
                     buf, frames, channels);
+            if (safetyLimRef != null && safetyLimRef.isSafetyOn()) {
+                safetyLimRef.enforceSafetyCeiling(buf, frames, channels);
+            }
         }
     }
 

@@ -1,5 +1,6 @@
 package com.example.hello;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 import android.app.Activity;
@@ -56,12 +57,12 @@ public class WaveformLoadTest {
 
         v.loadFromFloatWav(f);
         long t0 = System.currentTimeMillis();
-        while (v.historyCount() == 0
+        while (v.historyCount() < 20
                 && System.currentTimeMillis() - t0 < 5000) {
             Thread.sleep(50);
         }
-        assertTrue("waveform stayed blank for an attached session",
-                v.historyCount() > 0);
+        assertEquals("1 s at 20 bars/s must populate 20 buckets",
+                20, v.historyCount());
     }
 
     @Test

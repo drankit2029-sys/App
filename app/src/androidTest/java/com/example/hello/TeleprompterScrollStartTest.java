@@ -242,8 +242,9 @@ public class TeleprompterScrollStartTest {
                         TeleSettings.load(b).autoScroll));
             }
         }
-        org.junit.Assume.assumeTrue("no audio input on this device",
-                firstMoveAt >= 0L);
+        org.junit.Assume.assumeTrue("capture never started (no audio input)",
+                RecordingEngine.get().state
+                        == RecordingEngine.State.RECORDING);
         assertTrue("prompter never started scrolling; trace:" + trace,
                 firstMoveAt >= 0L);
         assertTrue("prompter waited " + firstMoveAt

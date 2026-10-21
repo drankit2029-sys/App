@@ -2198,8 +2198,8 @@ public class StudioFragment extends Fragment {
             EditLink.clear(appCtx);
             handler.post(() -> {
                 saving = false;
+                RecordingService.stopService(appCtx);
                 if (!isAdded()) return;
-                RecordingService.stopService(requireContext());
                 activity().syncFabWithEngine();
                 if (wasEdit) {
                     // Discarding an edit leaves the original take untouched;

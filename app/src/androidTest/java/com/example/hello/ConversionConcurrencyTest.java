@@ -183,6 +183,9 @@ public class ConversionConcurrencyTest {
         // A corrupted container is exactly what two writers on one path makes.
         FormatConverter.validateFinal(out, SaveFormat.M4A);
         TakesRepository.delete(made.id);
+        // Do not leave an orphan for the next test's sweep to adopt.
+        // noinspection ResultOfMethodCallIgnored
+        out.delete();
     }
 
     /**
@@ -357,7 +360,10 @@ public class ConversionConcurrencyTest {
             Take made = TakesRepository.all().get(0);
             assertEquals("rename during conversion was dropped",
                     "Renamed mid flight", made.title);
+            File out = new File(made.filePath);
             TakesRepository.delete(made.id);
+            // noinspection ResultOfMethodCallIgnored
+            out.delete();
         } finally {
             ConversionJobs.cancel(job.jobId, false);
             // noinspection ResultOfMethodCallIgnored
