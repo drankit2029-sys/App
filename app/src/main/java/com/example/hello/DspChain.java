@@ -1032,6 +1032,9 @@ public final class DspChain {
             if (p instanceof NoiseSuppressionProcessor) {
                 ((NoiseSuppressionProcessor) p).setNoiseProfile(null);
             }
+            if (p instanceof SpectralNoiseReductionProcessor) {
+                ((SpectralNoiseReductionProcessor) p).setNoiseProfile(null);
+            }
             for (FxParameter fp : p.getParameters()) {
                 if (!isPrimaryLegacyParam(fp.id)
                         && !isStage3PrimaryParam(p.getId(), fp.id)) {

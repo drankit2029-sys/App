@@ -120,6 +120,10 @@ public class Stage3FxAuditFixTest {
         assertTrue("Trim button must be enabled on an IDLE attached edit session",
                 btnTrimCrop.isEnabled());
 
+        // Effects mode needs a region: select one before entering.
+        WaveformView fxWave = root.findViewById(R.id.waveform);
+        fxWave.selectRange(0.25f, 0.75f);
+
         // Tap FX button to open the inline FX rack.
         btnDspFx.performClick();
         View fxPanel = root.findViewById(R.id.fxPanel);
@@ -398,6 +402,8 @@ public class Stage3FxAuditFixTest {
         View root = frag.getView();
         assertNotNull(root);
 
+        ((WaveformView) root.findViewById(R.id.waveform))
+                .selectRange(0.25f, 0.75f);
         root.findViewById(R.id.btnDspFx).performClick();
         assertEquals(View.VISIBLE,
                 root.findViewById(R.id.fxPanel).getVisibility());
@@ -433,6 +439,8 @@ public class Stage3FxAuditFixTest {
         assertNotNull(frag);
         View root = frag.getView();
         assertNotNull(root);
+        ((WaveformView) root.findViewById(R.id.waveform))
+                .selectRange(0.25f, 0.75f);
         root.findViewById(R.id.btnDspFx).performClick();
 
         View expand = findViewByContentDescription(root, "Expand effect");
@@ -476,6 +484,8 @@ public class Stage3FxAuditFixTest {
         assertNotNull(frag);
         View root = frag.getView();
         assertNotNull(root);
+        ((WaveformView) root.findViewById(R.id.waveform))
+                .selectRange(0.25f, 0.75f);
         root.findViewById(R.id.btnDspFx).performClick();
 
         TextView showAdvanced = findTextStartingWith(root,

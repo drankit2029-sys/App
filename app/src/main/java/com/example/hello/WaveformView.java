@@ -49,17 +49,17 @@ public class WaveformView extends View {
     private final Paint selBorderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint handlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint handleGripPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint fxPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF rect = new RectF();
 
     private float[] history = new float[COLS];
     /**
-     * Peaks of the effect-applied audio, drawn as a cyan overlay on top of
-     * the dry waveform while the FX rack is open. Null when no live FX
-     * preview is active.
+     * Dry peaks captured when the FX rack opened, so the effect-applied
+     * region can be re-spliced on every parameter change and restored when
+     * the rack closes. Null when no FX region is being shown.
      */
-    private float[] fxHistory;
-    private int fxCount;
+    private float[] fxBaseHistory;
+    private int fxBaseCount;
+    private boolean fxRegionActive;
     private int count;
     private boolean live;
     private float zoom = 1f;
@@ -193,6 +193,7 @@ public class WaveformView extends View {
         float[] snap = undoPeakStack.pollFirst();
         Float snapFrames = undoFramesPerBar.pollFirst();
         if (snap == null) return false;
+        dropFxBaseLocked();
         if (snapFrames != null) framesPerBar = snapFrames;
         if (history.length < snap.length) {
             history = new float[Math.max(COLS, snap.length)];
@@ -241,30 +242,75 @@ public class WaveformView extends View {
     }
 
     /**
-     * Shows the peaks of the effect-applied audio as a cyan overlay on top of
-     * the dry waveform, so the user can see what the rack will do before
-     * committing it.
+     * Replaces the waveform bars inside {@code [startFrac, endFrac)} with the
+     * peaks of the effect-applied audio, so effects mode shows the processed
+     * audio directly instead of a translucent overlay.
      *
-     * @param peaks peak per history bucket, or null to clear the overlay
+     * <p>The dry bars outside the region are untouched and the original peaks
+     * are captured on the first call, so every rack change can be spliced on
+     * top of the same dry baseline and {@link #clearFxRegionPeaks()} restores
+     * the untouched waveform.
+     *
+     * @param peaks peak per history bucket (zero outside the region), or null
+     *              to restore the dry waveform
      */
-    public void setFxPreviewPeaks(final float[] peaks) {
+    public void setFxRegionPeaks(final float[] peaks,
+                                 final float startFrac,
+                                 final float endFrac) {
         synchronized (this) {
-            if (peaks == null || peaks.length == 0) {
-                fxHistory = null;
-                fxCount = 0;
-            } else {
-                fxHistory = peaks;
-                fxCount = Math.min(peaks.length, MAX_HISTORY);
+            if (peaks == null || peaks.length == 0 || count <= 0) {
+                restoreFxBaseLocked();
+                postInvalidateOnAnimation();
+                return;
             }
+            if (fxBaseHistory == null || fxBaseCount != count) {
+                fxBaseHistory = Arrays.copyOf(history, count);
+                fxBaseCount = count;
+            } else {
+                int n = Math.min(count, fxBaseHistory.length);
+                System.arraycopy(fxBaseHistory, 0, history, 0, n);
+            }
+            int s = Math.max(0, Math.min(count - 1,
+                    Math.round(startFrac * count)));
+            int e = Math.max(s + 1, Math.min(count,
+                    Math.round(endFrac * count)));
+            int lim = Math.min(e, peaks.length);
+            for (int i = s; i < lim; i++) {
+                history[i] = Math.max(0f, peaks[i]);
+            }
+            fxRegionActive = true;
         }
         postInvalidateOnAnimation();
     }
 
-    /** True when an effect-applied overlay is being shown. */
-    public boolean hasFxPreview() {
+    /** Restores the dry waveform and drops the captured baseline. */
+    public void clearFxRegionPeaks() {
         synchronized (this) {
-            return fxHistory != null && fxCount > 0;
+            restoreFxBaseLocked();
         }
+        postInvalidateOnAnimation();
+    }
+
+    /** True when the waveform is currently showing an effect-applied region. */
+    public boolean hasFxRegion() {
+        synchronized (this) {
+            return fxRegionActive;
+        }
+    }
+
+    private void restoreFxBaseLocked() {
+        if (fxBaseHistory != null && count > 0) {
+            int n = Math.min(count, fxBaseHistory.length);
+            System.arraycopy(fxBaseHistory, 0, history, 0, n);
+        }
+        dropFxBaseLocked();
+    }
+
+    /** Discards the dry baseline because the underlying peaks are replaced. */
+    private void dropFxBaseLocked() {
+        fxBaseHistory = null;
+        fxBaseCount = 0;
+        fxRegionActive = false;
     }
 
     /** Number of waveform buckets currently held, for FX preview rendering. */
@@ -292,6 +338,7 @@ public class WaveformView extends View {
                 if (updated.length != curCount) return;
                 synchronized (WaveformView.this) {
                     if (count == curCount) {
+                        dropFxBaseLocked();
                         int s = Math.max(0, Math.min(count - 1,
                                 Math.round(startFrac * count)));
                         int e = Math.max(s + 1, Math.min(count,
@@ -307,6 +354,7 @@ public class WaveformView extends View {
     }
 
     public synchronized void enterSubEditorMode() {
+        dropFxBaseLocked();
         stashedParentPeaks = count > 0 ? Arrays.copyOf(history, count) : new float[0];
         stashedParentSelStart = Math.max(0, Math.min(count, selStartIdx));
         stashedParentSelEnd = Math.max(stashedParentSelStart, Math.min(count, selEndIdx));
@@ -853,6 +901,7 @@ public class WaveformView extends View {
 
     private void applyLoadedPeaks(float[] peaks, Runnable onLoaded) {
         synchronized (WaveformView.this) {
+            dropFxBaseLocked();
             int n = Math.min(peaks.length, MAX_HISTORY);
             int livePushed = count;
             int totalNeeded = Math.min(MAX_HISTORY, n + livePushed);
@@ -1269,39 +1318,6 @@ public class WaveformView extends View {
                 canvas.drawLine(x, centerY - bh / 2f, x, centerY + bh / 2f, barPaint);
             }
 
-            // 2b) Cyan overlay: the peaks of the effect-applied audio, so the
-            // user can see what the FX rack will do before committing it.
-            if (fxHistory != null && fxCount > 0) {
-                fxPaint.setColor(0xFF32D6FF);
-                for (long k = kStart; k <= kEnd; k++) {
-                    float bStart = k * bucketsPerBar;
-                    float bEnd = (k + 1) * bucketsPerBar;
-                    if (bStart >= fxCount || bEnd <= 0f) continue;
-                    float barCenterBucket = (k + 0.5f) * bucketsPerBar;
-                    if (barCenterBucket > fxCount) continue;
-                    float x = centerX - (headPos - barCenterBucket) * gap;
-                    if (x < -barW || x > w + barW) continue;
-                    float v = 0f;
-                    synchronized (this) {
-                        if (bucketsPerBar >= 1.0f) {
-                            int i0 = Math.max(0, (int) Math.floor(bStart));
-                            int i1 = Math.min(fxCount - 1, (int) Math.ceil(bEnd) - 1);
-                            if (i1 < i0) i1 = i0;
-                            for (int idx = i0; idx <= i1; idx++) {
-                                if (fxHistory[idx] > v) v = fxHistory[idx];
-                            }
-                        } else {
-                            int idx = Math.max(0, Math.min(fxCount - 1,
-                                    (int) Math.floor(barCenterBucket)));
-                            v = fxHistory[idx];
-                        }
-                    }
-                    if (v <= 0f) continue;
-                    float fh = Math.max(2f, v * maxH * 2f);
-                    fxPaint.setAlpha(200);
-                    canvas.drawLine(x, centerY - fh / 2f, x, centerY + fh / 2f, fxPaint);
-                }
-            }
         }
         barPaint.setAlpha(255);
 

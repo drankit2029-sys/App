@@ -114,6 +114,10 @@ public class FxEffectsModeTest {
         assertNotEquals("A pending rack must not highlight the FX chip",
                 SELECTED_CHIP_TEXT, idleColour);
 
+        // Effects mode needs a region before it can open.
+        ((WaveformView) root.findViewById(R.id.waveform))
+                .selectRange(0.25f, 0.75f);
+
         // Open the rack: now the chip is highlighted.
         btnDspFx.performClick();
         assertTrue("The rack must be open", frag.isFxPanelOpen());
@@ -190,5 +194,139 @@ public class FxEffectsModeTest {
         assertFalse("An empty rack must stay inactive", cfg.isActive());
         DspChain chain = new DspChain(1, cfg);
         assertFalse("An empty rack must not process audio", chain.isActive());
+    }
+
+    @Test
+    public void openingEffectsModeWithoutASelectionAsksForOne()
+            throws Exception {
+        int frames = 4800;
+        File raw = createFloatWav("needs_selection.wav", frames, 1);
+        DspChain.Config cfg = new DspChain.Config();
+        cfg.applyPreset(DspChain.Preset.CLEAR_ALL);
+        cfg.save(ctx);
+
+        engine.attachExisting(ctx, raw, "Needs Selection", 1,
+                RecordingEngine.payloadBytesOf(raw));
+        MainActivity act = Robolectric.buildActivity(MainActivity.class)
+                .create().start().resume().visible().get();
+        act.openStudioWithEdit(raw, 303L, "Needs Selection");
+        Robolectric.flushForegroundThreadScheduler();
+
+        StudioFragment frag = (StudioFragment) act.getSupportFragmentManager()
+                .findFragmentByTag("STU");
+        assertNotNull(frag);
+        View root = frag.getView();
+        assertNotNull(root);
+        WaveformView wf = root.findViewById(R.id.waveform);
+        TextView btnDspFx = root.findViewById(R.id.btnDspFx);
+
+        assertFalse("A fresh session has no selection", wf.hasSelection());
+        btnDspFx.performClick();
+
+        assertFalse("FX mode must not open without a region",
+                frag.isFxPanelOpen());
+        assertTrue("Tapping FX must enable selection like Trim does",
+                wf.hasSelection());
+
+        // With a region selected the same chip now enters the mode.
+        btnDspFx.performClick();
+        assertTrue("FX mode must open once a region exists",
+                frag.isFxPanelOpen());
+    }
+
+    @Test
+    public void everyOtherEditingActionIsLockedInsideEffectsMode()
+            throws Exception {
+        int frames = 4800;
+        File raw = createFloatWav("locked_mode.wav", frames, 1);
+        DspChain.Config cfg = new DspChain.Config();
+        cfg.applyPreset(DspChain.Preset.CLEAR_ALL);
+        cfg.save(ctx);
+
+        engine.attachExisting(ctx, raw, "Locked Mode", 1,
+                RecordingEngine.payloadBytesOf(raw));
+        MainActivity act = Robolectric.buildActivity(MainActivity.class)
+                .create().start().resume().visible().get();
+        act.openStudioWithEdit(raw, 304L, "Locked Mode");
+        Robolectric.flushForegroundThreadScheduler();
+
+        StudioFragment frag = (StudioFragment) act.getSupportFragmentManager()
+                .findFragmentByTag("STU");
+        assertNotNull(frag);
+        View root = frag.getView();
+        assertNotNull(root);
+        WaveformView wf = root.findViewById(R.id.waveform);
+        TextView btnDspFx = root.findViewById(R.id.btnDspFx);
+        TextView btnSelect = root.findViewById(R.id.btnSelectRange);
+        TextView btnReplace = root.findViewById(R.id.btnReplaceSeg);
+        TextView btnTrim = root.findViewById(R.id.btnTrimCrop);
+        TextView btnUndo = root.findViewById(R.id.btnEditUndo);
+
+        assertTrue("Trim must be live outside effects mode",
+                btnTrim.isEnabled());
+        wf.selectRange(0.25f, 0.75f);
+        btnDspFx.performClick();
+        assertTrue(frag.isFxPanelOpen());
+
+        assertFalse("Select must be locked inside effects mode",
+                btnSelect.isEnabled());
+        assertFalse("Select & Replace must be locked inside effects mode",
+                btnReplace.isEnabled());
+        assertFalse("Trim must be locked inside effects mode",
+                btnTrim.isEnabled());
+        assertFalse("Undo must be locked inside effects mode",
+                btnUndo.isEnabled());
+        assertTrue("The FX chip must stay live so the mode can be closed",
+                btnDspFx.isEnabled());
+
+        btnDspFx.performClick();
+        assertFalse(frag.isFxPanelOpen());
+        assertTrue("Closing the rack must unlock Trim", btnTrim.isEnabled());
+    }
+
+    @Test
+    public void closingTheRackRestoresTheDryWaveform()
+            throws Exception {
+        int frames = 4800;
+        File raw = createFloatWav("dry_restore.wav", frames, 1);
+        DspChain.Config cfg = new DspChain.Config();
+        cfg.applyPreset(DspChain.Preset.CLEAR_ALL);
+        DspChain.EffectSlot shelf =
+                cfg.addOrFocusSlot(DspChain.EffectType.SHELF_FILTER);
+        shelf.value = 600;
+        shelf.extraParams.put("freq", 20000);
+        cfg.save(ctx);
+
+        engine.attachExisting(ctx, raw, "Dry Restore", 1,
+                RecordingEngine.payloadBytesOf(raw));
+        MainActivity act = Robolectric.buildActivity(MainActivity.class)
+                .create().start().resume().visible().get();
+        act.openStudioWithEdit(raw, 305L, "Dry Restore");
+        Robolectric.flushForegroundThreadScheduler();
+
+        StudioFragment frag = (StudioFragment) act.getSupportFragmentManager()
+                .findFragmentByTag("STU");
+        assertNotNull(frag);
+        View root = frag.getView();
+        assertNotNull(root);
+        WaveformView wf = root.findViewById(R.id.waveform);
+        TextView btnDspFx = root.findViewById(R.id.btnDspFx);
+
+        wf.selectRange(0.25f, 0.75f);
+        btnDspFx.performClick();
+        assertTrue(frag.isFxPanelOpen());
+
+        // Splice a synthetic effect-applied region and verify the view knows
+        // it is showing processed bars, then verify closing restores dry.
+        float[] peaks = new float[wf.getHistoryCount()];
+        java.util.Arrays.fill(peaks, 0.9f);
+        wf.setFxRegionPeaks(peaks, 0.25f, 0.75f);
+        assertTrue("The waveform must show the effect-applied region",
+                wf.hasFxRegion());
+
+        btnDspFx.performClick();
+        assertFalse(frag.isFxPanelOpen());
+        assertFalse("Closing FX mode must restore the dry waveform",
+                wf.hasFxRegion());
     }
 }

@@ -92,6 +92,12 @@ public class StudioFragment extends Fragment {
     private float fxApplyTargetStart = 0f;
     private float fxApplyTargetEnd = 1f;
     private boolean fxApplyTargetHasSelection = false;
+    /**
+     * Monotonic token for the live waveform render. Every rack change bumps
+     * it so a slow render built from an older rack is discarded instead of
+     * painting stale bars.
+     */
+    private int fxPreviewGeneration = 0;
     private final java.util.Set<DspChain.EffectSlot> fxAdvancedOpen =
             java.util.Collections.newSetFromMap(
                     new java.util.IdentityHashMap<DspChain.EffectSlot, Boolean>());
@@ -356,6 +362,7 @@ public class StudioFragment extends Fragment {
         if (btnPreviewPlay != null) {
             PressAnim.applySoft(btnPreviewPlay, 0.95f);
             btnPreviewPlay.setOnClickListener(view -> {
+                if (fxPanelOpen) return;
                 if (!ensurePausedForEditing()) return;
                 stopStudioPreview();
                 replaceModeArmed = !replaceModeArmed;
@@ -385,7 +392,7 @@ public class StudioFragment extends Fragment {
         if (btnSelectRange != null) {
             PressAnim.applySoft(btnSelectRange, 0.95f);
             btnSelectRange.setOnClickListener(view -> {
-                if (replaceModeArmed) return;
+                if (replaceModeArmed || fxPanelOpen) return;
                 if (!ensurePausedForEditing()) return;
                 stopStudioPreview();
                 waveform.toggleSelectionAtPlayhead();
@@ -397,7 +404,7 @@ public class StudioFragment extends Fragment {
         if (btnReplaceSeg != null) {
             PressAnim.applySoft(btnReplaceSeg, 0.95f);
             btnReplaceSeg.setOnClickListener(view -> {
-                if (replaceModeArmed) return;
+                if (replaceModeArmed || fxPanelOpen) return;
                 if (!ensurePausedForEditing()) return;
                 openSelectAndReplaceSubEditor();
             });
@@ -407,7 +414,7 @@ public class StudioFragment extends Fragment {
         if (btnTrimCrop != null) {
             PressAnim.applySoft(btnTrimCrop, 0.95f);
             btnTrimCrop.setOnClickListener(view -> {
-                if (replaceModeArmed) return;
+                if (replaceModeArmed || fxPanelOpen) return;
                 if (!ensurePausedForEditing()) return;
                 showTrimOptionsPopup();
             });
@@ -418,7 +425,6 @@ public class StudioFragment extends Fragment {
             PressAnim.applySoft(btnDspFx, 0.95f);
             btnDspFx.setOnClickListener(view -> {
                 if (replaceModeArmed) return;
-                if (!ensurePausedForEditing()) return;
                 toggleFxPanel();
             });
         }
@@ -427,7 +433,7 @@ public class StudioFragment extends Fragment {
         if (btnEditUndo != null) {
             PressAnim.applySoft(btnEditUndo, 0.95f);
             btnEditUndo.setOnClickListener(view -> {
-                if (replaceModeArmed) return;
+                if (replaceModeArmed || fxPanelOpen) return;
                 if (!ensurePausedForEditing()) return;
                 performStudioUndo();
             });
@@ -2597,7 +2603,10 @@ public class StudioFragment extends Fragment {
 
         boolean hasSel = canEdit && !replaceModeArmed
                 && waveform != null && waveform.hasSelection();
-        boolean othersEnabled = canEdit && !replaceModeArmed;
+        // Effects mode is a separate mode: the rack owns the selection and the
+        // transport, so every other editing action is locked until it closes.
+        boolean fxMode = canEdit && fxPanelOpen;
+        boolean othersEnabled = canEdit && !replaceModeArmed && !fxMode;
         long durMs = Math.max(1L, engine.durationMs());
 
         // 1) Replace Mode Toggle Button (btnPreviewPlay):
@@ -2662,20 +2671,25 @@ public class StudioFragment extends Fragment {
             setChipIconAndTint(btnTrimCrop, R.drawable.ic_edit_trim, col);
         }
 
-        // 5) FX Button: disabled while Replace mode is on.
+        // 5) FX Button: disabled while Replace mode is on, and the only
+        //    editing chip that stays live while effects mode is open (it is
+        //    how the mode is closed).
         if (btnDspFx != null) {
             // The chip is only highlighted while the rack is actually open.
             // A rack with effects in it but a closed panel is a pending
             // edit, not an active mode, so it must not look selected.
-            boolean fxActive = othersEnabled && fxPanelOpen;
+            boolean fxAvailable = canEdit && !replaceModeArmed;
+            boolean fxActive = fxAvailable && fxPanelOpen;
             boolean fxPending = dspConfig != null && dspConfig.isActive();
             btnDspFx.setText(fxPending ? dspConfig.badgeSummary() : "FX");
-            btnDspFx.setEnabled(othersEnabled);
-            btnDspFx.setClickable(othersEnabled);
-            btnDspFx.setAlpha(othersEnabled ? 1f : 0.35f);
+            btnDspFx.setEnabled(fxAvailable);
+            btnDspFx.setClickable(fxAvailable);
+            // Dim like Trim when a region still has to be selected.
+            btnDspFx.setAlpha(!fxAvailable ? 0.35f
+                    : (fxPanelOpen || hasSel ? 1f : 0.75f));
             btnDspFx.setBackgroundResource(fxActive
                     ? R.drawable.bg_chip_selected : R.drawable.bg_chip);
-            int col = !othersEnabled ? 0xFF5D6672
+            int col = !fxAvailable ? 0xFF5D6672
                     : (fxActive ? 0xFFFFFFFF : 0xFF9AA3AF);
             btnDspFx.setTextColor(col);
             setChipIconAndTint(btnDspFx, R.drawable.ic_edit_fx, col);
@@ -2694,7 +2708,10 @@ public class StudioFragment extends Fragment {
         }
 
         if (hintText != null && canEdit) {
-            if (inSelectAndReplaceEditor) {
+            if (fxPanelOpen) {
+                hintText.setText("FX mode • Play auditions the effect-applied "
+                        + "audio • Stop applies it");
+            } else if (inSelectAndReplaceEditor) {
                 hintText.setText("Select & Replace Take • Tap Stop to splice into main take");
             } else if (studioPreviewPlayer != null) {
                 hintText.setText("Playing preview • Tap Pause FAB or scroll to stop");
@@ -2875,11 +2892,24 @@ public class StudioFragment extends Fragment {
      * toggle is disabled.
      */
     private void toggleFxPanel() {
-        setFxPanelVisible(!fxPanelOpen);
+        if (fxPanelOpen) {
+            setFxPanelVisible(false);
+            return;
+        }
+        if (!ensurePausedForEditing()) return;
+        // Effects mode is a separate editing mode: it needs a region to
+        // work on, so entering without one enables Select and asks for a
+        // drag, exactly like Trim does.
+        if (!ensureSelectionOrAutoEnable("FX")) return;
+        setFxPanelVisible(true);
     }
 
     private void setFxPanelVisible(boolean open) {
         if (fxPanel == null || telePanel == null) return;
+        if (open && (waveform == null || !waveform.hasSelection())) {
+            // Defensive: the mode only exists for a selected region.
+            return;
+        }
         fxPanelOpen = open;
         if (open) {
             // If no effects are currently enabled on initial default state,
@@ -2900,12 +2930,9 @@ public class StudioFragment extends Fragment {
                     telePanel.getVisibility() == View.VISIBLE;
             // Freeze the apply target: the selection at the moment the rack
             // opens is the region Stop will commit to.
-            fxApplyTargetHasSelection = waveform != null
-                    && waveform.hasSelection();
-            fxApplyTargetStart = fxApplyTargetHasSelection
-                    ? waveform.selectionStartFraction() : 0f;
-            fxApplyTargetEnd = fxApplyTargetHasSelection
-                    ? waveform.selectionEndFraction() : 1f;
+            fxApplyTargetHasSelection = true;
+            fxApplyTargetStart = waveform.selectionStartFraction();
+            fxApplyTargetEnd = waveform.selectionEndFraction();
             setTelePaused(true);
             telePanel.setVisibility(View.GONE);
             fxPanel.setVisibility(View.VISIBLE);
@@ -2913,60 +2940,80 @@ public class StudioFragment extends Fragment {
             paintFxPanelControls();
             refreshFxPreviewPeaks();
         } else {
+            // Cancel any in-flight render and put the dry waveform back: the
+            // effect-applied bars only exist inside effects mode.
+            fxPreviewGeneration++;
+            handler.removeCallbacks(fxPreviewRefresh);
             fxPanel.setVisibility(View.GONE);
             telePanel.setVisibility(teleWasVisibleBeforeFx
                     ? View.VISIBLE : View.GONE);
             setTeleActive(teleWasVisibleBeforeFx);
-            // The effect-applied overlay only makes sense while the rack is
-            // open, so it is cleared with the panel.
-            if (waveform != null) waveform.setFxPreviewPeaks(null);
+            if (waveform != null) waveform.clearFxRegionPeaks();
         }
         paintEditorStrip();
     }
 
     /**
-     * Renders the live rack over the take and shows the effect-applied
-     * waveform as a cyan overlay on the dry bars.
+     * Schedules a re-render of the effect-applied waveform for the frozen
+     * apply target.
      *
-     * <p>The render runs off the UI thread and is skipped when the rack has
-     * nothing enabled, so the studio stays responsive while the user dials
-     * effects in.
+     * <p>Rapid knob turns coalesce into one render and every request bumps a
+     * generation token, so a slow render built from an older rack can never
+     * paint over a newer one. The render runs off the UI thread and only
+     * covers the target region, which keeps it responsive on long takes.
      */
     private void refreshFxPreviewPeaks() {
+        handler.removeCallbacks(fxPreviewRefresh);
         if (!isAdded() || waveform == null) return;
-        if (!fxPanelOpen || dspConfig == null || !dspConfig.isActive()) {
-            waveform.setFxPreviewPeaks(null);
+        if (!fxPanelOpen) {
+            waveform.clearFxRegionPeaks();
             return;
         }
-        final File raw = engine.rawFile;
-        if (raw == null || !raw.exists()) {
-            waveform.setFxPreviewPeaks(null);
+        handler.postDelayed(fxPreviewRefresh, 70L);
+    }
+
+    private final Runnable fxPreviewRefresh = () -> {
+        if (!isAdded() || waveform == null || !fxPanelOpen) return;
+        if (dspConfig == null || !dspConfig.isActive()) {
+            fxPreviewGeneration++;
+            waveform.clearFxRegionPeaks();
             return;
         }
         final int buckets = waveform.getHistoryCount();
         if (buckets <= 0) {
-            waveform.setFxPreviewPeaks(null);
+            waveform.clearFxRegionPeaks();
             return;
         }
+        final File raw = engine.rawFile;
+        if (raw == null || !raw.exists()) {
+            waveform.clearFxRegionPeaks();
+            return;
+        }
+        final int gen = ++fxPreviewGeneration;
+        final float startFrac = fxApplyTargetStart;
+        final float endFrac = fxApplyTargetEnd;
         final int channels = Math.max(1, engine.channels);
-        final DspChain.Config cfg = dspConfig;
+        // Snapshot the chain on the UI thread: the worker gets an immutable
+        // rack while the user keeps turning knobs.
+        final DspChain chain = new DspChain(channels, dspConfig);
+        if (!chain.isActive()) {
+            waveform.clearFxRegionPeaks();
+            return;
+        }
         new Thread(() -> {
-            try {
-                DspChain chain = new DspChain(channels, cfg);
-                float[] peaks = FxPreviewPeaks.render(raw, chain, buckets,
-                        DspChain.SAMPLE_RATE);
-                if (!isAdded()) return;
-                handler.post(() -> {
-                    if (!isAdded()) return;
-                    // The rack may have changed while the render ran; the
-                    // overlay is only valid for the state it was built from.
-                    if (!fxPanelOpen) return;
-                    waveform.setFxPreviewPeaks(peaks);
-                });
-            } catch (Exception ignored) {
-            }
-        }, "takeone-fx-preview").start();
-    }
+            final float[] peaks = FxPreviewPeaks.renderRegion(raw, chain,
+                    buckets, DspChain.SAMPLE_RATE, startFrac, endFrac);
+            handler.post(() -> {
+                if (!isAdded() || waveform == null || !fxPanelOpen) return;
+                if (gen != fxPreviewGeneration) return;
+                if (peaks == null) {
+                    waveform.clearFxRegionPeaks();
+                } else {
+                    waveform.setFxRegionPeaks(peaks, startFrac, endFrac);
+                }
+            });
+        }, "takeone-fx-region").start();
+    };
 
     private void paintFxPanelControls() {
         if (fxPanel == null || !isAdded()) return;
@@ -3001,19 +3048,24 @@ public class StudioFragment extends Fragment {
         boolean anyEnabled = dspConfig != null && dspConfig.isActive();
         boolean blocked = replaceModeArmed || !isSessionEditable();
         if (fxHint != null) {
-            String target = fxApplyTargetHasSelection
-                    ? "the selected region"
-                    : "the entire take";
+            long durMs = Math.max(1L, engine.durationMs());
+            String target = formatTimer(
+                    Math.round(fxApplyTargetStart * durMs))
+                    + " – " + formatTimer(
+                    Math.round(fxApplyTargetEnd * durMs));
             if (blocked) {
                 fxHint.setText("Disable Replace mode to use the FX rack");
             } else if (previewingFx) {
                 fxHint.setText("Playing the effect-applied audio · "
-                        + "Stop applies it to " + target);
+                        + "Stop applies to " + target);
             } else if (anyEnabled) {
-                fxHint.setText("Play previews the effect-applied audio · "
-                        + "Stop applies it to " + target);
+                String tail = rackHasOfflineEffects()
+                        ? "\nLength-changing effects apply on Stop" : "";
+                fxHint.setText("Play auditions the effect-applied audio · "
+                        + "Stop applies to " + target + tail);
             } else {
-                fxHint.setText("Add an effect below to preview and apply it");
+                fxHint.setText("Add an effect below — the waveform and "
+                        + "playback update live");
             }
         }
         // Keep the save path honest: while a chain is enabled but not baked,
@@ -3254,6 +3306,21 @@ public class StudioFragment extends Fragment {
                     Toast.LENGTH_SHORT).show();
             return;
         }
+        // In effects mode the selection starts as the apply target. Learning
+        // from that is useless (it is the speech being treated), so the first
+        // tap explains the two-step flow instead of learning garbage.
+        boolean stillOnTarget = fxPanelOpen
+                && Math.abs(waveform.selectionStartFraction()
+                        - fxApplyTargetStart) < 0.0005f
+                && Math.abs(waveform.selectionEndFraction()
+                        - fxApplyTargetEnd) < 0.0005f;
+        if (stillOnTarget) {
+            Toast.makeText(requireContext(),
+                    "Drag the [ ] handles over a noise-only part of the "
+                            + "waveform, then tap Learn again",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
         File rawFile = engine.rawFile;
         if (rawFile == null || !rawFile.exists()) {
             Toast.makeText(requireContext(), "No editable audio yet",
@@ -3280,12 +3347,34 @@ public class StudioFragment extends Fragment {
             if (end - start > maxFrames) end = start + maxFrames;
             float[] samples = EditEngine.readFloatSelection(
                     rawFile, start, end);
+
+            // Feed the sample through every effect ABOVE this one, so a
+            // profiler that sits later in the rack learns the audio it will
+            // actually receive. This is what makes "applied on top of the
+            // previous effect" true for learning as well as playback.
+            int ch = Math.max(1, info.channels);
+            DspChain prefix = new DspChain(ch, prefixConfigFor(dspConfig, slot));
+            if (prefix.isActive()) {
+                prefix.prepareOffline(rawFile, start, end,
+                        info.sampleRate, ch);
+                prefix.reset();
+                int frames = samples.length / ch;
+                int chunk = 2048;
+                float[] block = new float[chunk * ch];
+                for (int off = 0; off < frames; off += chunk) {
+                    int n = Math.min(chunk, frames - off);
+                    System.arraycopy(samples, off * ch, block, 0, n * ch);
+                    prefix.processInPlace(block, n);
+                    System.arraycopy(block, 0, samples, off * ch, n * ch);
+                }
+            }
+
             float[] profile = slot.type
                     == DspChain.EffectType.SPECTRAL_NOISE_REDUCTION
                     ? SpectralNoiseReductionProcessor.learnProfile(
-                            samples, info.channels)
+                            samples, ch)
                     : NoiseSuppressionProcessor.learnProfile(
-                            samples, info.channels);
+                            samples, ch);
             if (profile == null) {
                 Toast.makeText(requireContext(),
                         "Select at least 0.1 s of steady noise",
@@ -3295,18 +3384,60 @@ public class StudioFragment extends Fragment {
             slot.noiseProfile = profile;
             if (slot.value <= 0) slot.value = slot.type.defaultVal;
             slot.enabled = true;
+            // Restore the apply target so effects mode keeps showing the
+            // region that Stop will commit; the learned profile is already
+            // part of the live waveform and playback.
+            if (fxPanelOpen) {
+                waveform.selectRange(fxApplyTargetStart, fxApplyTargetEnd);
+            }
             onSlotMutated.run();
             rebuildFxRackList();
             double seconds = (end - start)
                     / (double) Math.max(1, info.sampleRate);
             Toast.makeText(requireContext(), String.format(Locale.US,
-                    "Noise profile learned from %.1f s — tap Apply FX",
-                    seconds), Toast.LENGTH_SHORT).show();
+                    "Noise profile learned from %.1f s — waveform and "
+                            + "playback updated", seconds),
+                    Toast.LENGTH_SHORT).show();
         } catch (Exception e) {
             Toast.makeText(requireContext(),
                     "Could not analyze the selection",
                     Toast.LENGTH_SHORT).show();
         }
+    }
+
+    /** True when the rack contains a duration-changing effect. */
+    private boolean rackHasOfflineEffects() {
+        if (dspConfig == null) return false;
+        for (DspChain.EffectSlot s : dspConfig.slots) {
+            if (s == null || !s.enabled || s.type == null) continue;
+            AudioProcessor p = FxRackChain.getPrototypeProcessor(s.type.id);
+            if (p != null && p.isOfflineOnly()) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Snapshot of the enabled effects above {@code target} in rack order, so a
+     * learning effect samples the signal exactly as it enters that effect.
+     */
+    static DspChain.Config prefixConfigFor(DspChain.Config rack,
+                                          DspChain.EffectSlot target) {
+        DspChain.Config prefix = new DspChain.Config();
+        prefix.applyPreset(DspChain.Preset.CLEAR_ALL);
+        prefix.activePresetId = DspChain.Preset.CUSTOM.id;
+        if (rack == null || target == null) return prefix;
+        for (DspChain.EffectSlot s : rack.slots) {
+            if (s == target) break;
+            if (s == null || s.type == null || !s.enabled) continue;
+            DspChain.EffectSlot copy = new DspChain.EffectSlot(
+                    s.type, true, s.value, false, s.instanceId);
+            copy.wetDry = s.wetDry;
+            copy.extraParams.putAll(s.extraParams);
+            copy.noiseProfile = s.noiseProfile;
+            prefix.slots.add(copy);
+        }
+        prefix.syncLegacyFieldsFromSlots();
+        return prefix;
     }
 
     private void commitFxSlotEdit(DspChain.EffectSlot slot) {
@@ -3515,7 +3646,7 @@ public class StudioFragment extends Fragment {
                 // The apply target is frozen, so the user is free to pick a
                 // different range for the profile without moving the target.
                 TextView learnHint = makeFxChip(ctx,
-                        "Profile range is separate", density);
+                        "Drag a noise range, then Learn", density);
                 learnHint.setEnabled(false);
                 learnHint.setAlpha(0.55f);
                 profileOps.addView(learnHint);
@@ -4784,6 +4915,11 @@ public class StudioFragment extends Fragment {
                     return false;
                 }
             }
+            // The file is about to change: stop the live region render and
+            // drop its dry baseline so the reloaded bars become the new truth.
+            fxPreviewGeneration++;
+            handler.removeCallbacks(fxPreviewRefresh);
+            waveform.clearFxRegionPeaks();
             waveform.recordUndoPeaks();
             peaksPushed = true;
             DspChain chain = new DspChain(info.channels, dspConfig);

@@ -87,4 +87,145 @@ final class FxPreviewPeaks {
             return null;
         }
     }
+
+    /**
+     * Renders only {@code [startFrac, endFrac)} of {@code raw} through
+     * {@code chain} and returns peaks on the waveform's absolute bucket grid.
+     *
+     * <p>Rendering just the target region keeps the live preview responsive on
+     * long takes. The chain is warmed with a short pre-roll and primed for its
+     * algorithmic latency, exactly like {@code EditEngine.applyDspToRange}, so
+     * the bars line up with the audio that Stop will commit.
+     *
+     * @return one peak per history bucket (zero outside the region), or null
+     */
+    static float[] renderRegion(File raw, DspChain chain, int buckets,
+                                int sampleRate, float startFrac,
+                                float endFrac) {
+        if (raw == null || chain == null || buckets <= 0) return null;
+        if (!(startFrac < endFrac)) return null;
+        try (RandomAccessFile raf = new RandomAccessFile(raw, "r")) {
+            Dsp.WavHeader h = Dsp.parseWavHeader(raf);
+            long onDisk = Math.max(0, raf.length() - h.dataStart);
+            long dataBytes = (h.dataBytes <= 0 || h.dataBytes > onDisk)
+                    ? onDisk : h.dataBytes;
+            int ch = Math.max(1, h.channels);
+            long totalFrames = dataBytes / 4 / ch;
+            if (totalFrames <= 0) return null;
+            long start = Math.max(0L, Math.min(totalFrames,
+                    Math.round(startFrac * totalFrames)));
+            long end = Math.max(start, Math.min(totalFrames,
+                    Math.round(endFrac * totalFrames)));
+            if (end <= start) return null;
+
+            chain.prepareOffline(raw, start, end, sampleRate, ch);
+            chain.reset();
+
+            float[] peaks = new float[buckets];
+            int chunkFrames = 4096;
+            byte[] rawBuf = new byte[chunkFrames * ch * 4];
+            float[] fBuf = new float[chunkFrames * ch];
+            ByteBuffer bb = ByteBuffer.wrap(rawBuf)
+                    .order(ByteOrder.LITTLE_ENDIAN);
+
+            // Warm the chain's filter/envelope state just before the region.
+            int preRoll = (int) Math.min(Dsp.CROSSFADE_FRAMES, start);
+            if (preRoll > 0) {
+                raf.seek(h.dataStart + (start - preRoll) * ch * 4L);
+                raf.readFully(rawBuf, 0, preRoll * ch * 4);
+                bb.clear();
+                bb.limit(preRoll * ch * 4);
+                bb.asFloatBuffer().get(fBuf, 0, preRoll * ch);
+                chain.processInPlace(fBuf, preRoll);
+            }
+
+            // Prime the latency line so output frame `cur` aligns with input
+            // frame `cur`, matching the offline apply path.
+            final int latencyFrames = Math.max(0, chain.getLatencyFrames());
+            float[] postContext = null;
+            int postContextFrames = 0;
+            if (latencyFrames > 0) {
+                postContextFrames = (int) Math.min(latencyFrames,
+                        Math.max(0L, totalFrames - end));
+                if (postContextFrames > 0) {
+                    postContext = new float[postContextFrames * ch];
+                    byte[] pcBuf = new byte[postContextFrames * ch * 4];
+                    raf.seek(h.dataStart + end * ch * 4L);
+                    raf.readFully(pcBuf);
+                    ByteBuffer.wrap(pcBuf).order(ByteOrder.LITTLE_ENDIAN)
+                            .asFloatBuffer().get(postContext);
+                }
+                int remaining = latencyFrames;
+                long pos = start;
+                while (remaining > 0) {
+                    int step = Math.min(chunkFrames, remaining);
+                    int fromSel = (int) Math.max(0L,
+                            Math.min((long) step, end - pos));
+                    if (fromSel > 0) {
+                        raf.seek(h.dataStart + pos * ch * 4L);
+                        raf.readFully(rawBuf, 0, fromSel * ch * 4);
+                        bb.clear();
+                        bb.limit(fromSel * ch * 4);
+                        bb.asFloatBuffer().get(fBuf, 0, fromSel * ch);
+                    }
+                    for (int f = fromSel; f < step; f++) {
+                        long postIdx = (pos + f) - end;
+                        for (int c = 0; c < ch; c++) {
+                            fBuf[f * ch + c] = (postContext != null
+                                    && postIdx >= 0
+                                    && postIdx < postContextFrames)
+                                    ? postContext[(int) postIdx * ch + c] : 0f;
+                        }
+                    }
+                    chain.processInPlace(fBuf, step);
+                    pos += step;
+                    remaining -= step;
+                }
+            }
+
+            long cur = start;
+            while (cur < end) {
+                int want = (int) Math.min(chunkFrames, end - cur);
+                long inStart = cur + latencyFrames;
+                int fromFile = (int) Math.max(0L,
+                        Math.min((long) want, end - inStart));
+                if (fromFile > 0) {
+                    raf.seek(h.dataStart + inStart * ch * 4L);
+                    raf.readFully(rawBuf, 0, fromFile * ch * 4);
+                    bb.clear();
+                    bb.limit(fromFile * ch * 4);
+                    bb.asFloatBuffer().get(fBuf, 0, fromFile * ch);
+                }
+                if (fromFile < want) {
+                    for (int f = fromFile; f < want; f++) {
+                        long absFrame = inStart + f;
+                        long postIdx = absFrame - end;
+                        for (int c = 0; c < ch; c++) {
+                            fBuf[f * ch + c] = (postContext != null
+                                    && postIdx >= 0
+                                    && postIdx < postContextFrames)
+                                    ? postContext[(int) postIdx * ch + c] : 0f;
+                        }
+                    }
+                }
+                chain.processInPlace(fBuf, want);
+                for (int f = 0; f < want; f++) {
+                    float peak = 0f;
+                    for (int c = 0; c < ch; c++) {
+                        float a = Math.abs(fBuf[f * ch + c]);
+                        if (a > peak) peak = a;
+                    }
+                    int b = (int) ((cur + f) * buckets / totalFrames);
+                    if (b < 0) b = 0;
+                    if (b >= buckets) b = buckets - 1;
+                    if (peak > peaks[b]) peaks[b] = peak;
+                }
+                cur += want;
+            }
+            return peaks;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
 }
