@@ -387,6 +387,30 @@ public class FxEffectsModeTest {
     }
 
     @Test
+    public void effectsModeKeepsThePlayheadInsideItsTarget() {
+        WaveformView wf = new WaveformView(ctx);
+        for (int i = 0; i < 100; i++) wf.push(0.5f);
+        wf.setFxRegionBounds(0.25f, 0.75f);
+
+        wf.setPlayheadFraction(0.1f);
+        assertEquals("Playhead must clamp up to the target start",
+                0.25f, wf.playheadFraction(), 0.01f);
+
+        wf.setPlayheadFraction(0.9f);
+        assertEquals("Playhead must clamp down to the target end",
+                0.75f, wf.playheadFraction(), 0.01f);
+
+        wf.setPlayheadFraction(0.5f);
+        assertEquals("A playhead inside the target is untouched",
+                0.5f, wf.playheadFraction(), 0.01f);
+
+        wf.clearFxRegion();
+        wf.setPlayheadFraction(0.9f);
+        assertEquals("Leaving effects mode releases the clamp",
+                0.9f, wf.playheadFraction(), 0.01f);
+    }
+
+    @Test
     public void rotationKeepsEffectsModeOpen() throws Exception {
         int frames = 4800;
         File raw = createFloatWav("rotate_fx.wav", frames, 1);

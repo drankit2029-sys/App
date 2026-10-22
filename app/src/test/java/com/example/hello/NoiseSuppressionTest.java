@@ -186,6 +186,23 @@ public class NoiseSuppressionTest {
     }
 
     @Test
+    public void spectralProfileJsonRoundTripsWithItsOwnBinCount() {
+        float[] noise = whiteNoise(24000, 1, 0x4d2L, 0.02f);
+        float[] profile = SpectralNoiseReductionProcessor.learnProfile(
+                noise, 1);
+        assertNotNull(profile);
+        JSONArray json = NoiseSuppressionProcessor.profileToJson(profile);
+        float[] back = NoiseSuppressionProcessor.profileFromJson(json);
+        assertNotNull("Spectral profile rejected on load", back);
+        assertEquals(profile.length, back.length);
+        for (int i = 0; i < profile.length; i++) {
+            double d = Dsp.linToDb(profile[i]) - Dsp.linToDb(back[i]);
+            assertTrue("bin " + i + " drifted " + d + " dB",
+                    Math.abs(d) <= 0.11);
+        }
+    }
+
+    @Test
     public void chunkedProcessingMatchesSingleCallAndReportsLatency() {
         int frames = 12000;
         int latency = NoiseSuppressionProcessor.FFT_SIZE;

@@ -123,6 +123,24 @@ public class FxLivePreviewTest {
     }
 
     @Test
+    public void auditionStartsAtThePlayheadWhenItIsInsideTheRange() {
+        assertEquals(3000L,
+                StudioFragment.auditionStartFrame(1000L, 5000L, 3000L));
+        assertEquals("Playhead on the start keeps the range start",
+                1000L, StudioFragment.auditionStartFrame(
+                        1000L, 5000L, 1000L));
+        assertEquals("Playhead on the end restarts the range",
+                1000L, StudioFragment.auditionStartFrame(
+                        1000L, 5000L, 5000L));
+        assertEquals("Playhead before the range starts at its beginning",
+                1000L, StudioFragment.auditionStartFrame(
+                        1000L, 5000L, 200L));
+        assertEquals("Playhead after the range starts at its beginning",
+                1000L, StudioFragment.auditionStartFrame(
+                        1000L, 5000L, 9000L));
+    }
+
+    @Test
     public void regionRenderRejectsAnEmptyRange() throws Exception {
         File dir = new File(System.getProperty("java.io.tmpdir"),
                 "takeone-fx-live-tests");

@@ -101,6 +101,8 @@ public class StudioFragment extends Fragment {
     private final java.util.Set<DspChain.EffectSlot> fxAdvancedOpen =
             java.util.Collections.newSetFromMap(
                     new java.util.IdentityHashMap<DspChain.EffectSlot, Boolean>());
+    /** Marks the inline Learn chips so selection changes can re-enable them. */
+    private static final Object FX_LEARN_TAG = new Object();
 
     /**
      * False by default when scrolling in PAUSED state -> Resume FAB plays audio
@@ -1486,10 +1488,20 @@ public class StudioFragment extends Fragment {
         //    effect-applied audio instead of starting a new recording, and it
         //    always plays from the top when parked at the end of the take.
         if (fxPanelOpen) {
-            if (atEnd) {
-                curFrames = 0;
-                engine.seekCursorFrame(0);
-                if (waveform != null) waveform.setPlayheadFraction(0f);
+            // In effects mode the transport is bounded by the frozen target:
+            // pressing play at the target end replays from its start instead
+            // of jumping back to the beginning of the whole take.
+            if (totalFrames > 0) {
+                long targetStart = Math.round(fxApplyTargetStart * totalFrames);
+                long targetEnd = Math.round(fxApplyTargetEnd * totalFrames);
+                if (curFrames >= targetEnd - 480 || curFrames < targetStart) {
+                    curFrames = targetStart;
+                    engine.seekCursorFrame(curFrames);
+                    if (waveform != null) {
+                        waveform.setPlayheadFraction(
+                                curFrames / (float) totalFrames);
+                    }
+                }
             }
             toggleStudioPreview(true);
             syncStudioFabIcon();
@@ -2567,6 +2579,17 @@ public class StudioFragment extends Fragment {
         return applyLive && cfg != null ? cfg : new DspChain.Config();
     }
 
+    /**
+     * Range audition cue: start from the playhead when it is inside the
+     * range, otherwise from the range start. A playhead parked exactly on the
+     * range end restarts the range instead of producing an empty pass.
+     */
+    static long auditionStartFrame(long start, long end, long cue) {
+        if (end <= start) return start;
+        if (cue > start && cue < end) return cue;
+        return start;
+    }
+
     private void toggleStudioPreview(boolean withLiveFx) {
         if (!isAdded()) return;
         if (studioPreviewPlayer != null) {
@@ -2646,6 +2669,9 @@ public class StudioFragment extends Fragment {
             if (rangeSel) {
                 long start = Math.round(rangeStart * totalFrames);
                 long end = Math.round(rangeEnd * totalFrames);
+                start = auditionStartFrame(start, end,
+                        Math.max(0L, Math.min(totalFrames,
+                                engine.cursorFrames())));
                 if (end > start) {
                     player.playRange(start, end);
                 } else {
@@ -3050,12 +3076,24 @@ public class StudioFragment extends Fragment {
             teleWasVisibleBeforeFx =
                     telePanel.getVisibility() == View.VISIBLE;
             // Freeze the apply target: the selection at the moment the rack
-            // opens is the region Stop will commit to. The view dims the rest
-            // of the take and clamps any learning sub-selection to it.
+            // opens is the region Stop will commit to. The view highlights it in
+            // orange and clamps any learning sub-selection to it.
             fxApplyTargetHasSelection = true;
             fxApplyTargetStart = waveform.selectionStartFraction();
             fxApplyTargetEnd = waveform.selectionEndFraction();
             waveform.setFxRegionBounds(fxApplyTargetStart, fxApplyTargetEnd);
+            // The view clamps the playhead into the target; mirror the
+            // clamped position into the engine so transport and timer agree.
+            if (engine.hasSession() && engine.totalFrames() > 0) {
+                long total = engine.totalFrames();
+                long target = Math.round(waveform.playheadFraction() * total);
+                if (target != engine.cursorFrames()) {
+                    engine.seekCursorFrame(target);
+                    if (timerText != null) {
+                        timerText.setText(formatTimer(engine.cursorMs()));
+                    }
+                }
+            }
             setTelePaused(true);
             telePanel.setVisibility(View.GONE);
             fxPanel.setVisibility(View.VISIBLE);
@@ -3191,6 +3229,7 @@ public class StudioFragment extends Fragment {
                         + "playback update live");
             }
         }
+        refreshFxLearnChips();
         // Keep the save path honest: while a chain is enabled but not baked,
         // the incremental part must never be adopted.
         syncFxBakeRequired();
@@ -3230,6 +3269,36 @@ public class StudioFragment extends Fragment {
         chip.setLayoutParams(lp);
         PressAnim.applySoft(chip, 0.95f);
         return chip;
+    }
+
+    /**
+     * A Learn chip is only actionable while a waveform range exists. Disable
+     * it for real (not just dim it) so colour and click behaviour agree.
+     */
+    private void styleFxLearnChip(TextView chip) {
+        boolean available = isSessionEditable()
+                && waveform != null && waveform.hasSelection();
+        chip.setEnabled(available);
+        chip.setClickable(available);
+        chip.setAlpha(available ? 1f : 0.35f);
+    }
+
+    private void refreshFxLearnChips() {
+        if (fxListContainer == null) return;
+        refreshFxLearnChips(fxListContainer);
+    }
+
+    private void refreshFxLearnChips(View view) {
+        if (view.getTag() == FX_LEARN_TAG && view instanceof TextView) {
+            styleFxLearnChip((TextView) view);
+            return;
+        }
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                refreshFxLearnChips(group.getChildAt(i));
+            }
+        }
     }
 
     /** Per-effect accent used by the rack cards and their enable dot. */
@@ -3410,8 +3479,7 @@ public class StudioFragment extends Fragment {
      * True for the effects that learn a noise profile from a selected range.
      */
     private static boolean supportsNoiseProfile(DspChain.EffectType type) {
-        return type == DspChain.EffectType.NOISE_SUPPRESSION
-                || type == DspChain.EffectType.SPECTRAL_NOISE_REDUCTION;
+        return type != null && type.requiresLearnedProfile();
     }
 
     /**
@@ -3762,6 +3830,8 @@ public class StudioFragment extends Fragment {
             profileOps.setOrientation(
                     android.widget.LinearLayout.HORIZONTAL);
             TextView learn = makeFxChip(ctx, "Learn from selection", density);
+            learn.setTag(FX_LEARN_TAG);
+            styleFxLearnChip(learn);
             learn.setOnClickListener(v ->
                     learnNoiseProfile(slot, onChanged));
             profileOps.addView(learn);
@@ -4216,8 +4286,6 @@ public class StudioFragment extends Fragment {
             };
 
             if (supportsNoiseProfile(slot.type)) {
-                final boolean hasSelection = waveform != null
-                        && waveform.hasSelection();
                 TextView profileTv = new TextView(ctx);
                 profileTv.setText(slot.noiseProfile != null
                         ? "Noise profile: learned ("
@@ -4239,7 +4307,14 @@ public class StudioFragment extends Fragment {
                         android.widget.LinearLayout.HORIZONTAL);
                 TextView learnBtn = makeFxChip(ctx,
                         "Learn from selection", density);
-                learnBtn.setAlpha(hasSelection ? 1f : 0.35f);
+                Runnable refreshLearnState = () -> {
+                    boolean available = isSessionEditable()
+                            && waveform != null && waveform.hasSelection();
+                    learnBtn.setEnabled(available);
+                    learnBtn.setClickable(available);
+                    learnBtn.setAlpha(available ? 1f : 0.35f);
+                };
+                refreshLearnState.run();
                 learnBtn.setOnClickListener(v -> {
                     if (waveform == null || !waveform.hasSelection()) {
                         Toast.makeText(requireContext(),

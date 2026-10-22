@@ -236,6 +236,20 @@ public final class DspChain {
             this.unit = unit;
         }
 
+        /**
+         * True for the effects that need a noise profile learned from a
+         * selected portion of the audio before they can work properly.
+         *
+         * <p>This is the single source of truth for the Learn UI and for the
+         * learning path in Studio; add a type here (and a
+         * {@code learnProfile} implementation) when introducing another
+         * profiled effect.
+         */
+        public boolean requiresLearnedProfile() {
+            return this == NOISE_SUPPRESSION
+                    || this == SPECTRAL_NOISE_REDUCTION;
+        }
+
         public static EffectType byId(String id) {
             for (EffectType t : values()) {
                 if (t.id.equals(id)) return t;

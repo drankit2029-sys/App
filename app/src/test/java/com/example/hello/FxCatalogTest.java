@@ -58,6 +58,17 @@ public class FxCatalogTest {
     }
 
     @Test
+    public void onlyNoiseToolsRequireALearnedProfile() {
+        Set<DspChain.EffectType> expected = new HashSet<>();
+        expected.add(DspChain.EffectType.NOISE_SUPPRESSION);
+        expected.add(DspChain.EffectType.SPECTRAL_NOISE_REDUCTION);
+        for (DspChain.EffectType t : DspChain.EffectType.values()) {
+            assertEquals("Learn flag mismatch for " + t.id,
+                    expected.contains(t), t.requiresLearnedProfile());
+        }
+    }
+
+    @Test
     public void effectIdsAreUnique() {
         Set<String> ids = new HashSet<>();
         for (DspChain.EffectType t : DspChain.EffectType.values()) {

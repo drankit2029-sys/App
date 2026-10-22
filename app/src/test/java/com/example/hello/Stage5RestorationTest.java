@@ -225,6 +225,75 @@ public class Stage5RestorationTest {
     }
 
     @Test
+    public void spectralLearnedProfileUsesTheProcessingPowerScale() {
+        float[] noise = whiteNoise(48000, 1, 0x5eedL, 0.02f);
+        float[] profile = SpectralNoiseReductionProcessor.learnProfile(
+                noise, 1);
+        assertNotNull(profile);
+        // The profile is installed directly as the per-bin floor, so it must
+        // stay on the raw STFT power scale instead of being normalised to a
+        // mean of 1.0 (which would over-suppress quiet noise).
+        assertEquals(513, profile.length);
+        double mean = 0;
+        for (float v : profile) {
+            assertTrue("Non-positive bin " + v, v > 0f);
+            mean += v;
+        }
+        mean /= profile.length;
+        assertTrue("Profile was normalised: mean " + mean,
+                mean > 1e-6 && mean < 0.5);
+    }
+
+    @Test
+    public void spectralLearnedProfileSuppressesNoiseAndKeepsTheTone() {
+        float[] noise = whiteNoise(96000, 1, 0xabcdeL, 0.02f);
+        float[] profile = SpectralNoiseReductionProcessor.learnProfile(
+                java.util.Arrays.copyOfRange(noise, 0, 24000), 1);
+        assertNotNull(profile);
+
+        SpectralNoiseReductionProcessor p =
+                new SpectralNoiseReductionProcessor();
+        p.getParam("snr_reduction").setFloat(18f);
+        p.getParam("snr_sensitivity").setFloat(0f);
+        p.prepare(SR, 1);
+        p.setNoiseProfile(profile);
+        float[] wet = noise.clone();
+        p.processInPlace(wet, 96000, 1);
+        double reductionDb = 20.0 * Math.log10(
+                rms(noise, 24000, 72000) / Math.max(1e-12,
+                        rms(wet, 24000, 72000)));
+        assertTrue("Learned profile reduced only " + reductionDb + " dB",
+                reductionDb > 6.0);
+
+        float[] tone = sine(48000, 1, 1000, 0.5f);
+        float[] toneOut = tone.clone();
+        p.reset();
+        p.processInPlace(toneOut, 48000, 1);
+        double toneDelta = 20.0 * Math.log10(
+                rms(toneOut, 4800, 43200) / rms(tone, 4800, 43200));
+        assertTrue("Learned profile changed the tone by " + toneDelta
+                + " dB", Math.abs(toneDelta) < 2.0);
+    }
+
+    private static double rms(float[] buf, int from, int len) {
+        double sum = 0;
+        for (int i = from; i < from + len && i < buf.length; i++) {
+            sum += (double) buf[i] * buf[i];
+        }
+        return Math.sqrt(sum / Math.max(1, len));
+    }
+
+    private static float[] whiteNoise(int frames, int ch, long seed,
+                                      float amp) {
+        float[] out = new float[frames * ch];
+        java.util.Random rnd = new java.util.Random(seed);
+        for (int i = 0; i < out.length; i++) {
+            out[i] = (rnd.nextFloat() * 2f - 1f) * amp;
+        }
+        return out;
+    }
+
+    @Test
     public void everyStage5EffectIsRegisteredAndHasItsPrimaryParam() {
         DspChain.EffectType[] types = {
                 DspChain.EffectType.SPECTRAL_NOISE_REDUCTION,

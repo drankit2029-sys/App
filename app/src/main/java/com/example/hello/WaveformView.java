@@ -50,8 +50,9 @@ public class WaveformView extends View {
     private final Paint selBorderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint handlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint handleGripPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint fxShadePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint fxEdgePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint fxSelFillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint fxSelBorderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF rect = new RectF();
 
     private float[] history = new float[COLS];
@@ -64,9 +65,9 @@ public class WaveformView extends View {
     private int fxBaseCount;
     private boolean fxRegionActive;
     /**
-     * The region effects mode owns. It is the frozen apply target, so the
-     * waveform can shade everything outside it and the selection handles can
-     * never move beyond it (a sub-selection is only for learning a profile).
+     * The region effects mode owns. It is the frozen apply target, so its bars
+     * are highlighted in orange and the selection handles can never move
+     * beyond it (a sub-selection is only for learning a profile).
      */
     private float fxRegionStartFrac = 0f;
     private float fxRegionEndFrac = 1f;
@@ -151,11 +152,14 @@ public class WaveformView extends View {
         handleGripPaint.setStrokeCap(Paint.Cap.ROUND);
         handleGripPaint.setColor(0xFFF2F4F7);
         handleGripPaint.setStrokeWidth(1.5f);
-        fxShadePaint.setStyle(Paint.Style.FILL);
-        fxShadePaint.setColor(0x8C000000);
         fxEdgePaint.setStyle(Paint.Style.STROKE);
-        fxEdgePaint.setColor(0xB3FF6B6B);
+        fxEdgePaint.setColor(0xCCFF9F0A);
         fxEdgePaint.setStrokeWidth(1.5f);
+        fxSelFillPaint.setStyle(Paint.Style.FILL);
+        fxSelFillPaint.setColor(0x2EFF9F0A);
+        fxSelBorderPaint.setStyle(Paint.Style.STROKE);
+        fxSelBorderPaint.setColor(0xFFFF9F0A);
+        fxSelBorderPaint.setStrokeWidth(2f);
         setClickable(true);
         Arrays.fill(history, 0f);
     }
@@ -175,9 +179,22 @@ public class WaveformView extends View {
 
     public synchronized void setPlayheadFraction(float frac) {
         float clamped = Math.max(0f, Math.min(1f, frac));
-        playheadPos = clamped * count;
+        playheadPos = clampPlayheadToFxLocked(clamped * count);
         playheadIndex = Math.round(playheadPos);
         postInvalidateOnAnimation();
+    }
+
+    /**
+     * Keeps the playhead inside the frozen effects-mode target. Outside
+     * effects mode there is no constraint, so ordinary scrubbing is
+     * unaffected.
+     */
+    private float clampPlayheadToFxLocked(float pos) {
+        float bounded = Math.max(0f, Math.min(count, pos));
+        if (!fxRegionActive || count <= 0) return bounded;
+        float lo = fxRegionStartFrac * count;
+        float hi = fxRegionEndFrac * count;
+        return Math.max(lo, Math.min(hi, bounded));
     }
 
     public synchronized boolean hasSelection() {
@@ -319,11 +336,15 @@ public class WaveformView extends View {
             fxRegionEndFrac = Math.max(s + 1f / Math.max(1, count),
                     clampFrac(endFrac));
             fxRegionActive = true;
+            // Entering effects mode snaps an outside playhead onto the
+            // nearest edge of the target instead of leaving it stranded.
+            playheadPos = clampPlayheadToFxLocked(playheadPos);
+            playheadIndex = Math.round(playheadPos);
         }
         postInvalidateOnAnimation();
     }
 
-    /** Restores the dry bars but keeps the effects-mode region shading. */
+    /** Restores the dry bars but keeps the effects-mode region highlight. */
     public void clearFxRegionPeaks() {
         synchronized (this) {
             restoreWetBarsLocked();
@@ -331,7 +352,7 @@ public class WaveformView extends View {
         postInvalidateOnAnimation();
     }
 
-    /** Leaves effects mode: restores the dry bars and removes the shading. */
+    /** Leaves effects mode: restores the dry bars and removes the highlight. */
     public void clearFxRegion() {
         synchronized (this) {
             restoreWetBarsLocked();
@@ -1168,10 +1189,12 @@ public class WaveformView extends View {
                         float edge = 28f * density;
                         float gap = gapPxLocked(w);
                         if (x < edge && playheadPos > 0) {
-                            playheadPos = Math.max(0f, playheadPos - (edge - x) / (gap * 3f));
+                            playheadPos = clampPlayheadToFxLocked(
+                                    playheadPos - (edge - x) / (gap * 3f));
                             playheadIndex = Math.round(playheadPos);
                         } else if (x > w - edge && playheadPos < n) {
-                            playheadPos = Math.min(n, playheadPos + (x - (w - edge)) / (gap * 3f));
+                            playheadPos = clampPlayheadToFxLocked(
+                                    playheadPos + (x - (w - edge)) / (gap * 3f));
                             playheadIndex = Math.round(playheadPos);
                         }
                         int idx = bucketForScreenXLocked(x, w);
@@ -1193,10 +1216,12 @@ public class WaveformView extends View {
                         float edge = 28f * density;
                         float gap = gapPxLocked(w);
                         if (x < edge && playheadPos > 0) {
-                            playheadPos = Math.max(0f, playheadPos - (edge - x) / (gap * 3f));
+                            playheadPos = clampPlayheadToFxLocked(
+                                    playheadPos - (edge - x) / (gap * 3f));
                             playheadIndex = Math.round(playheadPos);
                         } else if (x > w - edge && playheadPos < n) {
-                            playheadPos = Math.min(n, playheadPos + (x - (w - edge)) / (gap * 3f));
+                            playheadPos = clampPlayheadToFxLocked(
+                                    playheadPos + (x - (w - edge)) / (gap * 3f));
                             playheadIndex = Math.round(playheadPos);
                         }
                         int idx = bucketForScreenXLocked(x, w);
@@ -1221,8 +1246,8 @@ public class WaveformView extends View {
                         // fit zoom where the whole take is already visible: it is
                         // how the user moves the playhead for editing.
                         float barsPerPx = 1f / gap;
-                        playheadPos = Math.max(0f, Math.min(n,
-                                playheadPos - stepDx * barsPerPx));
+                        playheadPos = clampPlayheadToFxLocked(
+                                playheadPos - stepDx * barsPerPx);
                         playheadIndex = Math.round(playheadPos);
                         pIdx = playheadIndex;
                         pFrac = playheadFraction();
@@ -1258,8 +1283,8 @@ public class WaveformView extends View {
                         if (!live && count > 0 && w > 0) {
                             int tappedIdx = bucketForScreenXLocked(x, w);
                             long now = SystemClock.uptimeMillis();
-                            playheadPos = tappedIdx;
-                            playheadIndex = tappedIdx;
+                            playheadPos = clampPlayheadToFxLocked(tappedIdx);
+                            playheadIndex = Math.round(playheadPos);
                             tappedEditor = true;
                             if (!selectionLocked && now - lastTapUpMs < 280L && count > 1) {
                                 lastTapUpMs = 0L;
@@ -1366,7 +1391,8 @@ public class WaveformView extends View {
                 float boxTop = Math.max(2f, centerY - maxH - 5f);
                 float boxBot = Math.min(h - 2f, centerY + maxH + 5f);
                 rect.set(left, boxTop, right, boxBot);
-                canvas.drawRoundRect(rect, 6f * density, 6f * density, selFillPaint);
+                canvas.drawRoundRect(rect, 6f * density, 6f * density,
+                        fxOn ? fxSelFillPaint : selFillPaint);
             }
         }
 
@@ -1412,7 +1438,14 @@ public class WaveformView extends View {
 
                 float bh = Math.max(2f, v * maxH * 2f);
 
-                if (selOn && barCenterBucket >= sIdx && barCenterBucket <= eIdx) {
+                if (fxOn && barCenterBucket >= fxS * n
+                        && barCenterBucket <= fxE * n) {
+                    // Effects mode marks the frozen apply target in orange so
+                    // the region that Stop will process is unmistakable.
+                    barPaint.setColor(0xFFFF9F0A);
+                    barPaint.setAlpha(255);
+                } else if (selOn && barCenterBucket >= sIdx
+                        && barCenterBucket <= eIdx) {
                     barPaint.setColor(0xFFFF453A);
                     barPaint.setAlpha(255);
                 } else if (x <= centerX) {
@@ -1436,20 +1469,14 @@ public class WaveformView extends View {
         }
         barPaint.setAlpha(255);
 
-        // 2b) Effects mode: dim everything outside the frozen target region.
-        // The region stays visible when the selection handles are hidden, so
-        // the user never loses track of what Stop will process.
+        // 2b) Effects mode: keep orange boundary posts around the frozen
+        // target. The target bars themselves are already orange, so the rest
+        // of the take stays normally readable instead of being dimmed.
         if (fxOn) {
             float fxStartX = centerX - (headPos - fxS * n) * gap;
             float fxEndX = centerX - (headPos - fxE * n) * gap;
             float left = Math.max(0f, Math.min(w, fxStartX));
             float right = Math.max(0f, Math.min(w, fxEndX));
-            if (left > 0f) {
-                canvas.drawRect(0f, 0f, left, h, fxShadePaint);
-            }
-            if (right < w) {
-                canvas.drawRect(right, 0f, w, h, fxShadePaint);
-            }
             if (fxStartX >= -1f && fxStartX <= w + 1f) {
                 canvas.drawLine(left, 0f, left, h, fxEdgePaint);
             }
@@ -1466,9 +1493,10 @@ public class WaveformView extends View {
             float tabH = 19f * density;
             float r = 4f * density;
 
+            Paint borderPaint = fxOn ? fxSelBorderPaint : selBorderPaint;
             if (xSelStart >= -tabW && xSelStart <= w + tabW) {
                 float cx = Math.max(tabW * 0.5f, Math.min(w - tabW * 0.5f, xSelStart));
-                canvas.drawLine(cx, boxTop, cx, boxBot, selBorderPaint);
+                canvas.drawLine(cx, boxTop, cx, boxBot, borderPaint);
                 rect.set(cx - tabW * 0.5f, boxTop, cx + tabW * 0.5f, boxTop + tabH);
                 canvas.drawRoundRect(rect, r, r, handlePaint);
                 canvas.drawLine(cx, boxTop + 4f * density,
@@ -1476,7 +1504,7 @@ public class WaveformView extends View {
             }
             if (xSelEnd >= -tabW && xSelEnd <= w + tabW) {
                 float cx = Math.max(tabW * 0.5f, Math.min(w - tabW * 0.5f, xSelEnd));
-                canvas.drawLine(cx, boxTop, cx, boxBot, selBorderPaint);
+                canvas.drawLine(cx, boxTop, cx, boxBot, borderPaint);
                 rect.set(cx - tabW * 0.5f, boxBot - tabH, cx + tabW * 0.5f, boxBot);
                 canvas.drawRoundRect(rect, r, r, handlePaint);
                 canvas.drawLine(cx, boxBot - tabH + 4f * density,

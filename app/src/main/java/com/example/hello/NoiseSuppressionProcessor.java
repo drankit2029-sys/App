@@ -360,9 +360,14 @@ final class NoiseSuppressionProcessor extends AudioProcessor {
     }
 
     static float[] profileFromJson(JSONArray a) {
-        if (a == null || a.length() != BINS) return null;
-        float[] p = new float[BINS];
-        for (int i = 0; i < BINS; i++) {
+        // Profiles are serialised through the same dB helpers by both
+        // profiled effects, so accept the stored bin count instead of
+        // assuming this processor's BINS (Spectral Noise Reduction learns a
+        // 1024-point profile). The owning processor validates the length when
+        // the profile is installed.
+        if (a == null || a.length() == 0) return null;
+        float[] p = new float[a.length()];
+        for (int i = 0; i < a.length(); i++) {
             p[i] = Dsp.dbToLin(a.optInt(i, -1200) / 10.0);
         }
         return p;

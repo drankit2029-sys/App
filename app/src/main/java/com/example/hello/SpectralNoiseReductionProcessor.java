@@ -86,21 +86,9 @@ final class SpectralNoiseReductionProcessor extends AudioProcessor {
      */
     static float[] learnProfile(float[] samples, int channels) {
         if (samples == null || samples.length == 0 || channels < 1) return null;
-        int frames = samples.length / channels;
-        if (frames < 512) return null;
-        float[] power = StftProcessor.welchSpectrum(samples, frames, channels,
-                2048, 1f);
-        if (power == null || power.length == 0) return null;
-        // Normalise so the profile describes a floor, not a level.
-        float mean = 0f;
-        for (float p : power) mean += p;
-        mean /= power.length;
-        if (mean <= 0f) return null;
-        float[] profile = new float[power.length];
-        for (int i = 0; i < power.length; i++) {
-            profile[i] = power[i] / mean;
-        }
-        return profile;
+        int ch = Math.max(1, Math.min(2, channels));
+        int frames = samples.length / ch;
+        return learnPower(samples, frames, ch);
     }
 
     /**
@@ -109,10 +97,51 @@ final class SpectralNoiseReductionProcessor extends AudioProcessor {
      */
     public void learnProfile(float[] buf, int frames, int channels) {
         if (buf == null || frames <= 0) return;
-        float[] power = StftProcessor.welchSpectrum(buf, frames, channels,
-                2048, 1f);
-        noiseProfile = power.clone();
+        int ch = Math.max(1, Math.min(2, channels));
+        float[] power = learnPower(buf, frames, ch);
+        if (power == null) return;
+        noiseProfile = power;
         profileLearned = true;
+    }
+
+    /**
+     * Averages the raw per-bin power of the learning region.
+     *
+     * <p>The FFT size and the unnormalised power scale deliberately match
+     * {@link #processInPlace}: the submitted profile is compared directly
+     * with each processing frame's power, so normalising it (or learning it
+     * with a different FFT size) would move the floor and either over-
+     * suppress the signal or leave the noise untouched.
+     */
+    private static float[] learnPower(float[] samples, int frames, int ch) {
+        final int fftSize = 1024;
+        final int bins = fftSize / 2 + 1;
+        if (frames < fftSize) return null;
+        int hop = fftSize / 4;
+        float[] window = Dsp.hannWindow(fftSize);
+        float[] acc = new float[bins];
+        float[] re = new float[fftSize];
+        float[] im = new float[fftSize];
+        int used = 0;
+        for (int start = 0; start + fftSize <= frames; start += hop) {
+            for (int c = 0; c < ch; c++) {
+                java.util.Arrays.fill(im, 0f);
+                for (int n = 0; n < fftSize; n++) {
+                    re[n] = samples[(start + n) * ch + c] * window[n];
+                }
+                Dsp.fft(re, im, false);
+                for (int b = 0; b < bins; b++) {
+                    acc[b] += re[b] * re[b] + im[b] * im[b];
+                }
+            }
+            used++;
+        }
+        if (used == 0) return null;
+        float inv = 1f / (used * (float) ch);
+        for (int b = 0; b < bins; b++) {
+            acc[b] = Math.max(1e-20f, acc[b] * inv);
+        }
+        return acc;
     }
 
     @Override
