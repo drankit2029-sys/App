@@ -379,38 +379,18 @@
                 android:orientation="vertical" />
         </ScrollView>
 
-        <LinearLayout
+        <!-- Effects mode: the transport controls the rack, so the panel itself
+             only carries the effect list. Play/pause auditions the
+             effect-applied audio and Stop commits it to the selection. -->
+        <TextView
+            android:id="@+id/fxHint"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:gravity="center_vertical"
-            android:orientation="horizontal">
-
-            <TextView
-                android:id="@+id/fxPreviewBtn"
-                android:layout_width="0dp"
-                android:layout_height="34dp"
-                android:layout_marginEnd="5dp"
-                android:layout_weight="1"
-                android:background="@drawable/bg_btn_ghost"
-                android:fontFamily="sans-serif-medium"
-                android:gravity="center"
-                android:text="▶ Preview FX"
-                android:textColor="@color/text_primary"
-                android:textSize="12sp" />
-
-            <TextView
-                android:id="@+id/fxApplyBtn"
-                android:layout_width="0dp"
-                android:layout_height="34dp"
-                android:layout_marginStart="5dp"
-                android:layout_weight="1"
-                android:background="@drawable/bg_btn_primary"
-                android:fontFamily="sans-serif-medium"
-                android:gravity="center"
-                android:text="Apply to Selection"
-                android:textColor="@color/white"
-                android:textSize="12sp" />
-        </LinearLayout>
+            android:paddingTop="4dp"
+            android:paddingBottom="2dp"
+            android:text="Play previews the effect-applied audio · Stop applies it to the selection"
+            android:textColor="@color/text_secondary"
+            android:textSize="10sp" />
     </LinearLayout>
 
     <!-- Recording strip moved downwards slightly with icons on all editing buttons -->

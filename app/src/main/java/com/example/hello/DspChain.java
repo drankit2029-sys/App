@@ -311,6 +311,12 @@ public final class DspChain {
     /** One effect pill in the user's scrollable FX rack. */
     public static final class EffectSlot {
         public final EffectType type;
+        /**
+         * Stable identity of this rack entry, so the same effect can be
+         * inserted twice and each copy keeps its own processor, parameters
+         * and learned profile. Persisted with the slot.
+         */
+        public final long instanceId;
         /** Checkmark state: only applied when enabled == true. */
         public boolean enabled;
         /** Current parameter setting (e.g. 0..100% or 40..160 Hz). */
@@ -332,11 +338,21 @@ public final class DspChain {
          */
         public float[] noiseProfile;
 
+        /** Monotonic source of unique rack-entry identities. */
+        private static final java.util.concurrent.atomic.AtomicLong
+                NEXT_INSTANCE_ID = new java.util.concurrent.atomic.AtomicLong(1);
+
         public EffectSlot(EffectType type, boolean enabled, int value, boolean expanded) {
+            this(type, enabled, value, expanded, NEXT_INSTANCE_ID.getAndIncrement());
+        }
+
+        public EffectSlot(EffectType type, boolean enabled, int value,
+                          boolean expanded, long instanceId) {
             this.type = type;
             this.enabled = enabled;
             this.value = Math.max(type.minVal, Math.min(type.maxVal, value));
             this.expanded = expanded;
+            this.instanceId = instanceId;
         }
     }
 
@@ -444,14 +460,28 @@ public final class DspChain {
             syncLegacyFieldsFromSlots();
         }
 
+        /**
+         * Adds a rack entry for {@code type}.
+         *
+         * <p>Every modern effect gets its own slot, so the same effect can be
+         * inserted twice (or more) and each copy keeps its own parameters,
+         * wet/dry mix and learned profile.
+         *
+         * <p>The eight legacy voice-chain stages are the exception: they are
+         * one fixed percentage chain, so a second copy of one of them would
+         * fight over the same shared field. Adding a legacy stage therefore
+         * focuses the existing entry instead.
+         */
         public EffectSlot addOrFocusSlot(EffectType type) {
-            for (EffectSlot s : slots) {
-                if (s.type == type) {
-                    s.enabled = true;
-                    s.expanded = true;
-                    activePresetId = Preset.CUSTOM.id;
-                    syncLegacyFieldsFromSlots();
-                    return s;
+            if (type != null && type.isLegacyStage()) {
+                for (EffectSlot s : slots) {
+                    if (s.type == type) {
+                        s.enabled = true;
+                        s.expanded = true;
+                        activePresetId = Preset.CUSTOM.id;
+                        syncLegacyFieldsFromSlots();
+                        return s;
+                    }
                 }
             }
             EffectSlot created = new EffectSlot(type, true, type.defaultVal, true);
@@ -540,16 +570,6 @@ public final class DspChain {
         }
 
         private void syncSlotsFromLegacyFields() {
-            Map<EffectType, EffectSlot> existingByType =
-                    new EnumMap<>(EffectType.class);
-            List<EffectType> previousOrder = new ArrayList<>(slots.size());
-            for (EffectSlot s : slots) {
-                if (s != null && s.type != null
-                        && !existingByType.containsKey(s.type)) {
-                    existingByType.put(s.type, s);
-                    previousOrder.add(s.type);
-                }
-            }
             Map<EffectType, Integer> activeValues =
                     new LinkedHashMap<>();
             if (hpfEnabled) {
@@ -578,35 +598,33 @@ public final class DspChain {
                 activeValues.put(EffectType.BRICKWALL_LIMITER, limiterPct);
             }
 
+            List<EffectSlot> previous = new ArrayList<>(slots);
             slots.clear();
-            // Preserve user's relative ordering, bypassed (unchecked) pills,
-            // and per-slot wetDry/extraParams for all slots already in the rack.
-            for (EffectType t : previousOrder) {
-                Integer val = activeValues.remove(t);
-                EffectSlot kept = existingByType.get(t);
-                if (val != null) {
-                    kept.enabled = true;
-                    kept.value = Math.max(t.minVal, Math.min(t.maxVal, val));
-                    slots.add(kept);
-                } else if (kept != null) {
-                    // Stage 3 suite slots are rack-local: their state must
-                    // survive every legacy-field resync untouched.
-                    if (t.isLegacyStage()) kept.enabled = false;
-                    slots.add(kept);
+            // Preserve the user's relative ordering, bypassed (unchecked)
+            // pills, and per-slot wetDry/extraParams for every slot already
+            // in the rack. Modern effects keep every copy: two slots of the
+            // same effect are two independent rack entries.
+            java.util.Set<EffectType> seenLegacy = new java.util.HashSet<>();
+            for (EffectSlot kept : previous) {
+                if (kept == null || kept.type == null) continue;
+                if (kept.type.isLegacyStage()) {
+                    if (!seenLegacy.add(kept.type)) continue;
+                    Integer val = activeValues.remove(kept.type);
+                    if (val != null) {
+                        kept.enabled = true;
+                        kept.value = Math.max(kept.type.minVal,
+                                Math.min(kept.type.maxVal, val));
+                    } else {
+                        kept.enabled = false;
+                    }
                 }
+                slots.add(kept);
             }
             // Append any newly enabled legacy stages in canonical stage order.
             for (Map.Entry<EffectType, Integer> e : activeValues.entrySet()) {
                 EffectType t = e.getKey();
                 int val = e.getValue();
-                EffectSlot kept = existingByType.get(t);
-                if (kept != null) {
-                    kept.enabled = true;
-                    kept.value = Math.max(t.minVal, Math.min(t.maxVal, val));
-                    slots.add(kept);
-                } else {
-                    slots.add(new EffectSlot(t, true, val, false));
-                }
+                slots.add(new EffectSlot(t, true, val, false));
             }
         }
 
@@ -838,7 +856,10 @@ public final class DspChain {
                         boolean en = o.optBoolean("en", true);
                         int val = o.optInt("val", t.defaultVal);
                         boolean exp = o.optBoolean("exp", false);
-                        EffectSlot slot = new EffectSlot(t, en, val, exp);
+                        long iid = o.optLong("iid", 0L);
+                        EffectSlot slot = iid > 0
+                                ? new EffectSlot(t, en, val, exp, iid)
+                                : new EffectSlot(t, en, val, exp);
                         slot.wetDry = Math.max(0f, Math.min(1f,
                                 (float) o.optDouble("mix", 1.0)));
                         JSONObject pj = o.optJSONObject("params");
@@ -880,6 +901,7 @@ public final class DspChain {
                 for (EffectSlot s : slots) {
                     JSONObject o = new JSONObject();
                     o.put("id", s.type.id);
+                    o.put("iid", s.instanceId);
                     o.put("en", s.enabled);
                     o.put("val", s.value);
                     o.put("exp", s.expanded);
@@ -953,9 +975,12 @@ public final class DspChain {
     }
 
     /**
-     * Creates or drops Stage 3 suite processors so every non-legacy slot owns
-     * exactly one rack processor and deleted slots leave no orphan behind.
-     * Runs before {@code applyLegacyConfig} so slot order can include them.
+     * Creates or drops rack processors so every non-legacy slot owns exactly
+     * one processor and deleted slots leave no orphan behind.
+     *
+     * <p>Processors are matched by the slot's instance key, so the same
+     * effect can sit in the rack twice with independent parameters. Runs
+     * before {@code applyLegacyConfig} so slot order can include them.
      */
     private void ensureRackSlots(Config cfg) {
         if (cfg == null) return;
@@ -964,19 +989,29 @@ public final class DspChain {
             if (s == null || s.type == null || s.type.isLegacyStage()) continue;
             String pid = FxRackChain.processorIdForSlotType(s.type);
             if (pid == null) continue;
-            wanted.add(pid);
-            AudioProcessor p = rack.getProcessor(rack.indexOf(pid));
+            String key = slotInstanceKey(s);
+            wanted.add(key);
+            int idx = rack.indexOfInstance(key, pid);
+            AudioProcessor p = idx >= 0 ? rack.getProcessor(idx) : null;
             if (p == null) {
                 p = FxRackChain.createProcessor(pid);
-                if (p != null) rack.addProcessor(p);
+                if (p == null) continue;
+                p.setInstanceKey(key);
+                rack.addProcessor(p);
             }
             if (p != null) p.setEnabled(s.enabled);
         }
         for (int i = rack.size() - 1; i >= 0; i--) {
             AudioProcessor p = rack.getProcessor(i);
             if (p == null || isLegacyProcessor(p)) continue;
-            if (!wanted.contains(p.getId())) rack.removeProcessor(i);
+            String key = p.getInstanceKey();
+            if (key == null || !wanted.contains(key)) rack.removeProcessor(i);
         }
+    }
+
+    /** Stable instance key of a rack entry, used to bind it to a processor. */
+    static String slotInstanceKey(EffectSlot s) {
+        return "slot:" + s.type.id + ":" + s.instanceId;
     }
 
     private static boolean isLegacyProcessor(AudioProcessor p) {
@@ -1030,7 +1065,7 @@ public final class DspChain {
         if (cfg == null) return;
         boolean bothToneEnabled = cfg.hasBothToneSlotsEnabled();
         for (DspChain.EffectSlot s : cfg.slots) {
-            AudioProcessor p = processorForSlot(s.type);
+            AudioProcessor p = processorForSlot(s);
             if (p == null) continue;
             if (s.type == EffectType.WARMTH_BODY
                     || s.type == EffectType.VOCAL_PRESENCE) {
@@ -1047,6 +1082,11 @@ public final class DspChain {
             if (s.type == EffectType.NOISE_SUPPRESSION
                     && p instanceof NoiseSuppressionProcessor) {
                 ((NoiseSuppressionProcessor) p).setNoiseProfile(
+                        s.noiseProfile);
+            }
+            if (s.type == EffectType.SPECTRAL_NOISE_REDUCTION
+                    && p instanceof SpectralNoiseReductionProcessor) {
+                ((SpectralNoiseReductionProcessor) p).setNoiseProfile(
                         s.noiseProfile);
             }
             if (!s.type.isLegacyStage()) {
@@ -1160,7 +1200,16 @@ public final class DspChain {
         }
     }
 
-    private AudioProcessor processorForSlot(EffectType type) {
+    /**
+     * The processor that serves a rack entry.
+     *
+     * <p>The legacy stages are a fixed chain, so they share one processor
+     * each. Every other effect is bound to its own rack entry by instance
+     * key, which is what lets the same effect appear in the rack twice.
+     */
+    private AudioProcessor processorForSlot(EffectSlot slot) {
+        if (slot == null || slot.type == null) return null;
+        EffectType type = slot.type;
         switch (type) {
             case LOW_CUT_HPF:
                 return rack.getProcessor(rack.indexOf("hpf"));
@@ -1177,9 +1226,13 @@ public final class DspChain {
             case WARMTH_BODY:
             case VOCAL_PRESENCE:
                 return rack.getProcessor(rack.indexOf("tone"));
-            default:
-                // Stage 3 suite ids match their processor ids exactly.
-                return rack.getProcessor(rack.indexOf(type.id));
+            default: {
+                // Rack-local effects: bound to this slot's own processor.
+                String pid = FxRackChain.processorIdForSlotType(type);
+                if (pid == null) return null;
+                int idx = rack.indexOfInstance(slotInstanceKey(slot), pid);
+                return idx >= 0 ? rack.getProcessor(idx) : null;
+            }
         }
     }
 

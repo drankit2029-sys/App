@@ -126,15 +126,16 @@ public class Stage3FxAuditFixTest {
         assertEquals("FX panel did not open on IDLE edit session",
                 View.VISIBLE, fxPanel.getVisibility());
 
-        TextView fxApplyBtn = root.findViewById(R.id.fxApplyBtn);
-        TextView fxPreviewBtn = root.findViewById(R.id.fxPreviewBtn);
-        assertTrue("FX Preview button must be enabled in IDLE edit session",
-                fxPreviewBtn.isEnabled());
-        assertTrue("FX Apply button must be enabled in IDLE edit session",
-                fxApplyBtn.isEnabled());
+        // The rack no longer carries its own Preview/Apply buttons: in
+        // effects mode the transport does both, so the panel only keeps the
+        // effect list and a hint line.
+        TextView fxHint = root.findViewById(R.id.fxHint);
+        assertNotNull("The FX panel must keep a hint line", fxHint);
+        assertTrue("The hint must explain the transport controls",
+                fxHint.getText().toString().length() > 0);
 
-        // Tap "Apply to Entire Take" and verify the audio samples on disk are modified!
-        fxApplyBtn.performClick();
+        // Stop asks for confirmation and then commits the rack to the audio.
+        frag.applyEffectsToSelection();
         float[] after = readSamples(raw, frames, 1);
         double diffEnergy = 0;
         for (int i = 0; i < frames; i++) {
@@ -401,12 +402,12 @@ public class Stage3FxAuditFixTest {
         assertEquals(View.VISIBLE,
                 root.findViewById(R.id.fxPanel).getVisibility());
 
-        TextView preview = root.findViewById(R.id.fxPreviewBtn);
-        TextView apply = root.findViewById(R.id.fxApplyBtn);
-        assertFalse("Preview with no active effects would just play dry audio",
-                preview.isEnabled());
-        assertFalse("Apply must stay disabled with an empty rack",
-                apply.isEnabled());
+        // With an empty rack there is nothing to preview or apply, and the
+        // panel says so instead of offering dead buttons.
+        TextView fxHint = root.findViewById(R.id.fxHint);
+        assertNotNull("The FX panel must keep a hint line", fxHint);
+        assertTrue("An empty rack must not offer a preview",
+                fxHint.getText().toString().contains("Add an effect"));
     }
 
     @Test

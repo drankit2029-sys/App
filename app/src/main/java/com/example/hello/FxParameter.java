@@ -66,7 +66,6 @@ public final class FxParameter {
         return new FxParameter(id, name, unit, Type.INT, Scale.LINEAR,
                 min, max, step, def, 1, null);
     }
-
     /** Fractional parameter stored scaled by 100 (two decimal places). */
     public static FxParameter floatParam(String id, String name, String unit,
                                          float min, float max, float def) {
@@ -103,6 +102,37 @@ public final class FxParameter {
 
     public int getCurrentRaw() {
         return currentRaw;
+    }
+
+    /**
+     * The step a control should use when the user drags or taps the value.
+     *
+     * <p>Fixed-point parameters are stored in raw counts ({@code scaleDivisor}
+     * counts per display unit), so their storage granularity is far finer than
+     * anything the user can read on the label. Dragging with the storage
+     * granularity makes a one-decimal control (a Q of 25.0, a 0.1 dB
+     * threshold) crawl: the value changes but the label barely moves, and
+     * crossing the range takes hundreds of swipes.
+     *
+     * <p>The interaction step is therefore derived from the *displayed*
+     * precision: one tenth of a display unit for fractional and decibel
+     * parameters, one count for integer ones. That matches what the label
+     * can actually show, so every drag tick produces a visible change.
+     */
+    public int interactionStepRaw() {
+        int span = Math.max(0, maxRaw - minRaw);
+        if (type == Type.INT) {
+            return Math.max(1, Math.min(span, stepRaw));
+        }
+        if (scaleDivisor <= 1) {
+            return Math.max(1, Math.min(span, stepRaw));
+        }
+        // One tenth of a display unit, in raw counts.
+        int tenth = Math.max(1, scaleDivisor / 10);
+        int step = Math.max(1, Math.max(stepRaw, tenth));
+        // The step must never be coarser than the range itself, or a narrow
+        // control could not reach its own bounds.
+        return Math.max(1, Math.min(span, step));
     }
 
     public void setCurrentRaw(int raw) {

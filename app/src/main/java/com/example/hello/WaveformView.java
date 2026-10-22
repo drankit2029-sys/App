@@ -49,9 +49,17 @@ public class WaveformView extends View {
     private final Paint selBorderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint handlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint handleGripPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint fxPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF rect = new RectF();
 
     private float[] history = new float[COLS];
+    /**
+     * Peaks of the effect-applied audio, drawn as a cyan overlay on top of
+     * the dry waveform while the FX rack is open. Null when no live FX
+     * preview is active.
+     */
+    private float[] fxHistory;
+    private int fxCount;
     private int count;
     private boolean live;
     private float zoom = 1f;
@@ -233,13 +241,46 @@ public class WaveformView extends View {
     }
 
     /**
+     * Shows the peaks of the effect-applied audio as a cyan overlay on top of
+     * the dry waveform, so the user can see what the rack will do before
+     * committing it.
+     *
+     * @param peaks peak per history bucket, or null to clear the overlay
+     */
+    public void setFxPreviewPeaks(final float[] peaks) {
+        synchronized (this) {
+            if (peaks == null || peaks.length == 0) {
+                fxHistory = null;
+                fxCount = 0;
+            } else {
+                fxHistory = peaks;
+                fxCount = Math.min(peaks.length, MAX_HISTORY);
+            }
+        }
+        postInvalidateOnAnimation();
+    }
+
+    /** True when an effect-applied overlay is being shown. */
+    public boolean hasFxPreview() {
+        synchronized (this) {
+            return fxHistory != null && fxCount > 0;
+        }
+    }
+
+    /** Number of waveform buckets currently held, for FX preview rendering. */
+    public int getHistoryCount() {
+        synchronized (this) {
+            return count;
+        }
+    }
+
+    /**
      * Updates the in-memory waveform bars across `[startFrac, endFrac]` from
      * `raw` after `Apply FX` so the user visually sees the effect on the bars.
      */
     public void reloadSelectionPeaksFromWav(final java.io.File raw,
                                             final float startFrac,
-                                            final float endFrac) {
-        if (raw == null || !raw.exists()) return;
+                                            final float endFrac) {        if (raw == null || !raw.exists()) return;
         new Thread(() -> {
             try {
                 int curCount;
@@ -1226,6 +1267,40 @@ public class WaveformView extends View {
                     barPaint.setAlpha(Math.round(65 + 45 * rightVis));
                 }
                 canvas.drawLine(x, centerY - bh / 2f, x, centerY + bh / 2f, barPaint);
+            }
+
+            // 2b) Cyan overlay: the peaks of the effect-applied audio, so the
+            // user can see what the FX rack will do before committing it.
+            if (fxHistory != null && fxCount > 0) {
+                fxPaint.setColor(0xFF32D6FF);
+                for (long k = kStart; k <= kEnd; k++) {
+                    float bStart = k * bucketsPerBar;
+                    float bEnd = (k + 1) * bucketsPerBar;
+                    if (bStart >= fxCount || bEnd <= 0f) continue;
+                    float barCenterBucket = (k + 0.5f) * bucketsPerBar;
+                    if (barCenterBucket > fxCount) continue;
+                    float x = centerX - (headPos - barCenterBucket) * gap;
+                    if (x < -barW || x > w + barW) continue;
+                    float v = 0f;
+                    synchronized (this) {
+                        if (bucketsPerBar >= 1.0f) {
+                            int i0 = Math.max(0, (int) Math.floor(bStart));
+                            int i1 = Math.min(fxCount - 1, (int) Math.ceil(bEnd) - 1);
+                            if (i1 < i0) i1 = i0;
+                            for (int idx = i0; idx <= i1; idx++) {
+                                if (fxHistory[idx] > v) v = fxHistory[idx];
+                            }
+                        } else {
+                            int idx = Math.max(0, Math.min(fxCount - 1,
+                                    (int) Math.floor(barCenterBucket)));
+                            v = fxHistory[idx];
+                        }
+                    }
+                    if (v <= 0f) continue;
+                    float fh = Math.max(2f, v * maxH * 2f);
+                    fxPaint.setAlpha(200);
+                    canvas.drawLine(x, centerY - fh / 2f, x, centerY + fh / 2f, fxPaint);
+                }
             }
         }
         barPaint.setAlpha(255);

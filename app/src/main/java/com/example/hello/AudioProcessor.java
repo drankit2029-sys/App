@@ -22,6 +22,21 @@ public abstract class AudioProcessor {
     private volatile boolean enabled = true;
     private volatile float wetDryMix = 1.0f;
     private final List<FxParameter> parameters = new ArrayList<>();
+    /**
+     * Identity of the rack entry this processor belongs to. Rack-local
+     * effects (the Stage 3+ suite) use the slot's instance id so the same
+     * effect can be inserted twice and each copy keeps its own state; the
+     * legacy stages leave it null and are matched by {@link #getId()}.
+     */
+    private volatile String instanceKey;
+
+    public String getInstanceKey() {
+        return instanceKey;
+    }
+
+    public void setInstanceKey(String key) {
+        this.instanceKey = key;
+    }
 
     public abstract String getId();
 

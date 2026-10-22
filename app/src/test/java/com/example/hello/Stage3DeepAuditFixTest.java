@@ -290,23 +290,21 @@ public class Stage3DeepAuditFixTest {
 
         WaveformView wf = root.findViewById(R.id.waveform);
         TextView btnDspFx = root.findViewById(R.id.btnDspFx);
-        btnDspFx.performClick();
 
-        TextView fxApplyBtn = root.findViewById(R.id.fxApplyBtn);
-        // 1) Select [0.25, 0.75] and apply FX to the selection:
+        // 1) Select [0.25, 0.75] BEFORE opening the rack: the region the
+        //    user picked is the target the rack commits to.
         wf.selectRange(0.25f, 0.75f);
-        assertEquals("Apply to Selection", fxApplyBtn.getText().toString());
-        fxApplyBtn.performClick();
+        btnDspFx.performClick();
+        assertTrue("The FX rack must be open", frag.isFxPanelOpen());
+        // Stop commits the rack to the selected region.
+        frag.applyEffectsToSelection();
 
         // 2) The source audio now carries the bake and the rack is blank, so
         //    there is no pending effect left to double-bake the region with.
         assertFalse(wf.hasSelection());
-        assertEquals("Apply to Entire Take", fxApplyBtn.getText().toString());
-        assertFalse("Apply must be disabled after the rack resets", fxApplyBtn.isEnabled());
         DspChain.Config saved = DspChain.Config.load(ctx);
         assertEquals(DspChain.Preset.CLEAR_ALL.id, saved.activePresetId);
         assertTrue(saved.slots.isEmpty());
-        fxApplyBtn.performClick(); // disabled: must be a no-op
 
         float[] after = readSamples(raw, frames, 1);
         float peakFirstQuarter = 0f;

@@ -153,6 +153,11 @@ public final class FxRackChain {
      */
     private DspChain.EffectType splitToneFirstType = null;
     private String splitToneAfterProcessorId = null;
+    /**
+     * Instance key of the processor the second tone stage runs after, so two
+     * copies of the same effect are told apart.
+     */
+    private String splitToneAfterInstanceKey = null;
     private float splitToneFirstMix = 1.0f;
     private float splitToneSecondMix = 1.0f;
 
@@ -198,6 +203,23 @@ public final class FxRackChain {
         if (id == null) return -1;
         for (int i = 0; i < processors.size(); i++) {
             if (id.equals(processors.get(i).getId())) return i;
+        }
+        return -1;
+    }
+
+    /**
+     * Index of the processor that serves a given rack entry.
+     *
+     * <p>Rack-local effects are matched by their instance key, so two copies
+     * of the same effect stay separate. The legacy stages have no instance
+     * key and are matched by their processor id.
+     */
+    public int indexOfInstance(String instanceKey, String fallbackId) {
+        if (instanceKey == null) {
+            return fallbackId == null ? -1 : indexOf(fallbackId);
+        }
+        for (int i = 0; i < processors.size(); i++) {
+            if (instanceKey.equals(processors.get(i).getInstanceKey())) return i;
         }
         return -1;
     }
@@ -279,6 +301,7 @@ public final class FxRackChain {
         if (n > buf.length) n = buf.length;
         final DspChain.EffectType firstTone = this.splitToneFirstType;
         final String splitAfterId = this.splitToneAfterProcessorId;
+        final String splitAfterKey = this.splitToneAfterInstanceKey;
         ProToneProcessor toneProcRef = null;
         ProLimiterProcessor safetyLimRef = null;
         if (firstTone != null && splitAfterId != null) {
@@ -298,7 +321,9 @@ public final class FxRackChain {
                 continue;
             }
             boolean splitAnchor = toneProcRef != null && splitAfterId != null
-                    && splitAfterId.equals(p.getId());
+                    && (splitAfterId.equals(p.getId())
+                        || (splitAfterKey != null
+                            && splitAfterKey.equals(p.getInstanceKey())));
             if (!p.isAudible()) {
                 if (splitAnchor && !splitSecondDone) {
                     runSplitToneSecondStage(toneProcRef, firstTone,
@@ -483,6 +508,7 @@ public final class FxRackChain {
     private void syncOrderFromSlots(DspChain.Config cfg) {
         this.splitToneFirstType = null;
         this.splitToneAfterProcessorId = null;
+        this.splitToneAfterInstanceKey = null;
         this.splitToneFirstMix = 1.0f;
         this.splitToneSecondMix = 1.0f;
         if (cfg == null || cfg.slots == null || cfg.slots.isEmpty()) return;
@@ -491,6 +517,7 @@ public final class FxRackChain {
         DspChain.EffectSlot firstToneSlot = null;
         DspChain.EffectSlot secondToneSlot = null;
         String lastEnabledBetween = null;
+        String lastEnabledBetweenKey = null;
         for (DspChain.EffectSlot s : cfg.slots) {
             if (s == null || s.type == null || !s.enabled) {
                 continue;
@@ -509,7 +536,11 @@ public final class FxRackChain {
             } else if (firstToneSlot != null && secondToneSlot == null) {
                 String pid = processorIdForSlotType(s.type);
                 if (pid != null && !"tone".equals(pid)) {
+                    // The anchor is tracked by instance key so two copies of
+                    // the same effect cannot be confused with each other.
                     lastEnabledBetween = pid;
+                    lastEnabledBetweenKey = s.type.isLegacyStage()
+                            ? null : DspChain.slotInstanceKey(s);
                 }
             }
         }
@@ -517,6 +548,7 @@ public final class FxRackChain {
                 && lastEnabledBetween != null) {
             this.splitToneFirstType = firstToneSlot.type;
             this.splitToneAfterProcessorId = lastEnabledBetween;
+            this.splitToneAfterInstanceKey = lastEnabledBetweenKey;
             this.splitToneFirstMix = firstToneSlot.wetDry;
             this.splitToneSecondMix = secondToneSlot.wetDry;
         }
@@ -532,7 +564,14 @@ public final class FxRackChain {
                 continue;
             }
             String pid = processorIdForSlotType(s.type);
-            if (pid != null && indexOf(pid) >= 0) {
+            if (pid == null) continue;
+            // Rack-local effects are ordered by their instance key so two
+            // copies of the same effect keep their own positions.
+            String key = DspChain.slotInstanceKey(s);
+            int idx = indexOfInstance(key, pid);
+            if (idx >= 0) {
+                desiredIds.add(key);
+            } else if (indexOf(pid) >= 0) {
                 desiredIds.add(pid);
             }
         }
@@ -542,11 +581,17 @@ public final class FxRackChain {
             }
         }
         for (AudioProcessor p : processors) {
-            desiredIds.add(p.getId());
+            String key = p.getInstanceKey();
+            if (key != null) {
+                desiredIds.add(key);
+            } else {
+                desiredIds.add(p.getId());
+            }
         }
         int targetIdx = 0;
-        for (String pid : desiredIds) {
-            int curIdx = indexOf(pid);
+        for (String key : desiredIds) {
+            int curIdx = indexOfInstance(key, null);
+            if (curIdx < 0) curIdx = indexOf(key);
             if (curIdx >= 0 && curIdx != targetIdx) {
                 moveProcessor(curIdx, targetIdx);
             }
@@ -566,6 +611,7 @@ public final class FxRackChain {
         if (cfg == null) {
             this.splitToneFirstType = null;
             this.splitToneAfterProcessorId = null;
+            this.splitToneAfterInstanceKey = null;
             for (AudioProcessor p : processors) p.setEnabled(false);
             return;
         }

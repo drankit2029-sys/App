@@ -76,6 +76,34 @@ final class SpectralNoiseReductionProcessor extends AudioProcessor {
     }
 
     /**
+     * Learns the noise profile of a steady noise-only region.
+     *
+     * <p>The profile is the averaged power spectrum of the region, so a
+     * region of pure hiss produces a flat floor that the reduction stage
+     * subtracts from every frame.
+     *
+     * @return the profile, or null when the region is too short
+     */
+    static float[] learnProfile(float[] samples, int channels) {
+        if (samples == null || samples.length == 0 || channels < 1) return null;
+        int frames = samples.length / channels;
+        if (frames < 512) return null;
+        float[] power = StftProcessor.welchSpectrum(samples, frames, channels,
+                2048, 1f);
+        if (power == null || power.length == 0) return null;
+        // Normalise so the profile describes a floor, not a level.
+        float mean = 0f;
+        for (float p : power) mean += p;
+        mean /= power.length;
+        if (mean <= 0f) return null;
+        float[] profile = new float[power.length];
+        for (int i = 0; i < power.length; i++) {
+            profile[i] = power[i] / mean;
+        }
+        return profile;
+    }
+
+    /**
      * Learns the noise profile from a region (used by the "Learn" action and
      * by the automatic fallback to the quietest 300 ms).
      */
