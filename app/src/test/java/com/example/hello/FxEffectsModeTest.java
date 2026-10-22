@@ -108,37 +108,21 @@ public class FxEffectsModeTest {
 
         TextView btnDspFx = root.findViewById(R.id.btnDspFx);
         assertFalse("The rack must start closed", frag.isFxPanelOpen());
+        // The studio paints the selected chip white and the idle one grey,
+        // so the text colour is the chip's own selected/idle signal.
+        int idleColour = btnDspFx.getCurrentTextColor();
         assertNotEquals("A pending rack must not highlight the FX chip",
-                selectedChipColour(btnDspFx), chipColour(btnDspFx));
+                SELECTED_CHIP_TEXT, idleColour);
 
         // Open the rack: now the chip is highlighted.
         btnDspFx.performClick();
         assertTrue("The rack must be open", frag.isFxPanelOpen());
-        assertNotEquals("An open rack must highlight the FX chip",
-                selectedChipColour(btnDspFx), chipColour(btnDspFx));
+        assertEquals("An open rack must highlight the FX chip",
+                SELECTED_CHIP_TEXT, btnDspFx.getCurrentTextColor());
     }
 
-    /** The fill colour of the chip's current background drawable. */
-    private static int chipColour(TextView chip) {
-        android.graphics.drawable.Drawable d = chip.getBackground();
-        if (d instanceof android.graphics.drawable.GradientDrawable) {
-            return ((android.graphics.drawable.GradientDrawable) d)
-                    .getColor().getDefaultColor();
-        }
-        return 0;
-    }
-
-    /** The fill colour the highlighted (selected) chip uses. */
-    private static int selectedChipColour(TextView chip) {
-        android.graphics.drawable.Drawable d =
-                androidx.core.content.ContextCompat.getDrawable(
-                        chip.getContext(), R.drawable.bg_chip_selected);
-        if (d instanceof android.graphics.drawable.GradientDrawable) {
-            return ((android.graphics.drawable.GradientDrawable) d)
-                    .getColor().getDefaultColor();
-        }
-        return -1;
-    }
+    /** Text colour the studio uses for a selected (highlighted) chip. */
+    private static final int SELECTED_CHIP_TEXT = 0xFFFFFFFF;
 
     @Test
     public void theRackCommitsToTheRegionSelectedBeforeItOpened()
