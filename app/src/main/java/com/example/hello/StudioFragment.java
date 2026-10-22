@@ -121,6 +121,8 @@ public class StudioFragment extends Fragment {
     private boolean inSelectAndReplaceEditor = false;
     private EditEngine.UndoJournal subEditorUndoJournal;
 
+    /** Saved editing mode waiting for the waveform bars to finish loading. */
+    private Bundle pendingModeRestore;
     private boolean replacingSelectionActive = false;
     private long replacePassStartFrame = -1L;
     private long replaceTargetEndFrame = -1L;
@@ -392,11 +394,26 @@ public class StudioFragment extends Fragment {
         if (btnSelectRange != null) {
             PressAnim.applySoft(btnSelectRange, 0.95f);
             btnSelectRange.setOnClickListener(view -> {
-                if (replaceModeArmed || fxPanelOpen) return;
+                if (replaceModeArmed) return;
                 if (!ensurePausedForEditing()) return;
                 stopStudioPreview();
-                waveform.toggleSelectionAtPlayhead();
-                paintEditorStrip();
+                if (fxPanelOpen) {
+                    // Select stays live in effects mode so a noise profile
+                    // can be learned from a sub-range, but the handles are
+                    // clamped to the frozen apply target. Tapping again puts
+                    // the full target back once the sub-selection is gone.
+                    if (waveform.hasSelection()) {
+                        waveform.clearSelection();
+                    } else {
+                        waveform.selectRange(fxApplyTargetStart,
+                                fxApplyTargetEnd);
+                    }
+                    paintEditorStrip();
+                    paintFxPanelControls();
+                } else {
+                    waveform.toggleSelectionAtPlayhead();
+                    paintEditorStrip();
+                }
             });
         }
 
@@ -546,6 +563,7 @@ public class StudioFragment extends Fragment {
             attached = true;
         }
         restoreWaveformForAttachedSession();
+        restoreEditingMode(savedInstanceState);
 
         // Snapshot the attached session size so backing out of an untouched
         // edit can skip the save nag, and park the prompter unless capture
@@ -603,6 +621,96 @@ public class StudioFragment extends Fragment {
     }
 
     @Override
+    public void onSaveInstanceState(@NonNull Bundle outState) {
+        super.onSaveInstanceState(outState);
+        outState.putBoolean("fxPanelOpen", fxPanelOpen);
+        outState.putBoolean("replaceModeArmed", replaceModeArmed);
+        outState.putBoolean("inSelectAndReplaceEditor", inSelectAndReplaceEditor);
+        outState.putBoolean("userScrolledWhilePaused", userScrolledWhilePaused);
+        outState.putBoolean("dspBakedToRaw", dspBakedToRaw);
+        outState.putBoolean("dspSubRangeBaked", dspSubRangeBaked);
+        outState.putBoolean("lastEditWasSubRangeBake", lastEditWasSubRangeBake);
+        outState.putBoolean("fxTargetHasSelection", fxApplyTargetHasSelection);
+        outState.putFloat("fxTargetStart", fxApplyTargetStart);
+        outState.putFloat("fxTargetEnd", fxApplyTargetEnd);
+        if (waveform != null) {
+            if (waveform.hasSelection()) {
+                outState.putBoolean("selActive", true);
+                outState.putFloat("selStart", waveform.selectionStartFraction());
+                outState.putFloat("selEnd", waveform.selectionEndFraction());
+            }
+            waveform.saveSubEditorState(outState);
+        }
+    }
+
+    /**
+     * Puts the editor back into the mode the user was in before a rotation.
+     * The engine session survives the configuration change, but the fragment
+     * is recreated, so every mode flag has to travel in the saved state.
+     */
+    private void restoreEditingMode(@Nullable Bundle state) {
+        if (state == null || waveform == null) return;
+        boolean fxWasOpen = state.getBoolean("fxPanelOpen", false);
+        boolean selActive = state.getBoolean("selActive", false);
+        float selStart = state.getFloat("selStart", 0f);
+        float selEnd = state.getFloat("selEnd", 1f);
+
+        dspBakedToRaw = state.getBoolean("dspBakedToRaw", false);
+        dspSubRangeBaked = state.getBoolean("dspSubRangeBaked", false);
+        lastEditWasSubRangeBake =
+                state.getBoolean("lastEditWasSubRangeBake", false);
+
+        if (state.getBoolean("inSelectAndReplaceEditor", false)
+                && engine.isInSubSession()) {
+            inSelectAndReplaceEditor = true;
+            waveform.restoreSubEditorState(state);
+        }
+
+        replaceModeArmed = state.getBoolean("replaceModeArmed", false);
+        if (replaceModeArmed) {
+            waveform.clearSelection();
+            waveform.setSelectionLocked(true);
+        }
+        userScrolledWhilePaused =
+                state.getBoolean("userScrolledWhilePaused", false);
+
+        // Ranges need buckets. The attached take loads in the background, so
+        // finish the restore from that callback instead of losing the mode.
+        if ((fxWasOpen || selActive) && waveform.historyCount() <= 1) {
+            pendingModeRestore = state;
+            paintEditorStrip();
+            return;
+        }
+
+        if (fxWasOpen) {
+            float ts = state.getFloat("fxTargetStart", 0f);
+            float te = state.getFloat("fxTargetEnd", 1f);
+            if (te <= ts) {
+                ts = 0f;
+                te = 1f;
+            }
+            fxApplyTargetStart = ts;
+            fxApplyTargetEnd = te;
+            fxApplyTargetHasSelection = true;
+            // Bounds first: selectRange and the handle drags are clamped to
+            // this region for the whole lifetime of the mode.
+            waveform.setFxRegionBounds(ts, te);
+            waveform.selectRange(ts, te);
+            fxPanelOpen = false;
+            setFxPanelVisible(true);
+            if (selActive) {
+                waveform.selectRange(selStart, selEnd);
+            }
+        } else if (selActive) {
+            waveform.selectRange(selStart, selEnd);
+        }
+
+        pendingModeRestore = null;
+        paintEditorStrip();
+        paintFxPanelControls();
+    }
+
+    @Override
     public void onResume() {
         super.onResume();
         handler.removeCallbacks(tick);
@@ -626,6 +734,7 @@ public class StudioFragment extends Fragment {
         cancelTeleFrame();
         stopDotPulse();
         stopStudioPreview();
+        pendingModeRestore = null;
         persistTeleScript();
         // Never abort here: the take keeps recording in the background via
         // the foreground service when the user leaves the studio.
@@ -2430,6 +2539,13 @@ public class StudioFragment extends Fragment {
                     engine.seekCursorFrame(total);
                     waveform.setPlayheadFraction(1f);
                     refreshZoomValue();
+                    // A rotation restores the editing mode only once the bars
+                    // exist: selection ranges need a bucket count.
+                    if (pendingModeRestore != null) {
+                        Bundle pending = pendingModeRestore;
+                        pendingModeRestore = null;
+                        restoreEditingMode(pending);
+                    }
                     paintEditorStrip();
                 }
             });
@@ -2581,7 +2697,9 @@ public class StudioFragment extends Fragment {
             btnPreviewPlay.setText("Replace");
             btnPreviewPlay.setBackgroundResource(replaceModeArmed
                     ? R.drawable.bg_chip_selected : R.drawable.bg_chip);
-            int col = replaceModeArmed ? 0xFFFFFFFF : 0xFF9AA3AF;
+            boolean replaceLive = isSessionEditable() && !fxPanelOpen;
+            int col = replaceModeArmed ? 0xFFFFFFFF
+                    : (replaceLive ? 0xFF9AA3AF : 0xFF5D6672);
             btnPreviewPlay.setTextColor(col);
             setChipIconAndTint(btnPreviewPlay, R.drawable.ic_edit_replace, col);
         }
@@ -2607,6 +2725,8 @@ public class StudioFragment extends Fragment {
         // transport, so every other editing action is locked until it closes.
         boolean fxMode = canEdit && fxPanelOpen;
         boolean othersEnabled = canEdit && !replaceModeArmed && !fxMode;
+        boolean selectEnabled = canEdit && !replaceModeArmed;
+        boolean replaceEnabled = canEdit && !fxMode;
         long durMs = Math.max(1L, engine.durationMs());
 
         // 1) Replace Mode Toggle Button (btnPreviewPlay):
@@ -2617,13 +2737,14 @@ public class StudioFragment extends Fragment {
             boolean showReplaceActive = replaceModeArmed
                     && (canEdit || engine.state == RecordingEngine.State.RECORDING);
             btnPreviewPlay.setText("Replace");
-            btnPreviewPlay.setEnabled(canEdit);
-            btnPreviewPlay.setClickable(canEdit);
-            btnPreviewPlay.setAlpha(canEdit ? 1f : (showReplaceActive ? 0.75f : 0.35f));
+            btnPreviewPlay.setEnabled(replaceEnabled);
+            btnPreviewPlay.setClickable(replaceEnabled);
+            btnPreviewPlay.setAlpha(replaceEnabled ? 1f
+                    : (showReplaceActive ? 0.75f : 0.35f));
             btnPreviewPlay.setBackgroundResource(showReplaceActive
                     ? R.drawable.bg_chip_selected : R.drawable.bg_chip);
             int col = showReplaceActive ? 0xFFFFFFFF
-                    : (canEdit ? 0xFF9AA3AF : 0xFF5D6672);
+                    : (replaceEnabled ? 0xFF9AA3AF : 0xFF5D6672);
             btnPreviewPlay.setTextColor(col);
             setChipIconAndTint(btnPreviewPlay, R.drawable.ic_edit_replace, col);
         }
@@ -2632,12 +2753,12 @@ public class StudioFragment extends Fragment {
         //    disabled while Replace mode is on.
         if (btnSelectRange != null) {
             btnSelectRange.setText("Select");
-            btnSelectRange.setEnabled(othersEnabled);
-            btnSelectRange.setClickable(othersEnabled);
-            btnSelectRange.setAlpha(othersEnabled ? 1f : 0.35f);
+            btnSelectRange.setEnabled(selectEnabled);
+            btnSelectRange.setClickable(selectEnabled);
+            btnSelectRange.setAlpha(selectEnabled ? 1f : 0.35f);
             btnSelectRange.setBackgroundResource(hasSel
                     ? R.drawable.bg_chip_selected : R.drawable.bg_chip);
-            int col = !othersEnabled ? 0xFF5D6672
+            int col = !selectEnabled ? 0xFF5D6672
                     : (hasSel ? 0xFFFFFFFF : 0xFF9AA3AF);
             btnSelectRange.setTextColor(col);
             setChipIconAndTint(btnSelectRange, R.drawable.ic_edit_select, col);
@@ -2929,10 +3050,12 @@ public class StudioFragment extends Fragment {
             teleWasVisibleBeforeFx =
                     telePanel.getVisibility() == View.VISIBLE;
             // Freeze the apply target: the selection at the moment the rack
-            // opens is the region Stop will commit to.
+            // opens is the region Stop will commit to. The view dims the rest
+            // of the take and clamps any learning sub-selection to it.
             fxApplyTargetHasSelection = true;
             fxApplyTargetStart = waveform.selectionStartFraction();
             fxApplyTargetEnd = waveform.selectionEndFraction();
+            waveform.setFxRegionBounds(fxApplyTargetStart, fxApplyTargetEnd);
             setTelePaused(true);
             telePanel.setVisibility(View.GONE);
             fxPanel.setVisibility(View.VISIBLE);
@@ -2948,7 +3071,7 @@ public class StudioFragment extends Fragment {
             telePanel.setVisibility(teleWasVisibleBeforeFx
                     ? View.VISIBLE : View.GONE);
             setTeleActive(teleWasVisibleBeforeFx);
-            if (waveform != null) waveform.clearFxRegionPeaks();
+            if (waveform != null) waveform.clearFxRegion();
         }
         paintEditorStrip();
     }
@@ -2966,7 +3089,7 @@ public class StudioFragment extends Fragment {
         handler.removeCallbacks(fxPreviewRefresh);
         if (!isAdded() || waveform == null) return;
         if (!fxPanelOpen) {
-            waveform.clearFxRegionPeaks();
+            waveform.clearFxRegion();
             return;
         }
         handler.postDelayed(fxPreviewRefresh, 70L);

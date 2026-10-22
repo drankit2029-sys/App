@@ -128,6 +128,17 @@ public class FxEffectsModeTest {
     /** Text colour the studio uses for a selected (highlighted) chip. */
     private static final int SELECTED_CHIP_TEXT = 0xFFFFFFFF;
 
+    /** The attached take loads its bars on a worker; wait for that handoff. */
+    private static void awaitHistory(WaveformView wf) throws Exception {
+        long deadline = System.currentTimeMillis() + 5000L;
+        while (wf.historyCount() <= 1
+                && System.currentTimeMillis() < deadline) {
+            Robolectric.flushForegroundThreadScheduler();
+            Thread.sleep(10L);
+        }
+        Robolectric.flushForegroundThreadScheduler();
+    }
+
     @Test
     public void theRackCommitsToTheRegionSelectedBeforeItOpened()
             throws Exception {
@@ -258,6 +269,7 @@ public class FxEffectsModeTest {
         WaveformView wf = root.findViewById(R.id.waveform);
         TextView btnDspFx = root.findViewById(R.id.btnDspFx);
         TextView btnSelect = root.findViewById(R.id.btnSelectRange);
+        TextView btnReplaceMode = root.findViewById(R.id.btnPreviewPlay);
         TextView btnReplace = root.findViewById(R.id.btnReplaceSeg);
         TextView btnTrim = root.findViewById(R.id.btnTrimCrop);
         TextView btnUndo = root.findViewById(R.id.btnEditUndo);
@@ -268,8 +280,10 @@ public class FxEffectsModeTest {
         btnDspFx.performClick();
         assertTrue(frag.isFxPanelOpen());
 
-        assertFalse("Select must be locked inside effects mode",
+        assertTrue("Select must stay live to pick a noise-learning range",
                 btnSelect.isEnabled());
+        assertFalse("Replace must be locked inside effects mode",
+                btnReplaceMode.isEnabled());
         assertFalse("Select & Replace must be locked inside effects mode",
                 btnReplace.isEnabled());
         assertFalse("Trim must be locked inside effects mode",
@@ -328,5 +342,92 @@ public class FxEffectsModeTest {
         assertFalse(frag.isFxPanelOpen());
         assertFalse("Closing FX mode must restore the dry waveform",
                 wf.hasFxRegion());
+    }
+
+    @Test
+    public void learningSelectionIsClampedToTheFrozenTarget()
+            throws Exception {
+        int frames = 4800;
+        File raw = createFloatWav("clamped_selection.wav", frames, 1);
+        DspChain.Config cfg = new DspChain.Config();
+        cfg.applyPreset(DspChain.Preset.CLEAR_ALL);
+        cfg.save(ctx);
+
+        engine.attachExisting(ctx, raw, "Clamped", 1,
+                RecordingEngine.payloadBytesOf(raw));
+        MainActivity act = Robolectric.buildActivity(MainActivity.class)
+                .create().start().resume().visible().get();
+        act.openStudioWithEdit(raw, 306L, "Clamped");
+        Robolectric.flushForegroundThreadScheduler();
+
+        StudioFragment frag = (StudioFragment) act.getSupportFragmentManager()
+                .findFragmentByTag("STU");
+        assertNotNull(frag);
+        View root = frag.getView();
+        assertNotNull(root);
+        WaveformView wf = root.findViewById(R.id.waveform);
+        TextView btnDspFx = root.findViewById(R.id.btnDspFx);
+        awaitHistory(wf);
+
+        wf.selectRange(0.25f, 0.75f);
+        btnDspFx.performClick();
+        assertTrue(frag.isFxPanelOpen());
+
+        // Even a request for the whole take is confined to the target, so a
+        // learning selection can never move the region Stop applies to.
+        wf.selectRange(0.05f, 0.95f);
+        assertEquals("The left handle must stay inside the target",
+                0.25f, wf.selectionStartFraction(), 0.02f);
+        assertEquals("The right handle must stay inside the target",
+                0.75f, wf.selectionEndFraction(), 0.02f);
+
+        wf.clearSelection();
+        assertTrue("The target stays shaded when the handles are hidden",
+                wf.hasFxRegion());
+    }
+
+    @Test
+    public void rotationKeepsEffectsModeOpen() throws Exception {
+        int frames = 4800;
+        File raw = createFloatWav("rotate_fx.wav", frames, 1);
+        DspChain.Config cfg = new DspChain.Config();
+        cfg.applyPreset(DspChain.Preset.CLEAR_ALL);
+        cfg.save(ctx);
+
+        engine.attachExisting(ctx, raw, "Rotate FX", 1,
+                RecordingEngine.payloadBytesOf(raw));
+        org.robolectric.android.controller.ActivityController<MainActivity>
+                controller = Robolectric.buildActivity(MainActivity.class)
+                .create().start().resume().visible();
+        MainActivity act = controller.get();
+        act.openStudioWithEdit(raw, 307L, "Rotate FX");
+        Robolectric.flushForegroundThreadScheduler();
+
+        StudioFragment frag = (StudioFragment) act.getSupportFragmentManager()
+                .findFragmentByTag("STU");
+        assertNotNull(frag);
+        View root = frag.getView();
+        assertNotNull(root);
+        WaveformView wf = root.findViewById(R.id.waveform);
+        TextView btnDspFx = root.findViewById(R.id.btnDspFx);
+        awaitHistory(wf);
+
+        wf.selectRange(0.2f, 0.8f);
+        btnDspFx.performClick();
+        assertTrue(frag.isFxPanelOpen());
+
+        controller.recreate();
+        Robolectric.flushForegroundThreadScheduler();
+
+        StudioFragment restored = (StudioFragment) controller.get()
+                .getSupportFragmentManager().findFragmentByTag("STU");
+        assertNotNull("The studio must survive rotation", restored);
+        assertNotNull(restored.getView());
+        WaveformView restoredWf = restored.getView()
+                .findViewById(R.id.waveform);
+        awaitHistory(restoredWf);
+        assertTrue("FX mode must survive rotation", restored.isFxPanelOpen());
+        assertTrue("The restored mode must still shade its target",
+                restoredWf.hasFxRegion());
     }
 }
