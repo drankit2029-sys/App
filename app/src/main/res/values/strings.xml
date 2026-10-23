@@ -212,6 +212,7 @@
     <string name="conv_channel_desc">Progress for takes converting in the background</string>
     <string name="conv_notif_title">Converting… %1$d%%</string>
     <string name="conv_notif_text">“%1$s” → %2$s</string>
+    <string name="notif_paused_short">Paused while recording • %1$s</string>
     <string name="conv_notif_idle_title">Conversion ready</string>
     <string name="conv_notif_idle_text">Background conversions run here</string>
     <string name="conv_cancel">Cancel</string>

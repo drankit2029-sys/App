@@ -74,6 +74,12 @@ public final class OptionsSheet {
                                   Runnable action) {
             return new Item(0, label, sub, false, checked, action);
         }
+
+        /** Two-line row with a leading icon. */
+        public static Item detail(int icon, String label, String sub,
+                                  boolean checked, Runnable action) {
+            return new Item(icon, label, sub, false, checked, action);
+        }
     }
 
     /** One save-format toggle chip inside the unified recording dialog. */
@@ -182,20 +188,16 @@ public final class OptionsSheet {
                     sub.setVisibility(View.GONE);
                 }
             }
-            ImageView iconView = row.findViewById(R.id.pillDot);
+            ImageView iconView = row.findViewById(R.id.pillIcon);
             if (item.icon != 0) {
                 iconView.setImageResource(item.icon);
-                iconView.setAlpha(item.checked ? 1f : 0.8f);
-                iconView.setColorFilter(item.destructive
-                        ? 0xFFFF3B30 : 0xFFF2F4F7);
-                iconView.setVisibility(View.VISIBLE);
             } else {
-                iconView.setImageResource(R.drawable.bg_thumb);
-                iconView.setColorFilter(item.checked ? 0xFFFF3B30 : 0xFF5D6672);
-                int inset = dp(ctx, 5);
-                iconView.setPadding(inset, inset, inset, inset);
-                iconView.setVisibility(View.VISIBLE);
+                iconView.setImageResource(R.drawable.ic_wave);
             }
+            iconView.setAlpha(item.checked ? 1f : 0.8f);
+            iconView.setColorFilter(item.destructive
+                    ? 0xFFFF3B30 : 0xFFF2F4F7);
+            iconView.setVisibility(View.VISIBLE);
             ImageView check = row.findViewById(R.id.pillCheck);
             check.setVisibility(item.checked ? View.VISIBLE : View.GONE);
 
@@ -227,6 +229,73 @@ public final class OptionsSheet {
 
         styleAsCentered(dialog);
         dialog.show();
+    }
+
+    /**
+     * Two primary choices rendered side by side, with the redundant bottom
+     * Cancel button removed. Used by the Back/Stop/Edit/Trim modals.
+     */
+    public static Dialog showTwoChoiceModal(Context ctx, String title,
+                                            String subtitle,
+                                            Item first, Item second) {
+        Dialog dialog = new Dialog(ctx, R.style.TakeOneCenterDialog);
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        View root = LayoutInflater.from(ctx).inflate(R.layout.dialog_options, null);
+        dialog.setContentView(root);
+
+        TextView titleView = root.findViewById(R.id.dialogTitle);
+        titleView.setText(title != null ? title : "");
+        TextView subView = root.findViewById(R.id.dialogSubtitle);
+        if (subtitle != null && !subtitle.isEmpty()) {
+            subView.setText(subtitle);
+            subView.setVisibility(View.VISIBLE);
+        }
+
+        View scroll = root.findViewById(R.id.optScroll);
+        if (scroll != null) scroll.setVisibility(View.GONE);
+        TextView cancel = root.findViewById(R.id.dialogCancel);
+        if (cancel != null) cancel.setVisibility(View.GONE);
+        LinearLayout row = root.findViewById(R.id.optHorizontalRow);
+        row.setVisibility(View.VISIBLE);
+        row.removeAllViews();
+
+        Item[] pair = new Item[]{first, second};
+        for (int i = 0; i < pair.length; i++) {
+            Item item = pair[i];
+            if (item == null) continue;
+            TextView btn = new TextView(ctx);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    0, dp(ctx, 46), 1f);
+            if (i > 0) lp.setMarginStart(dp(ctx, 10));
+            btn.setLayoutParams(lp);
+            btn.setGravity(Gravity.CENTER);
+            btn.setText(item.label);
+            btn.setTextSize(14f);
+            btn.setTypeface(btn.getTypeface(), android.graphics.Typeface.BOLD);
+            btn.setPadding(dp(ctx, 10), 0, dp(ctx, 10), 0);
+            if (item.icon != 0) {
+                btn.setCompoundDrawablesRelativeWithIntrinsicBounds(
+                        item.icon, 0, 0, 0);
+                btn.setCompoundDrawablePadding(dp(ctx, 6));
+            }
+            if (item.destructive) {
+                btn.setBackgroundResource(R.drawable.bg_btn_danger);
+                btn.setTextColor(0xFFFF3B30);
+            } else {
+                btn.setBackgroundResource(R.drawable.bg_btn_primary);
+                btn.setTextColor(Color.WHITE);
+            }
+            PressAnim.apply(btn);
+            btn.setOnClickListener(v -> {
+                dialog.dismiss();
+                if (item.action != null) item.action.run();
+            });
+            row.addView(btn);
+        }
+
+        styleAsCentered(dialog);
+        dialog.show();
+        return dialog;
     }
 
     // ---- unified recording settings: presets + format toggles ----
@@ -358,10 +427,15 @@ public final class OptionsSheet {
                     sub.setVisibility(View.GONE);
                 }
             }
-            ImageView dot = row.findViewById(R.id.pillDot);
-            dot.setImageResource(R.drawable.bg_thumb);
-            int inset = dp(ctx, 5);
-            dot.setPadding(inset, inset, inset, inset);
+            ImageView dot = row.findViewById(R.id.pillIcon);
+            if (it.icon != 0) {
+                dot.setImageResource(it.icon);
+                dot.setPadding(0, 0, 0, 0);
+            } else {
+                dot.setImageResource(R.drawable.bg_thumb);
+                int inset = dp(ctx, 5);
+                dot.setPadding(inset, inset, inset, inset);
+            }
             dot.setVisibility(View.VISIBLE);
             ImageView check = row.findViewById(R.id.pillCheck);
             pillRows.add(row);
@@ -507,9 +581,10 @@ public final class OptionsSheet {
                     ? 0xFFF2F4F7 : pillColors.get(i));
             pillChecks.get(i).setVisibility(
                     it.checked ? View.VISIBLE : View.GONE);
-            ImageView dot = pillRows.get(i).findViewById(R.id.pillDot);
-            if (dot != null) dot.setColorFilter(
-                    it.checked ? 0xFFFF3B30 : 0xFF5D6672);
+            ImageView dot = pillRows.get(i).findViewById(R.id.pillIcon);
+            if (dot != null) dot.setColorFilter(it.icon != 0
+                    ? (it.checked ? 0xFFFF3B30 : 0xFF9AA4B2)
+                    : (it.checked ? 0xFFFF3B30 : 0xFF5D6672));
         }
         for (int i = 0; i < chipViews.size() && i < formats.size(); i++) {
             Chip c = formats.get(i);
@@ -685,49 +760,72 @@ public final class OptionsSheet {
             msg.setVisibility(View.VISIBLE);
         }
         TextView ok = root.findViewById(R.id.resultOk);
-        boolean needsButton = onOk != null;
-        ok.setVisibility(needsButton ? View.VISIBLE : View.GONE);
-        if (needsButton) {
-            ok.setText(ctx.getString(R.string.ok_got_it));
-            PressAnim.apply(ok);
-            final boolean[] fired = {false};
-            final Runnable fire = () -> {
-                if (fired[0]) return;
-                fired[0] = true;
+        ok.setVisibility(onOk != null ? View.VISIBLE : View.GONE);
+        ok.setText(ctx.getString(R.string.ok_got_it));
+        PressAnim.apply(ok);
+
+        final boolean[] fired = {false};
+        final Runnable fire = () -> {
+            if (fired[0]) return;
+            fired[0] = true;
+            if (onOk != null) {
                 try {
                     onOk.run();
                 } catch (Exception ignored) {}
-            };
-            ok.setOnClickListener(v -> {
-                dialog.dismiss();
-                fire.run();
-            });
-            dialog.setOnDismissListener(dd -> fire.run());
-        }
+            }
+        };
+        ok.setOnClickListener(v -> {
+            dialog.dismiss();
+            fire.run();
+        });
+        root.setOnClickListener(v -> {
+            dialog.dismiss();
+            fire.run();
+        });
+        dialog.setOnDismissListener(dd -> fire.run());
 
         dialog.setCancelable(true);
-        styleAsCentered(dialog);
+        styleAsTopPopup(dialog);
         dialog.show();
         PressAnim.pop(iconBg);
 
-        long delay = success ? 1600 : 2400;
-        if (onOk == null) {
-            new Handler(Looper.getMainLooper()).postDelayed(() -> {
-                try {
-                    if (dialog.isShowing()) dialog.dismiss();
-                } catch (Exception ignored) {}
-            }, delay);
-        } else {
-            new Handler(Looper.getMainLooper()).postDelayed(() -> {
-                try {
-                    if (dialog.isShowing() && !success) dialog.dismiss();
-                } catch (Exception ignored) {}
-            }, 8000);
-        }
+        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+            try {
+                if (dialog.isShowing()) dialog.dismiss();
+            } catch (Exception ignored) {}
+        }, 2200L);
         return dialog;
     }
 
+    /** Lightweight, non-blocking confirmation banner at the top of the screen. */
+    public static void showTopPopup(Context ctx, String title, String message) {
+        showResult(ctx, true, title, message, null);
+    }
+
     // ---- helpers ----
+
+    /**
+     * Anchors a dialog at the top edge as a floating banner: no dim, no
+     * outside-touch blocking, full width with a small inset.
+     */
+    public static void styleAsTopPopup(Dialog dialog) {
+        Window w = dialog.getWindow();
+        if (w == null) return;
+        Context ctx = dialog.getContext();
+        DisplayMetrics dm = ctx.getResources().getDisplayMetrics();
+        w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+        w.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+        w.addFlags(WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL);
+        w.setDimAmount(0f);
+        WindowManager.LayoutParams lp = w.getAttributes();
+        lp.width = dm.widthPixels - dp(ctx, 24);
+        lp.height = WindowManager.LayoutParams.WRAP_CONTENT;
+        lp.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+        lp.y = dp(ctx, 12);
+        w.setAttributes(lp);
+        View decor = w.getDecorView();
+        if (decor != null) decor.setPadding(0, 0, 0, 0);
+    }
 
     public static void styleAsCentered(Dialog dialog) {
         styleAsCenteredWithMaxWidth(dialog, MAX_DIALOG_WIDTH_DP);

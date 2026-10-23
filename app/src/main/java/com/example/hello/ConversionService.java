@@ -185,6 +185,8 @@ public class ConversionService extends Service {
                 queue.remove(id);
                 if (current != null && id.equals(current.jobId)) {
                     current.cancelled = true;
+                    Thread w = worker;
+                    if (w != null) w.interrupt();
                 } else {
                     // Queued but never started: drop it now.
                     ConversionJobs.cancel(id, false);
@@ -238,6 +240,27 @@ public class ConversionService extends Service {
         }
         releaseWakeLock();
         super.onDestroy();
+    }
+
+    /**
+     * The user swiped the task away: persist the in-flight job as QUEUED
+     * before the process can die, keeping its raw and partial output intact,
+     * and make sure a watchdog pass brings it back.
+     */
+    @Override
+    public void onTaskRemoved(Intent rootIntent) {
+        ConversionJob job = current;
+        if (job != null && !job.cancelled
+                && ConversionJob.RUNNING.equals(job.state)) {
+            job.paused = false;
+            job.state = ConversionJob.QUEUED;
+            job.updatedAt = System.currentTimeMillis();
+            job.write();
+        }
+        if (!serviceTimedOut) {
+            ConversionWatchdog.arm(this);
+        }
+        super.onTaskRemoved(rootIntent);
     }
 
     // ---- wake lock ----
@@ -325,11 +348,15 @@ public class ConversionService extends Service {
         super.onTimeout(startId, fgsType);
     }
 
-    /**
-     * Kept for call-site compatibility. Conversion pacing is now bounded and
-     * polled, so a missed wake-up can never strand a job.
-     */
-    public static void onRecordingStateChanged() {}
+    /** Monitor that parks conversion while the microphone is capturing. */
+    private static final Object CAPTURE_PAUSE_LOCK = new Object();
+
+    /** Wakes a parked conversion immediately when capture pauses or stops. */
+    public static void onRecordingStateChanged() {
+        synchronized (CAPTURE_PAUSE_LOCK) {
+            CAPTURE_PAUSE_LOCK.notifyAll();
+        }
+    }
 
     /**
      * True while the mic is actually capturing. A conversion yields briefly
@@ -346,25 +373,30 @@ public class ConversionService extends Service {
         }
     }
 
-    /** Longest cooperative pause per progress tick while capture is active. */
-    private static final long CAPTURE_YIELD_MS = 120L;
-
     /**
-     * Briefly steps aside for a live take. Unlike the old park-until-idle
-     * loop, this can never stop a background conversion indefinitely: editing
-     * a take or leaving a raw reader open no longer pauses the worker at all.
+     * Parks conversion completely while the mic is capturing. The worker
+     * keeps its exact in-memory position, so resuming after Pause/Stop is
+     * immediate and never restarts the take.
      */
     private void paceForCapture(ConversionJob job) {
         if (!recordingInProgress()) return;
-        long until = SystemClock.elapsedRealtime() + CAPTURE_YIELD_MS;
-        while (workerAlive && !serviceTimedOut && recordingInProgress()
-                && (job == null || !job.cancelled)
-                && SystemClock.elapsedRealtime() < until) {
+        synchronized (CAPTURE_PAUSE_LOCK) {
             try {
-                Thread.sleep(16L);
-            } catch (InterruptedException ignored) {
+                while (workerAlive && !serviceTimedOut && recordingInProgress()
+                        && (job == null || !job.cancelled)) {
+                    if (job != null && !job.paused) {
+                        job.paused = true;
+                        handler.post(this::refreshNotif);
+                    }
+                    CAPTURE_PAUSE_LOCK.wait(250L);
+                }
+            } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
-                return;
+            } finally {
+                if (job != null && job.paused) {
+                    job.paused = false;
+                    handler.post(this::refreshNotif);
+                }
             }
         }
     }
@@ -848,6 +880,9 @@ public class ConversionService extends Service {
                     SaveFormat.of(job.formatId));
             title = getString(R.string.conv_notif_title, pct);
             text = getString(R.string.conv_notif_text, job.title, badge);
+            if (job.paused) {
+                text = getString(R.string.notif_paused_short, text);
+            }
         } else {
             title = getString(R.string.conv_notif_idle_title);
             text = getString(R.string.conv_notif_idle_text);

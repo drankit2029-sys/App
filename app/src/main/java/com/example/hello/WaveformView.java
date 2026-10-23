@@ -117,6 +117,9 @@ public class WaveformView extends View {
     private boolean selectionLocked = false;
     private int selStartIdx = 0;
     private int selEndIdx = 0;
+    /** Canonical float bucket positions: snap to one visual bar at any zoom. */
+    private float selStartPos = 0f;
+    private float selEndPos = 0f;
 
     private static final int DRAG_NONE = 0;
     private static final int DRAG_ZOOM = 1;
@@ -198,15 +201,42 @@ public class WaveformView extends View {
     }
 
     public synchronized boolean hasSelection() {
-        return selectionActive && selEndIdx > selStartIdx && count > 0;
+        return selectionActive && count > 0
+                && Math.max(selStartPos, selEndPos)
+                - Math.min(selStartPos, selEndPos) > 1e-4f;
     }
 
     public synchronized float selectionStartFraction() {
-        return count <= 0 ? 0f : Math.max(0f, Math.min(1f, selStartIdx / (float) count));
+        if (count <= 0) return 0f;
+        float low = Math.min(selStartPos, selEndPos);
+        return Math.max(0f, Math.min(1f, low / (float) count));
     }
 
     public synchronized float selectionEndFraction() {
-        return count <= 0 ? 1f : Math.max(0f, Math.min(1f, selEndIdx / (float) count));
+        if (count <= 0) return 1f;
+        float high = Math.max(selStartPos, selEndPos);
+        return Math.max(0f, Math.min(1f, high / (float) count));
+    }
+
+    /** Buckets covered by one on-screen bar at the current zoom. */
+    private float bucketsPerBarLocked() {
+        return (COLS / (float) SCREEN_BARS) / Math.max(1e-5f, zoom);
+    }
+
+    /** Canonical selection floats -> integer buckets used by edits/tests. */
+    private void syncSelectionIntsLocked() {
+        float lo = Math.min(selStartPos, selEndPos);
+        float hi = Math.max(selStartPos, selEndPos);
+        selStartPos = Math.max(0f, Math.min(count, lo));
+        selEndPos = Math.max(selStartPos, Math.min(count, hi));
+        selStartIdx = Math.round(selStartPos);
+        selEndIdx = Math.round(selEndPos);
+    }
+
+    private void setSelectionPositionsLocked(float start, float end) {
+        selStartPos = start;
+        selEndPos = end;
+        syncSelectionIntsLocked();
     }
 
     /** Snapshots the current in-memory waveform peaks before an edit operation. */
@@ -243,7 +273,7 @@ public class WaveformView extends View {
     /** Crops the in-memory waveform bars to the current selection `[selStartIdx, selEndIdx)` in-place. */
     public synchronized void cropToSelectionBuckets() {
         if (!hasSelection()) return;
-        int s = Math.max(0, Math.min(count, selStartIdx));
+        int s = Math.max(0, Math.min(count - 1, selStartIdx));
         int e = Math.max(s + 1, Math.min(count, selEndIdx));
         int keep = e - s;
         System.arraycopy(history, s, history, 0, keep);
@@ -258,8 +288,8 @@ public class WaveformView extends View {
     /** Deletes the selected buckets `[selStartIdx, selEndIdx)` in-place and shifts the tail left. */
     public synchronized void deleteSelectionBuckets() {
         if (!hasSelection()) return;
-        int s = Math.max(0, Math.min(count, selStartIdx));
-        int e = Math.max(s, Math.min(count, selEndIdx));
+        int s = Math.max(0, Math.min(count - 1, selStartIdx));
+        int e = Math.max(s + 1, Math.min(count, selEndIdx));
         int tail = count - e;
         if (tail > 0) {
             System.arraycopy(history, e, history, s, tail);
@@ -608,6 +638,8 @@ public class WaveformView extends View {
                 if (e < maxE) e = Math.min(maxE, s + 1);
                 else s = Math.max(minS, e - 1);
             }
+            selStartPos = s;
+            selEndPos = e;
             selStartIdx = s;
             selEndIdx = e;
             selectionActive = (selEndIdx > selStartIdx);
@@ -665,6 +697,8 @@ public class WaveformView extends View {
                 selEndIdx = count;
             }
         }
+        if (selectionActive) setSelectionPositionsLocked(selStartIdx, selEndIdx);
+        else { selStartPos = 0f; selEndPos = 0f; }
         invalidate();
         if (timelineListener != null) {
             timelineListener.onSelectionChanged(selectionActive,
@@ -674,6 +708,8 @@ public class WaveformView extends View {
 
     public synchronized void clearSelection() {
         selectionActive = false;
+        selStartPos = 0f;
+        selEndPos = 0f;
         invalidate();
         if (timelineListener != null) {
             timelineListener.onSelectionChanged(false, 0f, 1f);
@@ -1097,11 +1133,18 @@ public class WaveformView extends View {
     }
 
     private int bucketForScreenXLocked(float sx, int w) {
-        if (count <= 0 || w <= 0) return 0;
+        return Math.round(bucketPosForScreenXLocked(sx, w));
+    }
+
+    /** Float bucket position, snapped to the current visual bar grid. */
+    private float bucketPosForScreenXLocked(float sx, int w) {
+        if (count <= 0 || w <= 0) return 0f;
         float centerX = w / 2f;
         float gap = gapPxLocked(w);
-        float idx = playheadPos - (centerX - sx) / gap;
-        return Math.max(0, Math.min(count, Math.round(idx)));
+        float raw = playheadPos - (centerX - sx) / gap;
+        float bpb = bucketsPerBarLocked();
+        float snapped = Math.round(raw / bpb) * bpb;
+        return Math.max(0f, Math.min((float) count, snapped));
     }
 
     private void notifySelectionAndPlayhead() {
@@ -1135,8 +1178,8 @@ public class WaveformView extends View {
                 dragMode = DRAG_NONE;
                 synchronized (this) {
                     if (!live && count > 0 && w > 0 && hasSelection()) {
-                        float xStart = screenXForBucketLocked(selStartIdx, w);
-                        float xEnd = screenXForBucketLocked(selEndIdx, w);
+                        float xStart = screenXForBucketLocked(selStartPos, w);
+                        float xEnd = screenXForBucketLocked(selEndPos, w);
                         float hitRadius = 28f * density;
                         float dStart = Math.abs(x - xStart);
                         float dEnd = Math.abs(x - xEnd);
@@ -1197,15 +1240,17 @@ public class WaveformView extends View {
                                     playheadPos + (x - (w - edge)) / (gap * 3f));
                             playheadIndex = Math.round(playheadPos);
                         }
-                        int idx = bucketForScreenXLocked(x, w);
-                        int minS = 0;
+                        float pos = bucketPosForScreenXLocked(x, w);
+                        float minS = 0f;
                         if (fxRegionActive) {
-                            minS = Math.max(0, Math.min(count - 1,
+                            minS = Math.max(0f, Math.min(count - 1f,
                                     Math.round(fxRegionStartFrac * count)));
                         }
-                        int limit = Math.max(minS + 1, selEndIdx);
-                        selStartIdx = Math.max(minS,
-                                Math.min(limit - 1, idx));
+                        float maxStart = Math.max(minS,
+                                selEndPos - bucketsPerBarLocked());
+                        setSelectionPositionsLocked(
+                                Math.max(minS, Math.min(maxStart, pos)),
+                                selEndPos);
                     }
                     invalidate();
                     notifySelectionAndPlayhead();
@@ -1224,14 +1269,16 @@ public class WaveformView extends View {
                                     playheadPos + (x - (w - edge)) / (gap * 3f));
                             playheadIndex = Math.round(playheadPos);
                         }
-                        int idx = bucketForScreenXLocked(x, w);
-                        int maxE = n;
+                        float pos = bucketPosForScreenXLocked(x, w);
+                        float maxE = n;
                         if (fxRegionActive) {
-                            maxE = Math.max(1, Math.min(n,
+                            maxE = Math.max(1f, Math.min((float) n,
                                     Math.round(fxRegionEndFrac * count)));
                         }
-                        selEndIdx = Math.min(maxE,
-                                Math.max(selStartIdx + 1, idx));
+                        float minEnd = Math.min(maxE,
+                                selStartPos + bucketsPerBarLocked());
+                        setSelectionPositionsLocked(selStartPos,
+                                Math.min(maxE, Math.max(minEnd, pos)));
                     }
                     invalidate();
                     notifySelectionAndPlayhead();
@@ -1346,6 +1393,8 @@ public class WaveformView extends View {
         boolean selOn;
         int sIdx;
         int eIdx;
+        float sPos;
+        float ePos;
         float gap;
         float curZoom;
         boolean fxOn;
@@ -1358,7 +1407,10 @@ public class WaveformView extends View {
             headPos = (playheadPos >= 0f && playheadPos <= n)
                     ? playheadPos
                     : ((pIdx >= 0 && pIdx <= n) ? pIdx : n);
-            selOn = !isLive && selectionActive && selEndIdx > selStartIdx && count > 0;
+            sPos = Math.min(selStartPos, selEndPos);
+            ePos = Math.max(selStartPos, selEndPos);
+            selOn = !isLive && selectionActive && ePos - sPos > 1e-4f
+                    && count > 0;
             sIdx = selStartIdx;
             eIdx = selEndIdx;
             gap = gapPxLocked(w);
@@ -1380,8 +1432,8 @@ public class WaveformView extends View {
                 Math.min(2.6f * density, barSpacingPx * 0.56f));
         barPaint.setStrokeWidth(barW);
 
-        float xSelStart = centerX - (headPos - sIdx) * gap;
-        float xSelEnd = centerX - (headPos - eIdx) * gap;
+        float xSelStart = centerX - (headPos - sPos) * gap;
+        float xSelEnd = centerX - (headPos - ePos) * gap;
 
         // 1) Selection highlight box on the red waveform when paused
         if (selOn) {
@@ -1392,7 +1444,7 @@ public class WaveformView extends View {
                 float boxBot = Math.min(h - 2f, centerY + maxH + 5f);
                 rect.set(left, boxTop, right, boxBot);
                 canvas.drawRoundRect(rect, 6f * density, 6f * density,
-                        fxOn ? fxSelFillPaint : selFillPaint);
+                        selFillPaint);
             }
         }
 
@@ -1402,6 +1454,12 @@ public class WaveformView extends View {
             long kMax = (long) Math.ceil((headPos + (w - centerX + barW) / gap) / bucketsPerBar) + 1L;
             long kStart = Math.max(0L, kMin);
             long kEnd = Math.min((long) Math.ceil(n / (double) bucketsPerBar), kMax);
+            if (isLive && savedReplaceTailPeaks == null) {
+                // Live capture only has buckets up to the interpolated head;
+                // never draw bars ahead of the centre playhead.
+                kEnd = Math.min(kEnd,
+                        (long) Math.floor(headPos / bucketsPerBar));
+            }
 
             for (long k = kStart; k <= kEnd; k++) {
                 float bStart = k * bucketsPerBar;
@@ -1438,14 +1496,15 @@ public class WaveformView extends View {
 
                 float bh = Math.max(2f, v * maxH * 2f);
 
-                if (fxOn && barCenterBucket >= fxS * n
-                        && barCenterBucket <= fxE * n) {
-                    // Effects mode marks the frozen apply target in orange so
-                    // the region that Stop will process is unmistakable.
-                    barPaint.setColor(0xFFFF9F0A);
-                    barPaint.setAlpha(255);
-                } else if (selOn && barCenterBucket >= sIdx
-                        && barCenterBucket <= eIdx) {
+                boolean fxInside = fxOn && barCenterBucket >= fxS * n
+                        && barCenterBucket <= fxE * n;
+                if (fxOn && !fxInside) {
+                    // Dim the untouched part of the take so the frozen FX
+                    // target is the only fully bright region (no overlay box).
+                    barPaint.setColor(0xFFFF3B30);
+                    barPaint.setAlpha(0x47);
+                } else if (selOn && barCenterBucket >= sPos
+                        && barCenterBucket <= ePos) {
                     barPaint.setColor(0xFFFF453A);
                     barPaint.setAlpha(255);
                 } else if (x <= centerX) {
@@ -1469,22 +1528,6 @@ public class WaveformView extends View {
         }
         barPaint.setAlpha(255);
 
-        // 2b) Effects mode: keep orange boundary posts around the frozen
-        // target. The target bars themselves are already orange, so the rest
-        // of the take stays normally readable instead of being dimmed.
-        if (fxOn) {
-            float fxStartX = centerX - (headPos - fxS * n) * gap;
-            float fxEndX = centerX - (headPos - fxE * n) * gap;
-            float left = Math.max(0f, Math.min(w, fxStartX));
-            float right = Math.max(0f, Math.min(w, fxEndX));
-            if (fxStartX >= -1f && fxStartX <= w + 1f) {
-                canvas.drawLine(left, 0f, left, h, fxEdgePaint);
-            }
-            if (fxEndX >= -1f && fxEndX <= w + 1f) {
-                canvas.drawLine(right, 0f, right, h, fxEdgePaint);
-            }
-        }
-
         // 3) Selection boundary posts + [ and ] grab handles on the red waveform
         if (selOn) {
             float boxTop = Math.max(2f, centerY - maxH - 5f);
@@ -1493,7 +1536,7 @@ public class WaveformView extends View {
             float tabH = 19f * density;
             float r = 4f * density;
 
-            Paint borderPaint = fxOn ? fxSelBorderPaint : selBorderPaint;
+            Paint borderPaint = selBorderPaint;
             if (xSelStart >= -tabW && xSelStart <= w + tabW) {
                 float cx = Math.max(tabW * 0.5f, Math.min(w - tabW * 0.5f, xSelStart));
                 canvas.drawLine(cx, boxTop, cx, boxBot, borderPaint);

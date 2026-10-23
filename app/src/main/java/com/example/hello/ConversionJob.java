@@ -42,6 +42,8 @@ public final class ConversionJob {
     public volatile long framesDone;
     public volatile long updatedAt;
     public volatile boolean cancelled;
+    /** Transient UI status while capture is active; never persisted. */
+    public volatile boolean paused;
     public volatile String error;
     /**
      * Edit-replace lineage (BUG-02): when an edit punch-in is saved to the

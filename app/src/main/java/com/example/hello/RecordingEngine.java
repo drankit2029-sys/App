@@ -64,6 +64,8 @@ public final class RecordingEngine {
     public int channels = 2;
     public long dataBytes = 0;
     public volatile float level = 0f;
+    private volatile long lastChunkElapsedNanos = 0L;
+    private volatile float lastSmoothedPeak = 0.02f;
     /** Audio source used for the current capture (MIC or UNPROCESSED). */
     public int audioSource = MediaRecorder.AudioSource.MIC;
     /** True when stereo was requested but the hardware only gave mono. */
@@ -170,6 +172,35 @@ public final class RecordingEngine {
             int ch = Math.max(1, channels);
             return dataBytes / (ch * 4L);
         }
+    }
+
+    public boolean isActivelyRecording() {
+        return state == State.RECORDING;
+    }
+
+    /**
+     * Sub-chunk interpolated frame count at the current display VSYNC instant.
+     * Capture advances in 20 ms chunks; this lets the waveform move every
+     * display frame instead of jumping once per read.
+     */
+    public long liveInterpolatedFrames() {
+        synchronized (lock) {
+            long base = dataBytes / (Math.max(1, channels) * 4L);
+            if (state != State.RECORDING || lastChunkElapsedNanos <= 0L
+                    || cursorFrame < base) {
+                return base;
+            }
+            long elapsedNs = Math.max(0L,
+                    android.os.SystemClock.elapsedRealtimeNanos()
+                            - lastChunkElapsedNanos);
+            long extraFrames = (elapsedNs * SAMPLE_RATE) / 1_000_000_000L;
+            long maxExtra = Math.max(1L, SAMPLE_RATE / 50L);
+            return base + Math.min(extraFrames, maxExtra);
+        }
+    }
+
+    public float lastSmoothedPeak() {
+        return lastSmoothedPeak;
     }
 
     /**
@@ -460,6 +491,9 @@ public final class RecordingEngine {
             if (!pendingFor(raw).exists()) writePending(raw, takeName, channels);
             state = State.IDLE;
             level = 0f;
+            // A kill mid-write can leave the RIFF size fields stale even when
+            // the payload is intact; normalise them before the editor opens.
+            patchHeaderLocked();
         }
     }
 
@@ -664,6 +698,7 @@ public final class RecordingEngine {
             capThread.setPriority(Thread.MAX_PRIORITY);
             capThread.start();
             state = State.RECORDING;
+            lastChunkElapsedNanos = android.os.SystemClock.elapsedRealtimeNanos();
             lastHeaderPatch = System.currentTimeMillis();
         }
         ConversionService.onRecordingStateChanged();
@@ -695,6 +730,7 @@ public final class RecordingEngine {
                 patchHeaderLocked();
                 state = State.PAUSED;
                 level = 0f;
+                lastChunkElapsedNanos = 0L;
             }
         }
         ConversionService.onRecordingStateChanged();
@@ -777,6 +813,7 @@ public final class RecordingEngine {
             capThread.setPriority(Thread.MAX_PRIORITY);
             capThread.start();
             state = State.RECORDING;
+            lastChunkElapsedNanos = android.os.SystemClock.elapsedRealtimeNanos();
             lastHeaderPatch = System.currentTimeMillis();
         }
         ConversionService.onRecordingStateChanged();
@@ -790,6 +827,20 @@ public final class RecordingEngine {
 
     /** Clean finalize: stop capture, write final header, remove pending mark. */
     public File finalizeRaw() {
+        return finalizeRawInternal(false);
+    }
+
+    /**
+     * Stops capture and returns the raw WAV while keeping its {@code .pending}
+     * marker. The marker is deleted by the save dispatcher only after the
+     * conversion sidecar has been written, closing the crash window between
+     * finalize and enqueue.
+     */
+    public File finalizeRawForSave() {
+        return finalizeRawInternal(true);
+    }
+
+    private File finalizeRawInternal(boolean keepPending) {
         synchronized (lock) {
             capRun = false;
         }
@@ -802,20 +853,22 @@ public final class RecordingEngine {
             capThread = null;
         }
         stopThenJoinThenRelease(rec, th);
+        File out;
         synchronized (lock) {
             closeRafLocked();
             patchHeaderLocked();
             state = State.IDLE;
             level = 0f;
-            File out = rawFile;
-            if (out != null) {
+            lastChunkElapsedNanos = 0L;
+            out = rawFile;
+            if (out != null && !keepPending) {
                 // noinspection ResultOfMethodCallIgnored
                 pendingFor(out).delete();
             }
-            ConversionService.onRecordingStateChanged();
-            RecordingService.onRecordingStateChanged();
-            return out;
         }
+        ConversionService.onRecordingStateChanged();
+        RecordingService.onRecordingStateChanged();
+        return out;
     }
 
     private static void stopThenJoinThenRelease(AudioRecord rec, Thread th) {
@@ -1019,10 +1072,10 @@ public final class RecordingEngine {
     }
 
     private void capLoop() {
-        // 512 frames @ 48 kHz = 10.6 ms per read (4x faster response than 2048),
-        // eliminating initial read buffering lag and allowing fine-grained
-        // trimming of hardware ADC/HAL startup dead air.
-        final int framesPerRead = 512;
+        // 960 frames @ 48 kHz = 20 ms per read. The UI interpolates between
+        // reads at display VSYNC, so capture stays cheap while the waveform
+        // still scrolls at 60 FPS.
+        final int framesPerRead = 960;
         final int maxWarmupSkipFrames = SAMPLE_RATE / 3; // bound warmup skip to ~333 ms
         final float warmupSilenceFloor = 0.0008f;        // ~ -62 dBFS hardware mute floor
         final int outCh;
@@ -1146,6 +1199,8 @@ public final class RecordingEngine {
                     }
                 }
                 if (frames <= 0) break;
+                lastChunkElapsedNanos =
+                        android.os.SystemClock.elapsedRealtimeNanos();
 
                 // Blend first 240 frames on mid-file punch-in
                 if (punchInFadeBuf != null) {
@@ -1198,7 +1253,9 @@ public final class RecordingEngine {
                 if (reachedPunchOut) {
                     break;
                 }
-                level = Math.max(0f, Math.min(1f, peak));
+                lastSmoothedPeak = lastSmoothedPeak * 0.65f
+                        + Math.max(0f, Math.min(1f, peak)) * 0.35f;
+                level = lastSmoothedPeak;
                 if (++sincePatch >= 60) {
                     sincePatch = 0;
                     synchronized (lock) {

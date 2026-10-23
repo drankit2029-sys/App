@@ -591,34 +591,25 @@
         </LinearLayout>
     </LinearLayout>
 
+    <!-- Hidden 0dp stub row: IDs remain for layout tests. -->
     <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="2dp"
-        android:orientation="horizontal">
+        android:layout_height="0dp"
+        android:orientation="horizontal"
+        android:visibility="gone">
 
         <TextView
             android:id="@+id/takeName"
             android:layout_width="0dp"
-            android:layout_height="wrap_content"
+            android:layout_height="0dp"
             android:layout_weight="1"
-            android:clickable="true"
-            android:focusable="true"
-            android:gravity="center"
-            android:textColor="@color/text_hint"
-            android:textSize="11sp" />
+            android:visibility="gone" />
 
         <TextView
             android:id="@+id/hintText"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
-            android:layout_weight="1"
-            android:ellipsize="end"
-            android:gravity="center"
-            android:maxLines="1"
-            android:textColor="@color/text_hint"
-            android:textSize="11sp" />
+            android:layout_width="wrap_content"
+            android:layout_height="0dp"
+            android:visibility="gone" />
     </LinearLayout>
 
 </LinearLayout>

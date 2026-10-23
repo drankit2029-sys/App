@@ -628,7 +628,7 @@ public final class ConversionJobs {
                                           long replaceTakeId,
                                           String replaceTitle) {
         RecordingEngine e = RecordingEngine.get();
-        File raw = e.finalizeRaw();
+        File raw = e.finalizeRawForSave();
         if (raw == null || !raw.exists()) {
             throw new IllegalStateException("empty");
         }
@@ -732,6 +732,11 @@ public final class ConversionJobs {
         }
         ConversionJob job = enqueue(ctx, raw, title, preset, format, dur,
                 replaceTakeId, replaceTitle);
+        // The sidecar now exists, so recovery no longer needs the pending
+        // marker. Keep it until this instant to close the finalize/enqueue
+        // crash window.
+        // noinspection ResultOfMethodCallIgnored
+        new File(raw.getAbsolutePath() + ".pending").delete();
         if (cb != null) cb.onProgress(0);
         return SaveResult.background(job);
     }

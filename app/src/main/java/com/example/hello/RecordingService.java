@@ -35,6 +35,8 @@ public class RecordingService extends Service {
             "com.example.hello.REC_SAVE";
     public static final String ACTION_CANCEL =
             "com.example.hello.REC_CANCEL";
+    public static final String ACTION_RESTORE_NOTIF =
+            "com.example.hello.action.RESTORE_NOTIF";
 
     public static final String EXTRA_FORMAT = "format";
 
@@ -65,6 +67,7 @@ public class RecordingService extends Service {
     private PendingIntent cachedToggleIntent;
     private PendingIntent cachedSaveIntent;
     private PendingIntent cachedCancelIntent;
+    private PendingIntent cachedRestoreIntent;
 
     private String lastNotifTitle = "";
     private String lastNotifText = "";
@@ -146,6 +149,17 @@ public class RecordingService extends Service {
             return START_NOT_STICKY;
         }
         String a = intent.getAction();
+        if (ACTION_RESTORE_NOTIF.equals(a)) {
+            RecordingEngine e = RecordingEngine.get();
+            if (e.hasSession() && (e.state == RecordingEngine.State.RECORDING
+                    || e.state == RecordingEngine.State.PAUSED)) {
+                startFg();
+                refreshNotif(true);
+            } else {
+                stopSelf();
+            }
+            return START_NOT_STICKY;
+        }
         if (ACTION_START.equals(a)) {
             String preset = intent.getStringExtra(EXTRA_FORMAT);
             if (preset != null) RecordPreset.of(preset).save(this);
@@ -303,10 +317,6 @@ public class RecordingService extends Service {
                 }
                 e.resumeCapture(getApplicationContext(),
                         RecordPreset.load(this).audioSource);
-                try {
-                    e.beginStreaming(getApplicationContext(),
-                            RecordPreset.load(this), SaveFormat.load(this));
-                } catch (Exception ignored) {}
             } else {
                 return;
             }
@@ -627,6 +637,9 @@ public class RecordingService extends Service {
         b.setOngoing(true);
         b.setOnlyAlertOnce(true);
         b.setSilent(true);
+        if (cachedRestoreIntent != null) {
+            b.setDeleteIntent(cachedRestoreIntent);
+        }
         // Native SystemUI Chronometer ticks in real time on the system UI
         // thread without requiring sub-second Binder IPC updates.
         if (convertingPct < 0 && !paused) {
@@ -655,7 +668,11 @@ public class RecordingService extends Service {
             b.setProgress(100, Math.max(0, Math.min(100, convertingPct)), false);
         }
         try {
-            return b.build();
+            Notification n = b.build();
+            n.flags |= Notification.FLAG_ONGOING_EVENT
+                    | Notification.FLAG_NO_CLEAR
+                    | Notification.FLAG_FOREGROUND_SERVICE;
+            return n;
         } catch (Exception ex) {
             return new Notification();
         }
@@ -675,6 +692,7 @@ public class RecordingService extends Service {
         cachedToggleIntent = action(ACTION_TOGGLE, 21);
         cachedSaveIntent = action(ACTION_SAVE, 22);
         cachedCancelIntent = action(ACTION_CANCEL, 23);
+        cachedRestoreIntent = action(ACTION_RESTORE_NOTIF, 24);
     }
 
     private PendingIntent action(String what, int code) {

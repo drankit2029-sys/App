@@ -43,7 +43,8 @@
         <service
             android:name=".RecordingService"
             android:exported="false"
-            android:foregroundServiceType="microphone" />
+            android:foregroundServiceType="microphone"
+            android:stopWithTask="false" />
         <service
             android:name=".ConversionService"
             android:exported="false"

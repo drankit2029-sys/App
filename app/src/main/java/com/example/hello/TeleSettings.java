@@ -13,6 +13,11 @@ public final class TeleSettings {
     private static final String PREFS = "takeone";
     private static final String P = "tele_";
 
+    /** Simple first-run greeting shown until the user writes a script. */
+    public static final String DEFAULT_SCRIPT =
+            "Hello! Welcome to TakeOne.\n"
+            + "Tap Edit above to write or paste your script, then press Record whenever you're ready.";
+
     /** Words per minute. Slower is the sane default for a first read. */
     public static final int MIN_WPM = 60;
     public static final int MAX_WPM = 300;

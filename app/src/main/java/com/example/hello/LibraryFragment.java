@@ -201,6 +201,7 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
     private long lastBackPress = 0;
 
     private ActivityResultLauncher<Uri> openTreeLauncher;
+    private ActivityResultLauncher<String[]> openImportLauncher;
     private List<Take> pendingExportTakes;
 
     @Override
@@ -217,6 +218,10 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                                         | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
                     } catch (Exception ignored) {}
                     exportTakesToFolder(takes, uri);
+                });
+        openImportLauncher = registerForActivityResult(
+                new ActivityResultContracts.OpenDocument(), uri -> {
+                    if (uri != null) importAudio(uri);
                 });
     }
 
@@ -280,10 +285,20 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
 
         v.findViewById(R.id.searchToggle).setOnClickListener(view -> toggleSearch());
         v.findViewById(R.id.sortBtn).setOnClickListener(this::showSortMenu);
+        View importBtn = v.findViewById(R.id.importBtn);
+        if (importBtn != null) {
+            importBtn.setOnClickListener(view -> {
+                if (openImportLauncher != null) {
+                    openImportLauncher.launch(new String[]{
+                            "audio/*", "application/ogg"});
+                }
+            });
+        }
 
         // Press feedback on every tappable header / selection control.
         PressAnim.apply(v.findViewById(R.id.searchToggle));
         PressAnim.apply(v.findViewById(R.id.sortBtn));
+        if (importBtn != null) PressAnim.apply(importBtn);
         PressAnim.apply(v.findViewById(R.id.selClose));
         PressAnim.apply(selAll);
         PressAnim.apply(selExport);
@@ -600,7 +615,8 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         List<OptionsSheet.Item> items = new ArrayList<>();
         for (Sort s : values) {
             final Sort option = s;
-            items.add(new OptionsSheet.Item(0, sortLabel(option), false, option == sort,
+            items.add(new OptionsSheet.Item(sortIcon(option),
+                    sortLabel(option), false, option == sort,
                     () -> {
                         sort = option;
                         saveSort();
@@ -615,6 +631,15 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                 getString(R.string.sort_by),
                 getString(R.string.sort_subtitle, total),
                 items);
+    }
+
+    private int sortIcon(Sort s) {
+        switch (s) {
+            case NAME: return R.drawable.ic_pencil;
+            case LONGEST: return R.drawable.ic_wave;
+            case SHORTEST: return R.drawable.ic_scissors;
+            default: return R.drawable.ic_sort;
+        }
     }
 
     private String sortLabel(Sort s) {
@@ -643,6 +668,57 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                     .getSharedPreferences("takeone", Context.MODE_PRIVATE);
             p.edit().putInt("sort", sort.ordinal()).apply();
         } catch (Exception ignored) {}
+    }
+
+    /**
+     * Decodes the picked document into a 32-bit float WAV in the takes
+     * directory, then registers it as an ordinary editable take.
+     */
+    private void importAudio(Uri uri) {
+        final Context appCtx = requireContext().getApplicationContext();
+        new Thread(() -> {
+            File out = null;
+            String title = null;
+            long durMs = 0;
+            String error = null;
+            try {
+                File dir = RecordingEngine.takesDir(appCtx);
+                out = AudioImporter.importToFloatWav(appCtx, uri, dir);
+                FormatConverter.WavInfo info =
+                        FormatConverter.readFloatWav(out);
+                int ch = Math.max(1, info.channels);
+                long frames = info.dataBytes / 4 / ch;
+                durMs = Math.max(1000L, frames * 1000L
+                        / Math.max(1, info.sampleRate));
+                title = Dsp.prettyFileTitle(out.getName());
+                TakesRepository.addRecording(out, durMs, title, "WAV");
+            } catch (Exception | Error e) {
+                error = String.valueOf(e.getMessage());
+                if (out != null) {
+                    // noinspection ResultOfMethodCallIgnored
+                    out.delete();
+                }
+            }
+            final File imported = out;
+            final String importedTitle = title;
+            final long importedDur = durMs;
+            final String failure = error;
+            handler.post(() -> {
+                if (!isAdded() || getView() == null) return;
+                refresh();
+                if (imported != null) {
+                    OptionsSheet.showTopPopup(requireContext(),
+                            "Audio imported",
+                            importedTitle + " • "
+                                    + Take.formatDuration(importedDur));
+                } else {
+                    OptionsSheet.showResult(requireContext(), false,
+                            "Unsupported audio format",
+                            failure != null ? failure
+                                    : "Could not decode this file.");
+                }
+            });
+        }, "takeone-import").start();
     }
 
     /** External refresh (e.g. MainActivity after library init). */

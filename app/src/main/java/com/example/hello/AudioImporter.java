@@ -1,5 +1,6 @@
 package com.example.hello;
 
+import android.content.Context;
 import android.media.MediaCodec;
 import android.media.MediaExtractor;
 import android.media.MediaFormat;
@@ -42,6 +43,68 @@ public final class AudioImporter {
         } catch (Exception e) {
             return false;
         }
+    }
+
+    /**
+     * Imports a user-selected SAF document into the takes directory as a
+     * 32-bit float WAV edit master. Supports WAV PCM/float and any container
+     * the platform decoder can turn into PCM (M4A/AAC, MP3, OGG/Opus, FLAC,
+     * AMR, …). Throws when no decodable audio is present.
+     */
+    public static File importToFloatWav(Context ctx, android.net.Uri uri,
+                                        File targetDir) throws Exception {
+        if (ctx == null || uri == null || targetDir == null) {
+            throw new IllegalArgumentException("missing import source");
+        }
+        String display = queryDisplayName(ctx, uri);
+        String ext = extensionOf(display);
+        File temp = File.createTempFile("takeone_import_",
+                ext.isEmpty() ? ".audio" : "." + ext, ctx.getCacheDir());
+        try {
+            try (java.io.InputStream in =
+                         ctx.getContentResolver().openInputStream(uri);
+                 java.io.FileOutputStream out =
+                         new java.io.FileOutputStream(temp)) {
+                if (in == null) throw new java.io.IOException("cannot open uri");
+                byte[] buf = new byte[65536];
+                int n;
+                while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+            }
+            String base = stripExtension(display != null ? display
+                    : "Imported_" + System.currentTimeMillis());
+            base = base.replaceAll("[\\\\/:*?\"<>|]", "_").trim();
+            if (base.isEmpty()) base = "Imported";
+            return takeToFloatWav(temp, targetDir, base, null);
+        } finally {
+            // noinspection ResultOfMethodCallIgnored
+            temp.delete();
+        }
+    }
+
+    private static String queryDisplayName(Context ctx, android.net.Uri uri) {
+        try (android.database.Cursor c = ctx.getContentResolver().query(uri,
+                new String[]{android.provider.OpenableColumns.DISPLAY_NAME},
+                null, null, null)) {
+            if (c != null && c.moveToFirst()) {
+                int idx = c.getColumnIndex(
+                        android.provider.OpenableColumns.DISPLAY_NAME);
+                if (idx >= 0) return c.getString(idx);
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    private static String extensionOf(String name) {
+        if (name == null) return "";
+        int dot = name.lastIndexOf('.');
+        if (dot < 0 || dot == name.length() - 1) return "";
+        return name.substring(dot + 1).toLowerCase(java.util.Locale.US);
+    }
+
+    private static String stripExtension(String name) {
+        if (name == null) return "Imported";
+        int dot = name.lastIndexOf('.');
+        return dot > 0 ? name.substring(0, dot) : name;
     }
 
     /**

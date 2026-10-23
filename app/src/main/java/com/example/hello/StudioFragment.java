@@ -214,6 +214,58 @@ public class StudioFragment extends Fragment {
             Choreographer.getInstance().removeFrameCallback(teleFrameCallback);
         } catch (Throwable ignored) {}
     }
+
+    // ---- 60 FPS waveform / preview VSYNC driver ----
+    private boolean waveChoreographerActive;
+
+    private final Choreographer.FrameCallback waveFrameCallback =
+            new Choreographer.FrameCallback() {
+                @Override
+                public void doFrame(long frameTimeNanos) {
+                    waveChoreographerActive = false;
+                    if (!isAdded() || getView() == null) return;
+                    try {
+                        boolean live = engine.state
+                                == RecordingEngine.State.RECORDING;
+                        boolean preview = studioPreviewPlayer != null;
+                        if (live) {
+                            long cur = engine.liveInterpolatedFrames();
+                            if (cur > 0 && cur != lastPushedCursorFrame) {
+                                lastPushedCursorFrame = cur;
+                                waveform.updateLiveFromFrames(
+                                        engine.lastSmoothedPeak(), cur,
+                                        replaceTargetEndFrame);
+                            }
+                        } else if (preview) {
+                            long total = Math.max(1L, engine.totalFrames());
+                            waveform.setPlayheadFraction(Math.min(1f,
+                                    studioPreviewPlayer.positionFrames()
+                                            / (float) total));
+                        }
+                        if ((live || preview) && getView() != null) {
+                            scheduleWaveFrame();
+                        }
+                    } catch (Throwable ignored) {}
+                }
+            };
+
+    private void scheduleWaveFrame() {
+        if (waveChoreographerActive || !isAdded() || getView() == null) return;
+        try {
+            Choreographer.getInstance().postFrameCallback(waveFrameCallback);
+            waveChoreographerActive = true;
+        } catch (Throwable ignored) {
+            waveChoreographerActive = false;
+        }
+    }
+
+    private void cancelWaveFrame() {
+        waveChoreographerActive = false;
+        try {
+            Choreographer.getInstance().removeFrameCallback(waveFrameCallback);
+        } catch (Throwable ignored) {}
+    }
+
     private ActivityResultLauncher<String[]> scriptPicker;
 
     private String pendingName;
@@ -579,6 +631,7 @@ public class StudioFragment extends Fragment {
         paint();
         handler.removeCallbacks(tick);
         handler.post(tick);
+        scheduleWaveFrame();
         activity().syncFabWithEngine();
 
         doneReceiver = new BroadcastReceiver() {
@@ -717,6 +770,7 @@ public class StudioFragment extends Fragment {
         super.onResume();
         handler.removeCallbacks(tick);
         handler.post(tick);
+        scheduleWaveFrame();
         if (!telePaused) scheduleTeleFrame();
         paint();
         activity().syncFabWithEngine();
@@ -726,6 +780,7 @@ public class StudioFragment extends Fragment {
     public void onPause() {
         super.onPause();
         handler.removeCallbacks(tick);
+        cancelWaveFrame();
         cancelTeleFrame();
         persistTeleScript();
     }
@@ -733,6 +788,7 @@ public class StudioFragment extends Fragment {
     @Override
     public void onDestroyView() {
         handler.removeCallbacksAndMessages(null);
+        cancelWaveFrame();
         cancelTeleFrame();
         stopDotPulse();
         stopStudioPreview();
@@ -832,6 +888,14 @@ public class StudioFragment extends Fragment {
 
     // ---- unified recording settings: presets + format toggles ----
 
+    private int presetIcon(RecordPreset p) {
+        switch (p) {
+            case PODCAST: return R.drawable.ic_sliders;
+            case MUSIC: return R.drawable.ic_wave;
+            default: return R.drawable.ic_mic;
+        }
+    }
+
     private void showRecordingSettings() {
         if (!isAdded()) return;
         OptionsSheet.SettingsState state = new OptionsSheet.SettingsState() {
@@ -841,6 +905,7 @@ public class StudioFragment extends Fragment {
                 for (RecordPreset p : RecordPreset.all()) {
                     final RecordPreset pick = p;
                     items.add(OptionsSheet.Item.detail(
+                            presetIcon(p),
                             getString(p.titleRes), getString(p.subRes),
                             p == preset,
                             () -> {
@@ -896,16 +961,6 @@ public class StudioFragment extends Fragment {
                                 }
                                 saveFormat = pick;
                                 saveFormat.save(requireContext());
-                                // A4-07: keep the incremental encoder in sync
-                                // with the new container, otherwise it keeps
-                                // producing the old format and the partial is
-                                // discarded at save time.
-                                if (engine.hasSession()
-                                        && engine.dataBytes > 0
-                                        && engine.streaming() != null) {
-                                    engine.restartStreaming(requireContext(),
-                                            preset, saveFormat);
-                                }
                                 paint();
                             }));
                 }
@@ -1078,7 +1133,7 @@ public class StudioFragment extends Fragment {
         try {
             return requireContext().getSharedPreferences("takeone",
                             Context.MODE_PRIVATE)
-                    .getString("tele_script", "");
+                    .getString("tele_script", TeleSettings.DEFAULT_SCRIPT);
         } catch (Exception e) {
             return "";
         }
@@ -1568,29 +1623,25 @@ public class StudioFragment extends Fragment {
         // If inside the Select & Replace sub-editor, Stop offers to splice the
         // replacement take into the main take or discard the replacement!
         if (inSelectAndReplaceEditor) {
-            List<OptionsSheet.Item> items = new ArrayList<>();
-            items.add(OptionsSheet.Item.of(R.drawable.ic_check,
-                    "Apply Replacement to Take",
-                    () -> closeSelectAndReplaceSubEditor(true)));
-            items.add(OptionsSheet.Item.danger(R.drawable.ic_trash,
-                    "Discard Replacement",
-                    () -> closeSelectAndReplaceSubEditor(false)));
-            OptionsSheet.showOptions(requireContext(),
-                    "Finish Select & Replace?",
-                    "Splice this replacement recording into your take, or discard it.",
-                    items);
+            OptionsSheet.showTwoChoiceModal(requireContext(),
+                    "Replace selection?",
+                    "Apply the new recording or discard it?",
+                    OptionsSheet.Item.of(R.drawable.ic_check,
+                            "Apply",
+                            () -> closeSelectAndReplaceSubEditor(true)),
+                    OptionsSheet.Item.danger(R.drawable.ic_trash,
+                            "Discard",
+                            () -> closeSelectAndReplaceSubEditor(false)));
             return;
         }
-        String name = engine.takeName != null ? engine.takeName : "";
-        List<OptionsSheet.Item> items = new ArrayList<>();
-        items.add(OptionsSheet.Item.of(R.drawable.ic_check,
-                getString(R.string.action_save), this::doSaveSequence));
-        items.add(OptionsSheet.Item.danger(R.drawable.ic_trash,
-                getString(R.string.action_discard), this::doDiscardSequence));
-        OptionsSheet.showOptions(requireContext(),
-                getString(R.string.save_take_title),
-                getString(R.string.save_take_msg, name, getString(preset.titleRes)),
-                items);
+        OptionsSheet.showTwoChoiceModal(requireContext(),
+                "Finish take?",
+                "Save to library or discard this recording?",
+                OptionsSheet.Item.of(R.drawable.ic_check,
+                        getString(R.string.action_save), this::doSaveSequence),
+                OptionsSheet.Item.danger(R.drawable.ic_trash,
+                        getString(R.string.action_discard),
+                        this::doDiscardSequence));
     }
 
     /**
@@ -1608,22 +1659,13 @@ public class StudioFragment extends Fragment {
                     Toast.LENGTH_SHORT).show();
             return;
         }
-        boolean hasSel = fxApplyTargetHasSelection;
-        String target = hasSel
-                ? "the selected region"
-                : "the entire take";
-        List<OptionsSheet.Item> items = new ArrayList<>();
-        items.add(OptionsSheet.Item.of(R.drawable.ic_check,
-                "Apply Effects",
-                this::applyEffectsToSelection));
-        items.add(OptionsSheet.Item.danger(R.drawable.ic_trash,
-                "Cancel",
-                () -> { }));
-        OptionsSheet.showOptions(requireContext(),
-                "Apply Effects to " + target + "?",
-                "This replaces " + target
-                        + " with the effect-applied audio. It can be undone.",
-                items);
+        OptionsSheet.showTwoChoiceModal(requireContext(),
+                "Apply effects?",
+                "Save effect changes or discard them?",
+                OptionsSheet.Item.of(R.drawable.ic_check,
+                        "Apply", this::applyEffectsToSelection),
+                OptionsSheet.Item.danger(R.drawable.ic_trash,
+                        "Discard", () -> { }));
     }
 
     /**
@@ -1684,21 +1726,20 @@ public class StudioFragment extends Fragment {
         }
         if (engine.state == RecordingEngine.State.RECORDING
                 || engine.state == RecordingEngine.State.PAUSED) {
-            List<OptionsSheet.Item> items = new ArrayList<>();
-            items.add(OptionsSheet.Item.of(R.drawable.ic_mic,
-                    getString(R.string.action_continue_bg), () -> {
-                        Toast.makeText(requireContext(),
-                                getString(R.string.recording_bg_msg,
-                                        engine.takeName != null ? engine.takeName : ""),
-                                Toast.LENGTH_LONG).show();
-                        activity().exitStudio();
-                    }));
-            items.add(OptionsSheet.Item.of(R.drawable.ic_circle_stop,
-                    getString(R.string.action_stop_take), this::onStopPressed));
-            OptionsSheet.showOptions(requireContext(),
-                    getString(R.string.end_take_title),
-                    getString(R.string.recording_bg_title),
-                    items);
+            OptionsSheet.showTwoChoiceModal(requireContext(),
+                    "Recording active",
+                    "Keep recording in background or discard this take?",
+                    OptionsSheet.Item.of(R.drawable.ic_mic,
+                            "Keep recording", () -> {
+                                Toast.makeText(requireContext(),
+                                        getString(R.string.recording_bg_msg,
+                                                engine.takeName != null
+                                                        ? engine.takeName : ""),
+                                        Toast.LENGTH_LONG).show();
+                                activity().exitStudio();
+                            }),
+                    OptionsSheet.Item.danger(R.drawable.ic_trash,
+                            "Discard", this::discardActiveTakeAndLeave));
             return true;
         }
         // Finalized raw waiting on a save choice: run the stop sequence.
@@ -1873,21 +1914,13 @@ public class StudioFragment extends Fragment {
         stopStudioPreview();
         if (!ensureSelectionOrAutoEnable("Trim")) return;
 
-        long durMs = Math.max(1L, engine.durationMs());
-        long sMs = Math.round(waveform.selectionStartFraction() * durMs);
-        long eMs = Math.round(waveform.selectionEndFraction() * durMs);
-        String rangeLabel = formatTimer(sMs) + " – " + formatTimer(eMs);
-
-        List<OptionsSheet.Item> items = new ArrayList<>();
-        items.add(OptionsSheet.Item.of(R.drawable.ic_check,
-                "Keep Selected", () -> runEditOperation(true)));
-        items.add(OptionsSheet.Item.danger(R.drawable.ic_trash,
-                "Delete Selected", () -> runEditOperation(false)));
-
-        OptionsSheet.showOptions(requireContext(),
-                "Trim Selection",
-                "Selected region: " + rangeLabel,
-                items);
+        OptionsSheet.showTwoChoiceModal(requireContext(),
+                "Trim audio",
+                "Keep only selection or delete selection?",
+                OptionsSheet.Item.of(R.drawable.ic_check,
+                        "Keep", () -> runEditOperation(true)),
+                OptionsSheet.Item.danger(R.drawable.ic_trash,
+                        "Delete", () -> runEditOperation(false)));
     }
 
     /**
@@ -1908,10 +1941,6 @@ public class StudioFragment extends Fragment {
         long endF = Math.round(waveform.selectionEndFraction() * totalFrames);
         if (endF <= startF) return;
 
-        long durMs = Math.max(1L, engine.durationMs());
-        String rangeStr = formatTimer(Math.round(waveform.selectionStartFraction() * durMs))
-                + " – " + formatTimer(Math.round(waveform.selectionEndFraction() * durMs));
-
         try {
             if (subEditorUndoJournal != null) subEditorUndoJournal.clear();
             waveform.enterSubEditorMode();
@@ -1928,15 +1957,10 @@ public class StudioFragment extends Fragment {
             paint();
             activity().syncFabWithEngine();
 
-            // Prompt the user to start recording the replaced take
-            OptionsSheet.showConfirm(requireContext(),
+            // Non-blocking guidance: replace mode is already armed.
+            OptionsSheet.showTopPopup(requireContext(),
                     "Select & Replace",
-                    "Ready to record replacement for " + rangeStr
-                            + ". Tap Start Recording now, or tap the mic button when ready.",
-                    "Start Recording",
-                    R.drawable.ic_mic,
-                    false,
-                    this::ensurePermissionThenStart);
+                    "Drag handles over the section to replace, then press Record.");
         } catch (Exception e) {
             inSelectAndReplaceEditor = false;
             Toast.makeText(requireContext(), "Could not open Select & Replace editor",
@@ -2053,11 +2077,6 @@ public class StudioFragment extends Fragment {
                 Toast.makeText(requireContext(), R.string.mono_fallback_toast,
                         Toast.LENGTH_LONG).show();
             }
-            try {
-                if (!inSelectAndReplaceEditor) {
-                    engine.beginStreaming(requireContext(), preset, saveFormat);
-                }
-            } catch (Exception ignored) {}
             if (engine.state == RecordingEngine.State.RECORDING) {
                 if (!wasPaused && !isEditOrRecovery && !fxPanelOpen) {
                     teleprompterArmForTake();
@@ -2074,6 +2093,7 @@ public class StudioFragment extends Fragment {
         lastPushedCursorFrame = engine.cursorFrames();
         handler.removeCallbacks(tick);
         handler.post(tick);
+        scheduleWaveFrame();
         paint();
         syncStudioFabIcon();
     }
@@ -2183,23 +2203,23 @@ public class StudioFragment extends Fragment {
         String sessionTitle = engine.takeName != null ? engine.takeName : "";
         String target = editTitle != null && !editTitle.isEmpty()
                 ? editTitle : sessionTitle;
-        List<OptionsSheet.Item> items = new ArrayList<>();
-        items.add(OptionsSheet.Item.of(R.drawable.ic_check,
-                getString(R.string.edit_replace, target),
-                () -> runSaveDispatch(editId, target, true)));
-        items.add(OptionsSheet.Item.of(R.drawable.ic_upload,
-                getString(R.string.edit_save_new), () -> {
-                    // Save-as-new drops the lineage now; the save below is
-                    // an ordinary one.
-                    editSourceId = -1;
-                    editSourceTitle = null;
-                    try {
-                        EditLink.clear(requireContext());
-                    } catch (Exception ignored) {}
-                    runSaveDispatch(-1, null, false);
-                }));
-        OptionsSheet.showOptions(requireContext(),
-                getString(R.string.edit_save_title), target, items);
+        OptionsSheet.showTwoChoiceModal(requireContext(),
+                "Save edits?",
+                "Replace original take or save as a new copy?",
+                OptionsSheet.Item.of(R.drawable.ic_check,
+                        getString(R.string.edit_replace, target),
+                        () -> runSaveDispatch(editId, target, true)),
+                OptionsSheet.Item.of(R.drawable.ic_upload,
+                        getString(R.string.edit_save_new), () -> {
+                            // Save-as-new drops the lineage now; the save
+                            // below is an ordinary one.
+                            editSourceId = -1;
+                            editSourceTitle = null;
+                            try {
+                                EditLink.clear(requireContext());
+                            } catch (Exception ignored) {}
+                            runSaveDispatch(-1, null, false);
+                        }));
     }
 
     /**
@@ -2283,12 +2303,7 @@ public class StudioFragment extends Fragment {
                     }
                     if (!isAdded()) return;
                     activity().syncFabWithEngine();
-                    if (res != null) {
-                        Toast.makeText(requireContext(),
-                                R.string.conv_bg_toast, Toast.LENGTH_LONG)
-                                .show();
-                        activity().exitStudio();
-                    } else {
+                    if (res == null) {
                         paint();
                         OptionsSheet.showResult(requireContext(), false,
                                 getString(R.string.convert_failed_title),
@@ -2307,6 +2322,10 @@ public class StudioFragment extends Fragment {
                 }
             });
         }).start();
+        // Leave for the Library immediately: conversion runs entirely in the
+        // background and the synthetic converting card appears as soon as the
+        // job sidecar is written.
+        if (isAdded()) activity().exitStudio();
     }
 
     /** Incremental output adopted: the take is saved, synchronously. */
@@ -2406,6 +2425,36 @@ public class StudioFragment extends Fragment {
         }).start();
     }
 
+    /**
+     * Back-while-recording destructive path: drop the take immediately and
+     * leave Studio without opening a second Save/Discard modal.
+     */
+    public void discardActiveTakeAndLeave() {
+        if (saving) return;
+        saving = true;
+        engine.setSaving(true);
+        replacingSelectionActive = false;
+        if (replaceSavedTailFile != null) {
+            // noinspection ResultOfMethodCallIgnored
+            replaceSavedTailFile.delete();
+            replaceSavedTailFile = null;
+        }
+        final Context appCtx = requireContext().getApplicationContext();
+        new Thread(() -> {
+            engine.abortAndDelete();
+            editSourceId = -1;
+            editSourceTitle = null;
+            EditLink.clear(appCtx);
+            completionHandler.post(() -> {
+                saving = false;
+                engine.setSaving(false);
+                RecordingService.stopService(appCtx);
+                if (isAdded()) activity().exitStudio();
+            });
+        }).start();
+        if (isAdded()) activity().exitStudio();
+    }
+
     /** Notification save/cancel finished while the studio is open. */
     private void onBackgroundActionDone(boolean ok, boolean wasCancel, String msg) {
         if (!isAdded() || getView() == null) return;
@@ -2495,20 +2544,10 @@ public class StudioFragment extends Fragment {
                         paintEditorStrip();
                         paintFxPanelControls();
                     }
-                    // Only advance/draw waveform bars once the mic has actually
-                    // delivered audio frames (prevents blank waveform during mic warm-up).
-                    if (cur != lastPushedCursorFrame && cur > 0) {
-                        lastPushedCursorFrame = cur;
-                        waveform.updateLiveFromFrames(lvl, cur, replaceTargetEndFrame);
-                    }
                     timerText.setText(formatTimer(engine.cursorMs()));
                 } else if (studioPreviewPlayer != null) {
                     long posMs = studioPreviewPlayer.positionMs();
                     timerText.setText(formatTimer(posMs));
-                    long total = Math.max(1L, engine.totalFrames());
-                    waveform.setPlayheadFraction(
-                            Math.min(1f, studioPreviewPlayer.positionFrames()
-                                    / (float) total));
                 } else if (engine.hasSession()) {
                     long shownMs = (engine.cursorFrames() > 0 || userScrolledWhilePaused)
                             ? engine.cursorMs() : engine.durationMs();
@@ -2654,6 +2693,7 @@ public class StudioFragment extends Fragment {
             RawFloatPlayer player = slot[0];
             player.setDspChain(livePreviewDsp);
             studioPreviewPlayer = player;
+            scheduleWaveFrame();
             previewPlaysLiveFx = withLiveFx;
             // In effects mode the audition follows the frozen apply target,
             // not whatever happens to be selected right now.
@@ -3301,71 +3341,14 @@ public class StudioFragment extends Fragment {
         }
     }
 
-    /** Per-effect accent used by the rack cards and their enable dot. */
+    /** Cohesive studio accent shared by every FX card and enable dot. */
     static int fxAccentColor(DspChain.EffectType type) {
-        if (type == null) return 0xFFFF6B6B;
-        switch (type) {
-            case NOISE_SUPPRESSION:
-            case ROOM_GATE:
-                return 0xFF30D158;
-            case DE_ESSER:
-            case WARMTH_BODY:
-                return 0xFFFF9F0A;
-            case COMPRESSOR:
-                return 0xFF0A84FF;
-            case LOW_CUT_HPF:
-            case HIGH_PASS_FILTER:
-                return 0xFF64D2FF;
-            case VOCAL_PRESENCE:
-                return 0xFFFFD60A;
-            case BRICKWALL_LIMITER:
-            case NOTCH_FILTER:
-                return 0xFFFF6B6B;
-            case PARAMETRIC_EQ6:
-                return 0xFFBF5AF2;
-            case GRAPHIC_EQ:
-                return 0xFF5E5CE6;
-            case FILTER_CURVE_EQ:
-                return 0xFFDA8FFF;
-            case BASS_TREBLE:
-                return 0xFFFFB340;
-            case LOW_PASS_FILTER:
-                return 0xFF6AC4FF;
-            case SHELF_FILTER:
-                return 0xFFA0D96A;
-            case CLASSIC_FILTERS:
-                return 0xFFB0B8C4;
-            default:
-                return fxCategoryAccent(DspChain.categoryOf(type));
-        }
+        return 0xFFFF3B30;
     }
 
-    /**
-     * Accent color for a whole catalog category, so the Stage 4-7 effects
-     * read as families instead of one undifferentiated red.
-     */
+    /** Neutral cool-slate accent for whole-category badges. */
     static int fxCategoryAccent(FxCategory category) {
-        if (category == null) return 0xFFFF6B6B;
-        switch (category) {
-            case EQUALIZER:
-                return 0xFF5E5CE6;
-            case DYNAMICS:
-                return 0xFF0A84FF;
-            case RESTORATION:
-                return 0xFF30D158;
-            case SPATIAL:
-                return 0xFF64D2FF;
-            case TIME:
-                return 0xFFFF9F0A;
-            case CREATIVE:
-                return 0xFFBF5AF2;
-            case TOOLS:
-                return 0xFFA0D96A;
-            case ANALYZER:
-                return 0xFFB0B8C4;
-            default:
-                return 0xFFFF6B6B;
-        }
+        return 0xFF9AA4B2;
     }
 
     private static int withAlpha(int color, int alpha) {
@@ -3378,9 +3361,9 @@ public class StudioFragment extends Fragment {
         android.graphics.drawable.GradientDrawable shape =
                 new android.graphics.drawable.GradientDrawable();
         shape.setCornerRadius(14f * density);
-        shape.setColor(enabled ? 0xFF15191F : 0xFF0F1216);
+        shape.setColor(enabled ? 0xFF171B21 : 0xFF12161B);
         shape.setStroke(Math.max(1, Math.round(density)),
-                enabled ? withAlpha(accent, 0x70) : 0x1AFFFFFF);
+                enabled ? 0x55FF3B30 : 0x1FFFFFFF);
         return new android.graphics.drawable.RippleDrawable(
                 android.content.res.ColorStateList.valueOf(0x18FFFFFF),
                 shape, null);
@@ -3393,11 +3376,11 @@ public class StudioFragment extends Fragment {
                 new android.graphics.drawable.GradientDrawable();
         g.setShape(android.graphics.drawable.GradientDrawable.OVAL);
         if (enabled) {
-            g.setColor(accent);
+            g.setColor(0xFFFF3B30);
         } else {
-            g.setColor(0x00000000);
+            g.setColor(0xFF262C36);
             g.setStroke(Math.max(1, Math.round(1.4f * density)),
-                    0xFF3E4652);
+                    0x1FFFFFFF);
         }
         return g;
     }
@@ -4782,6 +4765,17 @@ public class StudioFragment extends Fragment {
     }
 
     /** Dropdown menu of premade presets (templates of effects and their settings). */
+    private int fxPresetIcon(DspChain.Preset p) {
+        switch (p) {
+            case VOICE_POLISH: return R.drawable.ic_mic;
+            case PODCAST_BROADCAST: return R.drawable.ic_sliders;
+            case WARM_VOCAL: return R.drawable.ic_heart;
+            case CRISP_CLARITY: return R.drawable.ic_star;
+            case CLEAR_ALL: return R.drawable.ic_close;
+            default: return R.drawable.ic_edit_fx;
+        }
+    }
+
     private void showFxPresetsMenu() {
         if (!isAdded()) return;
         DspChain.Preset[] presets = {
@@ -4796,7 +4790,8 @@ public class StudioFragment extends Fragment {
         for (DspChain.Preset p : presets) {
             final DspChain.Preset pick = p;
             boolean checked = p.id.equals(dspConfig.activePresetId);
-            items.add(new OptionsSheet.Item(0, p.title, false, checked, () -> {
+            items.add(new OptionsSheet.Item(fxPresetIcon(p),
+                    p.title, false, checked, () -> {
                 if (!isAdded() || dspConfig == null) return;
                 if (dspSubRangeBaked) lastEditWasSubRangeBake = true;
                 dspBakedToRaw = false;

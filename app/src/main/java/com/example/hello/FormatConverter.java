@@ -419,8 +419,6 @@ public final class FormatConverter {
             r.readFully(head);
             switch (fmt) {
                 case M4A:
-                case AMR_NB:
-                case AMR_WB:
                 case AUTO:
                 default:
                     // ISO base media: 'ftyp' at offset 4, and a 'moov' box
@@ -432,6 +430,27 @@ public final class FormatConverter {
                     }
                     if (!containsBox(r, new byte[]{'m', 'o', 'o', 'v'})) {
                         throw new IllegalStateException("mp4 truncated (no moov)");
+                    }
+                    break;
+                case AMR_NB:
+                case AMR_WB:
+                    // A .3gp that merely has ftyp/moov can still contain no
+                    // AMR sample entry. Require the exact sample description
+                    // atom the chosen codec must have written.
+                    if (head[4] != 'f' || head[5] != 't'
+                            || head[6] != 'y' || head[7] != 'p') {
+                        throw new IllegalStateException("not a 3gp container");
+                    }
+                    if (!containsBox(r, new byte[]{'m', 'o', 'o', 'v'})) {
+                        throw new IllegalStateException("3gp truncated (no moov)");
+                    }
+                    byte[] sampleEntry = fmt == SaveFormat.AMR_WB
+                            ? new byte[]{'s', 'a', 'w', 'b'}
+                            : new byte[]{'s', 'a', 'm', 'r'};
+                    if (!containsBox(r, sampleEntry)) {
+                        throw new IllegalStateException(
+                                "3gp missing " + new String(sampleEntry)
+                                        + " sample entry");
                     }
                     break;
                 case OPUS:
@@ -522,6 +541,9 @@ public final class FormatConverter {
             throws Exception {
         WavInfo info = readFloatWav(src);
         final int outRate = wideband ? 16000 : 8000;
+        // AMR encoders require exact 20 ms frames: 160 samples at 8 kHz,
+        // 320 at 16 kHz. Anything else produces a malformed .3gp.
+        final int frameSamples = wideband ? 320 : 160;
         final int decim = Math.max(1, info.sampleRate / outRate);
         final double cutoff = (wideband ? 7000.0 : 3400.0) / info.sampleRate;
         final int taps = wideband ? 48 : 64;
@@ -620,6 +642,23 @@ public final class FormatConverter {
                             }
                             pendLen += decimator.flush(totalFrames, pend,
                                     pendLen);
+                            // Zero-pad the final partial frame so every
+                            // queued buffer is an exact AMR frame multiple.
+                            int pad = (frameSamples - (pendLen % frameSamples))
+                                    % frameSamples;
+                            if (pad > 0) {
+                                int padNeed = pendLen + pad;
+                                if (padNeed > pend.length) {
+                                    short[] bigger = new short[Math.max(
+                                            pend.length * 2, padNeed)];
+                                    System.arraycopy(pend, 0, bigger, 0,
+                                            pendLen);
+                                    pend = bigger;
+                                }
+                                java.util.Arrays.fill(pend, pendLen,
+                                        pendLen + pad, (short) 0);
+                                pendLen += pad;
+                            }
                             tailFlushed = true;
                         }
                         // 2) Feed the encoder from the backlog.
@@ -629,7 +668,9 @@ public final class FormatConverter {
                                 ByteBuffer dstBuf = enc.getInputBuffer(idx);
                                 dstBuf.clear();
                                 int room = dstBuf.remaining() / 2;
-                                int want = Math.min(room, pendLen);
+                                int framesFit = room / frameSamples;
+                                int want = Math.min(pendLen,
+                                        framesFit * frameSamples);
                                 if (want <= 0) {
                                     enc.queueInputBuffer(idx, 0, 0, 0, 0);
                                 } else {
@@ -668,18 +709,30 @@ public final class FormatConverter {
                             // remains — loop back to produce more.
                         }
                     }
-                    int oidx = enc.dequeueOutputBuffer(bi, 5000);
-                    if (oidx == MediaCodec.INFO_TRY_AGAIN_LATER) {
-                        if (inEos && SystemClock.elapsedRealtime()
-                                > drainDeadline) {
-                            throw new IllegalStateException(
-                                    "encoder never finished");
+                    // Drain every output buffer the codec has ready, not just
+                    // one per input buffer. The old single dequeue let the
+                    // encoder fall behind and stall near EOS.
+                    int drained = 0;
+                    while (true) {
+                        int oidx = enc.dequeueOutputBuffer(bi,
+                                drained == 0 ? 5000L : 0L);
+                        if (oidx == MediaCodec.INFO_TRY_AGAIN_LATER) {
+                            if (inEos && SystemClock.elapsedRealtime()
+                                    > drainDeadline) {
+                                throw new IllegalStateException(
+                                        "encoder never finished");
+                            }
+                            break;
                         }
-                    } else if (oidx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                        track = muxer.addTrack(enc.getOutputFormat());
-                        muxer.start();
-                        muxStarted = true;
-                    } else if (oidx >= 0) {
+                        if (oidx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                            if (!muxStarted) {
+                                track = muxer.addTrack(enc.getOutputFormat());
+                                muxer.start();
+                                muxStarted = true;
+                            }
+                            continue;
+                        }
+                        if (oidx < 0) continue;
                         ByteBuffer ob = enc.getOutputBuffer(oidx);
                         if ((bi.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0
                                 && bi.size > 0 && muxStarted) {
@@ -689,8 +742,10 @@ public final class FormatConverter {
                             samplesWritten++;
                         }
                         enc.releaseOutputBuffer(oidx, false);
+                        drained++;
                         if ((bi.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
                             outEos = true;
+                            break;
                         }
                     }
                 }

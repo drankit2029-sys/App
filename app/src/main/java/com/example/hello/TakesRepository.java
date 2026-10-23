@@ -623,16 +623,8 @@ public final class TakesRepository {
             }
         }
 
-        // 4) Demo seeding, once ever, only on a truly fresh install.
-        boolean empty;
-        synchronized (TakesRepository.class) {
-            empty = TAKES.isEmpty();
-        }
-        if (empty && !seededOnce(ctx) && !hasAnyAudio(files)) {
-            seedDemos(ctx);
-        } else if (empty) {
-            markSeeded(ctx);
-        }
+        // 4) New installs start with an empty library: no synthetic demos.
+        markSeeded(ctx);
         return rr;
     }
 
@@ -651,6 +643,41 @@ public final class TakesRepository {
         } catch (Exception e) {
             return false;
         }
+    }
+
+    /** Distinguish integer 24-bit WAV from the standard 16/float badge. */
+    private static String wavBadge(File f) {
+        try (java.io.RandomAccessFile r =
+                     new java.io.RandomAccessFile(f, "r")) {
+            Dsp.WavHeader h = Dsp.parseWavHeader(r);
+            if (h.audioFormat == 1 && h.bits == 24) return "WAV24";
+        } catch (Exception ignored) {}
+        return "WAV";
+    }
+
+    /** True when an ASCII/byte token occurs anywhere in the file. */
+    private static boolean containsToken(File f, byte[] token) {
+        if (f == null || token == null || token.length == 0) return false;
+        try (java.io.RandomAccessFile r =
+                     new java.io.RandomAccessFile(f, "r")) {
+            byte[] buf = new byte[65536];
+            int carry = 0;
+            long left = r.length();
+            r.seek(0);
+            while (left > 0) {
+                int n = (int) Math.min(buf.length, left);
+                r.readFully(buf, 0, n);
+                left -= n;
+                for (int i = 0; i < n; i++) {
+                    if (buf[i] == token[carry]) {
+                        if (++carry == token.length) return true;
+                    } else {
+                        carry = buf[i] == token[0] ? 1 : 0;
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+        return false;
     }
 
     private static Take adoptFile(Context ctx, File f) {
@@ -673,13 +700,28 @@ public final class TakesRepository {
             if (dur < 0) dur = 1000;
             String badge;
             switch (ext) {
-                case "wav": badge = "WAV"; break;
-                case "m4a": badge = "M4A"; break;
-                case "3gp": badge = "AMR"; break;
-                case "flac": badge = "FLAC"; break;
-                case "webm": badge = "OPUS"; break;
-                case "mp3": badge = "MP3"; break;
-                default: badge = ext.toUpperCase(Locale.US); break;
+                case "wav":
+                    badge = wavBadge(f);
+                    break;
+                case "m4a":
+                    badge = "M4A";
+                    break;
+                case "3gp":
+                    badge = containsToken(f, new byte[]{'s', 'a', 'w', 'b'})
+                            ? "AMR-WB" : "AMR";
+                    break;
+                case "flac":
+                    badge = "FLAC";
+                    break;
+                case "webm":
+                    badge = "OPUS";
+                    break;
+                case "mp3":
+                    badge = "MP3";
+                    break;
+                default:
+                    badge = ext.toUpperCase(Locale.US);
+                    break;
             }
             Take t;
             synchronized (TakesRepository.class) {
