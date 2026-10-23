@@ -67,9 +67,26 @@ public class LibraryFlowTest {
         for (int i = 0; i < 3; i++) {
             UiObject cancel = d.findObject(new UiSelector()
                     .resourceId("com.example.hello:id/dialogCancel"));
-            if (!cancel.waitForExists(400)) return;
+            if (cancel.waitForExists(400)) {
+                try {
+                    cancel.click();
+                } catch (Exception ignored) {
+                    return;
+                }
+                try {
+                    Thread.sleep(400);
+                } catch (InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+                continue;
+            }
+            // Recovery is a 2-choice modal with no Cancel button. Discard the
+            // orphaned raw so it cannot keep the library covered.
+            UiObject discard = d.findObject(new UiSelector().text("Discard"));
+            if (!discard.waitForExists(400)) return;
             try {
-                cancel.click();
+                discard.click();
             } catch (Exception ignored) {
                 return;
             }
