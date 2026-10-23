@@ -39,16 +39,18 @@ public class OptionsSheetResultDismissTest {
     }
 
     @Test
-    public void buttonThenDismissFiresOnlyOnce() {
+    public void bannerTapThenDismissFiresOnlyOnce() {
         Activity a = activity();
         final int[] fired = {0};
         android.app.Dialog d = OptionsSheet.showResult(a, true,
-                "Saved", "Msg", () -> fired[0]++);
+                "Take saved", null, () -> fired[0]++);
         ShadowLooper.idleMainLooper();
         android.view.View ok = d.findViewById(R.id.resultOk);
-        assertTrue("no OK button", ok != null && ok.getVisibility()
-                == android.view.View.VISIBLE);
-        a.runOnUiThread(ok::performClick);
+        assertTrue("Got it button must be hidden",
+                ok == null || ok.getVisibility() == android.view.View.GONE);
+        android.view.View title = d.findViewById(R.id.resultTitle);
+        a.runOnUiThread(((android.view.View) title.getParent().getParent())
+                ::performClick);
         ShadowLooper.idleMainLooper();
         d.dismiss();
         ShadowLooper.idleMainLooper();

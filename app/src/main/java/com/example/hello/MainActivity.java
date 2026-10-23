@@ -212,9 +212,7 @@ public class MainActivity extends AppCompatActivity {
         fabWrap.post(() -> {
             if (inStudio) return;
             try {
-                OptionsSheet.showResult(this, true,
-                        getString(R.string.recovered_title),
-                        getString(R.string.recovered_msg, rr.adopted));
+                OptionsSheet.showTopPopup(this, "Takes recovered");
             } catch (Exception ignored) {}
         });
     }
@@ -422,38 +420,33 @@ public class MainActivity extends AppCompatActivity {
         RecordingEngine.Unfinished u = all.get(index);
         String dur = String.format(Locale.US, "%02d:%02d",
                 (u.durationMs / 60000), (u.durationMs / 1000) % 60);
-        java.util.List<OptionsSheet.Item> items = new java.util.ArrayList<>();
-        items.add(OptionsSheet.Item.of(R.drawable.ic_play,
-                getString(R.string.action_continue), () -> {
-                    try {
-                        RecordingEngine.get().attachExisting(
-                                getApplicationContext(),
-                                u.rawFile, u.name, u.channels,
-                                RecordingEngine.payloadBytesOf(u.rawFile));
-                    } catch (Exception e) {
-                        OptionsSheet.showResult(this, false,
-                                getString(R.string.convert_failed_title),
-                                getString(R.string.couldnt_export));
-                        promptRecovery(index + 1, all);
-                        return;
-                    }
-                    openStudioWithRecovery(u.rawFile);
-                }));
-        items.add(OptionsSheet.Item.danger(R.drawable.ic_trash,
-                getString(R.string.action_discard), () -> {
-                    boolean ok = RecordingEngine.deleteUnfinished(u.rawFile);
-                    OptionsSheet.showResult(this, ok,
-                            ok ? getString(R.string.delete_success_title)
-                                    : getString(R.string.delete_failed_title),
-                            ok ? getString(R.string.delete_success_one, u.name)
-                                    : getString(R.string.delete_failed_msg),
-                            () -> promptRecovery(index + 1, all));
-                }));
         try {
-            OptionsSheet.showOptions(this,
+            OptionsSheet.showTwoChoiceModal(this,
                     getString(R.string.unfinished_title),
                     getString(R.string.unfinished_msg, u.name, dur),
-                    items);
+                    OptionsSheet.Item.danger(R.drawable.ic_trash,
+                            "Discard", () -> {
+                                boolean ok = RecordingEngine.deleteUnfinished(u.rawFile);
+                                OptionsSheet.showResult(this, ok,
+                                        ok ? "Take discarded" : "Delete failed",
+                                        null,
+                                        () -> promptRecovery(index + 1, all));
+                            }),
+                    OptionsSheet.Item.of(R.drawable.ic_play,
+                            "Continue", () -> {
+                                try {
+                                    RecordingEngine.get().attachExisting(
+                                            getApplicationContext(),
+                                            u.rawFile, u.name, u.channels,
+                                            RecordingEngine.payloadBytesOf(u.rawFile));
+                                } catch (Exception e) {
+                                    OptionsSheet.showResult(this, false,
+                                            "Open failed", null);
+                                    promptRecovery(index + 1, all);
+                                    return;
+                                }
+                                openStudioWithRecovery(u.rawFile);
+                            }));
         } catch (Exception ignored) {}
     }
 

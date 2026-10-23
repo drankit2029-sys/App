@@ -38,6 +38,23 @@ public final class OptionsSheet {
 
     private OptionsSheet() {}
 
+    private static Dialog activeTopPopup;
+    private static final Handler TOP_POPUP_HANDLER =
+            new Handler(Looper.getMainLooper());
+
+    /**
+     * Enforces at most two words on stylized top popup titles so banners
+     * stay scannable at a glance.
+     */
+    static String compactTwoWords(String text) {
+        if (text == null) return "";
+        String clean = text.trim().replaceAll("\\s+", " ");
+        if (clean.isEmpty()) return "";
+        String[] parts = clean.split(" ");
+        if (parts.length <= 2) return clean;
+        return parts[0] + " " + parts[1];
+    }
+
     public static final class Item {
         public final int icon;
         public final String label;
@@ -199,6 +216,7 @@ public final class OptionsSheet {
                     ? 0xFFFF3B30 : 0xFFF2F4F7);
             iconView.setVisibility(View.VISIBLE);
             ImageView check = row.findViewById(R.id.pillCheck);
+            check.setColorFilter(0xFFFF3B30);
             check.setVisibility(item.checked ? View.VISIBLE : View.GONE);
 
             PressAnim.apply(row);
@@ -579,6 +597,7 @@ public final class OptionsSheet {
                     : R.drawable.bg_pill_option);
             pillLabels.get(i).setTextColor(it.checked
                     ? 0xFFF2F4F7 : pillColors.get(i));
+            pillChecks.get(i).setColorFilter(0xFFFF3B30);
             pillChecks.get(i).setVisibility(
                     it.checked ? View.VISIBLE : View.GONE);
             ImageView dot = pillRows.get(i).findViewById(R.id.pillIcon);
@@ -741,6 +760,14 @@ public final class OptionsSheet {
     public static android.app.Dialog showResult(Context ctx, boolean success,
                                   String title, String message,
                                   Runnable onOk) {
+        if (activeTopPopup != null) {
+            try {
+                if (activeTopPopup.isShowing()) activeTopPopup.dismiss();
+            } catch (Exception ignored) {}
+            activeTopPopup = null;
+        }
+        TOP_POPUP_HANDLER.removeCallbacksAndMessages(null);
+
         Dialog dialog = new Dialog(ctx, R.style.TakeOneCenterDialog);
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
         View root = LayoutInflater.from(ctx).inflate(R.layout.dialog_result, null);
@@ -748,21 +775,21 @@ public final class OptionsSheet {
 
         FrameLayout iconBg = root.findViewById(R.id.resultIconBg);
         ImageView icon = root.findViewById(R.id.resultIcon);
-        iconBg.setBackgroundResource(success
-                ? R.drawable.bg_icon_success : R.drawable.bg_icon_danger);
+        iconBg.setBackgroundResource(R.drawable.bg_icon_danger);
         icon.setImageResource(success ? R.drawable.ic_check : R.drawable.ic_close);
-        icon.setColorFilter(success ? 0xFF34C759 : 0xFFFF3B30);
+        icon.setColorFilter(0xFFFF3B30);
 
-        ((TextView) root.findViewById(R.id.resultTitle)).setText(title);
+        ((TextView) root.findViewById(R.id.resultTitle))
+                .setText(compactTwoWords(title));
         TextView msg = root.findViewById(R.id.resultMessage);
-        if (message != null && !message.isEmpty()) {
-            msg.setText(message);
-            msg.setVisibility(View.VISIBLE);
+        if (msg != null) {
+            msg.setText("");
+            msg.setVisibility(View.GONE);
         }
         TextView ok = root.findViewById(R.id.resultOk);
-        ok.setVisibility(onOk != null ? View.VISIBLE : View.GONE);
-        ok.setText(ctx.getString(R.string.ok_got_it));
-        PressAnim.apply(ok);
+        if (ok != null) {
+            ok.setVisibility(View.GONE);
+        }
 
         final boolean[] fired = {false};
         final Runnable fire = () -> {
@@ -774,32 +801,42 @@ public final class OptionsSheet {
                 } catch (Exception ignored) {}
             }
         };
-        ok.setOnClickListener(v -> {
-            dialog.dismiss();
-            fire.run();
-        });
+        if (ok != null) {
+            ok.setOnClickListener(v -> {
+                dialog.dismiss();
+                fire.run();
+            });
+        }
         root.setOnClickListener(v -> {
             dialog.dismiss();
             fire.run();
         });
-        dialog.setOnDismissListener(dd -> fire.run());
+        dialog.setOnDismissListener(dd -> {
+            if (activeTopPopup == dialog) activeTopPopup = null;
+            fire.run();
+        });
 
         dialog.setCancelable(true);
         styleAsTopPopup(dialog);
+        activeTopPopup = dialog;
         dialog.show();
         PressAnim.pop(iconBg);
 
-        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+        TOP_POPUP_HANDLER.postDelayed(() -> {
             try {
                 if (dialog.isShowing()) dialog.dismiss();
             } catch (Exception ignored) {}
-        }, 2200L);
+        }, 1600L);
         return dialog;
     }
 
-    /** Lightweight, non-blocking confirmation banner at the top of the screen. */
-    public static void showTopPopup(Context ctx, String title, String message) {
-        showResult(ctx, true, title, message, null);
+    /** Lightweight, non-blocking 2-word confirmation banner at the top. */
+    public static void showTopPopup(Context ctx, String title, String ignoredMessage) {
+        showResult(ctx, true, compactTwoWords(title), null, null);
+    }
+
+    public static void showTopPopup(Context ctx, String twoWordTitle) {
+        showResult(ctx, true, compactTwoWords(twoWordTitle), null, null);
     }
 
     // ---- helpers ----

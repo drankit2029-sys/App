@@ -1614,58 +1614,32 @@ public class StudioFragment extends Fragment {
             paint();
             activity().syncFabWithEngine();
         }
-        // Effects mode: Stop commits the rack to the selected region, which
-        // replaces the selected audio with the effect-applied audio.
+        // Effects mode: Stop commits the rack directly, no confirmation modal.
         if (fxPanelOpen) {
-            confirmApplyEffects();
+            applyEffectsToSelection();
             return;
         }
-        // If inside the Select & Replace sub-editor, Stop offers to splice the
-        // replacement take into the main take or discard the replacement!
+        // Select & Replace sub-editor: Discard on the left, Apply on the right.
         if (inSelectAndReplaceEditor) {
             OptionsSheet.showTwoChoiceModal(requireContext(),
                     "Replace selection?",
                     "Apply the new recording or discard it?",
-                    OptionsSheet.Item.of(R.drawable.ic_check,
-                            "Apply",
-                            () -> closeSelectAndReplaceSubEditor(true)),
                     OptionsSheet.Item.danger(R.drawable.ic_trash,
                             "Discard",
-                            () -> closeSelectAndReplaceSubEditor(false)));
+                            () -> closeSelectAndReplaceSubEditor(false)),
+                    OptionsSheet.Item.of(R.drawable.ic_check,
+                            "Apply",
+                            () -> closeSelectAndReplaceSubEditor(true)));
             return;
         }
+        // Normal recording stop: Discard on the left, Save on the right.
         OptionsSheet.showTwoChoiceModal(requireContext(),
                 "Finish take?",
                 "Save to library or discard this recording?",
-                OptionsSheet.Item.of(R.drawable.ic_check,
-                        getString(R.string.action_save), this::doSaveSequence),
                 OptionsSheet.Item.danger(R.drawable.ic_trash,
-                        getString(R.string.action_discard),
-                        this::doDiscardSequence));
-    }
-
-    /**
-     * Asks for confirmation before committing the FX rack.
-     *
-     * <p>In effects mode the target is the region the user selected before
-     * opening the rack; committing replaces that region with the
-     * effect-applied audio. Without a selection the whole take is the target.
-     */
-    private void confirmApplyEffects() {
-        if (!isAdded()) return;
-        if (dspConfig == null || !dspConfig.isActive()) {
-            Toast.makeText(requireContext(),
-                    "Enable at least one effect first",
-                    Toast.LENGTH_SHORT).show();
-            return;
-        }
-        OptionsSheet.showTwoChoiceModal(requireContext(),
-                "Apply effects?",
-                "Save effect changes or discard them?",
+                        "Discard", this::doDiscardSequence),
                 OptionsSheet.Item.of(R.drawable.ic_check,
-                        "Apply", this::applyEffectsToSelection),
-                OptionsSheet.Item.danger(R.drawable.ic_trash,
-                        "Discard", () -> { }));
+                        "Save", this::doSaveSequence));
     }
 
     /**
@@ -1684,7 +1658,7 @@ public class StudioFragment extends Fragment {
         return fxPanelOpen;
     }
 
-    /** Back: idle -> exit; active -> background-or-stop choice. */
+    /** Back: always leave Studio immediately; active takes keep running. */
     public boolean onBackPressed() {
         if (saving || engine.isSaving()) return true;
         if (fxPanelOpen) {
@@ -1698,7 +1672,7 @@ public class StudioFragment extends Fragment {
                 paint();
                 activity().syncFabWithEngine();
             }
-            onStopPressed();
+            closeSelectAndReplaceSubEditor(false);
             return true;
         }
         if (!engine.hasSession()) {
@@ -1724,26 +1698,13 @@ public class StudioFragment extends Fragment {
             activity().exitStudio();
             return true;
         }
-        if (engine.state == RecordingEngine.State.RECORDING
-                || engine.state == RecordingEngine.State.PAUSED) {
-            OptionsSheet.showTwoChoiceModal(requireContext(),
-                    "Recording active",
-                    "Keep recording in background or discard this take?",
-                    OptionsSheet.Item.of(R.drawable.ic_mic,
-                            "Keep recording", () -> {
-                                Toast.makeText(requireContext(),
-                                        getString(R.string.recording_bg_msg,
-                                                engine.takeName != null
-                                                        ? engine.takeName : ""),
-                                        Toast.LENGTH_LONG).show();
-                                activity().exitStudio();
-                            }),
-                    OptionsSheet.Item.danger(R.drawable.ic_trash,
-                            "Discard", this::discardActiveTakeAndLeave));
-            return true;
+        // Switch straight to background recording / Library with no modal.
+        MainActivity act = activity();
+        boolean wasRecording = engine.state == RecordingEngine.State.RECORDING;
+        act.exitStudio();
+        if (wasRecording) {
+            OptionsSheet.showTopPopup(act, "Background recording");
         }
-        // Finalized raw waiting on a save choice: run the stop sequence.
-        onStopPressed();
         return true;
     }
 
@@ -1917,10 +1878,10 @@ public class StudioFragment extends Fragment {
         OptionsSheet.showTwoChoiceModal(requireContext(),
                 "Trim audio",
                 "Keep only selection or delete selection?",
-                OptionsSheet.Item.of(R.drawable.ic_check,
-                        "Keep", () -> runEditOperation(true)),
                 OptionsSheet.Item.danger(R.drawable.ic_trash,
-                        "Delete", () -> runEditOperation(false)));
+                        "Delete", () -> runEditOperation(false)),
+                OptionsSheet.Item.of(R.drawable.ic_check,
+                        "Keep", () -> runEditOperation(true)));
     }
 
     /**
@@ -1958,9 +1919,7 @@ public class StudioFragment extends Fragment {
             activity().syncFabWithEngine();
 
             // Non-blocking guidance: replace mode is already armed.
-            OptionsSheet.showTopPopup(requireContext(),
-                    "Select & Replace",
-                    "Drag handles over the section to replace, then press Record.");
+            OptionsSheet.showTopPopup(requireContext(), "Press Record");
         } catch (Exception e) {
             inSelectAndReplaceEditor = false;
             Toast.makeText(requireContext(), "Could not open Select & Replace editor",
@@ -2000,11 +1959,9 @@ public class StudioFragment extends Fragment {
             }
             paint();
             activity().syncFabWithEngine();
-            Toast.makeText(requireContext(),
+            OptionsSheet.showTopPopup(requireContext(),
                     hasReplacementAudio
-                            ? "Replacement spliced into take (Undo available)"
-                            : "Select & Replace cancelled",
-                    Toast.LENGTH_SHORT).show();
+                            ? "Selection replaced" : "Replace discarded");
         } catch (Exception e) {
             inSelectAndReplaceEditor = false;
             paint();
@@ -2207,10 +2164,10 @@ public class StudioFragment extends Fragment {
                 "Save edits?",
                 "Replace original take or save as a new copy?",
                 OptionsSheet.Item.of(R.drawable.ic_check,
-                        getString(R.string.edit_replace, target),
+                        "Replace",
                         () -> runSaveDispatch(editId, target, true)),
                 OptionsSheet.Item.of(R.drawable.ic_upload,
-                        getString(R.string.edit_save_new), () -> {
+                        "New", () -> {
                             // Save-as-new drops the lineage now; the save
                             // below is an ordinary one.
                             editSourceId = -1;
@@ -2324,8 +2281,14 @@ public class StudioFragment extends Fragment {
         }).start();
         // Leave for the Library immediately: conversion runs entirely in the
         // background and the synthetic converting card appears as soon as the
-        // job sidecar is written.
-        if (isAdded()) activity().exitStudio();
+        // job sidecar is written. The 2-word banner is shown on MainActivity,
+        // never as a bottom snackbar.
+        if (isAdded()) {
+            MainActivity act = activity();
+            act.exitStudio();
+            OptionsSheet.showTopPopup(act,
+                    replacing ? "Take replaced" : "Take saved");
+        }
     }
 
     /** Incremental output adopted: the take is saved, synchronously. */
@@ -2355,30 +2318,18 @@ public class StudioFragment extends Fragment {
         engine.clearSession();
         if (!isAdded()) return;
         if (editId == -1) {
-            OptionsSheet.showResult(requireContext(), true,
-                    getString(R.string.convert_done_title),
-                    getString(R.string.convert_done_msg, res.title, res.label),
-                    () -> {
-                        if (isAdded()) activity().exitStudio();
-                    });
-        } else {
-            if (replaceFailed) {
-                OptionsSheet.showResult(requireContext(), false,
-                        getString(R.string.convert_failed_title),
-                        getString(R.string.couldnt_save));
-                return;
-            }
-            editSourceId = -1;
-            try {
-                EditLink.clear(requireContext());
-            } catch (Exception ignored) {}
-            OptionsSheet.showResult(requireContext(), true,
-                    getString(R.string.convert_done_title),
-                    getString(R.string.edit_replaced_msg, target),
-                    () -> {
-                        if (isAdded()) activity().exitStudio();
-                    });
+            // Save feedback already shown when Studio exited.
+            return;
         }
+        if (replaceFailed) {
+            OptionsSheet.showResult(requireContext(), false,
+                    "Save failed", null);
+            return;
+        }
+        editSourceId = -1;
+        try {
+            EditLink.clear(requireContext());
+        } catch (Exception ignored) {}
     }
 
     private void doDiscardSequence() {
@@ -2394,33 +2345,24 @@ public class StudioFragment extends Fragment {
             replaceSavedTailFile = null;
         }
         final Context appCtx = requireContext().getApplicationContext();
+        final MainActivity act = activity();
         final boolean wasEdit = (editSourceId != -1);
+        editSourceId = -1;
+        editSourceTitle = null;
+
+        // Leave Studio immediately; never wait for file cleanup or a popup.
+        act.exitStudio();
+        OptionsSheet.showTopPopup(act,
+                wasEdit ? "Edit discarded" : "Take discarded");
+
         new Thread(() -> {
-            String title = engine.takeName != null ? engine.takeName : "";
-            boolean ok = engine.abortAndDelete();
-            editSourceId = -1;
-            editSourceTitle = null;
+            engine.abortAndDelete();
             EditLink.clear(appCtx);
             completionHandler.post(() -> {
                 saving = false;
                 engine.setSaving(false);
                 RecordingService.stopService(appCtx);
-                if (!isAdded()) return;
-                activity().syncFabWithEngine();
-                if (wasEdit) {
-                    // Discarding an edit leaves the original take untouched;
-                    // do not claim the original take was deleted.
-                    activity().exitStudio();
-                    return;
-                }
-                OptionsSheet.showResult(requireContext(), ok,
-                        ok ? getString(R.string.delete_success_title)
-                                : getString(R.string.delete_failed_title),
-                        ok ? getString(R.string.delete_success_one, title)
-                                : getString(R.string.delete_failed_msg),
-                        () -> {
-                            if (isAdded()) activity().exitStudio();
-                        });
+                act.syncFabWithEngine();
             });
         }).start();
     }
@@ -3020,9 +2962,8 @@ public class StudioFragment extends Fragment {
             }
             refreshZoomValue();
             timerText.setText(formatTimer(engine.cursorMs()));
-            Toast.makeText(requireContext(),
-                    isTrim ? "Trimmed to selection" : "Selection removed",
-                    Toast.LENGTH_SHORT).show();
+            OptionsSheet.showTopPopup(requireContext(),
+                    isTrim ? "Audio trimmed" : "Selection deleted");
         } catch (IllegalArgumentException iae) {
             if (undoRecorded) waveform.popUndoPeaks();
             Toast.makeText(requireContext(), iae.getMessage(),
@@ -3066,8 +3007,7 @@ public class StudioFragment extends Fragment {
                 if (timerText != null) {
                     timerText.setText(formatTimer(engine.durationMs()));
                 }
-                Toast.makeText(requireContext(), "Undid last edit",
-                        Toast.LENGTH_SHORT).show();
+                OptionsSheet.showTopPopup(requireContext(), "Edit undone");
             }
         } catch (Exception ignored) {}
         paint();
@@ -3226,9 +3166,9 @@ public class StudioFragment extends Fragment {
                 }
             }
             fxTitle.setText(active > 0
-                    ? "PRO FX RACK · " + active + " ON"
-                    : "PRO FX RACK");
-            fxTitle.setTextColor(active > 0 ? 0xFFFF6B6B : 0xFF8A93A0);
+                    ? "Effects Rack · " + active + " on"
+                    : "Effects Rack");
+            fxTitle.setTextColor(active > 0 ? 0xFFFF3B30 : 0xFF8A93A0);
         }
         if (fxPresetDropdown != null) {
             String presetTitle = "Custom";
@@ -3376,7 +3316,9 @@ public class StudioFragment extends Fragment {
                 new android.graphics.drawable.GradientDrawable();
         g.setShape(android.graphics.drawable.GradientDrawable.OVAL);
         if (enabled) {
-            g.setColor(0xFFFF3B30);
+            g.setColor(0x26FF3B30);
+            g.setStroke(Math.max(1, Math.round(1.5f * density)),
+                    0xFFFF3B30);
         } else {
             g.setColor(0xFF262C36);
             g.setStroke(Math.max(1, Math.round(1.4f * density)),
@@ -4125,7 +4067,7 @@ public class StudioFragment extends Fragment {
             checkBtn.setText(slot.enabled ? "✓" : "");
             checkBtn.setTextSize(13f);
             checkBtn.setGravity(android.view.Gravity.CENTER);
-            checkBtn.setTextColor(slot.enabled ? 0xFF0B0D10 : 0x00000000);
+            checkBtn.setTextColor(slot.enabled ? 0xFFFF3B30 : 0x00000000);
             checkBtn.setBackground(fxToggleBackground(slot.enabled, accent,
                     density));
             int chkSz = Math.round(24 * density);
@@ -4253,7 +4195,7 @@ public class StudioFragment extends Fragment {
                 }
                 checkBtn.setText(slot.enabled ? "✓" : "");
                 checkBtn.setTextColor(slot.enabled
-                        ? 0xFF0B0D10 : 0x00000000);
+                        ? 0xFFFF3B30 : 0x00000000);
                 checkBtn.setBackground(fxToggleBackground(slot.enabled,
                         accent, density));
                 pill.setBackground(fxCardBackground(slot.enabled, accent,
@@ -4975,7 +4917,7 @@ public class StudioFragment extends Fragment {
                 selected[0] = categories[index];
                 for (int k = 0; k < chipViews.length; k++) {
                     boolean on = k == index;
-                    chipViews[k].setTextColor(on ? 0xFF0B0D10 : 0xFF9AA3AF);
+                    chipViews[k].setTextColor(on ? 0xFFFFFFFF : 0xFF9AA3AF);
                     chipViews[k].setBackgroundResource(on
                             ? R.drawable.bg_pill_option_selected
                             : R.drawable.bg_pill_option);
@@ -4984,7 +4926,7 @@ public class StudioFragment extends Fragment {
             });
         }
         // "All" starts selected.
-        chipViews[0].setTextColor(0xFF0B0D10);
+        chipViews[0].setTextColor(0xFFFFFFFF);
         chipViews[0].setBackgroundResource(R.drawable.bg_pill_option_selected);
         populateList.run();
 
@@ -5153,9 +5095,7 @@ public class StudioFragment extends Fragment {
                 waveform.loadFromFloatWav(raw);
                 resetFxRackAfterApply();
                 syncFxBakeRequired();
-                Toast.makeText(requireContext(),
-                        "Effect applied (Undo available)",
-                        Toast.LENGTH_SHORT).show();
+                OptionsSheet.showTopPopup(requireContext(), "Effects applied");
                 paint();
                 paintFxPanelControls();
                 return true;
@@ -5197,10 +5137,7 @@ public class StudioFragment extends Fragment {
             resetFxRackAfterApply();
             syncFxBakeRequired();
             waveform.clearSelection();
-            Toast.makeText(requireContext(),
-                    hadSel ? "Effects applied to selection (Undo available)"
-                            : "Effects applied to entire take (Undo available)",
-                    Toast.LENGTH_SHORT).show();
+            OptionsSheet.showTopPopup(requireContext(), "Effects applied");
         } catch (Exception e) {
             if (peaksPushed && waveform != null) waveform.popUndoPeaks();
             Toast.makeText(requireContext(), "FX failed",

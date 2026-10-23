@@ -76,20 +76,32 @@ public class OptionsSheetTest {
     }
 
     @Test
-    public void resultShowsMessageAndOk() {
+    public void resultShowsTwoWordTitleAndHidesGotItButton() {
         Activity a = activity();
         final boolean[] ok = {false};
-        OptionsSheet.showResult(a, true, "Saved", "All good", () -> ok[0] = true);
+        OptionsSheet.showResult(a, true, "Take saved", "Ignored sub",
+                () -> ok[0] = true);
         Dialog d = latest();
-        assertEquals("Saved",
+        assertEquals("Take saved",
                 ((TextView) d.findViewById(R.id.resultTitle)).getText()
                         .toString());
         View okBtn = d.findViewById(R.id.resultOk);
-        assertTrue(okBtn.getVisibility() == View.VISIBLE);
-        okBtn.performClick();
+        assertEquals(View.GONE, okBtn.getVisibility());
+        d.dismiss();
         idle();
         assertTrue(ok[0]);
         assertTrue(!d.isShowing());
+    }
+
+    @Test
+    public void resultCompactsTitleToTwoWords() {
+        Activity a = activity();
+        OptionsSheet.showResult(a, true, "Unsupported audio format", null);
+        Dialog d = latest();
+        assertEquals("Unsupported audio",
+                ((TextView) d.findViewById(R.id.resultTitle)).getText()
+                        .toString());
+        d.dismiss();
     }
 
     @Test

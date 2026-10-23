@@ -13,7 +13,6 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.os.PowerManager;
 import android.os.SystemClock;
-import android.widget.Toast;
 
 import java.io.File;
 import java.util.Deque;
@@ -1006,25 +1005,8 @@ public class ConversionService extends Service {
             b.setPackage(getPackageName());
             sendBroadcast(b);
         } catch (Exception ignored) {}
-        if (!ok && "cancelled".equals(message)) {
-            // The user cancelled this conversion on purpose: the Library
-            // already treats it as a non-failure, so stay silent instead of
-            // flashing "Something went wrong".
-            return;
-        }
-        try {
-            handler.post(() -> {
-                try {
-                    Toast.makeText(getApplicationContext(),
-                            ok ? getString(R.string.convert_done_msg,
-                                    job.title,
-                                    label != null ? label : "")
-                                    : getString(R.string.convert_failed_msg,
-                                    job.title),
-                            Toast.LENGTH_LONG).show();
-                } catch (Exception ignored) {}
-            });
-        } catch (Exception ignored) {}
+        // No bottom toast here: completion is surfaced by the stylized top
+        // banner in the Library/Studio, never by a transient snackbar.
     }
 
     private static void patchWavHeader(File part, int ch, int sr, boolean w24,

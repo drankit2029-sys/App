@@ -457,10 +457,6 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                     }
                     boolean ok = intent.getBooleanExtra(
                             ConversionService.EXTRA_OK, false);
-                    String title = intent.getStringExtra(
-                            ConversionService.EXTRA_TITLE);
-                    String label = intent.getStringExtra(
-                            ConversionService.EXTRA_LABEL);
                     String jobId = intent.getStringExtra(
                             ConversionService.EXTRA_JOB_ID);
                     String msg = intent.getStringExtra(
@@ -478,8 +474,8 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                         }
                         requestStructuralRefresh();
                         if (ok) {
-                            snackText(getString(R.string.conv_saved_bg, title,
-                                    label != null ? label : ""));
+                            // Studio already shows the 2-word "Take saved"
+                            // banner; never add a bottom snackbar here.
                         } else if ("cancelled".equals(msg)
                                 || (jobId != null
                                         && cancelledJobs.remove(jobId))) {
@@ -487,8 +483,8 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                             // notification shade); it is not a failure and
                             // must not claim the raw was kept.
                         } else {
-                            snackText(getString(R.string.conv_failed_bg,
-                                    title != null ? title : ""));
+                            OptionsSheet.showResult(requireContext(), false,
+                                    "Save failed", null);
                         }
                     });
                 }
@@ -621,9 +617,7 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                         sort = option;
                         saveSort();
                         refresh();
-                        OptionsSheet.showResult(requireContext(), true,
-                                getString(R.string.sort_by),
-                                sortLabel(option));
+                        OptionsSheet.showTopPopup(requireContext(), "List sorted");
                     }));
         }
         int total = TakesRepository.all().size();
@@ -680,7 +674,6 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             File out = null;
             String title = null;
             long durMs = 0;
-            String error = null;
             try {
                 File dir = RecordingEngine.takesDir(appCtx);
                 out = AudioImporter.importToFloatWav(appCtx, uri, dir);
@@ -693,29 +686,20 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                 title = Dsp.prettyFileTitle(out.getName());
                 TakesRepository.addRecording(out, durMs, title, "WAV");
             } catch (Exception | Error e) {
-                error = String.valueOf(e.getMessage());
                 if (out != null) {
                     // noinspection ResultOfMethodCallIgnored
                     out.delete();
                 }
             }
             final File imported = out;
-            final String importedTitle = title;
-            final long importedDur = durMs;
-            final String failure = error;
             handler.post(() -> {
                 if (!isAdded() || getView() == null) return;
                 refresh();
                 if (imported != null) {
-                    OptionsSheet.showTopPopup(requireContext(),
-                            "Audio imported",
-                            importedTitle + " • "
-                                    + Take.formatDuration(importedDur));
+                    OptionsSheet.showTopPopup(requireContext(), "Audio imported");
                 } else {
                     OptionsSheet.showResult(requireContext(), false,
-                            "Unsupported audio format",
-                            failure != null ? failure
-                                    : "Could not decode this file.");
+                            "Import failed", null);
                 }
             });
         }, "takeone-import").start();
@@ -1042,6 +1026,7 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             return;
         }
         if (playingId == take.id) {
+            adapter.expandDirectIfNeeded(list, take.id);
             if (playPaused) resumePlayback();
             else pausePlayback();
             return;
@@ -1059,6 +1044,7 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
      */
     private void startRawPreview(Take take) {
         if (playingId == take.id && rawMode) {
+            adapter.expandDirectIfNeeded(list, take.id);
             if (playPaused) resumePlayback();
             else pausePlayback();
             return;
@@ -1099,9 +1085,8 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         playingId = take.id;
         playPaused = false;
         adapter.setProgress(list, take.id, 0);
-        adapter.setExpandedId(take.id);
-        adapter.setPlayingId(playingId);
-        adapter.setPaused(false);
+        adapter.expandDirectIfNeeded(list, take.id);
+        adapter.paintPlayState(list, playingId, false);
         rawPlayer.play();
         handler.post(progressTick);
         snackText(getString(R.string.conv_preview_hint, take.convFormat));
@@ -1160,9 +1145,8 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         // Drop any stale near-end position so replay starts exactly at startPos
         // instead of snapping to where the last playthrough left off.
         adapter.setProgress(list, take.id, startPos);
-        adapter.setExpandedId(take.id);
-        adapter.setPlayingId(playingId);
-        adapter.setPaused(false);
+        adapter.expandDirectIfNeeded(list, take.id);
+        adapter.paintPlayState(list, playingId, false);
         handler.post(progressTick);
     }
 
@@ -1181,7 +1165,7 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             simBase = simPosition();
         }
         playPaused = true;
-        adapter.setPaused(true);
+        adapter.paintPlayState(list, playingId, true);
         handler.removeCallbacks(progressTick);
     }
 
@@ -1203,7 +1187,7 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             simStartedAt = SystemClock.elapsedRealtime();
         }
         playPaused = false;
-        adapter.setPaused(false);
+        adapter.paintPlayState(list, playingId, false);
         handler.post(progressTick);
     }
 
@@ -1234,7 +1218,7 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             } catch (Exception ignored) {}
             rawPlayer = null;
         }
-        if (adapter != null) adapter.clearPlaying();
+        if (adapter != null) adapter.paintPlayState(list, -1, false);
         if (player != null) {
             try {
                 player.stop();
@@ -1438,19 +1422,14 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                                 return;
                             }
                             refreshImmediate();
-                            OptionsSheet.showResult(requireContext(), true,
-                                    getString(R.string.rename_success_title),
-                                    getString(R.string.rename_success_msg,
-                                            applied));
+                            OptionsSheet.showTopPopup(requireContext(),
+                                    "Take renamed");
                             return;
                         }
                         TakesRepository.rename(take.id, clean);
                         refresh();
-                        Take updated = TakesRepository.find(take.id);
-                        String name = updated != null ? updated.title : clean;
-                        OptionsSheet.showResult(requireContext(), true,
-                                getString(R.string.rename_success_title),
-                                getString(R.string.rename_success_msg, name));
+                        OptionsSheet.showTopPopup(requireContext(),
+                                "Take renamed");
                     } catch (Exception e) {
                         OptionsSheet.showResult(requireContext(), false,
                                 getString(R.string.rename_failed_title),
@@ -1866,7 +1845,8 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                         }
                     }
                     refresh();
-                    snackText(getString(R.string.conv_cancelled));
+                    OptionsSheet.showTopPopup(requireContext(),
+                            "Conversion cancelled");
                 });
     }
 
@@ -1881,9 +1861,7 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             if (selectionMode && selection.isEmpty()) selectionMode = false;
             refresh();
             snackUndo(getString(R.string.take_deleted), op);
-            OptionsSheet.showResult(requireContext(), true,
-                    getString(R.string.delete_success_title),
-                    getString(R.string.delete_success_one, name));
+            OptionsSheet.showTopPopup(requireContext(), "Take deleted");
         } catch (Exception e) {
             OptionsSheet.showResult(requireContext(), false,
                     getString(R.string.delete_failed_title),
@@ -1908,9 +1886,7 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                         selectionMode = false;
                         refresh();
                         snackUndo(getString(R.string.takes_deleted, n), op);
-                        OptionsSheet.showResult(requireContext(), true,
-                                getString(R.string.delete_success_title),
-                                getString(R.string.delete_success_many, n));
+                        OptionsSheet.showTopPopup(requireContext(), "Takes deleted");
                     } catch (Exception e) {
                         OptionsSheet.showResult(requireContext(), false,
                                 getString(R.string.delete_failed_title),
@@ -2011,8 +1987,7 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             startActivity(Intent.createChooser(intent, getString(R.string.action_export)));
         } catch (Exception e) {
             OptionsSheet.showResult(requireContext(), false,
-                    getString(R.string.action_export),
-                    getString(R.string.couldnt_export));
+                    "Export failed", null);
         }
     }
 
@@ -2055,23 +2030,14 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             final int total = copy.size();
             handler.post(() -> {
                 if (getView() == null || !isAdded()) return;
-                if (n == total && n == 1) {
-                    OptionsSheet.showResult(requireContext(), true,
-                            getString(R.string.export_complete_title),
-                            getString(R.string.saved_to_location,
-                                    folderLabel + "/" + savedNames.get(0)));
-                } else if (n == total) {
-                    OptionsSheet.showResult(requireContext(), true,
-                            getString(R.string.export_complete_title),
-                            getString(R.string.saved_n_to_location, n, folderLabel));
+                if (n == total) {
+                    OptionsSheet.showTopPopup(requireContext(), "Export complete");
                 } else if (n > 0) {
                     OptionsSheet.showResult(requireContext(), false,
-                            getString(R.string.export_partial_title),
-                            getString(R.string.export_partial_msg, n, total, folderLabel));
+                            "Export partial", null);
                 } else {
                     OptionsSheet.showResult(requireContext(), false,
-                            getString(R.string.couldnt_save_title),
-                            getString(R.string.export_failed_msg, total, folderLabel));
+                            "Export failed", null);
                 }
             });
         }).start();

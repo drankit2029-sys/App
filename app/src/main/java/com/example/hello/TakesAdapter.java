@@ -176,6 +176,64 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
         notifyForId(old);
     }
 
+    /**
+     * Smoothly expands {@code id} (and smoothly collapses any previously
+     * expanded card) using the same height/alpha transition as tapping the
+     * card body, without triggering a full ViewHolder rebind.
+     */
+    public void expandDirectIfNeeded(RecyclerView rv, long id) {
+        if (rv == null) {
+            setExpandedId(id);
+            return;
+        }
+        RecyclerView.ViewHolder curVh = rv.findViewHolderForItemId(id);
+        if (expandedId == id) {
+            if (curVh instanceof Vh) {
+                Vh h = (Vh) curVh;
+                if (h.expanded.getVisibility() == View.VISIBLE) return;
+                animateExpand(h.expanded, h.chevron);
+            }
+            return;
+        }
+        toggleExpandedDirect(rv, id);
+    }
+
+    /**
+     * Updates the playing/paused state and repaints the play/pause button icon
+     * directly on visible ViewHolder(s) without notifyItemChanged(), so an
+     * in-flight smooth expand animation is never interrupted or snapped.
+     */
+    public void paintPlayState(RecyclerView rv, long newPlayingId,
+                               boolean isPaused) {
+        long oldPlayingId = this.playingId;
+        this.playingId = newPlayingId;
+        this.paused = isPaused;
+        if (rv == null) {
+            notifyForId(oldPlayingId);
+            notifyForId(newPlayingId);
+            return;
+        }
+        if (oldPlayingId != -1 && oldPlayingId != newPlayingId) {
+            RecyclerView.ViewHolder oldVh =
+                    rv.findViewHolderForItemId(oldPlayingId);
+            if (oldVh instanceof Vh) {
+                ((Vh) oldVh).play.setImageResource(R.drawable.ic_play);
+            } else {
+                notifyForId(oldPlayingId);
+            }
+        }
+        if (newPlayingId != -1) {
+            RecyclerView.ViewHolder newVh =
+                    rv.findViewHolderForItemId(newPlayingId);
+            if (newVh instanceof Vh) {
+                ((Vh) newVh).play.setImageResource(isPaused
+                        ? R.drawable.ic_play : R.drawable.ic_pause);
+            } else {
+                notifyForId(newPlayingId);
+            }
+        }
+    }
+
     public void refreshItem(long id) {
         notifyForId(id);
     }
@@ -406,6 +464,7 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
         h.cardRoot.setBackgroundResource(isSel ? R.drawable.bg_card_selected : R.drawable.bg_card);
         h.selectBadge.setVisibility(selectionMode ? View.VISIBLE : View.GONE);
         h.selectBadge.setImageResource(isSel ? R.drawable.ic_checked : R.drawable.bg_select_ring);
+        h.selectBadge.setColorFilter(isSel ? 0xFFFF3B30 : 0xFF5D6672);
         h.selectBadge.setAlpha(isSel ? 1f : 0.5f);
 
         // Deterministic selection shrink. Every bind converges the card to the

@@ -407,7 +407,6 @@ public class RecordingService extends Service {
             handler.post(() -> {
                 e.setSaving(false);
                 try {
-                    toast(text);
                     convertingPct = -1;
                     refreshNotif();
                     Intent b = new Intent(BROADCAST_DONE);

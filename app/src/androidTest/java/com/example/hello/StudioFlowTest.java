@@ -303,7 +303,7 @@ public class StudioFlowTest {
     }
 
     @Test
-    public void backDuringRecordingOffersBackground() throws Exception {
+    public void backDuringRecordingSwitchesDirectlyToBackground() throws Exception {
         Activity a = openStudio();
         UiDevice device = UiDevice.getInstance(
                 InstrumentationRegistry.getInstrumentation());
@@ -321,18 +321,9 @@ public class StudioFlowTest {
             }
             org.junit.Assume.assumeTrue("no audio input on this device",
                     recording);
+            // Back arrow switches to background recording in Library with no modal.
             uiTap(a, a.findViewById(R.id.backBtn));
-            UiObject title = device.findObject(
-                    new UiSelector().text("End this take?"));
-            assertTrue("no background choice", title.waitForExists(5000));
-            assertTrue("no keep-recording option",
-                    device.findObject(new UiSelector()
-                            .text("Keep recording in background"))
-                            .waitForExists(3000));
-            device.findObject(new UiSelector()
-                    .text("Keep recording in background")).click();
             Thread.sleep(1000);
-            // Still recording, back in the library.
             assertTrue(RecordingEngine.get().state
                     == RecordingEngine.State.RECORDING);
             assertNotNull(findByText(a.getWindow().getDecorView(),
