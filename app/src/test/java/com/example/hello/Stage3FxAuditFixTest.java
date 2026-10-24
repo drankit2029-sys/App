@@ -99,6 +99,12 @@ public class Stage3FxAuditFixTest {
                 RecordingEngine.payloadBytesOf(raw));
         assertEquals(RecordingEngine.State.IDLE, engine.state);
 
+        // Studio no longer auto-applies Voice Polish when an edit session
+        // opens, so arm a rack explicitly before exercising Apply.
+        DspChain.Config cfg = DspChain.Config.load(ctx);
+        cfg.applyPreset(DspChain.Preset.VOICE_POLISH);
+        cfg.save(ctx);
+
         MainActivity act = Robolectric.buildActivity(MainActivity.class)
                 .create().start().resume().visible().get();
         act.openStudioWithEdit(raw, 101L, "Idle Edit Take");
