@@ -3238,15 +3238,16 @@ public class StudioFragment extends Fragment {
     }
 
     /**
-     * A Learn chip is only actionable while a waveform range exists. Disable
-     * it for real (not just dim it) so colour and click behaviour agree.
+     * Matches the Trim button behaviour: always enabled while the session is
+     * editable, dimming slightly when selection handles are not yet active so
+     * tapping it can auto-activate Select mode and prompt the user.
      */
     private void styleFxLearnChip(TextView chip) {
-        boolean available = isSessionEditable()
-                && waveform != null && waveform.hasSelection();
-        chip.setEnabled(available);
-        chip.setClickable(available);
-        chip.setAlpha(available ? 1f : 0.35f);
+        boolean canEdit = isSessionEditable() && !replaceModeArmed;
+        boolean hasSel = canEdit && waveform != null && waveform.hasSelection();
+        chip.setEnabled(canEdit);
+        chip.setClickable(canEdit);
+        chip.setAlpha(!canEdit ? 0.35f : (hasSel ? 1f : 0.75f));
     }
 
     private void refreshFxLearnChips() {
@@ -3356,12 +3357,8 @@ public class StudioFragment extends Fragment {
         if (supportsNoiseProfile(slot.type) && slot.noiseProfile != null) {
             sb.append(" • Profile");
         }
-        boolean isTone = slot.type == DspChain.EffectType.WARMTH_BODY
-                || slot.type == DspChain.EffectType.VOCAL_PRESENCE;
-        boolean mixActive = !isTone || cfg == null
-                || !cfg.hasBothToneSlotsEnabled();
         int mixPct = Math.round(slot.wetDry * 100f);
-        if (mixActive && mixPct < 100) {
+        if (mixPct < 100) {
             sb.append(" • Mix ").append(mixPct).append("%");
         }
         boolean curveEditor = slot.type == DspChain.EffectType.PARAMETRIC_EQ6
@@ -3402,10 +3399,23 @@ public class StudioFragment extends Fragment {
     private void learnNoiseProfile(DspChain.EffectSlot slot,
                                    Runnable onSlotMutated) {
         if (slot == null || !ensurePausedForEditing()) return;
-        if (waveform == null || !waveform.hasSelection()) {
+        if (waveform == null) return;
+        if (!waveform.hasSelection()) {
+            if (fxPanelOpen) {
+                float span = Math.max(0.02f, fxApplyTargetEnd - fxApplyTargetStart);
+                float subSpan = Math.max(0.02f, span * 0.35f);
+                float mid = 0.5f * (fxApplyTargetStart + fxApplyTargetEnd);
+                waveform.selectRange(
+                        Math.max(fxApplyTargetStart, mid - subSpan * 0.5f),
+                        Math.min(fxApplyTargetEnd, mid + subSpan * 0.5f));
+            } else {
+                waveform.toggleSelectionAtPlayhead();
+            }
+            paintEditorStrip();
+            paintFxPanelControls();
             Toast.makeText(requireContext(),
-                    "Select a noise-only region on the waveform first",
-                    Toast.LENGTH_SHORT).show();
+                    "Select enabled — drag the red [ ] handles over a noise-only region, then tap Learn again",
+                    Toast.LENGTH_LONG).show();
             return;
         }
         // In effects mode the selection starts as the apply target. Learning
@@ -3417,8 +3427,16 @@ public class StudioFragment extends Fragment {
                 && Math.abs(waveform.selectionEndFraction()
                         - fxApplyTargetEnd) < 0.0005f;
         if (stillOnTarget) {
+            float span = Math.max(0.02f, fxApplyTargetEnd - fxApplyTargetStart);
+            float subSpan = Math.max(0.02f, span * 0.35f);
+            float mid = 0.5f * (fxApplyTargetStart + fxApplyTargetEnd);
+            waveform.selectRange(
+                    Math.max(fxApplyTargetStart, mid - subSpan * 0.5f),
+                    Math.min(fxApplyTargetEnd, mid + subSpan * 0.5f));
+            paintEditorStrip();
+            paintFxPanelControls();
             Toast.makeText(requireContext(),
-                    "Drag the [ ] handles over a noise-only part of the "
+                    "Select narrowed — drag the red [ ] handles over a noise-only part of the "
                             + "waveform, then tap Learn again",
                     Toast.LENGTH_LONG).show();
             return;
@@ -3724,6 +3742,36 @@ public class StudioFragment extends Fragment {
             }
         });
         primary.setOnValueChanged(applyPrimary::accept);
+
+        TeleValue modalMixCtl = new TeleValue(ctx);
+        modalMixCtl.setCaption("Wet-Dry Mix");
+        modalMixCtl.setCompact(false);
+        modalMixCtl.configure(0, 100, 5,
+                Math.round(slot.wetDry * 100f), "%");
+        android.widget.LinearLayout.LayoutParams modalMixLp =
+                new android.widget.LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT);
+        modalMixLp.topMargin = Math.round(8 * density);
+        body.addView(modalMixCtl, modalMixLp);
+        refreshers.add(() -> modalMixCtl.setValue(
+                Math.round(slot.wetDry * 100f), false));
+        java.util.function.IntConsumer applyModalMix = (int val) -> {
+            slot.wetDry = val / 100f;
+            onChanged.run();
+        };
+        modalMixCtl.setOnScrubListener(new TeleValue.OnScrubListener() {
+            @Override
+            public void onScrubValueChanged(int value) {
+                applyModalMix.accept(value);
+            }
+
+            @Override
+            public void onScrubFinished(int value) {
+                applyModalMix.accept(value);
+            }
+        });
+        modalMixCtl.setOnValueChanged(applyModalMix::accept);
 
         if (supportsNoiseProfile(slot.type)) {
             TextView profileTv = new TextView(ctx);
@@ -4162,6 +4210,7 @@ public class StudioFragment extends Fragment {
 
             final EqCurveView[] eqViewHolder = new EqCurveView[1];
             final DynamicsGraphView[] dynViewHolder = new DynamicsGraphView[1];
+            final TeleValue[] mixCtlHolder = new TeleValue[1];
             final java.util.Map<String, TeleValue> extraControls =
                     new java.util.LinkedHashMap<>();
             Runnable onSlotMutated = () -> {
@@ -4179,6 +4228,10 @@ public class StudioFragment extends Fragment {
                 }
                 refreshFxPreviewPeaks();
                 ctl.setValue(slot.value, false);
+                if (mixCtlHolder[0] != null) {
+                    mixCtlHolder[0].setValue(
+                            Math.round(slot.wetDry * 100f), false);
+                }
                 for (java.util.Map.Entry<String, TeleValue> entry
                         : extraControls.entrySet()) {
                     Integer v = slot.extraParams.get(entry.getKey());
@@ -4231,23 +4284,10 @@ public class StudioFragment extends Fragment {
                         android.widget.LinearLayout.HORIZONTAL);
                 TextView learnBtn = makeFxChip(ctx,
                         "Learn from selection", density);
-                Runnable refreshLearnState = () -> {
-                    boolean available = isSessionEditable()
-                            && waveform != null && waveform.hasSelection();
-                    learnBtn.setEnabled(available);
-                    learnBtn.setClickable(available);
-                    learnBtn.setAlpha(available ? 1f : 0.35f);
-                };
-                refreshLearnState.run();
-                learnBtn.setOnClickListener(v -> {
-                    if (waveform == null || !waveform.hasSelection()) {
-                        Toast.makeText(requireContext(),
-                                "Select a noise-only region on the waveform first",
-                                Toast.LENGTH_SHORT).show();
-                        return;
-                    }
-                    learnNoiseProfile(slot, onSlotMutated);
-                });
+                learnBtn.setTag(FX_LEARN_TAG);
+                styleFxLearnChip(learnBtn);
+                learnBtn.setOnClickListener(v ->
+                        learnNoiseProfile(slot, onSlotMutated));
                 profileOps.addView(learnBtn);
                 if (slot.noiseProfile != null) {
                     TextView clearProfileBtn = makeFxChip(ctx,
@@ -4435,13 +4475,7 @@ public class StudioFragment extends Fragment {
                 rebuildFxRackList();
             });
 
-            // Wet/dry blend for all 1:1 stages and for Warmth / Presence when
-            // only one tone slot is active in the rack.
-            boolean showMixControl =
-                    (slot.type != DspChain.EffectType.WARMTH_BODY
-                            && slot.type != DspChain.EffectType.VOCAL_PRESENCE)
-                    || !dspConfig.hasBothToneSlotsEnabled();
-            if (showMixControl) {
+            {
                 TextView mixCaption = new TextView(ctx);
                 mixCaption.setText("Wet-Dry Mix");
                 mixCaption.setTextSize(10.5f);
@@ -4452,6 +4486,7 @@ public class StudioFragment extends Fragment {
                 mixCtl.setCompact(true);
                 mixCtl.configure(0, 100, 5,
                         Math.round(slot.wetDry * 100f), "%");
+                mixCtlHolder[0] = mixCtl;
                 android.widget.LinearLayout.LayoutParams mixLp =
                         new android.widget.LinearLayout.LayoutParams(
                                 ViewGroup.LayoutParams.MATCH_PARENT,

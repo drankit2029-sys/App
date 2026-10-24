@@ -81,6 +81,7 @@ final class ChangePitchProcessor extends AudioProcessor {
     public float[] processOfflineRegion(float[] in, int frames, int channels) {
         if (in == null || frames <= 0) return in;
         WsolaTimePitchProcessor wsola = new WsolaTimePitchProcessor(sampleRate);
-        return wsola.pitchShift(in, frames, channels, totalSemitones());
+        return wsola.pitchShift(in, frames, channels, totalSemitones(),
+                preserveFormant.getBoolean());
     }
 }

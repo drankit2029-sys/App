@@ -32,6 +32,11 @@ final class WsolaTimePitchProcessor {
      * changing the pitch.
      */
     float[] timeStretch(float[] input, int frames, int channels, double rate) {
+        return timeStretch(input, frames, channels, rate, false);
+    }
+
+    float[] timeStretch(float[] input, int frames, int channels, double rate,
+                        boolean highQualitySpeech) {
         if (input == null || frames <= 0 || channels <= 0) return input;
         if (Math.abs(rate - 1.0) < 1e-6) return input.clone();
 
@@ -43,6 +48,7 @@ final class WsolaTimePitchProcessor {
         int refPos = 0;
         double expectedAnaPos = 0.0;
         double anaStep = synthesisHop / Math.max(0.05, rate);
+        int corrStride = highQualitySpeech ? 1 : 4;
         float[] window = Dsp.hannWindow(frameSize);
 
         // First frame is windowed and accumulated.
@@ -71,7 +77,7 @@ final class WsolaTimePitchProcessor {
             double bestScore = -1e30;
             for (int candidate = searchStart; candidate <= searchEnd; candidate++) {
                 double score = similarity(input, frames, channels, candidate,
-                        refPos, synthesisHop);
+                        refPos, synthesisHop, corrStride);
                 if (score > bestScore) {
                     bestScore = score;
                     best = candidate;
@@ -106,12 +112,12 @@ final class WsolaTimePitchProcessor {
 
     /** Normalised cross-correlation between the candidate and the reference. */
     private double similarity(float[] input, int frames, int channels,
-                              int candidate, int reference, int len) {
+                              int candidate, int reference, int len, int stride) {
         if (candidate + len > frames || reference + len > frames) return -1e30;
         double num = 0;
         double denA = 0;
         double denB = 0;
-        for (int i = 0; i < len; i += 4) {
+        for (int i = 0; i < len; i += Math.max(1, stride)) {
             float a = input[(candidate + i) * channels];
             float b = input[(reference + i) * channels];
             num += (double) a * b;
@@ -150,6 +156,11 @@ final class WsolaTimePitchProcessor {
      * {@code 1 / alpha}.
      */
     float[] pitchShift(float[] input, int frames, int channels, double semitones) {
+        return pitchShift(input, frames, channels, semitones, false);
+    }
+
+    float[] pitchShift(float[] input, int frames, int channels, double semitones,
+                       boolean preserveFormants) {
         if (input == null || frames <= 0) return input;
         if (Math.abs(semitones) < 1e-6) return input.clone();
         double alpha = Math.pow(2.0, semitones / 12.0);
@@ -167,6 +178,19 @@ final class WsolaTimePitchProcessor {
                 float b = sample(stretched, stretchedFrames, channels, i1 + 1, c);
                 out[f * channels + c] = a + (b - a) * frac;
             }
+        }
+        if (preserveFormants && Math.abs(semitones) > 0.5) {
+            // Compensate spectral tilt introduced by resampling vocal formants:
+            // pitching up shifts formants upward (thin/chipmunk), so apply a
+            // compensating high-shelf cut + low-mid body shelf; pitching down
+            // applies the inverse.
+            double tiltDb = Math.max(-10.0, Math.min(10.0, -semitones * 0.55));
+            BiquadFilter formantFilter = new BiquadFilter();
+            formantFilter.setSections(new float[][]{
+                    Dsp.rbjHighShelf(sampleRate, 1800.0, 0.7071, tiltDb),
+                    Dsp.rbjPeaking(sampleRate, 550.0, 0.9, -tiltDb * 0.45)
+            }, channels);
+            formantFilter.process(out, frames, channels);
         }
         return out;
     }

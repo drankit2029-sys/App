@@ -78,20 +78,26 @@ final class SpectralEditProcessor extends AudioProcessor {
                 float width = (f2 - f1) / centre;
                 for (int b = 0; b < binCount; b++) {
                     float hz = (float) b * sampleRate / 2048f;
-                    if (hz < f1 || hz > f2) continue;
+                    if (hz < f1) continue;
+                    if (modeIdx != 1 && hz > f2) continue;
                     float weight = 1f;
                     if (modeIdx == 0) {
                         // Bell shape centred in the band.
                         float d = (hz - centre) / (centre * Math.max(0.05f, width));
                         weight = (float) Math.exp(-d * d);
+                    } else if (modeIdx == 1) {
+                        // Smooth raised-cosine spectral shelf from f1 to f2,
+                        // holding full shelf gain above f2.
+                        float u = Math.min(1f, (hz - f1) / Math.max(1f, f2 - f1));
+                        weight = 0.5f * (1f - (float) Math.cos(Math.PI * u));
                     }
                     float targetDb = modeIdx == 2 ? (Math.abs(g) > 0.1f ? -Math.abs(g) : -24f) : g;
                     float factor = (float) Math.pow(10.0,
                             targetDb * weight / 20.0);
                     re[b] *= factor;
                     im[b] *= factor;
-                    int mirror = 2048 - b;
-                    if (mirror < re.length) {
+                    if (b > 0 && b < binCount - 1) {
+                        int mirror = 2048 - b;
                         re[mirror] = re[b];
                         im[mirror] = -im[b];
                     }

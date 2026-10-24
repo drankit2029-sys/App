@@ -143,9 +143,9 @@ final class NoiseGateExpanderProcessor extends AudioProcessor {
             } else {
                 target = open ? 0f : rangeDb;
             }
-            float step = (target - gainDb) / n;
             for (int f = 0; f < n; f++) {
-                gainDb += step;
+                float coef = (target > gainDb) ? attCoef : relCoef;
+                gainDb += coef * (target - gainDb);
                 float g = Dsp.dbToLin(gainDb);
                 int idx = (offset + f) * ch;
                 for (int c = 0; c < ch; c++) buf[idx + c] *= g;

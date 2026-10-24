@@ -13,6 +13,7 @@ final class FreeverbReverbProcessor extends AudioProcessor {
 
     private static final int COMBS = 8;
     private static final int ALLPASS = 4;
+    private static final int STEREO_SPREAD = 23;
     private static final int[] COMB_TUNING = {
             1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617};
     private static final int[] ALLPASS_TUNING = {556, 441, 341, 225};
@@ -108,24 +109,27 @@ final class FreeverbReverbProcessor extends AudioProcessor {
     private void rebuild() {
         float size = roomSize.getCurrentRaw() / 100f;
         float scale = 0.7f + size * 1.6f;
+        int spread = Math.max(1, Math.round(STEREO_SPREAD * scale));
         for (int i = 0; i < COMBS; i++) {
-            int len = Math.max(8, (int) (COMB_TUNING[i] * scale));
+            int lenL = Math.max(8, (int) (COMB_TUNING[i] * scale));
+            int lenR = lenL + spread;
             if (combL[i] == null) {
-                combL[i] = new Comb(len);
-                combR[i] = new Comb(len);
+                combL[i] = new Comb(lenL);
+                combR[i] = new Comb(lenR);
             } else {
-                combL[i].resize(len);
-                combR[i].resize(len);
+                combL[i].resize(lenL);
+                combR[i].resize(lenR);
             }
         }
         for (int i = 0; i < ALLPASS; i++) {
-            int len = Math.max(8, (int) (ALLPASS_TUNING[i] * scale));
+            int lenL = Math.max(8, (int) (ALLPASS_TUNING[i] * scale));
+            int lenR = lenL + spread;
             if (apL[i] == null) {
-                apL[i] = new Allpass(len);
-                apR[i] = new Allpass(len);
+                apL[i] = new Allpass(lenL);
+                apR[i] = new Allpass(lenR);
             } else {
-                apL[i].resize(len);
-                apR[i].resize(len);
+                apL[i].resize(lenL);
+                apR[i].resize(lenR);
             }
         }
         preFrames = Math.max(0, (int) (preDelay.getCurrentRaw() * 0.001f * sampleRate));

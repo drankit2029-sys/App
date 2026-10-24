@@ -16,6 +16,8 @@ final class RepairProcessor extends AudioProcessor {
     private final FxParameter maxLength = addParameter(FxParameter.intParam(
             "repair_len", "Max Glitch Length", " ms", 1, 50, 1, 12));
 
+    private int sampleRate = DspChain.SAMPLE_RATE;
+
     RepairProcessor() {
     }
 
@@ -41,6 +43,7 @@ final class RepairProcessor extends AudioProcessor {
 
     @Override
     public void prepare(int sampleRate, int channels) {
+        if (sampleRate > 0) this.sampleRate = sampleRate;
     }
 
     @Override
@@ -156,21 +159,42 @@ final class RepairProcessor extends AudioProcessor {
     public void processInPlace(float[] buf, int frames, int channels) {
         if (buf == null || frames <= 0) return;
         int ch = Math.max(1, Math.min(2, channels));
-        // Find short silent dropouts and repair them.
+        int maxFrames = Math.max(2,
+                Math.round(maxLength.getCurrentRaw() * 0.001f * sampleRate));
+        // Find short silent dropouts or localized glitch bursts up to maxFrames
+        // and repair them with bidirectional LPC interpolation.
         for (int c = 0; c < ch; c++) {
             float[] mono = new float[frames];
             for (int i = 0; i < frames; i++) mono[i] = buf[i * ch + c];
+            boolean repairedAny = false;
             int f = 0;
             while (f < frames) {
-                if (mono[f] != 0f) {
+                if (Math.abs(mono[f]) > 1e-7f) {
                     f++;
                     continue;
                 }
                 int start = f;
-                while (f < frames && mono[f] == 0f) f++;
+                while (f < frames && Math.abs(mono[f]) <= 1e-7f) f++;
                 int len = f - start;
-                if (len < 2 || len > 64) continue;
+                if (len < 2 || len > maxFrames) continue;
                 repairRegion(mono, start, start + len);
+                repairedAny = true;
+            }
+            if (!repairedAny && frames >= 64) {
+                int worstIdx = -1;
+                float worstDiff = 0f;
+                for (int i = 32; i < frames - 32; i++) {
+                    float diff = Math.abs(mono[i] - 0.5f * (mono[i - 1] + mono[i + 1]));
+                    if (diff > worstDiff) {
+                        worstDiff = diff;
+                        worstIdx = i;
+                    }
+                }
+                if (worstIdx >= 32 && worstDiff > 0.25f) {
+                    int half = Math.max(1, Math.min(maxFrames / 2, 16));
+                    repairRegion(mono, Math.max(16, worstIdx - half),
+                            Math.min(frames - 16, worstIdx + half));
+                }
             }
             for (int i = 0; i < frames; i++) buf[i * ch + c] = mono[i];
         }

@@ -27,6 +27,8 @@ final class BrickwallLimiterProcessor extends AudioProcessor {
     private int lookFrames = 144;
     /** Delayed samples, one ring per channel slot (interleaved). */
     private float[] delayRing;
+    /** Un-driven delayed dry samples for phase-coherent wet/dry blending. */
+    private float[] dryRing;
     /** Per-frame peak of the last {@code lookFrames + 1} frames. */
     private float[] peakRing;
     private int peakPos = 0;
@@ -63,12 +65,14 @@ final class BrickwallLimiterProcessor extends AudioProcessor {
         this.channels = Math.max(1, Math.min(2, channels));
         lookFrames = Math.max(1, (int) (sampleRate * 0.003));
         delayRing = new float[lookFrames * this.channels];
+        dryRing = new float[lookFrames * this.channels];
         peakRing = new float[lookFrames + 1];
     }
 
     @Override
     public void reset() {
         if (delayRing != null) java.util.Arrays.fill(delayRing, 0f);
+        if (dryRing != null) java.util.Arrays.fill(dryRing, 0f);
         if (peakRing != null) java.util.Arrays.fill(peakRing, 0f);
         peakPos = 0;
         framesSeen = 0;
@@ -78,27 +82,41 @@ final class BrickwallLimiterProcessor extends AudioProcessor {
 
     @Override
     public boolean isAudible() {
-        return isEnabled() && inputGain.getFloat() > 0.01f;
+        return isEnabled() && getWetDryMix() > 0.001f
+                && (inputGain.getFloat() > 0.01f
+                        || ceiling.getFloat() < -0.05f
+                        || makeup.getBoolean());
+    }
+
+    @Override
+    public boolean handlesOwnWetDryMix() {
+        return true;
     }
 
     @Override
     public int getLatencyFrames() {
-        return lookFrames;
+        return isAudible() ? lookFrames : 0;
     }
 
     @Override
     public void processInPlace(float[] buf, int frames, int channels) {
         if (buf == null || frames <= 0) return;
+        float mix = getWetDryMix();
+        if (!isEnabled() || mix <= 0.001f) return;
         int ch = Math.max(1, Math.min(2, channels));
-        if (delayRing == null || delayRing.length < lookFrames * ch) {
+        if (delayRing == null || delayRing.length < lookFrames * ch
+                || dryRing == null || dryRing.length < lookFrames * ch) {
             lookFrames = Math.max(1, (int) (sampleRate * 0.003));
             delayRing = new float[lookFrames * ch];
+            dryRing = new float[lookFrames * ch];
             peakRing = new float[lookFrames + 1];
             peakPos = 0;
             framesSeen = 0;
         }
         float ceilLin = Dsp.dbToLin(ceiling.getFloat());
         float drive = Dsp.dbToLin(inputGain.getFloat());
+        float mg = makeup.getBoolean()
+                ? Dsp.dbToLin(Math.max(0f, -ceiling.getFloat()) * 0.5f) : 1f;
         int holdFrames = Math.max(1,
                 (int) (hold.getFloat() * 0.001f * sampleRate));
         float relCoef = (float) (1.0 - Math.exp(-1.0
@@ -111,7 +129,7 @@ final class BrickwallLimiterProcessor extends AudioProcessor {
             int idx = f * ch;
             float framePeak = 0f;
             for (int c = 0; c < ch; c++) {
-                float a = Math.abs(buf[idx + c] * drive);
+                float a = Math.abs(buf[idx + c] * drive * mg);
                 if (a > framePeak) framePeak = a;
             }
 
@@ -119,9 +137,13 @@ final class BrickwallLimiterProcessor extends AudioProcessor {
             // `lookFrames` ago; the gain for it is decided from the peak of
             // the window that ends with the sample we just received.
             int delayPos = framesSeen % lookFrames;
-            float outSampleOld = delayRing[delayPos * ch];
+            float[] oldWet = new float[ch];
+            float[] oldDry = new float[ch];
             for (int c = 0; c < ch; c++) {
-                delayRing[delayPos * ch + c] = buf[idx + c] * drive;
+                oldWet[c] = delayRing[delayPos * ch + c];
+                oldDry[c] = dryRing[delayPos * ch + c];
+                dryRing[delayPos * ch + c] = buf[idx + c];
+                delayRing[delayPos * ch + c] = buf[idx + c] * drive * mg;
             }
             peakRing[peakPos] = framePeak;
 
@@ -145,26 +167,18 @@ final class BrickwallLimiterProcessor extends AudioProcessor {
 
             float g = Dsp.dbToLin(-gainDb);
             for (int c = 0; c < ch; c++) {
-                buf[idx + c] = outSampleOld * g;
-            }
-
-            peakPos = (peakPos + 1) % ringSize;
-            framesSeen++;
-        }
-
-        float mg = makeup.getBoolean() ? Dsp.dbToLin(gainDb * 0.5f) : 1f;
-        for (int f = 0; f < frames; f++) {
-            int idx = f * ch;
-            for (int c = 0; c < ch; c++) {
-                float v = buf[idx + c] * mg;
+                float v = oldWet[c] * g;
                 float a = Math.abs(v);
                 if (a > ceilLin) {
                     float over = a - ceilLin;
                     float shaped = ceilLin + over / (1f + over / (ceilLin + 1e-6f));
                     v = v < 0 ? -shaped : shaped;
                 }
-                buf[idx + c] = v;
+                buf[idx + c] = oldDry[c] * (1f - mix) + v * mix;
             }
+
+            peakPos = (peakPos + 1) % ringSize;
+            framesSeen++;
         }
     }
 }

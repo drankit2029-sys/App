@@ -89,23 +89,27 @@ final class AudioGeneratorTool extends AudioProcessor {
     @Override
     public float[] processOfflineRegion(float[] in, int frames, int channels) {
         if (in == null || frames <= 0) return in;
-        float[] out = new float[frames * channels];
+        int ch = Math.max(1, Math.min(2, channels));
+        int outFrames = (duration.getCurrentRaw() != duration.defaultRaw)
+                ? Math.max(1, Math.round(duration.getFloat() * sampleRate))
+                : frames;
+        float[] out = new float[outFrames * ch];
         int typeIdx = type.getEnumIndex();
         float amp = amplitude.getCurrentRaw() / 100f;
         switch (typeIdx) {
             case 0: // Tone & chirp
-                renderTone(out, frames, channels, amp);
+                renderTone(out, outFrames, ch, amp);
                 break;
             case 1: // Noise
-                renderNoise(out, frames, channels, amp);
+                renderNoise(out, outFrames, ch, amp);
                 break;
             case 2: // Silence
                 break;
             case 3: // Rhythm track
-                renderRhythm(out, frames, channels, amp);
+                renderRhythm(out, outFrames, ch, amp);
                 break;
             default: // DTMF
-                renderDtmf(out, frames, channels, amp);
+                renderDtmf(out, outFrames, ch, amp);
                 break;
         }
         return out;
@@ -169,16 +173,22 @@ final class AudioGeneratorTool extends AudioProcessor {
     }
 
     private void renderDtmf(float[] out, int frames, int ch, float amp) {
-        int digit = sequence.getCurrentRaw();
+        int seqVal = Math.max(0, sequence.getCurrentRaw());
         int[] rows = {697, 770, 852, 941};
         int[] cols = {1209, 1336, 1477, 1633};
-        int row = digit / 4;
-        int col = digit % 4;
-        if (row > 3) row = 3;
-        if (col > 3) col = 3;
-        double f1 = rows[row];
-        double f2 = cols[col];
+        int numDigits = Math.max(1, Math.min(8, (seqVal % 4) + 1));
+        int slotFrames = Math.max(1, frames / numDigits);
         for (int f = 0; f < frames; f++) {
+            int slotIdx = Math.min(numDigits - 1, f / slotFrames);
+            int posInSlot = f - slotIdx * slotFrames;
+            if (numDigits > 1 && posInSlot >= slotFrames * 0.75) {
+                continue; // 25% inter-digit silence gap
+            }
+            int digit = (seqVal + slotIdx * 3) & 0x0F;
+            int row = (digit / 4) & 3;
+            int col = digit & 3;
+            double f1 = rows[row];
+            double f2 = cols[col];
             double t = f / (double) sampleRate;
             double s = Math.sin(2 * Math.PI * f1 * t) + Math.sin(2 * Math.PI * f2 * t);
             s *= 0.5;
@@ -198,8 +208,8 @@ final class AudioGeneratorTool extends AudioProcessor {
                 return (float) (p < 0.5 ? 4 * p - 1 : 3 - 4 * p);
             case 4: { // Square no-alias: band-limited via additive synthesis
                 double s = 0;
-                for (int k = 1; k <= 12; k++) {
-                    s += Math.sin(2 * Math.PI * k * phase) / k;
+                for (int k = 1; k <= 15; k += 2) {
+                    s += Math.sin(k * phase) / k;
                 }
                 return (float) (s * 4 / Math.PI);
             }

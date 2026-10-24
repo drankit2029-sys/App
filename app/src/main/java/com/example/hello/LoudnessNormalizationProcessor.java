@@ -161,6 +161,9 @@ final class LoudnessNormalizationProcessor extends AudioProcessor {
                 }
             }
             double mean = sum / (block * (double) ch);
+            if (ch == 1 && dualMono.getBoolean()) {
+                mean *= 2.0;
+            }
             double l = -0.691 + 10 * Math.log10(Math.max(1e-12, mean));
             if (blockCount < blockLufs.length) {
                 blockLufs[blockCount++] = (float) l;
@@ -242,6 +245,9 @@ final class LoudnessNormalizationProcessor extends AudioProcessor {
                 sum += (double) weighted[i] * weighted[i];
             }
             double mean = sum / (n * (double) ch);
+            if (ch == 1 && dualMono.getBoolean()) {
+                mean *= 2.0;
+            }
             float blockLufs = (float) (-0.691 + 10 * Math.log10(Math.max(1e-12, mean)));
             // The estimate decays so a loud passage does not pin the gain.
             realtimeLufs = Math.max(blockLufs, realtimeLufs - 0.05f);

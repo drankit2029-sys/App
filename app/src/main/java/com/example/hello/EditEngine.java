@@ -491,12 +491,21 @@ public final class EditEngine {
         float[] region = readFloatSelection(raw, startFrame, endFrame);
         if (region == null || region.length == 0) return -1;
         int regionFrames = region.length / ch;
+        float mix = processor.getWetDryMix();
+        if (mix <= 0.001f) return totalFrames;
 
         processor.prepare(info.sampleRate, ch);
         float[] rendered = processor.processOfflineRegion(region, regionFrames, ch);
         if (rendered == null || rendered.length == 0) return -1;
         int newFrames = rendered.length / ch;
         if (newFrames <= 0) return -1;
+        if (mix < 0.999f) {
+            float dryWeight = 1f - mix;
+            int common = Math.min(region.length, rendered.length);
+            for (int i = 0; i < common; i++) {
+                rendered[i] = region[i] * dryWeight + rendered[i] * mix;
+            }
+        }
 
         if (undo != null) undo.recordSnapshot(raw);
 

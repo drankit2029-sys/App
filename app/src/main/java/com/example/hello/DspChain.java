@@ -524,7 +524,7 @@ public final class DspChain {
             gatePct = 0;
             limiterPct = 0;
             for (EffectSlot s : slots) {
-                if (!s.enabled) continue;
+                if (!s.enabled || s.wetDry <= 0.001f) continue;
                 switch (s.type) {
                     case LOW_CUT_HPF:
                         hpfEnabled = s.value > 0;
@@ -556,7 +556,8 @@ public final class DspChain {
             boolean anyStage3Active = false;
             for (EffectSlot s : slots) {
                 if (s != null && s.enabled && s.type != null
-                        && !s.type.isLegacyStage()) {
+                        && !s.type.isLegacyStage() && s.wetDry > 0.001f
+                        && isStage3SlotAudible(s)) {
                     anyStage3Active = true;
                     break;
                 }
@@ -705,7 +706,8 @@ public final class DspChain {
             boolean w = false;
             boolean p = false;
             for (EffectSlot s : slots) {
-                if (s == null || !s.enabled || s.value <= 0) continue;
+                if (s == null || !s.enabled || s.value <= 0
+                        || s.wetDry <= 0.001f) continue;
                 if (s.type == EffectType.WARMTH_BODY) w = true;
                 if (s.type == EffectType.VOCAL_PRESENCE) p = true;
             }
@@ -800,7 +802,7 @@ public final class DspChain {
         public int enabledSlotCount() {
             int n = 0;
             for (EffectSlot s : slots) {
-                if (s.enabled
+                if (s.enabled && s.wetDry > 0.001f
                         && (s.value > 0 || !s.type.isLegacyStage())) n++;
             }
             return n;
@@ -1036,6 +1038,10 @@ public final class DspChain {
     private void resetProcessorSlotExtras() {
         for (AudioProcessor p : rack.processors()) {
             p.setWetDryMix(1.0f);
+            if (p instanceof ProToneProcessor) {
+                ((ProToneProcessor) p).setWarmthSlotMix(1.0f);
+                ((ProToneProcessor) p).setPresenceSlotMix(1.0f);
+            }
             if (p instanceof NoiseSuppressionProcessor) {
                 ((NoiseSuppressionProcessor) p).setNoiseProfile(null);
             }
@@ -1079,6 +1085,13 @@ public final class DspChain {
             if (p == null) continue;
             if (s.type == EffectType.WARMTH_BODY
                     || s.type == EffectType.VOCAL_PRESENCE) {
+                if (p instanceof ProToneProcessor) {
+                    if (s.type == EffectType.WARMTH_BODY) {
+                        ((ProToneProcessor) p).setWarmthSlotMix(s.wetDry);
+                    } else {
+                        ((ProToneProcessor) p).setPresenceSlotMix(s.wetDry);
+                    }
+                }
                 if (!bothToneEnabled && s.enabled && s.value > 0) {
                     p.setWetDryMix(s.wetDry);
                 }
@@ -1246,12 +1259,14 @@ public final class DspChain {
             case WARMTH_BODY:
                 if (p instanceof ProToneProcessor) {
                     ((ProToneProcessor) p).setLegacyAmounts(s.value, 0);
+                    ((ProToneProcessor) p).setWarmthSlotMix(s.wetDry);
                     p.setEnabled(s.enabled && s.value > 0);
                 }
                 break;
             case VOCAL_PRESENCE:
                 if (p instanceof ProToneProcessor) {
                     ((ProToneProcessor) p).setLegacyAmounts(0, s.value);
+                    ((ProToneProcessor) p).setPresenceSlotMix(s.wetDry);
                     p.setEnabled(s.enabled && s.value > 0);
                 }
                 break;
@@ -1368,6 +1383,7 @@ public final class DspChain {
         for (AudioProcessor p : rack.processors()) {
             if (!p.isEnabled()) continue;
             if (!p.isOfflineOnly()) continue;
+            if (!p.isAudible() || p.getWetDryMix() <= 0.001f) continue;
             return p;
         }
         return null;
@@ -1377,7 +1393,8 @@ public final class DspChain {
     public java.util.List<AudioProcessor> offlineProcessors() {
         java.util.List<AudioProcessor> out = new java.util.ArrayList<>();
         for (AudioProcessor p : rack.processors()) {
-            if (!p.isEnabled() || !p.isOfflineOnly()) continue;
+            if (!p.isEnabled() || !p.isOfflineOnly()
+                    || !p.isAudible() || p.getWetDryMix() <= 0.001f) continue;
             out.add(p);
         }
         return out;
@@ -1421,9 +1438,18 @@ public final class DspChain {
         if (buf == null || buf.length == 0) return buf;
         int curFrames = buf.length / Math.max(1, channels);
         for (AudioProcessor proc : offlineProcessors()) {
+            float mix = proc.getWetDryMix();
+            if (mix <= 0.001f) continue;
             proc.prepare(sampleRate, channels);
             float[] next = proc.processOfflineRegion(buf, curFrames, channels);
             if (next != null && next.length > 0) {
+                if (mix < 0.999f) {
+                    float dryWeight = 1f - mix;
+                    int common = Math.min(buf.length, next.length);
+                    for (int i = 0; i < common; i++) {
+                        next[i] = buf[i] * dryWeight + next[i] * mix;
+                    }
+                }
                 buf = next;
                 curFrames = buf.length / Math.max(1, channels);
             }

@@ -92,7 +92,13 @@ final class MultibandCompressorProcessor extends AudioProcessor {
 
     @Override
     public boolean isAudible() {
-        return isEnabled() && amount.getFloat() > 0
+        if (!isEnabled() || getWetDryMix() <= 0.001f) return false;
+        if (Math.abs(lowGain.getFloat()) > 0.01f
+                || Math.abs(midGain.getFloat()) > 0.01f
+                || Math.abs(highGain.getFloat()) > 0.01f) {
+            return true;
+        }
+        return amount.getFloat() > 0
                 && (lowRatio.getFloat() > 1.01f
                 || midRatio.getFloat() > 1.01f
                 || highRatio.getFloat() > 1.01f);
@@ -146,9 +152,9 @@ final class MultibandCompressorProcessor extends AudioProcessor {
         int offset = 0;
         while (offset < frames) {
             int n = Math.min(block, frames - offset);
-            float lvlLow = envLow.detect(low, n, ch, false, attMs, relMs);
-            float lvlMid = envMid.detect(mid, n, ch, false, attMs, relMs);
-            float lvlHigh = envHigh.detect(high, n, ch, false, attMs, relMs);
+            float lvlLow = envLow.detect(low, offset, n, ch, false, attMs, relMs);
+            float lvlMid = envMid.detect(mid, offset, n, ch, false, attMs, relMs);
+            float lvlHigh = envHigh.detect(high, offset, n, ch, false, attMs, relMs);
 
             float amt = amount.getFloat() / 100f;
             float tLow = amt * DynamicsDetector.softKneeGainDb(

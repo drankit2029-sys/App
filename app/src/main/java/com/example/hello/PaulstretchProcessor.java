@@ -87,52 +87,40 @@ final class PaulstretchProcessor extends AudioProcessor {
         float[] re = new float[fftSize];
         float[] im = new float[fftSize];
         float[] mag = new float[bins];
-        float[] phase = new float[bins];
 
-        int inPos = 0;
-        int outPos = 0;
-        while (inPos < frames && outPos < outFrames) {
-            // Analyse the next window.
-            for (int i = 0; i < fftSize; i++) {
-                int src = inPos + i;
-                float s = 0f;
-                if (src < frames) {
-                    for (int c = 0; c < channels; c++) {
-                        s += in[src * channels + c];
+        for (int c = 0; c < channels; c++) {
+            int inPos = 0;
+            int outPos = 0;
+            while (inPos < frames && outPos < outFrames) {
+                for (int i = 0; i < fftSize; i++) {
+                    int src = inPos + i;
+                    float s = (src < frames) ? in[src * channels + c] : 0f;
+                    re[i] = s * win[i];
+                    im[i] = 0f;
+                }
+                Dsp.fft(re, im, false);
+                for (int b = 0; b < bins; b++) {
+                    mag[b] = (float) Math.sqrt(re[b] * re[b] + im[b] * im[b]);
+                }
+                for (int b = 0; b < bins; b++) {
+                    float p = (float) (nextRandom() * Math.PI * 2.0);
+                    re[b] = (float) (mag[b] * Math.cos(p));
+                    im[b] = (float) (mag[b] * Math.sin(p));
+                    int mirror = fftSize - b;
+                    if (mirror < fftSize) {
+                        re[mirror] = re[b];
+                        im[mirror] = -im[b];
                     }
-                    s /= channels;
                 }
-                re[i] = s * win[i];
-                im[i] = 0f;
-            }
-            Dsp.fft(re, im, false);
-            for (int b = 0; b < bins; b++) {
-                mag[b] = (float) Math.sqrt(re[b] * re[b] + im[b] * im[b]);
-                phase[b] = (float) Math.atan2(im[b], re[b]);
-            }
-            // Randomise the phases.
-            for (int b = 0; b < bins; b++) {
-                float p = (float) (nextRandom() * Math.PI * 2.0);
-                re[b] = (float) (mag[b] * Math.cos(p));
-                im[b] = (float) (mag[b] * Math.sin(p));
-                int mirror = fftSize - b;
-                if (mirror < fftSize) {
-                    re[mirror] = re[b];
-                    im[mirror] = -im[b];
+                Dsp.fft(re, im, true);
+                for (int i = 0; i < fftSize && outPos + i < outFrames; i++) {
+                    float x = (float) i / fftSize;
+                    float w = (float) Math.pow(Math.max(0.0, 1.0 - x * x), 1.25);
+                    out[(outPos + i) * channels + c] += re[i] * w * 0.25f;
                 }
+                inPos += hop;
+                outPos += outHop;
             }
-            Dsp.fft(re, im, true);
-            // Overlap-add with the (1 - x^2)^1.25 smoothing window.
-            for (int i = 0; i < fftSize && outPos + i < outFrames; i++) {
-                float x = (float) i / fftSize;
-                float w = (float) Math.pow(Math.max(0.0, 1.0 - x * x), 1.25);
-                float s = re[i] * w * 0.25f;
-                for (int c = 0; c < channels; c++) {
-                    out[(outPos + i) * channels + c] += s;
-                }
-            }
-            inPos += hop;
-            outPos += outHop;
         }
         return out;
     }

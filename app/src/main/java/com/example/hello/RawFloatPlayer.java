@@ -327,6 +327,7 @@ public final class RawFloatPlayer {
                 try {
                     preChain.prepareOffline(file, startFramePos, limitFrame,
                             RecordingEngine.SAMPLE_RATE, channels);
+                    preChain.reset();
                 } catch (Exception ignored) {}
             }
             if (preChain != null && preChain.isActive()

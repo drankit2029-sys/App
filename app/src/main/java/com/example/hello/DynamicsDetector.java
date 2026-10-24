@@ -48,13 +48,23 @@ final class DynamicsDetector {
          */
         float detect(float[] buf, int frames, int channels, boolean rms,
                      float attackMs, float releaseMs) {
+            return detect(buf, 0, frames, channels, rms, attackMs, releaseMs);
+        }
+
+        /**
+         * Feeds one block of interleaved frames starting at {@code frameOffset}
+         * and returns the detector level in dB.
+         */
+        float detect(float[] buf, int frameOffset, int frames, int channels,
+                     boolean rms, float attackMs, float releaseMs) {
             int n = Math.max(1, Math.min(2, channels));
             float blockDb = -120f;
             if (rms) {
                 double sum = 0;
                 int count = 0;
                 for (int f = 0; f < frames; f++) {
-                    int idx = f * n;
+                    int idx = (frameOffset + f) * n;
+                    if (idx + n > buf.length) break;
                     for (int c = 0; c < n; c++) {
                         sum += (double) buf[idx + c] * buf[idx + c];
                         count++;
@@ -67,7 +77,8 @@ final class DynamicsDetector {
             } else {
                 float peak = 0f;
                 for (int f = 0; f < frames; f++) {
-                    int idx = f * n;
+                    int idx = (frameOffset + f) * n;
+                    if (idx + n > buf.length) break;
                     for (int c = 0; c < n; c++) {
                         float a = Math.abs(buf[idx + c]);
                         if (a > peak) peak = a;

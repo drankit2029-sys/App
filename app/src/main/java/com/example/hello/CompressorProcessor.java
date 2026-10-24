@@ -99,7 +99,8 @@ final class CompressorProcessor extends AudioProcessor {
         int offset = 0;
         while (offset < frames) {
             int n = Math.min(block, frames - offset);
-            float levelDb = envelope.detect(buf, n, ch, rms, attMs, relMs);
+            float levelDb = envelope.detect(buf, offset, n, ch, rms, attMs,
+                    relMs);
 
             float over = 0f;
             if (upward.getBoolean()) {

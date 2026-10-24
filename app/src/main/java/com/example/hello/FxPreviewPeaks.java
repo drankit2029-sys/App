@@ -48,26 +48,10 @@ final class FxPreviewPeaks {
             while (frame < totalFrames) {
                 int want = (int) Math.min(framesPerRead, totalFrames - frame);
                 raf.readFully(in, 0, want * ch * 4);
-                fb.clear();
-                fb.limit(want * ch);
-                for (int f = 0; f < want; f++) {
-                    float s = 0f;
-                    for (int c = 0; c < ch; c++) {
-                        s += fb.get(f * ch + c);
-                    }
-                    s /= ch;
-                    int b = (int) ((frame + f) * bCount / totalFrames);
-                    if (b >= bCount) b = bCount - 1;
-                    if (b < 0) b = 0;
-                    float a = Math.abs(s);
-                    if (a > peaks[b]) peaks[b] = a;
-                }
                 float[] block = new float[want * ch];
                 fb.clear();
-                fb.limit(want * ch);
-                for (int i = 0; i < want * ch; i++) {
-                    block[i] = fb.get();
-                }
+                fb.limit(want * ch * 4);
+                fb.asFloatBuffer().get(block, 0, want * ch);
                 chain.processInPlace(block, want);
                 for (int f = 0; f < want; f++) {
                     float peak = 0f;

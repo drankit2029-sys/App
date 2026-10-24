@@ -98,14 +98,23 @@ final class ChorusFlangerProcessor extends AudioProcessor {
         rebuild();
         int modeIdx = mode.getEnumIndex();
         double baseSec = baseDelay.getFloat() * 0.001;
-        if (modeIdx == 1) baseSec = Math.min(baseSec, 0.0025);
+        if (modeIdx == 1) {
+            baseSec = Math.min(baseSec, 0.0025);
+        } else if (modeIdx == 2) {
+            // Doubler mode: vocal slapback doubling window (15..35 ms) with
+            // subtle pitch micro-detune and zero feedback regeneration.
+            baseSec = Math.max(0.015, baseSec);
+        }
         double baseSamples = baseSec * sampleRate;
         double depthSamples = baseSamples * (depth.getCurrentRaw() / 100.0) * 0.9;
+        if (modeIdx == 2) {
+            depthSamples *= 0.25;
+        }
         double rateHz = rate.getFloat();
         double lfoInc = rateHz / sampleRate;
         float wet = mix.getCurrentRaw() / 100f;
         float dry = 1f - wet;
-        double fb = feedback.getCurrentRaw() / 100.0;
+        double fb = (modeIdx == 2) ? 0.0 : (feedback.getCurrentRaw() / 100.0);
 
         for (int f = 0; f < frames; f++) {
             for (int c = 0; c < ch; c++) {

@@ -28,6 +28,7 @@ final class VocoderProcessor extends AudioProcessor {
     private int sampleRate = DspChain.SAMPLE_RATE;
     private int channels = 2;
     private BiquadFilter[] bandFilters = new BiquadFilter[0];
+    private BiquadFilter[] carrierFilters = new BiquadFilter[0];
     private float[] bandCenters = new float[0];
     private float[] envelopes = new float[0];
     private double sawPhase = 0;
@@ -66,6 +67,12 @@ final class VocoderProcessor extends AudioProcessor {
     @Override
     public void reset() {
         java.util.Arrays.fill(envelopes, 0f);
+        for (BiquadFilter f : bandFilters) {
+            if (f != null) f.reset();
+        }
+        for (BiquadFilter f : carrierFilters) {
+            if (f != null) f.reset();
+        }
         sawPhase = 0;
     }
 
@@ -79,6 +86,7 @@ final class VocoderProcessor extends AudioProcessor {
                 bands.getEnumIndex()))];
         if (bandFilters.length == count) return;
         bandFilters = new BiquadFilter[count];
+        carrierFilters = new BiquadFilter[count];
         bandCenters = new float[count];
         envelopes = new float[count];
         float lo = 80f;
@@ -87,6 +95,7 @@ final class VocoderProcessor extends AudioProcessor {
             float f = (float) (lo * Math.pow(hi / lo, i / (double) (count - 1)));
             bandCenters[i] = f;
             bandFilters[i] = new BiquadFilter();
+            carrierFilters[i] = new BiquadFilter();
         }
     }
 
@@ -99,45 +108,53 @@ final class VocoderProcessor extends AudioProcessor {
         float origMix = originalMix.getCurrentRaw() / 100f;
         float noiseMixPct = noiseMix.getCurrentRaw() / 100f;
         float relCoef = 1f / Math.max(1, release.getCurrentRaw());
-        double sawInc = pitch.getCurrentRaw() / sampleRate;
+        double sawInc = (double) pitch.getCurrentRaw() / sampleRate;
+        int carrierIdx = carrier.getEnumIndex();
 
         for (int b = 0; b < count; b++) {
-            bandFilters[b].setSections(new float[][]{
-                    Dsp.rbjBandPass(sampleRate, bandCenters[b], 4f)}, ch);
+            float[][] sec = new float[][]{
+                    Dsp.rbjBandPass(sampleRate, bandCenters[b], 4f)};
+            bandFilters[b].setSections(sec, 1);
+            carrierFilters[b].setSections(sec, 1);
         }
+        float[] probe = new float[1];
+        float[] cProbe = new float[1];
         for (int f = 0; f < frames; f++) {
             float modulator = 0f;
             for (int c = 0; c < ch; c++) modulator += buf[f * ch + c];
             modulator /= ch;
 
+            float baseCarrier;
+            float white = nextNoise();
+            if (carrierIdx == 1) {
+                baseCarrier = white;
+            } else if (carrierIdx == 2 && ch > 1) {
+                baseCarrier = buf[f * ch + 1] * (1f - noiseMixPct)
+                        + white * noiseMixPct;
+            } else {
+                float saw = (float) (2.0 * (sawPhase - Math.floor(sawPhase)) - 1.0);
+                baseCarrier = saw * (1f - noiseMixPct * 0.5f)
+                        + white * (noiseMixPct * 0.5f);
+            }
+
             float wet = 0f;
             for (int b = 0; b < count; b++) {
-                BiquadFilter bp = bandFilters[b];
-                float[] probe = new float[ch];
                 probe[0] = modulator;
-                bp.process(probe, 1, ch);
+                bandFilters[b].process(probe, 1, 1);
                 float e = Math.abs(probe[0]);
                 envelopes[b] += (e - envelopes[b]) * relCoef;
-                int carrierIdx = carrier.getEnumIndex();
-                float carrierSample;
-                if (carrierIdx == 1) {
-                    carrierSample = nextNoise();
-                } else if (carrierIdx == 2 && ch > 1) {
-                    carrierSample = buf[f * ch + 1];
-                } else {
-                    carrierSample = (float) (2.0 * (sawPhase - Math.floor(sawPhase)) - 1.0);
-                }
-                wet += carrierSample * envelopes[b] * 1.6f;
+                cProbe[0] = baseCarrier;
+                carrierFilters[b].process(cProbe, 1, 1);
+                wet += cProbe[0] * envelopes[b] * 4.0f;
             }
-            wet /= count;
+            wet /= Math.max(1f, (float) Math.sqrt(count));
             sawPhase += sawInc;
             if (sawPhase > 1.0) sawPhase -= 1.0;
 
             for (int c = 0; c < ch; c++) {
                 int idx = f * ch + c;
                 float original = buf[idx];
-                float mixed = wet * (1f - noiseMixPct * 0.5f)
-                        + original * origMix;
+                float mixed = wet * (1f - origMix) + original * origMix;
                 buf[idx] = mixed;
             }
         }

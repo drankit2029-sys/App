@@ -88,6 +88,7 @@ final class ChangeTempoProcessor extends AudioProcessor {
         double factor = stretchFactor();
         if (Math.abs(factor - 1.0) < 1e-6) return in.clone();
         WsolaTimePitchProcessor wsola = new WsolaTimePitchProcessor(sampleRate);
-        return wsola.timeStretch(in, frames, channels, factor);
+        return wsola.timeStretch(in, frames, channels, factor,
+                hq.getBoolean());
     }
 }

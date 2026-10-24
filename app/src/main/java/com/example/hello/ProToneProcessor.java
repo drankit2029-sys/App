@@ -33,6 +33,8 @@ final class ProToneProcessor extends AudioProcessor {
     private final float[] presZ2 = new float[2];
 
     private int sampleRate = DspChain.SAMPLE_RATE;
+    private volatile float warmthSlotMix = 1f;
+    private volatile float presenceSlotMix = 1f;
     private float cachedWarmMix = -1f;
     private float cachedPresMix = -1f;
     private int cachedWarmFreq = -1;
@@ -90,12 +92,22 @@ final class ProToneProcessor extends AudioProcessor {
     @Override
     public boolean isAudible() {
         return isEnabled()
-                && (warmth.getCurrentRaw() > 0 || presence.getCurrentRaw() > 0);
+                && getWetDryMix() > 0.001f
+                && ((warmth.getCurrentRaw() > 0 && warmthSlotMix > 0.001f)
+                        || (presence.getCurrentRaw() > 0 && presenceSlotMix > 0.001f));
     }
 
     void setLegacyAmounts(int warmthPct, int presencePct) {
         warmth.setCurrentRaw(warmthPct);
         presence.setCurrentRaw(presencePct);
+    }
+
+    void setWarmthSlotMix(float mix) {
+        this.warmthSlotMix = clampMix(mix);
+    }
+
+    void setPresenceSlotMix(float mix) {
+        this.presenceSlotMix = clampMix(mix);
     }
 
     void processWarmthOnly(float[] buf, int frames, int channels, float mix) {
@@ -131,12 +143,12 @@ final class ProToneProcessor extends AudioProcessor {
     public void processInPlace(float[] buf, int frames, int channels) {
         if (!isEnabled() || buf == null || frames <= 0) return;
         int ch = Math.max(1, Math.min(2, channels));
-        updateTargets(1f, 1f);
-        if (warmth.getCurrentRaw() > 0) {
+        updateTargets(warmthSlotMix, presenceSlotMix);
+        if (warmth.getCurrentRaw() > 0 && warmthSlotMix > 0.001f) {
             processBand(buf, frames, ch, warmCur, warmTarget,
                     warmZ1, warmZ2);
         }
-        if (presence.getCurrentRaw() > 0) {
+        if (presence.getCurrentRaw() > 0 && presenceSlotMix > 0.001f) {
             processBand(buf, frames, ch, presCur, presTarget,
                     presZ1, presZ2);
         }

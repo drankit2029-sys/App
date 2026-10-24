@@ -80,9 +80,9 @@ final class DeEsserProcessor extends AudioProcessor {
         float qq = Math.max(0.3f, q.getFloat());
         band.setSections(new float[][]{Dsp.rbjBandPass(sampleRate, f, qq)},
                 channels);
-        splitLow.setSections(new float[][]{Dsp.rbjHighPass(sampleRate, f, 0.7071)},
+        splitLow.setSections(new float[][]{Dsp.rbjLowPass(sampleRate, f, 0.7071)},
                 channels);
-        splitHigh.setSections(new float[][]{Dsp.rbjLowPass(sampleRate, f, 0.7071)},
+        splitHigh.setSections(new float[][]{Dsp.rbjHighPass(sampleRate, f, 0.7071)},
                 channels);
     }
 

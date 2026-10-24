@@ -78,7 +78,8 @@ final class MultiDelayProcessor extends AudioProcessor {
     private void rebuild() {
         delayFrames = Math.max(1,
                 (int) (delayTime.getCurrentRaw() * 0.001f * sampleRate));
-        int need = delayFrames * 2 + 1;
+        int taps = Math.max(1, echoes.getCurrentRaw());
+        int need = Math.max(delayFrames * (taps + 2), delayFrames * 2 + 1);
         if (delayLine.length < need * channels) {
             delayLine = new float[need * channels];
             writePos = 0;
@@ -96,6 +97,7 @@ final class MultiDelayProcessor extends AudioProcessor {
         int taps = Math.max(1, echoes.getCurrentRaw());
         float levelLin = Dsp.dbToLin(level.getFloat());
         int typeIdx = type.getEnumIndex();
+        int maxFrames = delayLine.length / ch;
 
         for (int f = 0; f < frames; f++) {
             int base = f * ch;
@@ -109,22 +111,20 @@ final class MultiDelayProcessor extends AudioProcessor {
                 if (typeIdx == 0) {
                     offset = delayFrames * k;
                     amp = (float) Math.pow(levelLin, k);
-                } else {
-                    // Bouncing ball: geometric spacing between taps.
-                    offset = (int) (delayFrames * k * (1f + 0.35f * k));
+                } else if (typeIdx == 1) {
+                    // Bouncing ball: shortening intervals as echoes decay.
+                    double ratio = 1.0 - Math.pow(0.82, k);
+                    offset = Math.max(1, (int) Math.round(delayFrames * taps * ratio));
                     amp = (float) Math.pow(levelLin, k);
+                } else {
+                    // Reverse bouncing ball: expanding intervals with rising level.
+                    offset = delayFrames * k;
+                    amp = (float) Math.pow(levelLin, (taps - k + 1));
                 }
-                if (offset >= delayLine.length / ch) break;
-                int pos = (writePos - offset + delayLine.length / ch)
-                        % (delayLine.length / ch);
+                if (offset >= maxFrames) offset = maxFrames - 1;
+                int pos = (writePos - offset + maxFrames) % maxFrames;
                 wetL += delayLine[pos * ch] * amp;
                 if (ch > 1) wetR += delayLine[pos * ch + 1] * amp;
-            }
-            if (typeIdx == 2) {
-                float tL = wetL;
-                float tR = wetR;
-                wetL = tR;
-                wetR = tL;
             }
             // Damping on the feedback path.
             float[] dampBuf = new float[ch];

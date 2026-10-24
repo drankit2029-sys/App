@@ -83,39 +83,42 @@ final class SlidingStretchProcessor extends AudioProcessor {
                 && Math.abs(p0) < 1e-6 && Math.abs(p1) < 1e-6) {
             return in.clone();
         }
-        // Estimate the output length from the average stretch factor.
-        double avg = (r0 + r1) * 0.5;
-        int outFrames = Math.max(1, (int) Math.round(frames * avg));
-        float[] out = new float[outFrames * channels];
         WsolaTimePitchProcessor wsola = new WsolaTimePitchProcessor(sampleRate);
-
-        // Process in segments so the ramp is audible.
         final int segments = 8;
+        float[][] segBuffers = new float[segments][];
+        int totalOutFrames = 0;
         int inPos = 0;
-        int outPos = 0;
         for (int s = 0; s < segments; s++) {
             double u = (s + 0.5) / segments;
-            double ratio = r0 + (r1 - r0) * u;
+            double ratio = Math.max(0.2, r0 + (r1 - r0) * u);
             double pitch = p0 + (p1 - p0) * u;
             int segIn = (s == segments - 1) ? frames - inPos
                     : Math.max(1, frames / segments);
-            int segOut = Math.max(1, (int) Math.round(segIn * ratio));
+            if (segIn <= 0) {
+                segBuffers[s] = new float[0];
+                continue;
+            }
             float[] chunk = new float[segIn * channels];
             System.arraycopy(in, inPos * channels, chunk, 0, chunk.length);
             float[] processed = chunk;
             if (Math.abs(pitch) > 1e-6) {
                 processed = wsola.pitchShift(chunk, segIn, channels, pitch);
             }
-            processed = wsola.timeStretch(processed, segIn, channels, ratio);
-            int copyFrames = Math.min(segOut, outFrames - outPos);
-            int copySamples = Math.min(copyFrames * channels,
-                    processed.length);
-            if (copySamples > 0) {
-                System.arraycopy(processed, 0, out, outPos * channels, copySamples);
+            if (Math.abs(ratio - 1.0) > 1e-6) {
+                processed = wsola.timeStretch(processed,
+                        processed.length / channels, channels, ratio);
             }
-            outPos += copyFrames;
+            segBuffers[s] = processed;
+            totalOutFrames += processed.length / channels;
             inPos += segIn;
             if (inPos >= frames) break;
+        }
+        float[] out = new float[Math.max(1, totalOutFrames) * channels];
+        int outPos = 0;
+        for (float[] seg : segBuffers) {
+            if (seg == null || seg.length == 0) continue;
+            System.arraycopy(seg, 0, out, outPos, seg.length);
+            outPos += seg.length;
         }
         return out;
     }

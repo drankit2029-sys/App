@@ -144,7 +144,7 @@ public abstract class AudioProcessor {
      * engine's 0.001 gate). Used by chains to decide activeness.
      */
     public boolean isAudible() {
-        return enabled;
+        return enabled && wetDryMix > 0.001f;
     }
 
     /** Serializes enable, mix and every parameter's raw value. */

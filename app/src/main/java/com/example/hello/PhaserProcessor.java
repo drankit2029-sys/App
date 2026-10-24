@@ -26,10 +26,9 @@ final class PhaserProcessor extends AudioProcessor {
 
     private int sampleRate = DspChain.SAMPLE_RATE;
     private int channels = 2;
-    private float[] z1 = new float[2];
-    private float[] z2 = new float[2];
+    private final float[][] stageState = new float[2][24];
     private double lfoPhase = 0;
-    private float fbState = 0f;
+    private final float[] fbState = new float[2];
 
     PhaserProcessor() {
     }
@@ -62,9 +61,11 @@ final class PhaserProcessor extends AudioProcessor {
 
     @Override
     public void reset() {
-        z1[0] = z1[1] = 0f;
-        z2[0] = z2[1] = 0f;
-        fbState = 0f;
+        for (int c = 0; c < 2; c++) {
+            java.util.Arrays.fill(stageState[c], 0f);
+            fbState[c] = 0f;
+        }
+        lfoPhase = 0;
     }
 
     @Override
@@ -83,7 +84,7 @@ final class PhaserProcessor extends AudioProcessor {
         double rateHz = rate.getFloat();
         double depthPct = depth.getCurrentRaw() / 100.0;
         double fb = feedback.getCurrentRaw() / 100.0;
-        double phase0 = phase.getCurrentRaw() * Math.PI / 180.0;
+        double phase0 = phase.getCurrentRaw() / 360.0;
         float gain = Dsp.dbToLin(outputGain.getFloat());
         double lfoInc = rateHz / sampleRate;
 
@@ -95,18 +96,14 @@ final class PhaserProcessor extends AudioProcessor {
             for (int c = 0; c < ch; c++) {
                 int idx = f * ch + c;
                 float drySample = buf[idx];
-                float x = drySample + fbState;
-                // First-order all-pass: y = a*x + x1 - a*y1
+                float out = drySample + fbState[c];
                 float ap = (float) coef;
-                float y = ap * x + z1[c];
-                z1[c] = x - ap * y;
-                float out = y;
-                for (int s = 1; s < n; s++) {
-                    float t = ap * out + z2[c];
-                    z2[c] = out - ap * t;
+                for (int s = 0; s < n; s++) {
+                    float t = ap * out + stageState[c][s];
+                    stageState[c][s] = out - ap * t;
                     out = t;
                 }
-                fbState = out * (float) fb;
+                fbState[c] = out * (float) fb;
                 buf[idx] = (drySample * dry + out * wet) * gain;
             }
             lfoPhase += lfoInc;
