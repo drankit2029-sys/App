@@ -158,7 +158,7 @@ final class FadeProcessor extends AudioProcessor {
                 float cutoff = 20000f * (float) Math.pow(800f / 20000f, u);
                 closingLp.setSections(new float[][]{
                         Dsp.rbjLowPass(sampleRate, cutoff, 0.7071)}, ch);
-                closingLp.process(buf, f + 1, ch);
+                closingLp.process(buf, 1, ch, f);
             }
         }
     }

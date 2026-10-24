@@ -166,11 +166,12 @@ public final class AudioImporter {
     private static File uniqueSession(File dir, String base) {
         String stamp = new java.text.SimpleDateFormat("yyyyMMdd_HHmmss",
                 java.util.Locale.US).format(new java.util.Date());
-        File c = new File(dir, base + "_" + stamp + ".wav");
+        File c = new File(dir, base + "_" + stamp + ".raw.wav");
         if (!c.exists()) return c;
         int i = 2;
         while (true) {
-            File n = new File(dir, base + "_" + stamp + " (" + i + ").wav");
+            File n = new File(dir, base + "_" + stamp + " (" + i
+                    + ").raw.wav");
             if (!n.exists()) return n;
             i++;
         }

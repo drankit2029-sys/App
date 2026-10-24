@@ -82,7 +82,7 @@ public class EncodeFormatsTest {
     @Test
     public void opus() throws Exception {
         File src = makeFloatWav("opus_in.wav");
-        File dst = out(".webm");
+        File dst = out("." + SaveFormat.OPUS.extension());
         FormatConverter.toOpus(src, dst, 128000, null);
         Log.i(TAG, "PASS opus bytes=" + dst.length());
         FormatConverter.validateFinal(dst, SaveFormat.OPUS);

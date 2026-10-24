@@ -80,18 +80,23 @@ public class FxRackDuplicatesTest {
     }
 
     @Test
-    public void legacyStagesStayASingleSharedChain() {
-        // The eight voice-chain stages are one percentage chain, so adding a
-        // second copy of one of them focuses the existing entry instead of
-        // creating a slot that would fight over the same field.
+    public void legacyStagesCanAlsoBeStackedMultipleTimes() {
         DspChain.Config cfg = new DspChain.Config();
         cfg.applyPreset(DspChain.Preset.CLEAR_ALL);
         DspChain.EffectSlot first =
                 cfg.addOrFocusSlot(DspChain.EffectType.COMPRESSOR);
         DspChain.EffectSlot second =
                 cfg.addOrFocusSlot(DspChain.EffectType.COMPRESSOR);
-        assertEquals("A legacy stage is not duplicated", first, second);
-        assertEquals("Only one entry for the legacy stage", 1, cfg.slots.size());
+        assertNotEquals("Legacy stages can be stacked multiple times", first, second);
+        assertEquals("Both copies live in the rack", 2, cfg.slots.size());
+        first.value = 35;
+        second.value = 75;
+        DspChain chain = new DspChain(1, cfg);
+        int comps = 0;
+        for (AudioProcessor p : chain.getRack().processors()) {
+            if ("comp".equals(p.getId()) && p.isEnabled()) comps++;
+        }
+        assertEquals("Both stacked legacy copies have active processors", 2, comps);
     }
 
     @Test

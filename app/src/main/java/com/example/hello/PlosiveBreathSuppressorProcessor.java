@@ -100,13 +100,12 @@ final class PlosiveBreathSuppressorProcessor extends AudioProcessor {
             float midDb = Dsp.linToDb((float) Math.sqrt(midE / (n * ch)));
 
             float target = 0f;
-            float excess = lowDb - midDb - 8f;
+            float excess = lowDb - midDb - 4f;
             if (excess > 0f) {
                 target = -Math.min(24f, excess) * sens;
             }
-            if (breathDb > 0.01f && midDb < -50f) {
-                target = Math.min(target, -breathDb);
-            }
+            boolean isBreath = breathDb > 0.01f && midDb < -42f && lowDb < -36f;
+            float breathLin = isBreath ? Dsp.dbToLin(-breathDb) : 1f;
             float step = (target - gainDb) / n;
             for (int f = 0; f < n; f++) {
                 gainDb += step;
@@ -114,8 +113,8 @@ final class PlosiveBreathSuppressorProcessor extends AudioProcessor {
                 int idx = (offset + f) * ch;
                 for (int c = 0; c < ch; c++) {
                     int local = f * ch + c;
-                    buf[idx + c] = buf[idx + c] * (1f - sens)
-                            + low[local] * sens * g;
+                    float high = buf[idx + c] - low[local];
+                    buf[idx + c] = (high + low[local] * g) * breathLin;
                 }
             }
             offset += n;

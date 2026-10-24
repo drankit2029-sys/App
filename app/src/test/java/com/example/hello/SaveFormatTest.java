@@ -59,7 +59,8 @@ public class SaveFormatTest {
         assertEquals("wav", SaveFormat.WAV24.extension());
         assertEquals("3gp", SaveFormat.AMR_NB.extension());
         assertEquals("flac", SaveFormat.FLAC.extension());
-        assertEquals("webm", SaveFormat.OPUS.extension());
+        assertEquals(android.os.Build.VERSION.SDK_INT >= 29
+                ? "opus" : "webm", SaveFormat.OPUS.extension());
     }
 
     @Test

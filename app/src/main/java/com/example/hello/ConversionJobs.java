@@ -712,8 +712,11 @@ public final class ConversionJobs {
                     if (!part.renameTo(fin)) {
                         throw new IllegalStateException("adopt failed");
                     }
-                    // noinspection ResultOfMethodCallIgnored
-                    raw.delete();
+                    if (!fin.equals(raw)) {
+                        // Keep the scratch only when it is the result.
+                        // noinspection ResultOfMethodCallIgnored
+                        raw.delete();
+                    }
                     // noinspection ResultOfMethodCallIgnored
                     new File(raw.getAbsolutePath() + ".pending").delete();
                     return SaveResult.adopted(fin,

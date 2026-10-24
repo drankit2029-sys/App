@@ -67,10 +67,19 @@ final class ChangeSpeedAndPitchProcessor extends AudioProcessor {
     /** Speed multiplier: 2.0 plays twice as fast (half the duration). */
     private double speedFactor() {
         double s = speed.getFloat();
-        if (s != 1.0) return s;
         double pct = percent.getFloat();
-        if (pct != 0f) return 1.0 + pct / 100.0;
-        return 1.0;
+        double factor = s;
+        if (Math.abs(pct) > 1e-4) {
+            double pctFactor = 1.0 + pct / 100.0;
+            if (Math.abs(s - pctFactor) < 0.02) {
+                factor = pctFactor;
+            } else if (Math.abs(s - 1.0) < 1e-4) {
+                factor = pctFactor;
+            } else {
+                factor = s * pctFactor;
+            }
+        }
+        return Math.max(0.1, Math.min(8.0, factor));
     }
 
     @Override

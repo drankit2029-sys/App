@@ -2058,8 +2058,16 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             String uniqueName = uniqueDocName(dir, wanted);
             String mime = mimeFor(uniqueName);
             DocumentFile out = dir.createFile(mime, uniqueName);
-            // Some providers ignore the requested name; fall back to display name.
             if (out == null) return null;
+            // Some providers append their canonical extension to a name that
+            // already has one ("audio/3gpp" turns ".3gp" into ".3gp.3ga").
+            // Rename back to the exact requested name when that happens.
+            String createdName = out.getName();
+            if (createdName != null && !createdName.equals(uniqueName)) {
+                try {
+                    out.renameTo(uniqueName);
+                } catch (Exception ignored) {}
+            }
             try (InputStream in = new FileInputStream(src);
                  OutputStream outStream = ctx.getContentResolver().openOutputStream(
                          out.getUri())) {
@@ -2104,17 +2112,20 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
     }
 
     private String mimeFor(String name) {
-        String lower = name.toLowerCase();
+        String lower = name.toLowerCase(Locale.US);
         if (lower.endsWith(".wav")) return "audio/wav";
         // "audio/mp4" makes the provider append ".mp4" to .m4a names
         // ("Take.m4a.mp4"); mp4a-latm resolves to ".m4a" instead.
         if (lower.endsWith(".m4a")) return "audio/mp4a-latm";
         if (lower.endsWith(".mp4")) return "audio/mp4";
         if (lower.endsWith(".mp3")) return "audio/mpeg";
-        if (lower.endsWith(".ogg")) return "audio/ogg";
+        if (lower.endsWith(".opus") || lower.endsWith(".ogg")) {
+            return "audio/ogg";
+        }
         if (lower.endsWith(".flac")) return "audio/flac";
         if (lower.endsWith(".webm")) return "audio/webm";
-        if (lower.endsWith(".3gp") || lower.endsWith(".3gpp")) return "audio/3gpp";
+        if (lower.endsWith(".3gp") || lower.endsWith(".3gpp")
+                || lower.endsWith(".3ga")) return "audio/3gpp";
         return "audio/*";
     }
 

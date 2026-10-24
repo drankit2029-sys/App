@@ -46,6 +46,20 @@ public class TakeSaverTest {
     }
 
     @Test
+    public void rawScratchKeepsFirstWavSaveClean() throws Exception {
+        File dir = new File(ctx().getCacheDir(), "uniqraw");
+        // noinspection ResultOfMethodCallIgnored
+        dir.mkdirs();
+        File raw = new File(dir, "Take_20261024_065622.raw.wav");
+        new RandomAccessFile(raw, "rw").close();
+        File fin = TakeSaver.uniqueFinal(raw, "wav");
+        assertEquals("Take_20261024_065622.wav", fin.getName());
+        assertTrue(!fin.getName().contains("(2)"));
+        // noinspection ResultOfMethodCallIgnored
+        raw.delete();
+    }
+
+    @Test
     public void durationOfGarbageFallsBack() throws Exception {
         File f = new File(ctx().getCacheDir(), "nodur.bin");
         RandomAccessFile w = new RandomAccessFile(f, "rw");

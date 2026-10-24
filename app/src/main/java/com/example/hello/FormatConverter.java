@@ -237,11 +237,14 @@ public final class FormatConverter {
         if (cb != null) cb.onProgress(100);
     }
 
-    /** Opus in WebM (probe-gated: only offered when an encoder exists). */
+    /** Opus in Ogg on API 29+ (WebM fallback on API 24-28). */
     public static void toOpus(File src, File dst, int bitrate, Progress cb) throws Exception {
+        int muxFmt = android.os.Build.VERSION.SDK_INT >= 29
+                ? MediaMuxer.OutputFormat.MUXER_OUTPUT_OGG
+                : MediaMuxer.OutputFormat.MUXER_OUTPUT_WEBM;
         encodeMuxed(src, dst, "audio/opus",
                 Math.max(32000, Math.min(256000, bitrate <= 0 ? 128000 : bitrate)),
-                MediaMuxer.OutputFormat.MUXER_OUTPUT_WEBM, -1, cb);
+                muxFmt, -1, cb);
     }
 
     /**
@@ -454,16 +457,19 @@ public final class FormatConverter {
                     }
                     break;
                 case OPUS:
-                    // EBML header.
-                    if ((head[0] & 0xFF) != 0x1A || (head[1] & 0xFF) != 0x45
-                            || (head[2] & 0xFF) != 0xDF
-                            || (head[3] & 0xFF) != 0xA3) {
-                        throw new IllegalStateException("not a webm container");
+                    // Accept RFC 7845 Ogg Opus ("OggS") on API 29+ or WebM
+                    // EBML (0x1A45DFA3) on older devices.
+                    boolean isOgg = head[0] == 'O' && head[1] == 'g'
+                            && head[2] == 'g' && head[3] == 'S';
+                    boolean isWebm = (head[0] & 0xFF) == 0x1A
+                            && (head[1] & 0xFF) == 0x45
+                            && (head[2] & 0xFF) == 0xDF
+                            && (head[3] & 0xFF) == 0xA3;
+                    if (!isOgg && !isWebm) {
+                        throw new IllegalStateException(
+                                "not an ogg or webm opus container");
                     }
-                    // The EBML magic is written before any audio is muxed, so
-                    // it alone would accept a truncated file with zero
-                    // clusters. Require at least one Cluster element.
-                    if (!containsBox(r, new byte[]{0x1F, 0x43,
+                    if (isWebm && !containsBox(r, new byte[]{0x1F, 0x43,
                             (byte) 0xB6, 0x75})) {
                         throw new IllegalStateException(
                                 "webm has no clusters (truncated)");
@@ -529,6 +535,55 @@ public final class FormatConverter {
     }
 
     /**
+     * Returns the exact byte length of a single RFC 4867 / 3GPP AMR frame
+     * from its Table of Contents (ToC) header byte, so any multi-frame
+     * MediaCodec output buffer can be split into 1-frame (20 ms) samples
+     * matching damr.frames_per_sample = 1.
+     */
+    static int amrFrameBytes(byte tocByte, boolean wideband) {
+        int ft = (tocByte >> 3) & 0x0F;
+        if (wideband) {
+            // 3GPP TS 26.201 AMR-WB frame sizes (including 1 ToC byte)
+            final int[] wbSizes = {18, 24, 33, 37, 41, 47, 51, 59, 61, 6, 1,
+                    1, 1, 1, 1, 1};
+            return wbSizes[ft];
+        } else {
+            // 3GPP TS 26.101 AMR-NB frame sizes (including 1 ToC byte)
+            final int[] nbSizes = {13, 14, 16, 18, 20, 21, 27, 32, 6, 7, 6,
+                    6, 1, 1, 1, 1};
+            return nbSizes[ft];
+        }
+    }
+
+    /**
+     * Writes an AMR MediaCodec output buffer to MediaMuxer as individual
+     * 1-frame (20 ms) MP4 samples. This prevents multi-frame MP4 samples
+     * that violate damr.frames_per_sample = 1 and fixes both the 0.28s/0.32s
+     * decode truncation and the stts duration inflation.
+     */
+    static long writeAmrFramesSingle(MediaMuxer muxer, int track,
+                                     ByteBuffer ob, MediaCodec.BufferInfo bi,
+                                     boolean wideband, long nextFramePtsUs) {
+        int pos = bi.offset;
+        int end = bi.offset + bi.size;
+        MediaCodec.BufferInfo singleBi = new MediaCodec.BufferInfo();
+        while (pos < end) {
+            int frameLen = amrFrameBytes(ob.get(pos), wideband);
+            if (frameLen <= 0 || pos + frameLen > end) {
+                frameLen = end - pos;
+            }
+            ob.position(pos);
+            ob.limit(pos + frameLen);
+            singleBi.set(pos, frameLen, nextFramePtsUs,
+                    (pos + frameLen >= end) ? bi.flags : 0);
+            muxer.writeSampleData(track, ob, singleBi);
+            nextFramePtsUs += 20_000L; // 20 ms per AMR frame
+            pos += frameLen;
+        }
+        return nextFramePtsUs;
+    }
+
+    /**
      * AMR-NB (8 kHz) or AMR-WB (16 kHz) in a .3gp container. The 48 kHz float
      * capture is mixed to mono and properly decimated through a windowed-sinc
      * lowpass (no naive downsampling, so no aliasing whistle).
@@ -565,6 +620,7 @@ public final class FormatConverter {
             MediaMuxer muxer = null;
             boolean muxStarted = false;
             int samplesWritten = 0;
+            long nextOutPtsUs = 0L;
             int track = -1;
             MediaCodec.BufferInfo bi = new MediaCodec.BufferInfo();
             int chunk = MemoryBudget.chunkFrames(CONV_CHUNK, ch);
@@ -664,49 +720,44 @@ public final class FormatConverter {
                         // 2) Feed the encoder from the backlog.
                         int idx = enc.dequeueInputBuffer(5000);
                         if (idx >= 0) {
-                            if (pendLen > 0) {
+                            if (pendLen >= frameSamples) {
                                 ByteBuffer dstBuf = enc.getInputBuffer(idx);
                                 dstBuf.clear();
-                                int room = dstBuf.remaining() / 2;
-                                int framesFit = room / frameSamples;
-                                int want = Math.min(pendLen,
-                                        framesFit * frameSamples);
-                                if (want <= 0) {
-                                    enc.queueInputBuffer(idx, 0, 0, 0, 0);
-                                } else {
-                                    java.nio.ShortBuffer sb = dstBuf
-                                            .order(ByteOrder.LITTLE_ENDIAN)
-                                            .asShortBuffer();
-                                    sb.put(pend, 0, want);
-                                    dstBuf.position(0);
-                                    dstBuf.limit(want * 2);
-                                    long pts = fed * 1_000_000L / outRate;
-                                    enc.queueInputBuffer(idx, 0, want * 2,
-                                            pts, 0);
-                                    fed += want;
-                                    System.arraycopy(pend, want, pend, 0,
-                                            pendLen - want);
-                                    pendLen -= want;
-                                    if (cb != null) {
-                                        int pct = (int) (fed * 100 / Math.max(
-                                                1, expectOut));
-                                        if (pct != lastPct) {
-                                            lastPct = pct;
-                                            cb.onProgress(
-                                                    Math.min(100, pct));
-                                        }
+                                // Queue exactly 1 AMR frame (20 ms) per input
+                                // buffer so each MediaCodec output packet is a
+                                // single 20 ms frame matching damr.
+                                int want = frameSamples;
+                                java.nio.ShortBuffer sb = dstBuf
+                                        .order(ByteOrder.LITTLE_ENDIAN)
+                                        .asShortBuffer();
+                                sb.put(pend, 0, want);
+                                dstBuf.position(0);
+                                dstBuf.limit(want * 2);
+                                long pts = fed * 1_000_000L / outRate;
+                                enc.queueInputBuffer(idx, 0, want * 2, pts, 0);
+                                fed += want;
+                                System.arraycopy(pend, want, pend, 0,
+                                        pendLen - want);
+                                pendLen -= want;
+                                if (cb != null) {
+                                    int pct = (int) (fed * 100 / Math.max(
+                                            1, expectOut));
+                                    if (pct != lastPct) {
+                                        lastPct = pct;
+                                        cb.onProgress(
+                                                Math.min(100, pct));
                                     }
                                 }
-                            } else if (tailFlushed) {
+                            } else if (tailFlushed && pendLen == 0) {
                                 enc.queueInputBuffer(idx, 0, 0, 0,
                                         MediaCodec.BUFFER_FLAG_END_OF_STREAM);
                                 inEos = true;
                                 // Progress is already 100%; bound the drain.
                                 drainDeadline = SystemClock.elapsedRealtime()
                                         + DRAIN_TIMEOUT_MS;
+                            } else {
+                                enc.queueInputBuffer(idx, 0, 0, 0, 0);
                             }
-                            // Else: backlog momentarily empty but more file
-                            // remains — loop back to produce more.
                         }
                     }
                     // Drain every output buffer the codec has ready, not just
@@ -736,9 +787,9 @@ public final class FormatConverter {
                         ByteBuffer ob = enc.getOutputBuffer(oidx);
                         if ((bi.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0
                                 && bi.size > 0 && muxStarted) {
-                            ob.position(bi.offset);
-                            ob.limit(bi.offset + bi.size);
-                            muxer.writeSampleData(track, ob, bi);
+                            nextOutPtsUs = writeAmrFramesSingle(
+                                    muxer, track, ob, bi, wideband,
+                                    nextOutPtsUs);
                             samplesWritten++;
                         }
                         enc.releaseOutputBuffer(oidx, false);

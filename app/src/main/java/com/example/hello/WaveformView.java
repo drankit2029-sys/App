@@ -460,7 +460,7 @@ public class WaveformView extends View {
 
     /**
      * Saves the parent waveform stashed by {@link #enterSubEditorMode()} so a
-     * rotation inside Select &amp; Replace does not lose the take behind it.
+     * rotation inside Select & Replace does not lose the take behind it.
      */
     public synchronized void saveSubEditorState(Bundle out) {
         if (out == null || stashedParentPeaks == null) return;
@@ -965,6 +965,44 @@ public class WaveformView extends View {
 
     public void loadFromFloatWav(java.io.File raw) {
         loadFromFloatWav(raw, null);
+    }
+
+    /**
+     * Synchronously reloads the full waveform at 20 bars/sec (2,400 frames per
+     * bar) from {@code raw}, replacing the existing history so duration-changing
+     * offline effects (Change Speed and Pitch, Change Tempo, Truncate Silence,
+     * Timeline Repeat, Paulstretch) immediately reflect their new segment and
+     * take duration on the timeline.
+     */
+    public void reloadFullFromWavSync(java.io.File raw) {
+        if (raw == null || !raw.exists()) return;
+        try {
+            long payload = RecordingEngine.payloadBytesOf(raw);
+            FormatConverter.WavInfo info = FormatConverter.readFloatWav(raw);
+            long totalFrames = payload / 4 / Math.max(1, info.channels);
+            int buckets20Hz = (int) Math.max(2,
+                    Math.min(MAX_HISTORY, (totalFrames + 1200) / 2400));
+            float[] peaks = loadPeaksExactBuckets(raw, buckets20Hz);
+            if (peaks.length == 0) return;
+            synchronized (WaveformView.this) {
+                dropFxBaseLocked();
+                if (history.length < peaks.length) {
+                    history = new float[Math.min(MAX_HISTORY,
+                            Math.max(COLS, peaks.length))];
+                }
+                Arrays.fill(history, 0f);
+                count = Math.min(peaks.length, history.length);
+                System.arraycopy(peaks, 0, history, 0, count);
+                framesPerBar = totalFrames > 0
+                        ? Math.max(240f, totalFrames / (float) count) : 2400f;
+                playheadIndex = count;
+                playheadPos = count;
+                selectionActive = false;
+                zoom = Math.max(minimumZoom(), Math.min(zoom,
+                        ZOOM_STEPS[ZOOM_STEPS.length - 1]));
+            }
+            postInvalidate();
+        } catch (Exception ignored) {}
     }
 
     public void loadFromFloatWav(java.io.File raw, Runnable onLoaded) {

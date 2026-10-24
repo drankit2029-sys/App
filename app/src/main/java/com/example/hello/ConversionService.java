@@ -524,7 +524,12 @@ public class ConversionService extends Service {
             // Delete now, or defer until its last reader finishes: dropping
             // the file here would corrupt the reader, and skipping the
             // delete would leak the raw into reconcile() as a duplicate.
-            ConversionJobs.deleteOrDeferRaw(job.rawPath);
+            // Never delete the result if a legacy raw name made the
+            // finished take reuse the raw path.
+            if (r.file == null || !r.file.getAbsolutePath()
+                    .equals(job.rawPath)) {
+                ConversionJobs.deleteOrDeferRaw(job.rawPath);
+            }
             // noinspection ResultOfMethodCallIgnored
             new File(job.rawPath + ".pending").delete();
             ConversionJobs.markDone(job);
@@ -735,8 +740,7 @@ public class ConversionService extends Service {
         // Same bar as a fresh conversion (NEW-03): never expose an
         // unvalidated container under a final extension.
         FormatConverter.validateFinal(part, eff);
-        File fin = TakeSaver.uniqueFinal(raw,
-                eff == SaveFormat.WAV24 ? "wav" : "wav");
+        File fin = TakeSaver.uniqueFinal(raw, "wav");
         if (!part.renameTo(fin)) throw new IllegalStateException("adopt");
         // AUDIT-3-01 fix: `fin` is integer PCM16/PCM24 (audioFormat 1), so
         // `TakeSaver.durationOf(fin)` (which calls `readFloatWav`) always

@@ -456,7 +456,8 @@ public final class TakesRepository {
     // ---- startup reconcile ----
 
     private static final String[] AUDIO_EXTS = {
-            "wav", "m4a", "3gp", "flac", "webm", "mp3", "ogg", "aac",
+            "wav", "m4a", "3gp", "3ga", "flac", "opus", "webm", "mp3", "ogg",
+            "aac",
     };
 
     private static boolean isAudioFile(String name) {
@@ -474,10 +475,12 @@ public final class TakesRepository {
     private static String stemOf(String name) {
         int dot = name.lastIndexOf('.');
         String stem = dot > 0 ? name.substring(0, dot) : name;
-        // WAV saves land as "<base> (2).wav" because the raw "<base>.wav"
-        // still exists when uniqueFinal() runs. Strip the uniquifier so a
-        // finished conversion groups with its leftover raw instead of
-        // orphaning it into a duplicate take.
+        // Scratch raws are "<base>.raw.wav"; strip that marker so a finished
+        // conversion groups with its leftover raw instead of orphaning it.
+        stem = stem.replaceFirst("\\.raw$", "");
+        // Old WAV saves landed as "<base> (2).wav" because the raw
+        // "<base>.wav" still existed when uniqueFinal() ran. Strip the
+        // uniquifier too so legacy leftovers still group.
         return stem.replaceFirst("\\s*\\(\\d+\\)$", "");
     }
 
@@ -707,12 +710,14 @@ public final class TakesRepository {
                     badge = "M4A";
                     break;
                 case "3gp":
+                case "3ga":
                     badge = containsToken(f, new byte[]{'s', 'a', 'w', 'b'})
                             ? "AMR-WB" : "AMR";
                     break;
                 case "flac":
                     badge = "FLAC";
                     break;
+                case "opus":
                 case "webm":
                     badge = "OPUS";
                     break;

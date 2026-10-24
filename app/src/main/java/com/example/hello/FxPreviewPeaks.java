@@ -118,6 +118,31 @@ final class FxPreviewPeaks {
                     Math.round(endFrac * totalFrames)));
             if (end <= start) return null;
 
+            if (!chain.offlineProcessors().isEmpty()) {
+                float[] rendered = chain.renderRegionOfflineAndInPlace(
+                        raw, start, end, sampleRate);
+                if (rendered == null || rendered.length == 0) return null;
+                int rFrames = rendered.length / ch;
+                float[] peaks = new float[buckets];
+                int bStart = Math.max(0, Math.min(buckets - 1,
+                        (int) (start * buckets / totalFrames)));
+                int bEnd = Math.max(bStart + 1, Math.min(buckets,
+                        (int) (end * buckets / totalFrames)));
+                int bSpan = Math.max(1, bEnd - bStart);
+                for (int f = 0; f < rFrames; f++) {
+                    float peak = 0f;
+                    for (int c = 0; c < ch; c++) {
+                        float a = Math.abs(rendered[f * ch + c]);
+                        if (a > peak) peak = a;
+                    }
+                    int b = bStart + (int) ((long) f * bSpan / Math.max(1, rFrames));
+                    if (b < 0) b = 0;
+                    if (b >= buckets) b = buckets - 1;
+                    if (peak > peaks[b]) peaks[b] = peak;
+                }
+                return peaks;
+            }
+
             chain.prepareOffline(raw, start, end, sampleRate, ch);
             chain.reset();
 

@@ -252,8 +252,10 @@ public final class StreamingEncoder {
                     pumpFlac();
                     break;
                 case OPUS:
-                    pumpMuxed("audio/opus", bitrate,
-                            MediaMuxer.OutputFormat.MUXER_OUTPUT_WEBM, -1);
+                    int opusMuxFmt = android.os.Build.VERSION.SDK_INT >= 29
+                            ? MediaMuxer.OutputFormat.MUXER_OUTPUT_OGG
+                            : MediaMuxer.OutputFormat.MUXER_OUTPUT_WEBM;
+                    pumpMuxed("audio/opus", bitrate, opusMuxFmt, -1);
                     break;
                 case M4A:
                 default:
@@ -749,6 +751,9 @@ public final class StreamingEncoder {
 
     private void pumpAmr(boolean wideband) throws Exception {
         final int outRate = wideband ? 16000 : 8000;
+        // AMR encoders process exact 20 ms frames: 160 samples at 8 kHz,
+        // 320 at 16 kHz.
+        final int frameSamples = wideband ? 320 : 160;
         final int decim = Math.max(1, sampleRate / outRate);
         final double cutoff = (wideband ? 7000.0 : 3400.0) / sampleRate;
         final int taps = wideband ? 48 : 64;
@@ -806,6 +811,7 @@ public final class StreamingEncoder {
         int pendLen = 0;
         long readAbs = 0;
         long fed = 0;
+        long nextOutPtsUs = 0L;
         boolean tailFlushed = false;
         try {
             boolean inEos = false;
@@ -857,7 +863,7 @@ public final class StreamingEncoder {
                         framesEncoded = readAbs;
                     } else if (finishing && !canRead && !tailFlushed
                             && avail > 0) {
-                        int need = pendLen + taps + 16;
+                        int need = pendLen + taps + frameSamples + 16;
                         if (need > pend.length) {
                             short[] bigger = new short[Math.max(
                                     pend.length * 2, need)];
@@ -865,31 +871,42 @@ public final class StreamingEncoder {
                             pend = bigger;
                         }
                         pendLen += decimator.flush(readAbs, pend, pendLen);
+                        int pad = (frameSamples - (pendLen % frameSamples))
+                                % frameSamples;
+                        if (pad > 0) {
+                            int padNeed = pendLen + pad;
+                            if (padNeed > pend.length) {
+                                short[] bigger = new short[Math.max(
+                                        pend.length * 2, padNeed)];
+                                System.arraycopy(pend, 0, bigger, 0,
+                                        pendLen);
+                                pend = bigger;
+                            }
+                            java.util.Arrays.fill(pend, pendLen,
+                                    pendLen + pad, (short) 0);
+                            pendLen += pad;
+                        }
                         tailFlushed = true;
                     }
-                    if (pendLen > 0) {
+                    if (pendLen >= frameSamples) {
                         int idx = enc.dequeueInputBuffer(2000);
                         if (idx >= 0) {
                             ByteBuffer dstBuf = enc.getInputBuffer(idx);
                             dstBuf.clear();
-                            int room = dstBuf.remaining() / 2;
-                            int want = Math.min(room, pendLen);
-                            if (want <= 0) {
-                                enc.queueInputBuffer(idx, 0, 0, 0, 0);
-                            } else {
-                                java.nio.ShortBuffer sb = dstBuf
-                                        .order(ByteOrder.LITTLE_ENDIAN)
-                                        .asShortBuffer();
-                                sb.put(pend, 0, want);
-                                dstBuf.position(0);
-                                dstBuf.limit(want * 2);
-                                long pts = fed * 1_000_000L / outRate;
-                                enc.queueInputBuffer(idx, 0, want * 2, pts, 0);
-                                fed += want;
-                                System.arraycopy(pend, want, pend, 0,
-                                        pendLen - want);
-                                pendLen -= want;
-                            }
+                            // Feed exactly one 20 ms frame per input buffer.
+                            int want = frameSamples;
+                            java.nio.ShortBuffer sb = dstBuf
+                                    .order(ByteOrder.LITTLE_ENDIAN)
+                                    .asShortBuffer();
+                            sb.put(pend, 0, want);
+                            dstBuf.position(0);
+                            dstBuf.limit(want * 2);
+                            long pts = fed * 1_000_000L / outRate;
+                            enc.queueInputBuffer(idx, 0, want * 2, pts, 0);
+                            fed += want;
+                            System.arraycopy(pend, want, pend, 0,
+                                    pendLen - want);
+                            pendLen -= want;
                         }
                     } else if (finishing && tailFlushed && readAbs >= avail) {
                         // Everything read, decimated, and fed: close the
@@ -919,9 +936,10 @@ public final class StreamingEncoder {
                             if ((bi.flags
                                     & MediaCodec.BUFFER_FLAG_CODEC_CONFIG)
                                     == 0 && bi.size > 0 && muxStarted) {
-                                ob.position(bi.offset);
-                                ob.limit(bi.offset + bi.size);
-                                muxer.writeSampleData(track, ob, bi);
+                                nextOutPtsUs = FormatConverter
+                                        .writeAmrFramesSingle(muxer, track,
+                                                ob, bi, wideband,
+                                                nextOutPtsUs);
                                 samplesWritten++;
                             }
                             enc.releaseOutputBuffer(oidx, false);
@@ -953,9 +971,9 @@ public final class StreamingEncoder {
                     ByteBuffer ob = enc.getOutputBuffer(oidx);
                     if ((bi.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0
                             && bi.size > 0 && muxStarted) {
-                        ob.position(bi.offset);
-                        ob.limit(bi.offset + bi.size);
-                        muxer.writeSampleData(track, ob, bi);
+                        nextOutPtsUs = FormatConverter.writeAmrFramesSingle(
+                                muxer, track, ob, bi, wideband,
+                                nextOutPtsUs);
                         samplesWritten++;
                     }
                     enc.releaseOutputBuffer(oidx, false);

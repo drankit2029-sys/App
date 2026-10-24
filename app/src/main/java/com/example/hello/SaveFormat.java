@@ -149,7 +149,9 @@ public enum SaveFormat {
             case AMR_NB:
             case AMR_WB: return "3gp";
             case FLAC: return "flac";
-            case OPUS: return "webm";
+            case OPUS:
+                return android.os.Build.VERSION.SDK_INT >= 29
+                        ? "opus" : "webm";
             default: return "m4a";
         }
     }

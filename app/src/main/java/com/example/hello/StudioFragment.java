@@ -3039,20 +3039,6 @@ public class StudioFragment extends Fragment {
         }
         fxPanelOpen = open;
         if (open) {
-            // If no effects are currently enabled on initial default state,
-            // activate the default Voice Polish rack so Preview & Apply work
-            // immediately out of the box without overwriting an intentional
-            // CLEAR_ALL ("Flat / No Effects") or custom unchecked rack!
-            if (dspConfig != null && !dspConfig.isActive()
-                    && (DspChain.Preset.VOICE_POLISH.id.equals(dspConfig.activePresetId)
-                            || (dspConfig.slots.isEmpty()
-                                    && !DspChain.Preset.CLEAR_ALL.id.equals(
-                                            dspConfig.activePresetId)))) {
-                dspBakedToRaw = false;
-                dspSubRangeBaked = false;
-                dspConfig.applyPreset(DspChain.Preset.VOICE_POLISH);
-                dspConfig.save(requireContext());
-            }
             teleWasVisibleBeforeFx =
                     telePanel.getVisibility() == View.VISIBLE;
             // Freeze the apply target: the selection at the moment the rack
@@ -3500,19 +3486,16 @@ public class StudioFragment extends Fragment {
             slot.noiseProfile = profile;
             if (slot.value <= 0) slot.value = slot.type.defaultVal;
             slot.enabled = true;
-            // Restore the apply target so effects mode keeps showing the
-            // region that Stop will commit; the learned profile is already
-            // part of the live waveform and playback.
-            if (fxPanelOpen) {
-                waveform.selectRange(fxApplyTargetStart, fxApplyTargetEnd);
-            }
             onSlotMutated.run();
             rebuildFxRackList();
+            long startMs = Math.round(start * 1000.0 / Math.max(1, info.sampleRate));
+            long endMs = Math.round(end * 1000.0 / Math.max(1, info.sampleRate));
             double seconds = (end - start)
                     / (double) Math.max(1, info.sampleRate);
             Toast.makeText(requireContext(), String.format(Locale.US,
-                    "Noise profile learned from %.1f s — waveform and "
-                            + "playback updated", seconds),
+                    "Noise profile learned from %s to %s (%.1f s) — waveform and "
+                            + "playback updated",
+                    formatTimer(startMs), formatTimer(endMs), seconds),
                     Toast.LENGTH_SHORT).show();
         } catch (Exception e) {
             Toast.makeText(requireContext(),
@@ -3628,7 +3611,6 @@ public class StudioFragment extends Fragment {
         root.addView(desc, descLp);
 
         android.widget.ScrollView scroll = new android.widget.ScrollView(ctx);
-        scroll.setFillViewport(true);
         android.widget.LinearLayout body =
                 new android.widget.LinearLayout(ctx);
         body.setOrientation(android.widget.LinearLayout.VERTICAL);
@@ -3668,6 +3650,21 @@ public class StudioFragment extends Fragment {
                             Math.round(210 * density));
             eqLp.topMargin = Math.round(10 * density);
             body.addView(eqView, eqLp);
+        }
+
+        DynamicsGraphView[] dynHolder = new DynamicsGraphView[1];
+        if (slot.type == DspChain.EffectType.COMPRESSOR
+                || slot.type == DspChain.EffectType.DYNAMIC_COMPRESSOR
+                || slot.type == DspChain.EffectType.MULTIBAND_COMPRESSOR) {
+            DynamicsGraphView dynView = new DynamicsGraphView(ctx, slot, onChanged);
+            dynHolder[0] = dynView;
+            android.widget.LinearLayout.LayoutParams dynLp =
+                    new android.widget.LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            Math.round(190 * density));
+            dynLp.topMargin = Math.round(10 * density);
+            body.addView(dynView, dynLp);
+            refreshers.add(dynView::invalidate);
         }
 
         TeleValue primary = new TeleValue(ctx);
@@ -4005,13 +4002,11 @@ public class StudioFragment extends Fragment {
             android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
             int dialogWidth = Math.round(dm.widthPixels * 0.94f);
             int maxHeight = Math.round(dm.heightPixels * 0.84f);
-            int minHeight = Math.round(dm.heightPixels * 0.34f);
             root.measure(View.MeasureSpec.makeMeasureSpec(
                             dialogWidth, View.MeasureSpec.EXACTLY),
                     View.MeasureSpec.makeMeasureSpec(
                             maxHeight, View.MeasureSpec.AT_MOST));
-            int dialogHeight = Math.min(maxHeight,
-                    Math.max(minHeight, root.getMeasuredHeight()));
+            int dialogHeight = Math.min(maxHeight, root.getMeasuredHeight());
             window.setLayout(dialogWidth, dialogHeight);
         }
     }
@@ -4166,6 +4161,7 @@ public class StudioFragment extends Fragment {
             pill.addView(body, bodyLp);
 
             final EqCurveView[] eqViewHolder = new EqCurveView[1];
+            final DynamicsGraphView[] dynViewHolder = new DynamicsGraphView[1];
             final java.util.Map<String, TeleValue> extraControls =
                     new java.util.LinkedHashMap<>();
             Runnable onSlotMutated = () -> {
@@ -4192,6 +4188,9 @@ public class StudioFragment extends Fragment {
                 }
                 if (eqViewHolder[0] != null) {
                     eqViewHolder[0].invalidate();
+                }
+                if (dynViewHolder[0] != null) {
+                    dynViewHolder[0].invalidate();
                 }
                 checkBtn.setText(slot.enabled ? "✓" : "");
                 checkBtn.setTextColor(slot.enabled
@@ -4291,11 +4290,14 @@ public class StudioFragment extends Fragment {
                 body.addView(eqView, eqLp);
             }
 
-            // Stage 4 dynamics card: the transfer curve and the live gain
-            // reduction meter explain what the compressor is doing.
-            if (slot.type == DspChain.EffectType.DYNAMIC_COMPRESSOR
+            // Dynamics card: interactive transfer curve and live gain
+            // reduction meter for Compressor Pro, Compressor and Multiband.
+            if (slot.type == DspChain.EffectType.COMPRESSOR
+                    || slot.type == DspChain.EffectType.DYNAMIC_COMPRESSOR
                     || slot.type == DspChain.EffectType.MULTIBAND_COMPRESSOR) {
-                DynamicsGraphView dynView = new DynamicsGraphView(ctx, slot);
+                DynamicsGraphView dynView = new DynamicsGraphView(
+                        ctx, slot, onSlotMutated);
+                dynViewHolder[0] = dynView;
                 android.widget.LinearLayout.LayoutParams dynLp =
                         new android.widget.LinearLayout.LayoutParams(
                                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -4651,7 +4653,18 @@ public class StudioFragment extends Fragment {
             fxListContainer.addView(pill, pillLp);
         }
 
-        // "+ Add Effect" Button at the bottom of the scrollable list
+        // Bottom action row: split horizontally into "+ Add Effect" and "Delete All"
+        android.widget.LinearLayout bottomActionRow =
+                new android.widget.LinearLayout(ctx);
+        bottomActionRow.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+        bottomActionRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        android.widget.LinearLayout.LayoutParams actionRowLp =
+                new android.widget.LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT);
+        actionRowLp.topMargin = Math.round(8 * density);
+
+        int addPad = Math.round(10 * density);
         TextView addBtn = new TextView(ctx);
         addBtn.setText("+ Add Effect");
         addBtn.setTextSize(12.5f);
@@ -4660,16 +4673,60 @@ public class StudioFragment extends Fragment {
         addBtn.setGravity(android.view.Gravity.CENTER);
         addBtn.setTextColor(0xFFF2F4F7);
         addBtn.setBackgroundResource(R.drawable.bg_btn_ghost);
-        int addPad = Math.round(10 * density);
         addBtn.setPadding(addPad, addPad, addPad, addPad);
         android.widget.LinearLayout.LayoutParams addLp =
                 new android.widget.LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT);
-        addLp.topMargin = Math.round(8 * density);
+                        0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        addLp.rightMargin = Math.round(4 * density);
         PressAnim.applySoft(addBtn, 0.96f);
         addBtn.setOnClickListener(v -> showAddEffectSearchDialog());
-        fxListContainer.addView(addBtn, addLp);
+        bottomActionRow.addView(addBtn, addLp);
+
+        TextView deleteAllBtn = new TextView(ctx);
+        deleteAllBtn.setText("Delete All");
+        deleteAllBtn.setTextSize(12.5f);
+        deleteAllBtn.setTypeface(android.graphics.Typeface.create(
+                "sans-serif-medium", android.graphics.Typeface.NORMAL));
+        deleteAllBtn.setGravity(android.view.Gravity.CENTER);
+        boolean hasAnySlots = !dspConfig.slots.isEmpty();
+        deleteAllBtn.setTextColor(hasAnySlots ? 0xFFFF453A : 0xFF5D6672);
+        deleteAllBtn.setBackgroundResource(R.drawable.bg_btn_danger);
+        deleteAllBtn.setPadding(addPad, addPad, addPad, addPad);
+        deleteAllBtn.setEnabled(hasAnySlots);
+        deleteAllBtn.setClickable(hasAnySlots);
+        deleteAllBtn.setAlpha(hasAnySlots ? 1f : 0.4f);
+        android.widget.LinearLayout.LayoutParams delAllLp =
+                new android.widget.LinearLayout.LayoutParams(
+                        0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        delAllLp.leftMargin = Math.round(4 * density);
+        PressAnim.applySoft(deleteAllBtn, 0.96f);
+        deleteAllBtn.setOnClickListener(v -> {
+            if (dspConfig == null || dspConfig.slots.isEmpty()) return;
+            OptionsSheet.showConfirm(requireContext(),
+                    "Delete all effects?",
+                    "Remove all currently added effects from the rack?",
+                    "Delete All",
+                    R.drawable.ic_trash,
+                    true,
+                    () -> {
+                        if (!isAdded() || dspConfig == null) return;
+                        if (dspSubRangeBaked) lastEditWasSubRangeBake = true;
+                        dspBakedToRaw = false;
+                        dspSubRangeBaked = false;
+                        fxAdvancedOpen.clear();
+                        dspConfig.clearRack();
+                        dspConfig.save(requireContext());
+                        if (livePreviewDsp != null) {
+                            livePreviewDsp.updateConfig(dspConfig);
+                        }
+                        refreshFxPreviewPeaks();
+                        rebuildFxRackList();
+                        paintEditorStrip();
+                        paintFxPanelControls();
+                    });
+        });
+        bottomActionRow.addView(deleteAllBtn, delAllLp);
+        fxListContainer.addView(bottomActionRow, actionRowLp);
     }
 
     /**
@@ -5089,11 +5146,24 @@ public class StudioFragment extends Fragment {
                 }
                 engine.abortStreaming();
                 engine.dataBytes = RecordingEngine.payloadBytesOf(raw);
+                long newTotalFrames = engine.totalFrames();
+                long nextCursor = Math.min(newTotalFrames, Math.max(0L, regionEnd));
+                engine.seekCursorFrame(nextCursor);
                 dspBakedToRaw = true;
                 dspSubRangeBaked = hadSel;
                 lastEditWasSubRangeBake = false;
-                waveform.loadFromFloatWav(raw);
+                waveform.reloadFullFromWavSync(raw);
+                waveform.syncFramesPerBar(newTotalFrames);
+                if (newTotalFrames > 0) {
+                    waveform.setPlayheadFraction(
+                            nextCursor / (float) newTotalFrames);
+                }
+                refreshZoomValue();
+                if (timerText != null) {
+                    timerText.setText(formatTimer(engine.cursorMs()));
+                }
                 resetFxRackAfterApply();
+                waveform.clearSelection();
                 syncFxBakeRequired();
                 OptionsSheet.showTopPopup(requireContext(), "Effects applied");
                 paint();
@@ -5149,24 +5219,16 @@ public class StudioFragment extends Fragment {
         return true;
     }
 
-    /** Empties the FX editor after a successful bake; processed audio stays. */
+    /** Preserves the user's FX rack after a bake while marking the audio committed. */
     private void resetFxRackAfterApply() {
         if (dspConfig == null) return;
-        dspConfig.clearRack();
         try {
             dspConfig.save(requireContext());
         } catch (Exception ignored) {}
         if (livePreviewDsp != null) {
             livePreviewDsp.updateConfig(dspConfig);
         }
-        // The effect-applied waveform overlay follows every rack edit.
         refreshFxPreviewPeaks();
-        // The baked audio is now the baseline: there is no "same rack" left to
-        // protect from a second bake, so a later whole-take edit must not roll
-        // this Apply back through the sub-range undo snapshot.
-        dspBakedToRaw = false;
-        dspSubRangeBaked = false;
-        lastEditWasSubRangeBake = false;
         rebuildFxRackList();
     }
 

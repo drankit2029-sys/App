@@ -57,7 +57,8 @@ final class SpectralEditProcessor extends AudioProcessor {
 
     @Override
     public boolean isAudible() {
-        return isEnabled();
+        return isEnabled() && (mode.getEnumIndex() == 2
+                || Math.abs(gain.getFloat()) >= 0.01f);
     }
 
     @Override
@@ -84,7 +85,7 @@ final class SpectralEditProcessor extends AudioProcessor {
                         float d = (hz - centre) / (centre * Math.max(0.05f, width));
                         weight = (float) Math.exp(-d * d);
                     }
-                    float targetDb = modeIdx == 2 ? -Math.abs(g) : g;
+                    float targetDb = modeIdx == 2 ? (Math.abs(g) > 0.1f ? -Math.abs(g) : -24f) : g;
                     float factor = (float) Math.pow(10.0,
                             targetDb * weight / 20.0);
                     re[b] *= factor;

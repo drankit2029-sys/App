@@ -134,11 +134,9 @@ final class AudioGeneratorTool extends AudioProcessor {
         for (int f = 0; f < frames; f++) {
             float white = nextNoise();
             float s;
-            if (waveIdx == 1) {
+            if (waveIdx == 0 || waveIdx == 1) {
                 s = white;
             } else if (waveIdx == 2) {
-                s = white;
-            } else if (waveIdx == 3) {
                 // Pink (Paul Kellet's economy filter).
                 pinkB0 = 0.99765f * pinkB0 + white * 0.0990460f;
                 pinkB1 = 0.96300f * pinkB1 + white * 0.2965164f;

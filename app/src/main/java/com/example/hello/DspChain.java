@@ -16,27 +16,27 @@ import java.util.Map;
 /**
  * Pro Multi-Effect Rack & Real-Time/Offline 48 kHz Float DSP Engine.
  *
- * &lt;p&gt;All 8 effects in {@link EffectType} are 100% active, parameter-driven,
+ * <p>All 8 effects in {@link EffectType} are 100% active, parameter-driven,
  * and audibly distinct:
- * &lt;ol&gt;
- *   &lt;li&gt;&lt;b&gt;Low-Cut Filter (40–160 Hz)&lt;/b&gt;: Dynamic 2nd-order Butterworth HPF
+ * <ol>
+ *   <li><b>Low-Cut Filter (40–160 Hz)</b>: Dynamic 2nd-order Butterworth HPF
  *       whose biquad coefficients recompute live from the user's Hz setting.</li>
- *   &lt;li&gt;&lt;b&gt;Noise Suppression Pro (0–100%)&lt;/b&gt;: latency-compensated STFT
+ *   <li><b>Noise Suppression Pro (0–100%)</b>: latency-compensated STFT
  *       spectral subtraction against a noise profile learned from a selected
  *       noise-only region (adaptive per-bin fallback when no profile exists).</li>
- *   &lt;li&gt;&lt;b&gt;Expander / Room Gate (0–100%)&lt;/b&gt;: Dedicated downward expander that
+ *   <li><b>Expander / Room Gate (0–100%)</b>: Dedicated downward expander that
  *       attenuates room noise and breaths below threshold (-52..-18 dBFS).</li>
- *   &lt;li&gt;&lt;b&gt;Warmth &amp; Chest Body (0–100%)&lt;/b&gt;: 180 Hz low-mid contour boost (up
+ *   <li><b>Warmth & Chest Body (0–100%)</b>: 180 Hz low-mid contour boost (up
  *       to +9 dB) for rich broadcast fullness.</li>
- *   &lt;li&gt;&lt;b&gt;Vocal Presence &amp; Air (0–100%)&lt;/b&gt;: 3.5 kHz articulation &amp; air shelf
+ *   <li><b>Vocal Presence & Air (0–100%)</b>: 3.5 kHz articulation & air shelf
  *       boost (up to +10 dB) for crisp intelligibility.</li>
- *   &lt;li&gt;&lt;b&gt;De-Esser (4.5–9.5 kHz)&lt;/b&gt;: Split-band relative sibilance suppressor
+ *   <li><b>De-Esser (4.5–9.5 kHz)</b>: Split-band relative sibilance suppressor
  *       (up to -14 dB cut on harsh 'S'/'T' transients).</li>
- *   &lt;li&gt;&lt;b&gt;Compressor &amp; Leveler (0–100%)&lt;/b&gt;: Soft-knee vocal compressor (up to
+ *   <li><b>Compressor & Leveler (0–100%)</b>: Soft-knee vocal compressor (up to
  *       6:1 ratio) with automatic makeup gain.</li>
- *   &lt;li&gt;&lt;b&gt;Brickwall Ceiling Limiter (0–100%)&lt;/b&gt;: Dedicated gain drive (up to
+ *   <li><b>Brickwall Ceiling Limiter (0–100%)</b>: Dedicated gain drive (up to
  *       +12 dB) into a zero-overshoot -0.2 dBFS soft-clip ceiling.</li>
- * &lt;/ol&gt;
+ * </ol>
  */
 public final class DspChain {
 
@@ -392,7 +392,7 @@ public final class DspChain {
         public int customDeEssPct = 30;
         public int customCompPct = 30;
 
-        public String activePresetId = Preset.VOICE_POLISH.id;
+        public String activePresetId = Preset.CLEAR_ALL.id;
         public final List<EffectSlot> slots = new ArrayList<>();
 
         public Config() {
@@ -487,17 +487,6 @@ public final class DspChain {
          * focuses the existing entry instead.
          */
         public EffectSlot addOrFocusSlot(EffectType type) {
-            if (type != null && type.isLegacyStage()) {
-                for (EffectSlot s : slots) {
-                    if (s.type == type) {
-                        s.enabled = true;
-                        s.expanded = true;
-                        activePresetId = Preset.CUSTOM.id;
-                        syncLegacyFieldsFromSlots();
-                        return s;
-                    }
-                }
-            }
             EffectSlot created = new EffectSlot(type, true, type.defaultVal, true);
             slots.add(created);
             activePresetId = Preset.CUSTOM.id;
@@ -621,8 +610,7 @@ public final class DspChain {
             java.util.Set<EffectType> seenLegacy = new java.util.HashSet<>();
             for (EffectSlot kept : previous) {
                 if (kept == null || kept.type == null) continue;
-                if (kept.type.isLegacyStage()) {
-                    if (!seenLegacy.add(kept.type)) continue;
+                if (kept.type.isLegacyStage() && seenLegacy.add(kept.type)) {
                     Integer val = activeValues.remove(kept.type);
                     if (val != null) {
                         kept.enabled = true;
@@ -858,10 +846,10 @@ public final class DspChain {
                 c.customNoisePct = clamp(p.getInt("dsp_custom_noise", 35));
                 c.customDeEssPct = clamp(p.getInt("dsp_custom_deess", 30));
                 c.customCompPct = clamp(p.getInt("dsp_custom_comp", 30));
-                c.activePresetId = p.getString("dsp_preset_id", Preset.VOICE_POLISH.id);
+                c.activePresetId = p.getString("dsp_preset_id", Preset.CLEAR_ALL.id);
 
                 String slotsJson = p.getString("dsp_slots_json", null);
-                if (slotsJson != null && !slotsJson.isEmpty()) {
+                if (slotsJson != null) {
                     c.slots.clear();
                     JSONArray arr = new JSONArray(slotsJson);
                     for (int i = 0; i < arr.length(); i++) {
@@ -999,13 +987,17 @@ public final class DspChain {
     private void ensureRackSlots(Config cfg) {
         if (cfg == null) return;
         java.util.Set<String> wanted = new java.util.HashSet<>();
+        java.util.Set<EffectType> firstLegacy = new java.util.HashSet<>();
         for (EffectSlot s : cfg.slots) {
-            if (s == null || s.type == null || s.type.isLegacyStage()) continue;
+            if (s == null || s.type == null) continue;
+            if (s.type.isLegacyStage() && firstLegacy.add(s.type)) {
+                continue;
+            }
             String pid = FxRackChain.processorIdForSlotType(s.type);
             if (pid == null) continue;
             String key = slotInstanceKey(s);
             wanted.add(key);
-            int idx = rack.indexOfInstance(key, pid);
+            int idx = rack.indexOfInstance(key, null);
             AudioProcessor p = idx >= 0 ? rack.getProcessor(idx) : null;
             if (p == null) {
                 p = FxRackChain.createProcessor(pid);
@@ -1017,9 +1009,10 @@ public final class DspChain {
         }
         for (int i = rack.size() - 1; i >= 0; i--) {
             AudioProcessor p = rack.getProcessor(i);
-            if (p == null || isLegacyProcessor(p)) continue;
+            if (p == null) continue;
             String key = p.getInstanceKey();
-            if (key == null || !wanted.contains(key)) rack.removeProcessor(i);
+            if (key == null) continue;
+            if (!wanted.contains(key)) rack.removeProcessor(i);
         }
     }
 
@@ -1106,10 +1099,14 @@ public final class DspChain {
                 ((SpectralNoiseReductionProcessor) p).setNoiseProfile(
                         s.noiseProfile);
             }
-            if (!s.type.isLegacyStage()) {
+            if (!s.type.isLegacyStage() || p.getInstanceKey() != null) {
                 p.setEnabled(s.enabled);
-                FxParameter fp = p.getParam(primaryParamId(s.type));
-                if (fp != null) fp.setCurrentRaw(s.value);
+                if (s.type.isLegacyStage()) {
+                    configureLegacySlotProcessor(p, s);
+                } else {
+                    FxParameter fp = p.getParam(primaryParamId(s.type));
+                    if (fp != null) fp.setCurrentRaw(s.value);
+                }
             }
             String primaryId = primaryParamId(s.type);
             for (Map.Entry<String, Integer> e : s.extraParams.entrySet()) {
@@ -1224,9 +1221,69 @@ public final class DspChain {
      * each. Every other effect is bound to its own rack entry by instance
      * key, which is what lets the same effect appear in the rack twice.
      */
+    static void configureLegacySlotProcessor(AudioProcessor p, EffectSlot s) {
+        if (p == null || s == null || s.type == null) return;
+        switch (s.type) {
+            case LOW_CUT_HPF:
+                if (p instanceof ProHpfProcessor) {
+                    ((ProHpfProcessor) p).setLegacyState(
+                            s.enabled && s.value > 0,
+                            Math.max(40, Math.min(160, s.value)));
+                }
+                break;
+            case NOISE_SUPPRESSION:
+                if (p instanceof NoiseSuppressionProcessor) {
+                    ((NoiseSuppressionProcessor) p).setLegacyAmount(s.value);
+                    p.setEnabled(s.enabled && s.value > 0);
+                }
+                break;
+            case ROOM_GATE:
+                if (p instanceof ProGateProcessor) {
+                    ((ProGateProcessor) p).setLegacyAmount(s.value);
+                    p.setEnabled(s.enabled && s.value > 0);
+                }
+                break;
+            case WARMTH_BODY:
+                if (p instanceof ProToneProcessor) {
+                    ((ProToneProcessor) p).setLegacyAmounts(s.value, 0);
+                    p.setEnabled(s.enabled && s.value > 0);
+                }
+                break;
+            case VOCAL_PRESENCE:
+                if (p instanceof ProToneProcessor) {
+                    ((ProToneProcessor) p).setLegacyAmounts(0, s.value);
+                    p.setEnabled(s.enabled && s.value > 0);
+                }
+                break;
+            case DE_ESSER:
+                if (p instanceof ProDeEsserProcessor) {
+                    ((ProDeEsserProcessor) p).setLegacyAmount(s.value);
+                    p.setEnabled(s.enabled && s.value > 0);
+                }
+                break;
+            case COMPRESSOR:
+                if (p instanceof ProCompressorProcessor) {
+                    ((ProCompressorProcessor) p).setLegacyAmount(s.value);
+                    p.setEnabled(s.enabled && s.value > 0);
+                }
+                break;
+            case BRICKWALL_LIMITER:
+                if (p instanceof ProLimiterProcessor) {
+                    ((ProLimiterProcessor) p).setLegacyState(s.value, false);
+                    p.setEnabled(s.enabled && s.value > 0);
+                }
+                break;
+            default:
+                break;
+        }
+    }
+
     private AudioProcessor processorForSlot(EffectSlot slot) {
         if (slot == null || slot.type == null) return null;
         EffectType type = slot.type;
+        String key = slotInstanceKey(slot);
+        int instIdx = rack.indexOfInstance(key, null);
+        if (instIdx >= 0) return rack.getProcessor(instIdx);
         switch (type) {
             case LOW_CUT_HPF:
                 return rack.getProcessor(rack.indexOf("hpf"));
@@ -1244,10 +1301,9 @@ public final class DspChain {
             case VOCAL_PRESENCE:
                 return rack.getProcessor(rack.indexOf("tone"));
             default: {
-                // Rack-local effects: bound to this slot's own processor.
                 String pid = FxRackChain.processorIdForSlotType(type);
                 if (pid == null) return null;
-                int idx = rack.indexOfInstance(slotInstanceKey(slot), pid);
+                int idx = rack.indexOfInstance(key, pid);
                 return idx >= 0 ? rack.getProcessor(idx) : null;
             }
         }
@@ -1348,6 +1404,56 @@ public final class DspChain {
 
     public void processInPlace(float[] buf, int frames) {
         rack.processInPlace(buf, frames);
+    }
+
+    /**
+     * Renders an entire region through both offline processors (such as
+     * Change Speed and Pitch, Change Tempo, Change Pitch, Audio Generator,
+     * Fade, Timeline Utility, Truncate Silence, Paulstretch, Sliding Stretch)
+     * and the in-place processor chain, returning the processed interleaved
+     * buffer (whose frame count may differ from {@code endFrame - startFrame}).
+     */
+    public float[] renderRegionOfflineAndInPlace(File raw, long startFrame,
+                                                 long endFrame, int sampleRate)
+            throws Exception {
+        if (raw == null || !raw.exists()) return null;
+        float[] buf = EditEngine.readFloatSelection(raw, startFrame, endFrame);
+        if (buf == null || buf.length == 0) return buf;
+        int curFrames = buf.length / Math.max(1, channels);
+        for (AudioProcessor proc : offlineProcessors()) {
+            proc.prepare(sampleRate, channels);
+            float[] next = proc.processOfflineRegion(buf, curFrames, channels);
+            if (next != null && next.length > 0) {
+                buf = next;
+                curFrames = buf.length / Math.max(1, channels);
+            }
+        }
+        if (hasInPlaceProcessors() && curFrames > 0) {
+            prepareOffline(raw, startFrame, endFrame, sampleRate, channels);
+            reset();
+            int chunk = 4096;
+            float[] block = new float[chunk * channels];
+            for (int off = 0; off < curFrames; off += chunk) {
+                int n = Math.min(chunk, curFrames - off);
+                System.arraycopy(buf, off * channels, block, 0, n * channels);
+                for (AudioProcessor p : rack.processors()) {
+                    if (!p.isEnabled() || p.isOfflineOnly() || !p.isAudible()) continue;
+                    float mix = p.getWetDryMix();
+                    if (mix >= 1.0f || (mix > 0.0f && p.handlesOwnWetDryMix())) {
+                        p.processInPlace(block, n, channels);
+                    } else if (mix > 0.0f) {
+                        float[] dry = new float[n * channels];
+                        System.arraycopy(block, 0, dry, 0, n * channels);
+                        p.processInPlace(block, n, channels);
+                        for (int i = 0; i < n * channels; i++) {
+                            block[i] = dry[i] * (1f - mix) + block[i] * mix;
+                        }
+                    }
+                }
+                System.arraycopy(block, 0, buf, off * channels, n * channels);
+            }
+        }
+        return buf;
     }
 
     public static float fastLinToDb(float x) {

@@ -618,6 +618,7 @@ public final class FxRackChain {
         cfg.syncLegacyFieldsFromSlots();
         syncOrderFromSlots(cfg);
         for (AudioProcessor p : processors) {
+            if (p.getInstanceKey() != null) continue;
             if (p instanceof ProHpfProcessor) {
                 ((ProHpfProcessor) p).setLegacyState(
                         cfg.hpfEnabled, cfg.hpfCutoffHz);

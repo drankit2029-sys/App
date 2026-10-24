@@ -158,6 +158,7 @@ final class MultibandCompressorProcessor extends AudioProcessor {
             float tHigh = amt * DynamicsDetector.softKneeGainDb(
                     lvlHigh - highThresh.getFloat(), highRatio.getFloat(), 6f);
 
+            FxTelemetry.publishGainReductionDb(Math.min(tLow, Math.min(tMid, tHigh)));
             float stepLow = (tLow - gainLow) / n;
             float stepMid = (tMid - gainMid) / n;
             float stepHigh = (tHigh - gainHigh) / n;

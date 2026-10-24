@@ -322,6 +322,50 @@ public final class RawFloatPlayer {
             track.play();
             activeTrack = track;
             long writtenFrames = 0;
+            DspChain preChain = this.dspChain;
+            if (preChain != null && preChain.isActive()) {
+                try {
+                    preChain.prepareOffline(file, startFramePos, limitFrame,
+                            RecordingEngine.SAMPLE_RATE, channels);
+                } catch (Exception ignored) {}
+            }
+            if (preChain != null && preChain.isActive()
+                    && !preChain.offlineProcessors().isEmpty()) {
+                float[] offlineBuf = preChain.renderRegionOfflineAndInPlace(
+                        file, startFramePos, limitFrame,
+                        RecordingEngine.SAMPLE_RATE);
+                if (offlineBuf != null && offlineBuf.length > 0) {
+                    int outFrames = offlineBuf.length / channels;
+                    int curOut = 0;
+                    while (!stop && curOut < outFrames) {
+                        int want = Math.min(1024, outFrames - curOut);
+                        int totalSamples = want * channels;
+                        System.arraycopy(offlineBuf, curOut * channels,
+                                buf, 0, totalSamples);
+                        FxTelemetry.push(buf, want, channels);
+                        float chunkPeak = 0f;
+                        for (int i = 0; i < totalSamples; i++) {
+                            float a = Math.abs(buf[i]);
+                            if (a > chunkPeak) chunkPeak = a;
+                        }
+                        this.level = Math.min(1f, chunkPeak);
+                        int written = 0;
+                        while (written < totalSamples && !stop) {
+                            int n = track.write(buf, written,
+                                    totalSamples - written,
+                                    AudioTrack.WRITE_BLOCKING);
+                            if (n <= 0) break;
+                            written += n;
+                        }
+                        curOut += want;
+                        writtenFrames += want;
+                        framePos = startFramePos + Math.round(
+                                (double) curOut / Math.max(1, outFrames)
+                                        * (limitFrame - startFramePos));
+                    }
+                    framePos = limitFrame;
+                }
+            }
             while (!stop && framePos < limitFrame) {
                 int want = (int) Math.min(1024, limitFrame - framePos);
                 r.seek(dataStart + framePos * channels * 4L);

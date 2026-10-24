@@ -35,6 +35,7 @@ public final class Dsp {
         String s = fileName;
         int dot = s.lastIndexOf('.');
         if (dot > 0) s = s.substring(0, dot);
+        s = s.replaceFirst("\\.raw$", "");
         s = s.replaceFirst("\\s*\\(\\d+\\)\\s*$", "");
         s = s.replaceFirst("_\\d{8}_\\d{6}$", "");
         s = s.replace('_', ' ').replaceAll("\\s+", " ").trim();

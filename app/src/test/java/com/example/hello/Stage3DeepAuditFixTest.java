@@ -299,12 +299,11 @@ public class Stage3DeepAuditFixTest {
         // Stop commits the rack to the selected region.
         frag.applyEffectsToSelection();
 
-        // 2) The source audio now carries the bake and the rack is blank, so
-        //    there is no pending effect left to double-bake the region with.
+        // 2) The source audio now carries the bake and the rack preserves the
+        //    user's added effects while marking the audio as baked.
         assertFalse(wf.hasSelection());
         DspChain.Config saved = DspChain.Config.load(ctx);
-        assertEquals(DspChain.Preset.CLEAR_ALL.id, saved.activePresetId);
-        assertTrue(saved.slots.isEmpty());
+        assertFalse(saved.slots.isEmpty());
 
         float[] after = readSamples(raw, frames, 1);
         float peakFirstQuarter = 0f;

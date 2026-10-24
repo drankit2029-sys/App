@@ -101,6 +101,10 @@ final class VocoderProcessor extends AudioProcessor {
         float relCoef = 1f / Math.max(1, release.getCurrentRaw());
         double sawInc = pitch.getCurrentRaw() / sampleRate;
 
+        for (int b = 0; b < count; b++) {
+            bandFilters[b].setSections(new float[][]{
+                    Dsp.rbjBandPass(sampleRate, bandCenters[b], 4f)}, ch);
+        }
         for (int f = 0; f < frames; f++) {
             float modulator = 0f;
             for (int c = 0; c < ch; c++) modulator += buf[f * ch + c];
@@ -109,8 +113,6 @@ final class VocoderProcessor extends AudioProcessor {
             float wet = 0f;
             for (int b = 0; b < count; b++) {
                 BiquadFilter bp = bandFilters[b];
-                bp.setSections(new float[][]{
-                        Dsp.rbjBandPass(sampleRate, bandCenters[b], 4f)}, ch);
                 float[] probe = new float[ch];
                 probe[0] = modulator;
                 bp.process(probe, 1, ch);

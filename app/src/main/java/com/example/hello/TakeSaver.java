@@ -67,9 +67,13 @@ public final class TakeSaver {
         long dur = Math.max(durationOf(raw), 1000);
         String title = e.takeName != null ? e.takeName : "";
         Result r = convertRaw(ctx, raw, title, preset, save, cb);
-        // The raw float capture was scratch; the finished file is its own copy.
-        // noinspection ResultOfMethodCallIgnored
-        raw.delete();
+        // The raw float capture was scratch; remove it unless the result
+        // somehow landed on the same path.
+        if (r.file == null
+                || !r.file.getAbsolutePath().equals(raw.getAbsolutePath())) {
+            // noinspection ResultOfMethodCallIgnored
+            raw.delete();
+        }
         return r;
     }
 
@@ -205,7 +209,10 @@ public final class TakeSaver {
 
     static File uniqueFinal(File raw, String ext) {
         File dir = raw.getParentFile();
-        String base = raw.getName().replaceFirst("\\.[^.]+$", "");
+        String name = raw.getName();
+        String base = name.endsWith(".raw.wav")
+                ? name.substring(0, name.length() - ".raw.wav".length())
+                : name.replaceFirst("\\.[^.]+$", "");
         File c = new File(dir, base + "." + ext);
         if (!c.exists()) return c;
         int i = 2;

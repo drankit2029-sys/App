@@ -37,38 +37,52 @@ final class WsolaTimePitchProcessor {
 
         int outFrames = Math.max(1, (int) Math.round(frames * rate));
         float[] out = new float[outFrames * channels];
+        float[] norm = new float[outFrames];
         int outPos = 0;
         int anaPos = 0;
         int refPos = 0;
+        double expectedAnaPos = 0.0;
+        double anaStep = synthesisHop / Math.max(0.05, rate);
         float[] window = Dsp.hannWindow(frameSize);
 
-        // First frame is taken verbatim.
-        copyFrame(input, frames, channels, anaPos, out, outPos, frameSize,
-                outFrames);
-        applyWindow(out, outPos, frameSize, channels, window, outFrames);
+        // First frame is windowed and accumulated.
+        for (int i = 0; i < frameSize && outPos + i < outFrames; i++) {
+            int srcFrame = anaPos + i;
+            if (srcFrame >= frames) break;
+            float w = window[i];
+            norm[outPos + i] += w;
+            int src = srcFrame * channels;
+            int dst = (outPos + i) * channels;
+            for (int c = 0; c < channels; c++) {
+                out[dst + c] += input[src + c] * w;
+            }
+        }
         outPos += synthesisHop;
-        refPos = anaPos + frameSize - synthesisHop;
+        refPos = Math.min(Math.max(0, frames - frameSize), anaPos + synthesisHop);
+        expectedAnaPos += anaStep;
 
-        while (outPos + synthesisHop < outFrames && anaPos < frames) {
-            int searchStart = Math.max(0, anaPos - searchRadius);
-            int searchEnd = Math.min(Math.max(0, frames - frameSize),
-                    anaPos + searchRadius);
-            int best = searchStart;
+        while (outPos < outFrames) {
+            int targetAna = (int) Math.round(expectedAnaPos);
+            int maxStart = Math.max(0, frames - frameSize);
+            targetAna = Math.max(0, Math.min(maxStart, targetAna));
+            int searchStart = Math.max(0, targetAna - searchRadius);
+            int searchEnd = Math.min(maxStart, targetAna + searchRadius);
+            int best = targetAna;
             double bestScore = -1e30;
             for (int candidate = searchStart; candidate <= searchEnd; candidate++) {
                 double score = similarity(input, frames, channels, candidate,
-                        refPos, frameSize);
+                        refPos, synthesisHop);
                 if (score > bestScore) {
                     bestScore = score;
                     best = candidate;
                 }
             }
             anaPos = best;
-            // Overlap-add the new frame at the synthesis position.
             for (int i = 0; i < frameSize && outPos + i < outFrames; i++) {
                 int srcFrame = anaPos + i;
                 if (srcFrame >= frames) break;
                 float w = window[i];
+                norm[outPos + i] += w;
                 int src = srcFrame * channels;
                 int dst = (outPos + i) * channels;
                 for (int c = 0; c < channels; c++) {
@@ -76,8 +90,16 @@ final class WsolaTimePitchProcessor {
                 }
             }
             outPos += synthesisHop;
-            refPos = anaPos + frameSize - synthesisHop;
-            anaPos += synthesisHop;
+            refPos = Math.min(maxStart, anaPos + synthesisHop);
+            expectedAnaPos += anaStep;
+        }
+        for (int f = 0; f < outFrames; f++) {
+            float n = norm[f];
+            if (n > 1e-4f) {
+                for (int c = 0; c < channels; c++) {
+                    out[f * channels + c] /= n;
+                }
+            }
         }
         return out;
     }

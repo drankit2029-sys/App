@@ -116,6 +116,7 @@ final class ProCompressorProcessor extends AudioProcessor {
             } else {
                 gainDb = -slope * over;
             }
+            FxTelemetry.publishGainReductionDb(gainDb);
             float target = DspChain.fastDbToLin(gainDb + makeupDb);
             float step = (target - gainCur) / blk;
 
