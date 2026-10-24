@@ -112,7 +112,7 @@ final class ProToneProcessor extends AudioProcessor {
 
     @Override
     public boolean handlesOwnWetDryMix() {
-        return true;
+        return warmthSlotMix < 0.999f || presenceSlotMix < 0.999f;
     }
 
     void processWarmthOnly(float[] buf, int frames, int channels, float mix) {
