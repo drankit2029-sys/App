@@ -110,6 +110,11 @@ final class ProToneProcessor extends AudioProcessor {
         this.presenceSlotMix = clampMix(mix);
     }
 
+    @Override
+    public boolean handlesOwnWetDryMix() {
+        return true;
+    }
+
     void processWarmthOnly(float[] buf, int frames, int channels, float mix) {
         if (!isEnabled() || buf == null || frames <= 0) return;
         float m = clampMix(mix);

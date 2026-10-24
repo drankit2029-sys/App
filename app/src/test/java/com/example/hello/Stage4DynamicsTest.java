@@ -82,6 +82,7 @@ public class Stage4DynamicsTest {
 
         LoudnessNormalizationProcessor p = new LoudnessNormalizationProcessor();
         p.getParam("loud_target").setFloat(-16f);
+        p.getParam("loud_dual").setBoolean(false);
         p.prepare(SR, 1);
         p.prepareOffline(wav, 0, frames, SR, 1);
 
@@ -178,6 +179,9 @@ public class Stage4DynamicsTest {
         p.getParam("gate_thresh").setFloat(-42f);
         p.getParam("gate_range").setFloat(-24f);
         p.getParam("gate_hpf").setCurrentRaw(120);
+        // Keep the release short enough that the 250 ms probe reaches the
+        // full range; the gate's release parameter is covered separately.
+        p.getParam("gate_release").setFloat(20f);
         p.prepare(SR, 1);
         double before = rmsDb(buf);
         p.processInPlace(buf, frames, 1);

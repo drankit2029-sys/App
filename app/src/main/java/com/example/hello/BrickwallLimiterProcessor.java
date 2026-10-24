@@ -125,6 +125,8 @@ final class BrickwallLimiterProcessor extends AudioProcessor {
                 / (Math.max(0.0002f, 0.0005f) * sampleRate)));
 
         final int ringSize = lookFrames + 1;
+        float[] oldWet = new float[ch];
+        float[] oldDry = new float[ch];
         for (int f = 0; f < frames; f++) {
             int idx = f * ch;
             float framePeak = 0f;
@@ -137,8 +139,6 @@ final class BrickwallLimiterProcessor extends AudioProcessor {
             // `lookFrames` ago; the gain for it is decided from the peak of
             // the window that ends with the sample we just received.
             int delayPos = framesSeen % lookFrames;
-            float[] oldWet = new float[ch];
-            float[] oldDry = new float[ch];
             for (int c = 0; c < ch; c++) {
                 oldWet[c] = delayRing[delayPos * ch + c];
                 oldDry[c] = dryRing[delayPos * ch + c];

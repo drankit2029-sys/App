@@ -1072,10 +1072,9 @@ public final class DspChain {
 
     /**
      * Pushes per-slot wet/dry mixes and any persisted secondary parameters
-     * into the rack. When both {@code WARMTH_BODY} and {@code VOCAL_PRESENCE}
-     * are enabled together in the combined tone stage, the tone processor
-     * stays fully wet (1.0f); when only one of the two is active, its slot
-     * {@code wetDry} mix drives the tone processor directly.
+     * into the rack. Warmth and Presence each carry their own slot mix into
+     * the shared tone processor, so the two halves honour separate wet/dry
+     * values whether they run combined or split around another effect.
      */
     private void applySlotExtras(Config cfg) {
         if (cfg == null) return;
