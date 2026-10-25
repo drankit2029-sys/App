@@ -376,7 +376,13 @@ public class StudioFragment extends Fragment {
         if (formatBadge != null) {
             formatBadge.setOnClickListener(view -> showRecordingSettings());
         }
-        teleEditBtn.setOnClickListener(view -> openTeleEditor());
+        teleEditBtn.setOnClickListener(view -> {
+            if (!TrialAndBillingManager.requireProOrShowPaywall(
+                    requireActivity(), "Teleprompter", null)) {
+                return;
+            }
+            openTeleEditor();
+        });
         PressAnim.applySoft(teleEditBtn, 0.95f);
         telePauseBtn.setOnClickListener(view -> toggleTelePaused());
         PressAnim.applySoft(telePauseBtn, 0.95f);
@@ -432,6 +438,10 @@ public class StudioFragment extends Fragment {
             btnPreviewPlay.setOnClickListener(view -> {
                 if (fxPanelOpen) return;
                 if (!ensurePausedForEditing()) return;
+                if (!TrialAndBillingManager.requireProOrShowPaywall(
+                        requireActivity(), "Replace", null)) {
+                    return;
+                }
                 stopStudioPreview();
                 replaceModeArmed = !replaceModeArmed;
                 if (replaceModeArmed) {
@@ -489,6 +499,10 @@ public class StudioFragment extends Fragment {
             btnReplaceSeg.setOnClickListener(view -> {
                 if (replaceModeArmed || fxPanelOpen) return;
                 if (!ensurePausedForEditing()) return;
+                if (!TrialAndBillingManager.requireProOrShowPaywall(
+                        requireActivity(), "Select & Replace", null)) {
+                    return;
+                }
                 openSelectAndReplaceSubEditor();
             });
         }
@@ -499,6 +513,10 @@ public class StudioFragment extends Fragment {
             btnTrimCrop.setOnClickListener(view -> {
                 if (replaceModeArmed || fxPanelOpen) return;
                 if (!ensurePausedForEditing()) return;
+                if (!TrialAndBillingManager.requireProOrShowPaywall(
+                        requireActivity(), "Trim", null)) {
+                    return;
+                }
                 showTrimOptionsPopup();
             });
         }
@@ -508,6 +526,10 @@ public class StudioFragment extends Fragment {
             PressAnim.applySoft(btnDspFx, 0.95f);
             btnDspFx.setOnClickListener(view -> {
                 if (replaceModeArmed) return;
+                if (!TrialAndBillingManager.requireProOrShowPaywall(
+                        requireActivity(), "The 53-Effect Pro DSP Rack", null)) {
+                    return;
+                }
                 toggleFxPanel();
             });
         }

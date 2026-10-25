@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@drawable/ic_launcher_background" />
+    <item android:drawable="@drawable/ic_launcher_foreground" />
+</layer-list>
+
+
+================================================================================
+ISSUE 4: CI WORKFLOW — ADD RELEASE APP BUNDLE (.AAB) GENERATION
+================================================================================
+PROBLEM DETAILS:
+  - `.github/workflows/build-apk.yml` only builds and uploads `app-debug.apk`.
+  - Google Play requires an Android App Bundle (`.aab`) generated via
+    `./gradlew bundleRelease`.
+

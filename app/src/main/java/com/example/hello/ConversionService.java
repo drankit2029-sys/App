@@ -58,6 +58,13 @@ public class ConversionService extends Service {
     private volatile boolean workerAlive;
     private static volatile boolean running;
     /**
+     * Process-wide lock ensuring that if ConversionService is destroyed and
+     * recreated while a previous worker thread is still unwinding a codec
+     * chunk, the new worker thread waits until the retiring thread exits
+     * before touching any sidecar or `.part` file.
+     */
+    private static final Object WORKER_SERIAL_LOCK = new Object();
+    /**
      * Set when the platform enforces the foreground-service time budget
      * (onTimeout). The worker parks instead of cancelling so every job
      * survives for the next launch. Reset whenever a worker starts.
@@ -221,6 +228,14 @@ public class ConversionService extends Service {
     public void onDestroy() {
         running = false;
         workerAlive = false;
+        Thread w;
+        synchronized (this) {
+            w = worker;
+            worker = null;
+        }
+        if (w != null) {
+            w.interrupt();
+        }
         // An unexpected destroy (OEM task-kill, FGS budget, process trim) must
         // leave a resumable QUEUED job rather than a RUNNING sidecar that no
         // worker will ever touch again.
@@ -410,41 +425,47 @@ public class ConversionService extends Service {
     }
 
     private void workLoop() {
+        final Thread self = Thread.currentThread();
         try {
-            while (true) {
-                String id;
-                synchronized (this) {
-                    id = queue.pollFirst();
+            synchronized (WORKER_SERIAL_LOCK) {
+                while (workerAlive && worker == self && !self.isInterrupted()) {
+                    String id;
+                    synchronized (this) {
+                        id = queue.pollFirst();
+                    }
+                    if (id == null) break;
+                    ConversionJob job = ConversionJobs.get(id);
+                    if (job == null || job.cancelled) {
+                        if (job != null) ConversionJobs.cancel(id, false);
+                        continue;
+                    }
+                    current = job;
+                    runJob(job);
+                    current = null;
+                    if (serviceTimedOut || !workerAlive || worker != self) break;
                 }
-                if (id == null) break;
-                ConversionJob job = ConversionJobs.get(id);
-                if (job == null || job.cancelled) {
-                    if (job != null) ConversionJobs.cancel(id, false);
-                    continue;
-                }
-                current = job;
-                runJob(job);
-                current = null;
-                if (serviceTimedOut) break;
             }
         } finally {
             synchronized (this) {
-                workerAlive = false;
-                releaseWakeLock();
-                if (queue.isEmpty()) {
-                    ConversionWatchdog.cancel(ConversionService.this);
-                    handler.removeCallbacksAndMessages(null);
-                    try {
-                        stopForeground(true);
-                    } catch (Exception ignored) {}
-                    try {
-                        NotificationManager nm = (NotificationManager)
-                                getSystemService(NOTIFICATION_SERVICE);
-                        if (nm != null) nm.cancel(NOTIF_ID);
-                    } catch (Exception ignored) {}
-                    stopSelf();
-                } else {
-                    pump();
+                if (worker == self) {
+                    worker = null;
+                    workerAlive = false;
+                    releaseWakeLock();
+                    if (queue.isEmpty()) {
+                        ConversionWatchdog.cancel(ConversionService.this);
+                        handler.removeCallbacksAndMessages(null);
+                        try {
+                            stopForeground(true);
+                        } catch (Exception ignored) {}
+                        try {
+                            NotificationManager nm = (NotificationManager)
+                                    getSystemService(NOTIFICATION_SERVICE);
+                            if (nm != null) nm.cancel(NOTIF_ID);
+                        } catch (Exception ignored) {}
+                        stopSelf();
+                    } else {
+                        pump();
+                    }
                 }
             }
         }
@@ -511,6 +532,15 @@ public class ConversionService extends Service {
                 // replace-vs-new choice made up front instead of duplicating.
                 take = TakesRepository.replaceRecording(job.replaceTakeId,
                         r.file, r.durationMs, liveTitle, r.label);
+                if (take == null) {
+                    // The target take was deleted while this replacement was
+                    // converting. Clean up raw + sidecar silently.
+                    ConversionJobs.deleteOrDeferRaw(job.rawPath);
+                    // noinspection ResultOfMethodCallIgnored
+                    new File(job.rawPath + ".pending").delete();
+                    ConversionJobs.markDone(job);
+                    return;
+                }
             } else {
                 take = TakesRepository.addRecording(r.file, r.durationMs,
                         liveTitle, r.label);

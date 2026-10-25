@@ -237,10 +237,19 @@ public final class TakesRepository {
         if (targetId < 0) {
             targetId = ConversionJobs.cancelForReplace(app, targetId);
         }
-        if (targetId >= 0) {
+        if (targetId > 0) {
+            if (find(targetId) == null) {
+                // The user deleted the target take while the replacement was
+                // converting. Do not resurrect it; discard the converted file.
+                if (saved != null) {
+                    // noinspection ResultOfMethodCallIgnored
+                    saved.delete();
+                }
+                return null;
+            }
             Set<Long> ids = new HashSet<>();
             ids.add(targetId);
-            deleteMany(ids);
+            deleteManyInternal(ids, false);
         }
         return addRecording(saved, durationMs, title, format);
     }
@@ -295,6 +304,7 @@ public final class TakesRepository {
     }
 
     public static synchronized void delete(long id) {
+        ConversionJobs.cancelForDeletedTargetTake(app, id);
         for (int i = 0; i < TAKES.size(); i++) {
             if (TAKES.get(i).id == id) {
                 Take t = TAKES.remove(i);
@@ -306,7 +316,20 @@ public final class TakesRepository {
     }
 
     public static synchronized RestoreOp deleteMany(Set<Long> ids) {
+        return deleteManyInternal(ids, true);
+    }
+
+    private static synchronized RestoreOp deleteManyInternal(
+            Set<Long> ids, boolean cancelReplacingJobs) {
         RestoreOp op = new RestoreOp();
+        if (ids == null || ids.isEmpty()) return op;
+        if (cancelReplacingJobs) {
+            for (Long id : ids) {
+                if (id != null && id > 0) {
+                    ConversionJobs.cancelForDeletedTargetTake(app, id);
+                }
+            }
+        }
         List<Long> gone = new ArrayList<>();
         for (int i = TAKES.size() - 1; i >= 0; i--) {
             if (ids.contains(TAKES.get(i).id)) {
