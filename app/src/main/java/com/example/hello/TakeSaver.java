@@ -110,6 +110,9 @@ public final class TakeSaver {
                 case WAV24:
                     FormatConverter.toWav24(raw, part, pct -> post(cb, pct));
                     break;
+                case WAV32:
+                    FormatConverter.toWav32(raw, part, pct -> post(cb, pct));
+                    break;
                 case AMR_NB:
                     FormatConverter.toAmr(raw, part, false, pct -> post(cb, pct));
                     break;
@@ -160,7 +163,8 @@ public final class TakeSaver {
             // Preserve the .part on an Android 15 FGS timeout for resumable
             // WAV formats so the restarted job can pick up where it stopped.
             boolean keepWavPart = t.getClass().getSimpleName().contains("Timeout")
-                    && (eff == SaveFormat.WAV16 || eff == SaveFormat.WAV24);
+                    && (eff == SaveFormat.WAV16 || eff == SaveFormat.WAV24
+                    || eff == SaveFormat.WAV32);
             if (!keepWavPart && part.exists()) {
                 // noinspection ResultOfMethodCallIgnored
                 part.delete();

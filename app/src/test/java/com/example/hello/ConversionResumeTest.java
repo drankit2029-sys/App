@@ -132,6 +132,62 @@ public class ConversionResumeTest {
     }
 
     @Test
+    public void resumedWav32IsByteIdentical() throws Exception {
+        File raw = makeRaw("resume-src32.wav", 48000);
+        try {
+            TakeSaver.Result full = TakeSaver.convertRaw(ctx(), raw,
+                    "Resume32", RecordPreset.MUSIC, SaveFormat.WAV32, null);
+            byte[] expect;
+            try {
+                expect = slurp(full.file);
+            } finally {
+                // noinspection ResultOfMethodCallIgnored
+                full.file.delete();
+            }
+            File part = new File(ctx().getCacheDir(), "resume32.part");
+            // noinspection ResultOfMethodCallIgnored
+            part.delete();
+            int doneFrames = 12000;
+            RandomAccessFile w = new RandomAccessFile(part, "rw");
+            try {
+                w.setLength(0);
+                w.write(Dsp.wavFloatHeader(2, 48000, 0));
+                RandomAccessFile r = new RandomAccessFile(raw, "r");
+                try {
+                    byte[] in = new byte[doneFrames * 2 * 4];
+                    r.seek(44);
+                    r.readFully(in);
+                    w.write(in);
+                } finally {
+                    r.close();
+                }
+            } finally {
+                w.close();
+            }
+            ConversionJob job = new ConversionJob("resume-32", "Resume32",
+                    raw.getAbsolutePath(), part.getAbsolutePath(),
+                    "music", "wav32", 2, 384000, 1000, 48000);
+            job.framesDone = doneFrames;
+            TakeSaver.Result resumed = ConversionService.resumeWavConvert(
+                    ctx(), raw, part, RecordPreset.MUSIC, SaveFormat.WAV32,
+                    job, null);
+            byte[] got;
+            try {
+                got = slurp(resumed.file);
+                FormatConverter.validateFinal(resumed.file, SaveFormat.WAV32);
+            } finally {
+                // noinspection ResultOfMethodCallIgnored
+                resumed.file.delete();
+            }
+            assertEquals("resumed length differs", expect.length, got.length);
+            assertTrue("resumed bytes differ", Arrays.equals(expect, got));
+        } finally {
+            // noinspection ResultOfMethodCallIgnored
+            raw.delete();
+        }
+    }
+
+    @Test
     public void misalignedPartialRestartsCleanly() throws Exception {
         File raw = makeRaw("resume-src2.wav", 48000);
         try {

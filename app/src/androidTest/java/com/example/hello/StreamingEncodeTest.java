@@ -120,6 +120,40 @@ public class StreamingEncodeTest {
     }
 
     @Test
+    public void wav32StreamAdoptsRawFloat() throws Exception {
+        Context ctx = InstrumentationRegistry.getInstrumentation()
+                .getTargetContext();
+        RecordingEngine engine = RecordingEngine.get();
+        engine.abortAndDelete();
+        engine.startNewSession(ctx, "Streaming WAV32", 2);
+        File adopted = null;
+        try {
+            engine.beginStreaming(ctx, RecordPreset.MUSIC, SaveFormat.WAV32);
+            assertNotNull(engine.streaming());
+            engine.startCapture(ctx,
+                    android.media.MediaRecorder.AudioSource.MIC);
+            Thread.sleep(2000);
+            engine.pauseCapture();
+            ConversionJobs.SaveResult r = ConversionJobs.dispatchSave(ctx,
+                    RecordPreset.MUSIC, SaveFormat.WAV32, null);
+            assertTrue("wav32 stream was not adopted", r.adopted);
+            adopted = r.file;
+            FormatConverter.validateFinal(adopted, SaveFormat.WAV32);
+            long payload = adopted.length() - 44;
+            assertTrue("payload=" + payload,
+                    payload > 48000L * 2 * 4 * 1
+                            && payload < 48000L * 2 * 4 * 4);
+        } finally {
+            engine.clearSession();
+            if (adopted != null && adopted.exists()) {
+                // noinspection ResultOfMethodCallIgnored
+                adopted.delete();
+            }
+            engine.abortAndDelete();
+        }
+    }
+
+    @Test
     public void opusStreamAdoptsWhenEncoderExists() throws Exception {
         Context ctx = InstrumentationRegistry.getInstrumentation()
                 .getTargetContext();

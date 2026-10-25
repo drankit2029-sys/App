@@ -2,6 +2,7 @@ package com.example.hello;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
@@ -78,6 +79,38 @@ public class FxCommitAndCrossfadeTest {
                 DspChain.EffectType.BRICKWALL_LIMITER, true, 100, false));
         cfg.syncLegacyFieldsFromSlots();
         return new DspChain(1, cfg);
+    }
+
+    @Test
+    public void durationPreviewRendersOnlyTheCopy() throws Exception {
+        File dir = RuntimeEnvironment.getApplication().getCacheDir();
+        int frames = 4800;
+        File raw = writeSineWav(dir, "fx_preview_raw.wav", frames, 1, 0.25f);
+        File copy = new File(dir, "fx_preview_copy.wav");
+        DspChain.Config cfg = new DspChain.Config();
+        cfg.slots.clear();
+        cfg.slots.add(new DspChain.EffectSlot(
+                DspChain.EffectType.CHANGE_TEMPO, true, 5000, false));
+        cfg.syncLegacyFieldsFromSlots();
+        EditEngine.copyFile(raw, copy);
+        DspChain chain = new DspChain(1, cfg);
+        long regionEnd = frames;
+        long newTotal = frames;
+        for (AudioProcessor proc : chain.offlineProcessors()) {
+            long next = EditEngine.applyLengthChangingEffectToRange(
+                    copy, 0, regionEnd, proc, null);
+            assertTrue("preview render failed", next > 0);
+            regionEnd = next - (newTotal - regionEnd);
+            newTotal = next;
+        }
+        assertNotEquals("duration preview did not change length",
+                frames, newTotal);
+        assertEquals("source raw was mutated",
+                frames, FormatConverter.readFloatWav(raw).dataBytes / 4);
+        assertEquals("copy duration mismatch", newTotal,
+                FormatConverter.readFloatWav(copy).dataBytes / 4);
+        // noinspection ResultOfMethodCallIgnored
+        copy.delete();
     }
 
     @Test

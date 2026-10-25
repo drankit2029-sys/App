@@ -57,6 +57,7 @@ public class SaveFormatTest {
         assertEquals("m4a", SaveFormat.M4A.extension());
         assertEquals("wav", SaveFormat.WAV16.extension());
         assertEquals("wav", SaveFormat.WAV24.extension());
+        assertEquals("wav", SaveFormat.WAV32.extension());
         assertEquals("3gp", SaveFormat.AMR_NB.extension());
         assertEquals("flac", SaveFormat.FLAC.extension());
         assertEquals(android.os.Build.VERSION.SDK_INT >= 29
@@ -71,6 +72,7 @@ public class SaveFormatTest {
         assertTrue(SaveFormat.WAV16.available(ctx));
         // Pure-Java lossless path: never gated on a platform encoder.
         assertTrue(SaveFormat.WAV24.available(ctx));
+        assertTrue(SaveFormat.WAV32.available(ctx));
     }
 
     @Test
@@ -99,6 +101,7 @@ public class SaveFormatTest {
         assertEquals("FLAC", TakeSaver.labelFor(RecordPreset.MUSIC, SaveFormat.AUTO));
         assertEquals("WAV", TakeSaver.labelFor(RecordPreset.MUSIC, SaveFormat.WAV16));
         assertEquals("WAV24", TakeSaver.labelFor(RecordPreset.MUSIC, SaveFormat.WAV24));
+        assertEquals("WAV32", TakeSaver.labelFor(RecordPreset.MUSIC, SaveFormat.WAV32));
         assertEquals("AMR", TakeSaver.labelFor(RecordPreset.MEMO, SaveFormat.AMR_NB));
     }
 
@@ -127,6 +130,29 @@ public class SaveFormatTest {
     }
 
     @Test
+    public void wav32SurvivesItsOwnValidation() throws Exception {
+        java.io.File f = java.io.File.createTempFile("vfy32", ".wav");
+        try {
+            int frames = 480;
+            byte[] hdr = Dsp.wavFloatHeader(2, 48000,
+                    (long) frames * 2 * 4);
+            byte[] all = new byte[hdr.length + frames * 2 * 4];
+            System.arraycopy(hdr, 0, all, 0, hdr.length);
+            java.io.FileOutputStream w = new java.io.FileOutputStream(f);
+            try {
+                w.write(all);
+            } finally {
+                w.close();
+            }
+            FormatConverter.validateFinal(f, SaveFormat.WAV32);
+            assertEquals(10L, Dsp.wavDurationMs(f));
+        } finally {
+            // noinspection ResultOfMethodCallIgnored
+            f.delete();
+        }
+    }
+
+    @Test
     public void storageEstimatesTrackChannelsAndClamp() {
         // WAV is exact and scales with the preset's channel count.
         assertEquals(48000L * 2 * 2 * 60,
@@ -135,6 +161,8 @@ public class SaveFormatTest {
                 SaveFormat.WAV16.bytesPerMinute(RecordPreset.MEMO));
         assertEquals(48000L * 2 * 3 * 60,
                 SaveFormat.WAV24.bytesPerMinute(RecordPreset.MUSIC));
+        assertEquals(48000L * 2 * 4 * 60,
+                SaveFormat.WAV32.bytesPerMinute(RecordPreset.MUSIC));
         // Music's Opus clamps 320k -> 256k, and the estimate must match the
         // file rather than the nominal preset bitrate.
         assertEquals(256000L / 8 * 60,

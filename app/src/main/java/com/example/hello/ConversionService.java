@@ -589,7 +589,8 @@ public class ConversionService extends Service {
     }
 
     private static boolean isWavFormat(SaveFormat eff) {
-        return eff == SaveFormat.WAV16 || eff == SaveFormat.WAV24;
+        return eff == SaveFormat.WAV16 || eff == SaveFormat.WAV24
+                || eff == SaveFormat.WAV32;
     }
 
     /**
@@ -617,13 +618,16 @@ public class ConversionService extends Service {
                                              TakeSaver.Progress cb)
             throws Exception {
         SaveFormat eff = format.effective(preset);
+        boolean w32 = eff == SaveFormat.WAV32;
         boolean w24 = eff == SaveFormat.WAV24;
+        int pcmFormat = w32 ? 3 : 1;
+        int bits = w32 ? 32 : (w24 ? 24 : 16);
         FormatConverter.WavInfo info = FormatConverter.readFloatWav(raw);
         int ch = Math.max(1, info.channels);
-        int frameBytes = ch * (w24 ? 3 : 2);
+        int frameBytes = ch * (bits / 8);
         long totalFrames = info.dataBytes / 4 / ch;
         long expectLen = 44 + job.framesDone * frameBytes;
-        if (!isWavHeaderValid(part, ch, info.sampleRate, w24 ? 24 : 16)) {
+        if (!isWavHeaderValid(part, ch, info.sampleRate, pcmFormat, bits)) {
             // noinspection ResultOfMethodCallIgnored
             part.delete();
             return TakeSaver.convertRaw(app, raw, job.title, preset, format, cb);
@@ -636,7 +640,7 @@ public class ConversionService extends Service {
             long diskPayload = part.length() - 44;
             if (diskPayload > 0 && (diskPayload % frameBytes) == 0
                     && isWavHeaderValid(part, ch, info.sampleRate,
-                    w24 ? 24 : 16)
+                    pcmFormat, bits)
                     && (diskPayload / frameBytes) <= totalFrames) {
                 job.framesDone = diskPayload / frameBytes;
             } else {
@@ -649,8 +653,8 @@ public class ConversionService extends Service {
         }
         try {
             if (job.framesDone >= totalFrames) {
-                patchWavHeader(part, info.channels, info.sampleRate, w24,
-                        totalFrames);
+                patchWavHeader(part, info.channels, info.sampleRate,
+                        w24, w32, totalFrames);
                 FormatConverter.validateFinal(part, eff);
                 return finishResumed(app, raw, part, job, eff, preset);
             }
@@ -663,8 +667,8 @@ public class ConversionService extends Service {
             w.seek(w.length());
             int chunk = MemoryBudget.chunkFrames(65536, ch);
             byte[] in = new byte[chunk * 4];
-            // Worst case (24-bit packs 3 bytes per sample).
-            byte[] out = new byte[chunk * 3];
+            // Worst case (32-bit float / 24-bit packed: 4 bytes per sample).
+            byte[] out = new byte[chunk * 4];
             java.nio.FloatBuffer fb = java.nio.ByteBuffer.wrap(in)
                     .order(java.nio.ByteOrder.LITTLE_ENDIAN).asFloatBuffer();
             int[] ints = w24 ? new int[chunk] : null;
@@ -676,7 +680,9 @@ public class ConversionService extends Service {
                 int want = (int) Math.min(chunk, totalSamples - doneSamples);
                 r.seek(info.dataStart + doneSamples * 4L);
                 r.readFully(in, 0, want * 4);
-                if (w24) {
+                if (w32) {
+                    w.write(in, 0, want * 4);
+                } else if (w24) {
                     FormatConverter.toInt24(fb, want, ints);
                     int p = 0;
                     for (int i = 0; i < want; i++) {
@@ -698,8 +704,8 @@ public class ConversionService extends Service {
                     job.framesDone = doneSamples / Math.max(1, info.channels);
                 }
             }
-            patchWavHeader(part, info.channels, info.sampleRate, w24,
-                    totalFrames);
+            patchWavHeader(part, info.channels, info.sampleRate,
+                    w24, w32, totalFrames);
         } finally {
             try {
                 r.close();
@@ -718,7 +724,8 @@ public class ConversionService extends Service {
             // this part again. Exception: an Android 15 FGS timeout leaves
             // a byte-valid resumable WAV part behind on purpose.
             boolean keepWavPart = t.getClass().getSimpleName().contains("Timeout")
-                    && (eff == SaveFormat.WAV16 || eff == SaveFormat.WAV24);
+                    && (eff == SaveFormat.WAV16 || eff == SaveFormat.WAV24
+                    || eff == SaveFormat.WAV32);
             if (!keepWavPart) {
                 try {
                     // noinspection ResultOfMethodCallIgnored
@@ -742,9 +749,9 @@ public class ConversionService extends Service {
         FormatConverter.validateFinal(part, eff);
         File fin = TakeSaver.uniqueFinal(raw, "wav");
         if (!part.renameTo(fin)) throw new IllegalStateException("adopt");
-        // AUDIT-3-01 fix: `fin` is integer PCM16/PCM24 (audioFormat 1), so
-        // `TakeSaver.durationOf(fin)` (which calls `readFloatWav`) always
-        // threw and returned 1000 ms. Read duration via `Dsp.wavDurationMs`.
+        // AUDIT-3-01 fix: `fin` may be integer PCM16/PCM24 (audioFormat 1)
+        // or raw float WAV32 (audioFormat 3), so `TakeSaver.durationOf(fin)`
+        // cannot read it uniformly. Read duration via `Dsp.wavDurationMs`.
         long dur = Dsp.wavDurationMs(fin);
         if (dur <= 0) {
             dur = Math.max(TakeSaver.durationOf(raw),
@@ -771,16 +778,18 @@ public class ConversionService extends Service {
 
     /**
      * True when the partial is a real RIFF/WAVE file with exactly the geometry
-     * a resume would append: integer PCM, expected channels, rate and depth. A
+     * a resume would append: expected PCM format, channels, rate and depth. A
      * stale part from a different bit depth or channel count whose byte size
      * happens to divide evenly must never be adopted.
      */
     private static boolean isWavHeaderValid(File part, int expectedCh,
-                                            int expectedSr, int expectedBits) {
+                                            int expectedSr, int expectedFormat,
+                                            int expectedBits) {
         try (java.io.RandomAccessFile r =
                      new java.io.RandomAccessFile(part, "r")) {
             Dsp.WavHeader h = Dsp.parseWavHeader(r);
-            return h.audioFormat == 1 && h.channels == expectedCh
+            return h.audioFormat == expectedFormat
+                    && h.channels == expectedCh
                     && h.sampleRate == expectedSr && h.bits == expectedBits;
         } catch (Exception e) {
             return false;
@@ -1014,12 +1023,14 @@ public class ConversionService extends Service {
     }
 
     private static void patchWavHeader(File part, int ch, int sr, boolean w24,
-                                       long frames) throws Exception {
+                                       boolean w32, long frames)
+            throws Exception {
         java.io.RandomAccessFile w = new java.io.RandomAccessFile(part, "rw");
         try {
             w.seek(0);
-            w.write(w24 ? Dsp.wav24Header(ch, sr, frames * ch * 3L)
-                    : Dsp.wav16Header(ch, sr, frames * ch * 2L));
+            w.write(w32 ? Dsp.wavFloatHeader(ch, sr, frames * ch * 4L)
+                    : (w24 ? Dsp.wav24Header(ch, sr, frames * ch * 3L)
+                    : Dsp.wav16Header(ch, sr, frames * ch * 2L)));
         } finally {
             try {
                 w.close();

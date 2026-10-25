@@ -1,5 +1,6 @@
 package com.example.hello;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -168,6 +169,32 @@ public class EncodeFormatsTest {
         long dur = Dsp.wavDurationMs(dst);
         Log.i(TAG, "PASS wav24 duration=" + dur);
         assertTrue("duration off: " + dur, dur >= 950 && dur <= 1050);
+    }
+
+    /** WAV32 is the raw capture: header plus a byte-exact float payload. */
+    @Test
+    public void wav32Encode() throws Exception {
+        File src = makeFloatWav("wav32_in.wav");
+        File dst = out(".wav");
+        FormatConverter.toWav32(src, dst, null);
+        Log.i(TAG, "PASS wav32 bytes=" + dst.length());
+        assertEquals(src.length(), dst.length());
+        FormatConverter.validateFinal(dst, SaveFormat.WAV32);
+        assertArrayEquals(readAll(src), readAll(dst));
+        long dur = Dsp.wavDurationMs(dst);
+        Log.i(TAG, "PASS wav32 duration=" + dur);
+        assertTrue("duration off: " + dur, dur >= 950 && dur <= 1050);
+    }
+
+    private static byte[] readAll(File f) throws Exception {
+        java.io.RandomAccessFile r = new java.io.RandomAccessFile(f, "r");
+        try {
+            byte[] out = new byte[(int) r.length()];
+            r.readFully(out);
+            return out;
+        } finally {
+            r.close();
+        }
     }
 
     /** Music + Auto must stay lossless and must never land on a lossy codec. */

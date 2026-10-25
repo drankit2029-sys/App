@@ -242,6 +242,9 @@ public final class StreamingEncoder {
                 case WAV24:
                     pumpWav(true);
                     break;
+                case WAV32:
+                    pumpWav32();
+                    break;
                 case AMR_NB:
                     pumpAmr(false);
                     break;
@@ -349,6 +352,53 @@ public final class StreamingEncoder {
                                 done * channels * 3L)
                         : Dsp.wav16Header(channels, sampleRate,
                                 done * channels * 2L));
+                finishedOk = !failed && done > 0;
+            } finally {
+                try {
+                    r.close();
+                } catch (Exception ignored) {}
+            }
+        } finally {
+            try {
+                w.close();
+            } catch (Exception ignored) {}
+        }
+    }
+
+    /**
+     * Raw 32-bit float WAV: copy the immutable float payload byte-for-byte
+     * behind a fresh header. This is the "no conversion" save path; the pump
+     * still follows capture so Save only has to drain the tail.
+     */
+    private void pumpWav32() throws Exception {
+        int pumpFrames = MemoryBudget.chunkFrames(PUMP_FRAMES, channels);
+        RandomAccessFile w = new RandomAccessFile(partFile, "rw");
+        try {
+            w.setLength(0);
+            w.write(Dsp.wavFloatHeader(channels, sampleRate, 0));
+            RandomAccessFile r = new RandomAccessFile(rawFile, "r");
+            try {
+                byte[] buf = new byte[pumpFrames * channels * 4];
+                long done = 0;
+                while (!stopRequested) {
+                    long avail = availableFrames();
+                    framesSeen = Math.max(framesSeen, avail);
+                    if (done >= avail) {
+                        if (finishing) break;
+                        parkForMore();
+                        continue;
+                    }
+                    int want = (int) Math.min(pumpFrames, avail - done);
+                    r.seek(dataStart + done * channels * 4L);
+                    r.readFully(buf, 0, want * channels * 4);
+                    w.write(buf, 0, want * channels * 4);
+                    done += want;
+                    framesEncoded = done;
+                }
+                if (stopRequested && !finishing) return;
+                w.seek(0);
+                w.write(Dsp.wavFloatHeader(channels, sampleRate,
+                        done * channels * 4L));
                 finishedOk = !failed && done > 0;
             } finally {
                 try {

@@ -22,6 +22,7 @@ public enum SaveFormat {
     AUTO("auto", R.string.save_auto, R.string.save_auto_sub, "M4A"),
     WAV16("wav16", R.string.save_wav16, R.string.save_wav16_sub, "WAV"),
     WAV24("wav24", R.string.save_wav24, R.string.save_wav24_sub, "WAV24"),
+    WAV32("wav32", R.string.save_wav32, R.string.save_wav32_sub, "WAV32"),
     FLAC("flac", R.string.save_flac, R.string.save_flac_sub, "FLAC"),
     M4A("m4a", R.string.save_m4a, R.string.save_m4a_sub, "M4A"),
     OPUS("opus", R.string.save_opus, R.string.save_opus_sub, "OPUS"),
@@ -82,6 +83,7 @@ public enum SaveFormat {
             case AUTO:
             case WAV16:
             case WAV24:
+            case WAV32:
             case M4A:
                 return true;
             case AMR_NB:
@@ -145,7 +147,8 @@ public enum SaveFormat {
         switch (this) {
             case M4A: return "m4a";
             case WAV16:
-            case WAV24: return "wav";
+            case WAV24:
+            case WAV32: return "wav";
             case AMR_NB:
             case AMR_WB: return "3gp";
             case FLAC: return "flac";
@@ -223,6 +226,8 @@ public enum SaveFormat {
                 return (long) sr * ch * 2 * 60;
             case WAV24:
                 return (long) sr * ch * 3 * 60;
+            case WAV32:
+                return (long) sr * ch * 4 * 60;
             case M4A: {
                 int br = clamp(preset != null ? preset.aacBitrate : 128000,
                         64000, 320000);

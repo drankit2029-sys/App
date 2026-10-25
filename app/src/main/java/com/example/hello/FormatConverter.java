@@ -109,6 +109,54 @@ public final class FormatConverter {
         }
     }
 
+    /**
+     * Copies the internal 32-bit float WAV payload into a clean WAV32 master.
+     *
+     * <p>The samples are already in the destination encoding, so this is a
+     * byte copy with a fresh 44-byte header — no float-to-int conversion and
+     * no resampling. Extra RIFF chunks on an imported source are dropped so
+     * the result has the same predictable geometry as the recording engine.
+     */
+    public static void toWav32(File src, File dst, Progress cb) throws Exception {
+        WavInfo info = readFloatWav(src);
+        long totalSamples = info.dataBytes / 4;
+        RandomAccessFile r = new RandomAccessFile(src, "r");
+        RandomAccessFile w = null;
+        try {
+            w = new RandomAccessFile(dst, "rw");
+            w.setLength(0);
+            w.write(Dsp.wavFloatHeader(info.channels, info.sampleRate,
+                    info.dataBytes));
+            r.seek(info.dataStart);
+            int chunk = MemoryBudget.chunkFrames(CONV_CHUNK, info.channels);
+            byte[] buf = new byte[chunk * 4];
+            long done = 0;
+            int lastPct = -1;
+            while (done < totalSamples) {
+                int want = (int) Math.min(chunk, totalSamples - done);
+                r.readFully(buf, 0, want * 4);
+                w.write(buf, 0, want * 4);
+                done += want;
+                if (cb != null) {
+                    int pct = (int) (done * 100 / Math.max(1, totalSamples));
+                    if (pct != lastPct) {
+                        lastPct = pct;
+                        cb.onProgress(pct);
+                    }
+                }
+            }
+        } finally {
+            try {
+                r.close();
+            } catch (Exception ignored) {}
+            if (w != null) {
+                try {
+                    w.close();
+                } catch (Exception ignored) {}
+            }
+        }
+    }
+
     /** 32-bit float WAV -> 16-bit PCM WAV. */
     public static void toWav16(File src, File dst, Progress cb) throws Exception {
         WavInfo info = readFloatWav(src);
@@ -490,6 +538,7 @@ public final class FormatConverter {
                 }
                 case WAV16:
                 case WAV24:
+                case WAV32:
                     // RIFF/WAVE; wavDurationMs() re-reads the header and
                     // rejects a bit depth it does not understand.
                     if (head[0] != 'R' || head[1] != 'I'
@@ -502,6 +551,13 @@ public final class FormatConverter {
                     // died before writing any payload.
                     if (Dsp.wavDurationMs(dst) <= 0) {
                         throw new IllegalStateException("wav has no audio");
+                    }
+                    if (fmt == SaveFormat.WAV32) {
+                        Dsp.WavHeader wh = Dsp.parseWavHeader(r);
+                        if (wh.audioFormat != 3 || wh.bits != 32) {
+                            throw new IllegalStateException(
+                                    "not a 32-bit float wav");
+                        }
                     }
                     break;
             }

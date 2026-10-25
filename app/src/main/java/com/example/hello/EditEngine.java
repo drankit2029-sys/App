@@ -23,6 +23,16 @@ public final class EditEngine {
 
     private EditEngine() {}
 
+    /** Copies a session file for a non-destructive FX preview render. */
+    public static void copyFile(File src, File dst) throws Exception {
+        try (FileInputStream in = new FileInputStream(src);
+             FileOutputStream out = new FileOutputStream(dst)) {
+            byte[] buf = new byte[CHUNK_BYTES];
+            int n;
+            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+        }
+    }
+
     /** Bounded 3-step undo journal storing pre-edit snapshots in takes/.undo/. */
     public static final class UndoJournal {
         private final File undoDir;
