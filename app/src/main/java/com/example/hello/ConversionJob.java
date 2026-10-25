@@ -3,6 +3,8 @@ package com.example.hello;
 import org.json.JSONObject;
 
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 
 /**
  * One background conversion: a finalized raw take plus the format it must
@@ -94,7 +96,16 @@ public final class ConversionJob {
         return new File(rawPath + ".conv.json");
     }
 
-    public void write() {
+    public File tempSidecar() {
+        return new File(rawPath + ".conv.json.tmp");
+    }
+
+    /**
+     * Atomically persists the conversion sidecar: writes to `.conv.json.tmp`,
+     * flushes + fsyncs the descriptor, then renames over `.conv.json` so a
+     * process kill mid-write can never truncate or corrupt the live sidecar.
+     */
+    public synchronized void write() {
         try {
             JSONObject o = new JSONObject();
             o.put("v", 1);
@@ -115,24 +126,64 @@ public final class ConversionJob {
             o.put("error", error != null ? error : "");
             o.put("replaceTakeId", replaceTakeId);
             o.put("replaceTitle", replaceTitle != null ? replaceTitle : "");
-            java.io.FileWriter w = new java.io.FileWriter(sidecar());
-            try {
-                w.write(o.toString());
-            } finally {
-                w.close();
+
+            byte[] payload = o.toString().getBytes("UTF-8");
+            File target = sidecar();
+            File tmp = tempSidecar();
+            File parent = target.getParentFile();
+            if (parent != null && !parent.exists()) {
+                // noinspection ResultOfMethodCallIgnored
+                parent.mkdirs();
+            }
+            try (FileOutputStream out = new FileOutputStream(tmp)) {
+                out.write(payload);
+                out.flush();
+                try {
+                    out.getFD().sync();
+                } catch (Exception ignored) {}
+            }
+            if (!tmp.renameTo(target)) {
+                // Fallback for filesystems where renameTo over an existing
+                // destination fails: write directly only after tmp is safely
+                // on disk so read() can recover from tmp if interrupted.
+                try (FileOutputStream direct = new FileOutputStream(target)) {
+                    direct.write(payload);
+                    direct.flush();
+                    try {
+                        direct.getFD().sync();
+                    } catch (Exception ignored) {}
+                }
+                // noinspection ResultOfMethodCallIgnored
+                tmp.delete();
             }
         } catch (Exception ignored) {}
     }
 
     public static ConversionJob read(File sidecar) {
+        ConversionJob primary = readSingleFile(sidecar);
+        if (primary != null) return primary;
+        if (sidecar != null) {
+            File tmp = new File(sidecar.getAbsolutePath() + ".tmp");
+            if (tmp.exists()) {
+                ConversionJob recovered = readSingleFile(tmp);
+                if (recovered != null) {
+                    // Promote the valid tmp file into place.
+                    // noinspection ResultOfMethodCallIgnored
+                    tmp.renameTo(sidecar);
+                    return recovered;
+                }
+            }
+        }
+        return null;
+    }
+
+    private static ConversionJob readSingleFile(File file) {
+        if (file == null || !file.exists()) return null;
         try {
-            byte[] buf = new byte[(int) Math.min(sidecar.length(), 8192)];
-            java.io.FileInputStream in = new java.io.FileInputStream(sidecar);
+            byte[] buf = new byte[(int) Math.min(file.length(), 8192)];
             int n;
-            try {
+            try (FileInputStream in = new FileInputStream(file)) {
                 n = in.read(buf);
-            } finally {
-                in.close();
             }
             if (n <= 0) return null;
             JSONObject o = new JSONObject(new String(buf, 0, n, "UTF-8"));
@@ -163,10 +214,14 @@ public final class ConversionJob {
         }
     }
 
-    public void deleteSidecar() {
+    public synchronized void deleteSidecar() {
         try {
             // noinspection ResultOfMethodCallIgnored
             sidecar().delete();
+        } catch (Exception ignored) {}
+        try {
+            // noinspection ResultOfMethodCallIgnored
+            tempSidecar().delete();
         } catch (Exception ignored) {}
     }
 
@@ -177,3 +232,4 @@ public final class ConversionJob {
         return id == 0 ? Long.MIN_VALUE : id;
     }
 }
+

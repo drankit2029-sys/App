@@ -486,6 +486,35 @@ public final class ConversionJobs {
         return finishedId != null ? finishedId : -1L;
     }
 
+    /**
+     * Cancels any active background conversion job that was scheduled to
+     * replace {@code deletedTakeId}. Prevents a replacement conversion from
+     * resurrecting a take that the user deleted while the conversion was
+     * still in flight.
+     */
+    public static void cancelForDeletedTargetTake(Context ctx, long deletedTakeId) {
+        if (deletedTakeId < 0) return;
+        List<String> jobsToCancel = new ArrayList<>();
+        synchronized (ConversionJobs.class) {
+            for (ConversionJob j : new ArrayList<>(ACTIVE.values())) {
+                if (j.replaceTakeId == deletedTakeId) {
+                    j.superseded = true;
+                    j.cancelled = true;
+                    jobsToCancel.add(j.jobId);
+                    cancel(j.jobId, true);
+                }
+            }
+        }
+        if (ctx != null) {
+            for (String jid : jobsToCancel) {
+                ConversionService.cancelJob(ctx, jid);
+            }
+            if (!jobsToCancel.isEmpty()) {
+                ConversionService.onRecordingStateChanged();
+            }
+        }
+    }
+
     static synchronized void updateProgress(ConversionJob job, int pct,
                                             long framesDone) {
         job.progress = pct;
@@ -554,6 +583,20 @@ public final class ConversionJobs {
                         f.getName().length() - ".pending".length());
                 liveParts.add(new File(dir, rawName + ".part")
                         .getAbsolutePath());
+            }
+        }
+        for (File f : files) {
+            if (f.isFile() && f.getName().endsWith(".conv.json.tmp")) {
+                String mainName = f.getName().substring(
+                        0, f.getName().length() - ".tmp".length());
+                File mainSidecar = new File(dir, mainName);
+                if (!mainSidecar.exists()) {
+                    // noinspection ResultOfMethodCallIgnored
+                    f.renameTo(mainSidecar);
+                } else {
+                    // noinspection ResultOfMethodCallIgnored
+                    f.delete();
+                }
             }
         }
         for (File f : files) {

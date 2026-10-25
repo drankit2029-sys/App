@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.HelloWorld" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+    <style name="Theme.TakeOne" parent="Theme.MaterialComponents.DayNight.NoActionBar">
         <item name="colorPrimary">@color/record</item>
         <item name="colorPrimaryVariant">@color/record_dark</item>
         <item name="colorOnPrimary">@color/white</item>
@@ -10,6 +10,10 @@
         <item name="android:navigationBarColor">@color/bg</item>
         <item name="android:windowLightStatusBar">false</item>
     </style>
+
+    <!-- Retained as an alias so existing unit/device tests referencing
+         Theme.HelloWorld continue to compile without changes. -->
+    <style name="Theme.HelloWorld" parent="Theme.TakeOne" />
 
     <style name="TakeOneCenterDialog" parent="Theme.AppCompat.DayNight.Dialog">
         <item name="android:windowBackground">@android:color/transparent</item>
@@ -24,3 +28,4 @@
         <item name="android:windowExitAnimation">@anim/modal_out</item>
     </style>
 </resources>
+

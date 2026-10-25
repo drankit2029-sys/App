@@ -2,25 +2,72 @@ plugins {
     id 'com.android.application'
 }
 
+// Load optional local keystore.properties or CI environment variables for release signing.
+def keystorePropsFile = rootProject.file("keystore.properties")
+def keystoreProps = new Properties()
+if (keystorePropsFile.exists()) {
+    keystorePropsFile.withInputStream { keystoreProps.load(it) }
+}
+def ksFile = keystoreProps.getProperty("storeFile") ?: System.getenv("TAKEONE_KEYSTORE_FILE")
+def ksPass = keystoreProps.getProperty("storePassword") ?: System.getenv("TAKEONE_KEYSTORE_PASSWORD")
+def kAlias = keystoreProps.getProperty("keyAlias") ?: System.getenv("TAKEONE_KEY_ALIAS")
+def kPass  = keystoreProps.getProperty("keyPassword") ?: System.getenv("TAKEONE_KEY_PASSWORD")
+def hasReleaseKeystore = ksFile != null && !ksFile.isEmpty() && rootProject.file(ksFile).exists()
+
 android {
     namespace 'com.example.hello'
     compileSdk 35
 
     defaultConfig {
-        applicationId "com.example.hello"
+        applicationId "com.takeone.studio"
         minSdk 24
         targetSdk 35
-        versionCode 3
-        versionName "1.2"
+        versionCode 4
+        versionName "1.3.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+
+        javaCompileOptions {
+            annotationProcessorOptions {
+                arguments += ["room.schemaLocation": "$projectDir/schemas".toString()]
+            }
+        }
+    }
+
+    signingConfigs {
+        if (hasReleaseKeystore) {
+            release {
+                storeFile rootProject.file(ksFile)
+                storePassword ksPass
+                keyAlias kAlias
+                keyPassword kPass
+                enableV1Signing true
+                enableV2Signing true
+                enableV3Signing true
+            }
+        }
     }
 
     buildTypes {
         debug {
+            applicationIdSuffix ".debug"
+            versionNameSuffix "-debug"
         }
         release {
-            minifyEnabled false
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            if (hasReleaseKeystore) {
+                signingConfig signingConfigs.release
+            }
+            ndk {
+                debugSymbolLevel 'FULL'
+            }
         }
+    }
+
+    sourceSets {
+        // Expose exported Room schemas to instrumentation/migration tests.
+        androidTest.assets.srcDirs += files("$projectDir/schemas".toString())
     }
 
     compileOptions {
@@ -39,6 +86,7 @@ android {
 }
 
 def roomVersion = '2.6.1'
+def billingVersion = '7.1.1'
 
 dependencies {
     implementation 'androidx.appcompat:appcompat:1.6.1'
@@ -50,6 +98,9 @@ dependencies {
     implementation 'androidx.work:work-runtime:2.10.1'
     implementation "androidx.room:room-runtime:$roomVersion"
     annotationProcessor "androidx.room:room-compiler:$roomVersion"
+
+    // Google Play Billing v7 for 14-day trial & Pro subscription / lifetime unlock.
+    implementation "com.android.billingclient:billing:$billingVersion"
 
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.robolectric:robolectric:4.13'
@@ -66,3 +117,4 @@ dependencies {
     // Cross-window UI driving (dialogs, text input) for flow tests.
     androidTestImplementation 'androidx.test.uiautomator:uiautomator:2.3.0'
 }
+

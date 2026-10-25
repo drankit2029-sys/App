@@ -111,6 +111,7 @@ public class MainActivity extends AppCompatActivity {
         // Library loads async (Room + disk reconcile). Recovery + first paint
         // wait for it so prompts see adopted orphans and pruned rows.
         TakesRepository.init(this);
+        TrialAndBillingManager.get(this).connectAndSync();
         TakesRepository.onReady(() -> {
             if (!recoveryChecked) {
                 recoveryChecked = true;

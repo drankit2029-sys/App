@@ -66,7 +66,7 @@ public class LibraryFlowTest {
     private void dismissStrayDialogs(UiDevice d) {
         for (int i = 0; i < 3; i++) {
             UiObject cancel = d.findObject(new UiSelector()
-                    .resourceId("com.example.hello:id/dialogCancel"));
+                    .resourceId(rid("dialogCancel")));
             if (cancel.waitForExists(400)) {
                 try {
                     cancel.click();
@@ -102,6 +102,11 @@ public class LibraryFlowTest {
     private UiDevice device() {
         return UiDevice.getInstance(
                 InstrumentationRegistry.getInstrumentation());
+    }
+
+    private String rid(String name) {
+        return InstrumentationRegistry.getInstrumentation()
+                .getTargetContext().getPackageName() + ":id/" + name;
     }
 
     private void seedTake(String title, String format) throws Exception {
@@ -208,7 +213,7 @@ public class LibraryFlowTest {
                     "search toggle");
             search.click();
             UiObject input = d.findObject(new UiSelector()
-                    .resourceId("com.example.hello:id/searchInput"));
+                    .resourceId(rid("searchInput")));
             assertTrue("no search input", input.waitForExists(5000));
             input.setText("FlowLib Alpha");
             Thread.sleep(800);
@@ -236,7 +241,7 @@ public class LibraryFlowTest {
             // Newest take is first: its heart is the first fav icon.
             UiObject heart = findAllowingDialog(d,
                     new UiSelector()
-                            .resourceId("com.example.hello:id/favIcon")
+                            .resourceId(rid("favIcon"))
                             .instance(0), "favorite heart");
             heart.click();
             Thread.sleep(600);
@@ -292,7 +297,7 @@ public class LibraryFlowTest {
             InstrumentationRegistry.getInstrumentation().waitForIdleSync();
             Thread.sleep(600);
 
-            clickChip(a, "com.example.hello:id/chipWav");
+            clickChip(a, rid("chipWav"));
             Thread.sleep(800);
             View root = a.getWindow().getDecorView();
             assertNotNull("WAV24 hidden by WAV chip",
@@ -300,7 +305,7 @@ public class LibraryFlowTest {
             assertTrue("FLAC shown by WAV chip",
                     findByText(root, "FlowLib Flac") == null);
 
-            clickChip(a, "com.example.hello:id/chipFlac");
+            clickChip(a, rid("chipFlac"));
             Thread.sleep(800);
             root = a.getWindow().getDecorView();
             assertNotNull("FLAC hidden by FLAC chip",
@@ -308,7 +313,7 @@ public class LibraryFlowTest {
             assertTrue("WAV24 shown by FLAC chip",
                     findByText(root, "FlowLib W24") == null);
 
-            clickChip(a, "com.example.hello:id/chipAmr");
+            clickChip(a, rid("chipAmr"));
             Thread.sleep(800);
             root = a.getWindow().getDecorView();
             assertNotNull("AMR hidden by AMR chip",
@@ -316,7 +321,7 @@ public class LibraryFlowTest {
             assertTrue("M4A shown by AMR chip",
                     findByText(root, "FlowLib M4") == null);
 
-            clickChip(a, "com.example.hello:id/chipAll");
+            clickChip(a, rid("chipAll"));
             Thread.sleep(800);
         } finally {
             cleanupTitle("FlowLib W24");

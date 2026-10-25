@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Outer signature TakeOne record ring (#FF3B30) within 66dp safe zone -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFF3B30"
+        android:strokeWidth="3.5"
+        android:pathData="M54,54m-26,0a26,26 0,1 1,52 0a26,26 0,1 1,-52 0" />
+    <!-- Left & right studio waveform bars (#FF3B30) -->
+    <path
+        android:fillColor="#FFFF3B30"
+        android:pathData="M34,48h3v12h-3zM39,43h3v22h-3zM66,43h3v22h-3zM71,48h3v12h-3z" />
+    <!-- Center condenser microphone capsule (#F2F4F7) -->
+    <path
+        android:fillColor="#FFF2F4F7"
+        android:pathData="M54,36c-3.87,0 -7,3.13 -7,7v11c0,3.87 3.13,7 7,7s7,-3.13 7,-7V43c0,-3.87 -3.13,-7 -7,-7z" />
+    <!-- Microphone cradle & stand (#F2F4F7) -->
+    <path
+        android:fillColor="#FFF2F4F7"
+        android:pathData="M64,53h-2.5c0,4.14 -3.36,7.5 -7.5,7.5S46.5,57.14 46.5,53H44c0,5.1 3.83,9.31 8.75,9.92V68h-4v2.5h10.5V68h-4v-5.08C60.17,62.31 64,58.1 64,53z" />
+</vector>
+

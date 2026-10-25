@@ -117,6 +117,20 @@ jobs:
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
 
+      - name: Build Release App Bundle (.aab)
+        env:
+          TAKEONE_KEYSTORE_PASSWORD: ${{ secrets.TAKEONE_KEYSTORE_PASSWORD }}
+          TAKEONE_KEY_ALIAS: ${{ secrets.TAKEONE_KEY_ALIAS }}
+          TAKEONE_KEY_PASSWORD: ${{ secrets.TAKEONE_KEY_PASSWORD }}
+        run: ./gradlew bundleRelease --stacktrace
+
+      - name: Upload Release App Bundle (.aab)
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-bundle
+          path: app/build/outputs/bundle/release/*.aab
+          if-no-files-found: warn
+
   # The interesting regressions in this app (RecyclerView stable-id swaps,
   # the conversion service queue, the streaming encoder handoff) only show up
   # on a device, so the instrumentation suite runs here too.
