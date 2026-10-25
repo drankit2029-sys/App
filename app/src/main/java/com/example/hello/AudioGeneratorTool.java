@@ -90,9 +90,7 @@ final class AudioGeneratorTool extends AudioProcessor {
     public float[] processOfflineRegion(float[] in, int frames, int channels) {
         if (in == null || frames <= 0) return in;
         int ch = Math.max(1, Math.min(2, channels));
-        int outFrames = (duration.getCurrentRaw() != duration.defaultRaw)
-                ? Math.max(1, Math.round(duration.getFloat() * sampleRate))
-                : frames;
+        int outFrames = Math.max(1, Math.round(duration.getFloat() * sampleRate));
         float[] out = new float[outFrames * ch];
         int typeIdx = type.getEnumIndex();
         float amp = amplitude.getCurrentRaw() / 100f;
@@ -225,3 +223,4 @@ final class AudioGeneratorTool extends AudioProcessor {
         return (bits / (float) 0x7FFFFFFF) * 2f - 1f;
     }
 }
+

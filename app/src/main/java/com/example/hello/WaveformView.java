@@ -63,6 +63,7 @@ public class WaveformView extends View {
      */
     private float[] fxBaseHistory;
     private int fxBaseCount;
+    private float fxBaseFramesPerBar = 2400f;
     private boolean fxRegionActive;
     /**
      * The region effects mode owns. It is the frozen apply target, so its bars
@@ -71,6 +72,8 @@ public class WaveformView extends View {
      */
     private float fxRegionStartFrac = 0f;
     private float fxRegionEndFrac = 1f;
+    private float fxOrigStartFrac = 0f;
+    private float fxOrigEndFrac = 1f;
     private int count;
     private boolean live;
     private float zoom = 1f;
@@ -325,10 +328,23 @@ public class WaveformView extends View {
                 postInvalidateOnAnimation();
                 return;
             }
-            fxRegionStartFrac = clampFrac(startFrac);
-            fxRegionEndFrac = Math.max(
-                    fxRegionStartFrac + 1f / Math.max(1, count),
+            if (fxBaseHistory != null && fxBaseCount > 0 && count != fxBaseCount) {
+                // Returning from a stretched offline FX render to an in-place FX render:
+                // restore the dry bucket count first so [startFrac, endFrac) maps cleanly.
+                if (history.length < fxBaseCount) {
+                    history = new float[Math.max(COLS, fxBaseCount)];
+                }
+                Arrays.fill(history, 0f);
+                System.arraycopy(fxBaseHistory, 0, history, 0, fxBaseCount);
+                count = fxBaseCount;
+                framesPerBar = fxBaseFramesPerBar;
+            }
+            fxOrigStartFrac = clampFrac(startFrac);
+            fxOrigEndFrac = Math.max(
+                    fxOrigStartFrac + 1f / Math.max(1, count),
                     clampFrac(endFrac));
+            fxRegionStartFrac = fxOrigStartFrac;
+            fxRegionEndFrac = fxOrigEndFrac;
             fxRegionActive = true;
             if (peaks == null || peaks.length == 0) {
                 restoreWetBarsLocked();
@@ -338,6 +354,7 @@ public class WaveformView extends View {
             if (fxBaseHistory == null || fxBaseCount != count) {
                 fxBaseHistory = Arrays.copyOf(history, count);
                 fxBaseCount = count;
+                fxBaseFramesPerBar = framesPerBar;
             } else {
                 int n = Math.min(count, fxBaseHistory.length);
                 System.arraycopy(fxBaseHistory, 0, history, 0, n);
@@ -349,6 +366,127 @@ public class WaveformView extends View {
             int lim = Math.min(e, peaks.length);
             for (int i = s; i < lim; i++) {
                 history[i] = Math.max(0f, peaks[i]);
+            }
+            playheadPos = clampPlayheadToFxLocked(playheadPos);
+            playheadIndex = Math.round(playheadPos);
+        }
+        postInvalidateOnAnimation();
+    }
+
+    /**
+     * Splices a duration-changing effect's rendered region peaks into the
+     * dry baseline in real time, resizing the timeline (`count` and
+     * `fxRegionStartFrac..fxRegionEndFrac`) while keeping `fxRegionActive`
+     * and the playhead's relative position inside the FX region intact.
+     */
+    public void setFxRegionStretchedPeaks(final float[] regionPeaks,
+                                          final float origStartFrac,
+                                          final float origEndFrac,
+                                          final long newTotalFrames) {
+        synchronized (this) {
+            if (count <= 0 && fxBaseCount <= 0) return;
+            if (fxBaseHistory == null || fxBaseCount <= 0) {
+                fxBaseHistory = Arrays.copyOf(history, count);
+                fxBaseCount = count;
+                fxBaseFramesPerBar = framesPerBar;
+            }
+            if (regionPeaks == null || regionPeaks.length == 0) {
+                restoreWetBarsLocked();
+                postInvalidateOnAnimation();
+                return;
+            }
+            float oldSpan = Math.max(1e-5f,
+                    (fxRegionEndFrac - fxRegionStartFrac) * Math.max(1, count));
+            float relPlayhead = (playheadPos - fxRegionStartFrac * count) / oldSpan;
+            relPlayhead = Math.max(0f, Math.min(1f, relPlayhead));
+
+            boolean hadSubSel = selectionActive && count > 0;
+            float relSelStart = 0f;
+            float relSelEnd = 1f;
+            if (hadSubSel) {
+                float lo = Math.min(selStartPos, selEndPos);
+                float hi = Math.max(selStartPos, selEndPos);
+                relSelStart = Math.max(0f, Math.min(1f,
+                        (lo - fxRegionStartFrac * count) / oldSpan));
+                relSelEnd = Math.max(relSelStart, Math.min(1f,
+                        (hi - fxRegionStartFrac * count) / oldSpan));
+            }
+
+            fxOrigStartFrac = clampFrac(origStartFrac);
+            fxOrigEndFrac = Math.max(
+                    fxOrigStartFrac + 1f / Math.max(1, fxBaseCount),
+                    clampFrac(origEndFrac));
+            int s = Math.max(0, Math.min(fxBaseCount - 1,
+                    Math.round(fxOrigStartFrac * fxBaseCount)));
+            int e = Math.max(s + 1, Math.min(fxBaseCount,
+                    Math.round(fxOrigEndFrac * fxBaseCount)));
+            int prefixLen = s;
+            int suffixLen = Math.max(0, fxBaseCount - e);
+            int rLen = regionPeaks.length;
+            int rawTotal = prefixLen + rLen + suffixLen;
+
+            float[] combined = new float[Math.max(1, rawTotal)];
+            if (prefixLen > 0) {
+                System.arraycopy(fxBaseHistory, 0, combined, 0, prefixLen);
+            }
+            for (int i = 0; i < rLen; i++) {
+                combined[prefixLen + i] = Math.max(0f, regionPeaks[i]);
+            }
+            if (suffixLen > 0) {
+                System.arraycopy(fxBaseHistory, e, combined,
+                        prefixLen + rLen, suffixLen);
+            }
+
+            int newCount = rawTotal;
+            int newStartBucket = prefixLen;
+            int newEndBucket = prefixLen + rLen;
+            if (rawTotal > MAX_HISTORY) {
+                combined = resamplePeaksMax(combined, MAX_HISTORY);
+                newCount = MAX_HISTORY;
+                newStartBucket = Math.round(
+                        (float) prefixLen * MAX_HISTORY / rawTotal);
+                newEndBucket = Math.max(newStartBucket + 1,
+                        Math.round((float) (prefixLen + rLen)
+                                * MAX_HISTORY / rawTotal));
+            }
+            if (history.length < Math.max(COLS, newCount)) {
+                history = new float[Math.max(COLS, newCount)];
+            }
+            Arrays.fill(history, 0f);
+            System.arraycopy(combined, 0, history, 0, newCount);
+            count = newCount;
+            if (newTotalFrames > 0) {
+                framesPerBar = Math.max(240f,
+                        newTotalFrames / (float) Math.max(1, newCount));
+            }
+
+            fxRegionStartFrac = clampFrac(
+                    newStartBucket / (float) Math.max(1, newCount));
+            fxRegionEndFrac = Math.max(
+                    fxRegionStartFrac + 1f / Math.max(1, newCount),
+                    clampFrac(newEndBucket / (float) Math.max(1, newCount)));
+            fxRegionActive = true;
+
+            float newRegionStartPos = fxRegionStartFrac * count;
+            float newRegionSpan = Math.max(1f,
+                    (fxRegionEndFrac - fxRegionStartFrac) * count);
+            playheadPos = clampPlayheadToFxLocked(
+                    newRegionStartPos + relPlayhead * newRegionSpan);
+            playheadIndex = Math.round(playheadPos);
+
+            if (hadSubSel) {
+                float ns = newRegionStartPos + relSelStart * newRegionSpan;
+                float ne = newRegionStartPos + relSelEnd * newRegionSpan;
+                if (ne - ns < 1f) {
+                    ne = Math.min(fxRegionEndFrac * count, ns + 1f);
+                }
+                setSelectionPositionsLocked(ns, ne);
+            }
+            if (followMinZoom) {
+                zoom = minimumZoom();
+            } else {
+                zoom = Math.max(minimumZoom(),
+                        Math.min(zoom, ZOOM_STEPS[ZOOM_STEPS.length - 1]));
             }
         }
         postInvalidateOnAnimation();
@@ -365,6 +503,10 @@ public class WaveformView extends View {
             fxRegionStartFrac = s;
             fxRegionEndFrac = Math.max(s + 1f / Math.max(1, count),
                     clampFrac(endFrac));
+            if (fxBaseHistory == null) {
+                fxOrigStartFrac = fxRegionStartFrac;
+                fxOrigEndFrac = fxRegionEndFrac;
+            }
             fxRegionActive = true;
             // Entering effects mode snaps an outside playhead onto the
             // nearest edge of the target instead of leaving it stranded.
@@ -372,6 +514,14 @@ public class WaveformView extends View {
             playheadIndex = Math.round(playheadPos);
         }
         postInvalidateOnAnimation();
+    }
+
+    public synchronized float fxRegionStartFraction() {
+        return fxRegionStartFrac;
+    }
+
+    public synchronized float fxRegionEndFraction() {
+        return fxRegionEndFrac;
     }
 
     /** Restores the dry bars but keeps the effects-mode region highlight. */
@@ -403,9 +553,38 @@ public class WaveformView extends View {
     }
 
     private void restoreWetBarsLocked() {
-        if (fxBaseHistory != null && count > 0) {
-            int n = Math.min(count, fxBaseHistory.length);
-            System.arraycopy(fxBaseHistory, 0, history, 0, n);
+        if (fxBaseHistory != null && fxBaseCount > 0) {
+            float oldSpan = Math.max(1e-5f,
+                    (fxRegionEndFrac - fxRegionStartFrac) * Math.max(1, count));
+            float relPlayhead = (playheadPos - fxRegionStartFrac * count) / oldSpan;
+            relPlayhead = Math.max(0f, Math.min(1f, relPlayhead));
+
+            if (history.length < Math.max(COLS, fxBaseCount)) {
+                history = new float[Math.max(COLS, fxBaseCount)];
+            }
+            Arrays.fill(history, 0f);
+            System.arraycopy(fxBaseHistory, 0, history, 0, fxBaseCount);
+            count = fxBaseCount;
+            framesPerBar = fxBaseFramesPerBar;
+            fxRegionStartFrac = fxOrigStartFrac;
+            fxRegionEndFrac = Math.max(
+                    fxOrigStartFrac + 1f / Math.max(1, count),
+                    fxOrigEndFrac);
+            float newStartPos = fxRegionStartFrac * count;
+            float newSpan = Math.max(1f,
+                    (fxRegionEndFrac - fxRegionStartFrac) * count);
+            playheadPos = clampPlayheadToFxLocked(
+                    newStartPos + relPlayhead * newSpan);
+            playheadIndex = Math.round(playheadPos);
+            if (selectionActive) {
+                setSelectionPositionsLocked(newStartPos, newStartPos + newSpan);
+            }
+            if (followMinZoom) {
+                zoom = minimumZoom();
+            } else {
+                zoom = Math.max(minimumZoom(),
+                        Math.min(zoom, ZOOM_STEPS[ZOOM_STEPS.length - 1]));
+            }
         }
         fxBaseHistory = null;
         fxBaseCount = 0;
@@ -422,6 +601,14 @@ public class WaveformView extends View {
     public int getHistoryCount() {
         synchronized (this) {
             return count;
+        }
+    }
+
+    /** Dry baseline bucket count before any length-changing FX stretch. */
+    public int getBaseHistoryCount() {
+        synchronized (this) {
+            return (fxBaseHistory != null && fxBaseCount > 0)
+                    ? fxBaseCount : count;
         }
     }
 
@@ -1604,3 +1791,4 @@ public class WaveformView extends View {
         }
     }
 }
+

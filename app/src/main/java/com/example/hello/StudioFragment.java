@@ -135,6 +135,9 @@ public class StudioFragment extends Fragment {
     private boolean previewPlaysRenderedFx = false;
     private File fxRenderedPreviewFile;
     private long fxRenderedPreviewTotalFrames;
+    private long fxRenderedPreviewStartFrame;
+    private long fxRenderedPreviewEndFrame;
+    private long fxPreviewPlayheadFrame;
     private boolean fxRenderedPreviewWaveLoaded;
     private boolean fxPreviewPreparing;
     private int fxPreviewRenderGen;
@@ -538,7 +541,34 @@ public class StudioFragment extends Fragment {
             @Override
             public void onPlayheadScrubbed(int bucketIndex, float fraction) {
                 if (!isSessionEditable()) return;
-                stopStudioPreview();
+                if (studioPreviewPlayer != null || fxPreviewPreparing) {
+                    stopStudioPreview();
+                }
+                if (fxPanelOpen && fxRenderedPreviewWaveLoaded
+                        && fxRenderedPreviewTotalFrames > 0) {
+                    fxPreviewPlayheadFrame = Math.max(
+                            fxRenderedPreviewStartFrame,
+                            Math.min(fxRenderedPreviewEndFrame,
+                                    Math.round(fraction * fxRenderedPreviewTotalFrames)));
+                    float rStart = waveform.fxRegionStartFraction();
+                    float rEnd = Math.max(rStart + 1e-5f,
+                            waveform.fxRegionEndFraction());
+                    float rel = Math.max(0f,
+                            Math.min(1f, (fraction - rStart) / (rEnd - rStart)));
+                    long rawTotal = engine.totalFrames();
+                    long rawStart = Math.round(fxApplyTargetStart * rawTotal);
+                    long rawEnd = Math.round(fxApplyTargetEnd * rawTotal);
+                    long mappedRaw = rawStart + Math.round(rel * (rawEnd - rawStart));
+                    engine.seekCursorFrame(
+                            Math.max(0L, Math.min(rawTotal, mappedRaw)));
+                    userScrolledWhilePaused = true;
+                    timerText.setText(formatTimer(
+                            fxPreviewPlayheadFrame * 1000L
+                                    / RecordingEngine.SAMPLE_RATE));
+                    paintEditorStrip();
+                    paintFxPanelControls();
+                    return;
+                }
                 long totalFrames = engine.totalFrames();
                 long targetFrame = Math.round(fraction * totalFrames);
                 // Never disarm replaceModeArmed while scrubbing! If the user
@@ -1553,10 +1583,18 @@ public class StudioFragment extends Fragment {
         //    effect-applied audio instead of starting a new recording, and it
         //    always plays from the top when parked at the end of the take.
         if (fxPanelOpen) {
-            // In effects mode the transport is bounded by the frozen target:
-            // pressing play at the target end replays from its start instead
-            // of jumping back to the beginning of the whole take.
-            if (totalFrames > 0) {
+            if (fxRenderedPreviewWaveLoaded
+                    && fxRenderedPreviewTotalFrames > 0) {
+                if (fxPreviewPlayheadFrame >= fxRenderedPreviewEndFrame - 480
+                        || fxPreviewPlayheadFrame < fxRenderedPreviewStartFrame) {
+                    fxPreviewPlayheadFrame = fxRenderedPreviewStartFrame;
+                    if (waveform != null) {
+                        waveform.setPlayheadFraction(
+                                fxPreviewPlayheadFrame
+                                        / (float) fxRenderedPreviewTotalFrames);
+                    }
+                }
+            } else if (totalFrames > 0) {
                 long targetStart = Math.round(fxApplyTargetStart * totalFrames);
                 long targetEnd = Math.round(fxApplyTargetEnd * totalFrames);
                 if (curFrames >= targetEnd - 480 || curFrames < targetStart) {
@@ -2500,10 +2538,13 @@ public class StudioFragment extends Fragment {
                 } else if (studioPreviewPlayer != null) {
                     long posMs = studioPreviewPlayer.positionMs();
                     timerText.setText(formatTimer(posMs));
-                } else if (fxRenderedPreviewFile != null
-                        && fxRenderedPreviewWaveLoaded) {
+                } else if (fxPanelOpen && fxRenderedPreviewWaveLoaded
+                        && fxRenderedPreviewTotalFrames > 0) {
+                    long shownFrame = userScrolledWhilePaused
+                            ? fxPreviewPlayheadFrame
+                            : fxRenderedPreviewTotalFrames;
                     timerText.setText(formatTimer(
-                            fxRenderedPreviewTotalFrames * 1000L
+                            shownFrame * 1000L
                                     / RecordingEngine.SAMPLE_RATE));
                 } else if (engine.hasSession()) {
                     long shownMs = (engine.cursorFrames() > 0 || userScrolledWhilePaused)
@@ -2610,8 +2651,14 @@ public class StudioFragment extends Fragment {
         if (raw == null || !raw.exists() || waveform == null) return;
         if (withLiveFx && fxPanelOpen && rackHasOfflineEffects()
                 && !(dspBakedToRaw && !dspSubRangeBaked)) {
-            startRenderedFxPreview(raw, previewConfigFor(true,
-                    dspBakedToRaw, dspSubRangeBaked, true, dspConfig));
+            if (fxRenderedPreviewWaveLoaded && fxRenderedPreviewFile != null
+                    && fxRenderedPreviewFile.exists()
+                    && fxRenderedPreviewTotalFrames > 0) {
+                playLoadedRenderedFxPreview();
+            } else {
+                startRenderedFxPreview(raw, previewConfigFor(true,
+                        dspBakedToRaw, dspSubRangeBaked, true, dspConfig));
+            }
             return;
         }
         try {
@@ -2794,43 +2841,33 @@ public class StudioFragment extends Fragment {
         }
         fxRenderedPreviewFile = rendered;
         fxRenderedPreviewTotalFrames = totalFrames;
+        fxRenderedPreviewStartFrame = startFrame;
+        fxRenderedPreviewEndFrame = regionEndFrame;
         try {
-            waveform.reloadFullFromWavSync(rendered);
-            waveform.syncFramesPerBar(totalFrames);
-            fxRenderedPreviewWaveLoaded = true;
-            float newStart = startFrame / (float) totalFrames;
-            float newEnd = regionEndFrame / (float) totalFrames;
-            waveform.setFxRegionBounds(newStart, newEnd);
-            waveform.setPlayheadFraction(newStart);
-            final RawFloatPlayer[] slot = new RawFloatPlayer[1];
-            slot[0] = new RawFloatPlayer(rendered, completed -> handler.post(() -> {
-                if (studioPreviewPlayer != slot[0]) return;
-                studioPreviewPlayer = null;
-                previewPlaysLiveFx = false;
-                previewPlaysRenderedFx = false;
-                livePreviewDsp = null;
-                try {
-                    slot[0].stop();
-                } catch (Exception ignored) {}
-                if (completed && fxRenderedPreviewFile == rendered) {
-                    if (waveform != null) waveform.setPlayheadFraction(1f);
-                    if (timerText != null) {
-                        timerText.setText(formatTimer(totalFrames * 1000L
-                                / RecordingEngine.SAMPLE_RATE));
-                    }
+            int baseBuckets = waveform.getBaseHistoryCount();
+            long rawTotal = Math.max(1L, engine.totalFrames());
+            long rFrames = Math.max(1L, regionEndFrame - startFrame);
+            int regionBuckets = Math.max(1, Math.min(8192,
+                    Math.round((float) rFrames * baseBuckets / rawTotal)));
+            float[] fullPeaks = Dsp.loadPeaks(rendered,
+                    Math.max(regionBuckets * 2, baseBuckets));
+            float[] regionPeaks = new float[regionBuckets];
+            if (fullPeaks.length > 0 && totalFrames > 0) {
+                for (int b = 0; b < regionBuckets; b++) {
+                    long f = startFrame + (b * rFrames / regionBuckets);
+                    int idx = Math.min(fullPeaks.length - 1,
+                            Math.max(0, (int) (f * fullPeaks.length / totalFrames)));
+                    regionPeaks[b] = fullPeaks[idx];
                 }
-                paintEditorStrip();
-                paintFxPanelControls();
-            }));
-            RawFloatPlayer player = slot[0];
-            player.setDspChain(null);
-            studioPreviewPlayer = player;
-            previewPlaysLiveFx = true;
-            previewPlaysRenderedFx = true;
-            scheduleWaveFrame();
-            player.playFrom(startFrame);
-            paintEditorStrip();
-            paintFxPanelControls();
+            }
+            waveform.setFxRegionStretchedPeaks(regionPeaks,
+                    fxApplyTargetStart, fxApplyTargetEnd, totalFrames);
+            fxRenderedPreviewWaveLoaded = true;
+            fxPreviewPlayheadFrame = startFrame;
+            waveform.setPlayheadFraction(
+                    startFrame / (float) Math.max(1L, totalFrames));
+            refreshZoomValue();
+            playLoadedRenderedFxPreview();
         } catch (Exception e) {
             // noinspection ResultOfMethodCallIgnored
             rendered.delete();
@@ -2844,10 +2881,77 @@ public class StudioFragment extends Fragment {
         }
     }
 
+    /**
+     * Plays the already-rendered live FX preview file across the stretched
+     * FX region `[fxRenderedPreviewStartFrame, fxRenderedPreviewEndFrame)`
+     * without re-rendering or resetting the timeline.
+     */
+    private void playLoadedRenderedFxPreview() {
+        File rendered = fxRenderedPreviewFile;
+        long totalFrames = fxRenderedPreviewTotalFrames;
+        if (!isAdded() || waveform == null || !fxPanelOpen
+                || rendered == null || !rendered.exists() || totalFrames <= 0) {
+            return;
+        }
+        try {
+            long start = auditionStartFrame(fxRenderedPreviewStartFrame,
+                    fxRenderedPreviewEndFrame, fxPreviewPlayheadFrame);
+            fxPreviewPlayheadFrame = start;
+            waveform.setPlayheadFraction(start / (float) totalFrames);
+            final RawFloatPlayer[] slot = new RawFloatPlayer[1];
+            slot[0] = new RawFloatPlayer(rendered, completed -> handler.post(() -> {
+                if (studioPreviewPlayer != slot[0]) return;
+                studioPreviewPlayer = null;
+                previewPlaysLiveFx = false;
+                previewPlaysRenderedFx = false;
+                livePreviewDsp = null;
+                try {
+                    slot[0].stop();
+                } catch (Exception ignored) {}
+                if (fxRenderedPreviewFile == rendered && totalFrames > 0) {
+                    long endPos = completed
+                            ? fxRenderedPreviewEndFrame
+                            : Math.max(fxRenderedPreviewStartFrame,
+                                    Math.min(fxRenderedPreviewEndFrame,
+                                            slot[0].positionFrames()));
+                    fxPreviewPlayheadFrame = endPos;
+                    userScrolledWhilePaused = !completed;
+                    if (waveform != null) {
+                        waveform.setPlayheadFraction(
+                                endPos / (float) totalFrames);
+                    }
+                    if (timerText != null) {
+                        long shown = completed ? totalFrames : endPos;
+                        timerText.setText(formatTimer(shown * 1000L
+                                / RecordingEngine.SAMPLE_RATE));
+                    }
+                }
+                paintEditorStrip();
+                paintFxPanelControls();
+                syncStudioFabIcon();
+            }));
+            RawFloatPlayer player = slot[0];
+            player.setDspChain(null);
+            studioPreviewPlayer = player;
+            previewPlaysLiveFx = true;
+            previewPlaysRenderedFx = true;
+            scheduleWaveFrame();
+            if (fxRenderedPreviewEndFrame > start) {
+                player.playRange(start, fxRenderedPreviewEndFrame);
+            } else {
+                player.playFrom(start);
+            }
+            paintEditorStrip();
+            paintFxPanelControls();
+        } catch (Exception ignored) {
+            paintEditorStrip();
+            paintFxPanelControls();
+        }
+    }
+
     private void cancelRenderedFxPreviewRender() {
         fxPreviewRenderGen++;
         fxPreviewPreparing = false;
-        discardRenderedFxPreview();
     }
 
     /** Drops a rendered preview and returns the waveform to the session raw. */
@@ -2858,6 +2962,9 @@ public class StudioFragment extends Fragment {
             fxRenderedPreviewFile = null;
         }
         fxRenderedPreviewTotalFrames = 0;
+        fxRenderedPreviewStartFrame = 0;
+        fxRenderedPreviewEndFrame = 0;
+        fxPreviewPlayheadFrame = 0;
         previewPlaysRenderedFx = false;
         if (fxRenderedPreviewWaveLoaded) {
             restoreRawWaveformAfterRenderedPreview();
@@ -2866,13 +2973,13 @@ public class StudioFragment extends Fragment {
 
     private void restoreRawWaveformAfterRenderedPreview() {
         fxRenderedPreviewWaveLoaded = false;
-        File raw = engine.rawFile;
-        if (waveform != null && raw != null && raw.exists()) {
-            waveform.reloadFullFromWavSync(raw);
+        if (waveform != null) {
+            waveform.clearFxRegionPeaks();
             long total = Math.max(1L, engine.totalFrames());
             waveform.syncFramesPerBar(total);
             long cur = Math.max(0L, Math.min(total, engine.cursorFrames()));
             waveform.setPlayheadFraction(cur / (float) total);
+            refreshZoomValue();
         }
         if (timerText != null && engine.hasSession()) {
             timerText.setText(formatTimer(engine.cursorMs()));
@@ -2892,24 +2999,21 @@ public class StudioFragment extends Fragment {
             try {
                 player.stop();
             } catch (Exception ignored) {}
-            if (wasRendered) {
-                long totalF = Math.max(1L, engine.totalFrames());
-                long rawFrame = fxRenderedPreviewTotalFrames > 0
-                        ? Math.round(lastFrame * (double) totalF
-                                / fxRenderedPreviewTotalFrames)
-                        : engine.cursorFrames();
-                discardRenderedFxPreview();
-                if (engine.hasSession()
-                        && engine.state != RecordingEngine.State.RECORDING) {
-                    rawFrame = Math.max(0L, Math.min(totalF, rawFrame));
-                    userScrolledWhilePaused = (rawFrame < totalF - 480);
-                    engine.seekCursorFrame(rawFrame);
-                    if (waveform != null) {
-                        waveform.setPlayheadFraction(rawFrame / (float) totalF);
-                    }
-                    if (timerText != null) {
-                        timerText.setText(formatTimer(engine.cursorMs()));
-                    }
+            if (wasRendered && fxPanelOpen && fxRenderedPreviewWaveLoaded
+                    && fxRenderedPreviewTotalFrames > 0) {
+                // Keep the stretched FX timeline and rendered preview WAV intact
+                // when pausing or scrubbing in FX mode!
+                lastFrame = Math.max(fxRenderedPreviewStartFrame,
+                        Math.min(fxRenderedPreviewEndFrame, lastFrame));
+                fxPreviewPlayheadFrame = lastFrame;
+                userScrolledWhilePaused = true;
+                if (waveform != null) {
+                    waveform.setPlayheadFraction(
+                            lastFrame / (float) fxRenderedPreviewTotalFrames);
+                }
+                if (timerText != null) {
+                    timerText.setText(formatTimer(lastFrame * 1000L
+                            / RecordingEngine.SAMPLE_RATE));
                 }
             } else if (engine.hasSession()
                     && engine.state != RecordingEngine.State.RECORDING) {
@@ -2923,8 +3027,6 @@ public class StudioFragment extends Fragment {
                     timerText.setText(formatTimer(engine.cursorMs()));
                 }
             }
-        } else if (fxRenderedPreviewFile != null) {
-            discardRenderedFxPreview();
         }
         // NOTE: Do NOT set btnPreviewPlay.setText("▶ Preview") or reset its
         // background here! btnPreviewPlay is the "Replace" toggle button and
@@ -3323,15 +3425,13 @@ public class StudioFragment extends Fragment {
         handler.removeCallbacks(fxPreviewRefresh);
         if (!isAdded() || waveform == null) return;
         if (previewPlaysRenderedFx && studioPreviewPlayer != null) {
-            // A rendered preview is a snapshot of the previous rack. Drop it
-            // before drawing the freshly edited region so the bars and timer
-            // never describe two different durations.
+            // Pause active rendered playback when a parameter changes; the
+            // live refresh below will atomically swap in the newly stretched
+            // timeline and preview WAV without snapping back to raw first.
             stopStudioPreview();
-        } else if (fxRenderedPreviewFile != null
-                && studioPreviewPlayer == null) {
-            discardRenderedFxPreview();
         }
         if (!fxPanelOpen) {
+            discardRenderedFxPreview();
             waveform.clearFxRegion();
             return;
         }
@@ -3342,16 +3442,19 @@ public class StudioFragment extends Fragment {
         if (!isAdded() || waveform == null || !fxPanelOpen) return;
         if (dspConfig == null || !dspConfig.isActive()) {
             fxPreviewGeneration++;
+            discardRenderedFxPreview();
             waveform.clearFxRegionPeaks();
             return;
         }
-        final int buckets = waveform.getHistoryCount();
-        if (buckets <= 0) {
+        final int baseBuckets = waveform.getBaseHistoryCount();
+        if (baseBuckets <= 0) {
+            discardRenderedFxPreview();
             waveform.clearFxRegionPeaks();
             return;
         }
         final File raw = engine.rawFile;
         if (raw == null || !raw.exists()) {
+            discardRenderedFxPreview();
             waveform.clearFxRegionPeaks();
             return;
         }
@@ -3363,19 +3466,81 @@ public class StudioFragment extends Fragment {
         // rack while the user keeps turning knobs.
         final DspChain chain = new DspChain(channels, dspConfig);
         if (!chain.isActive()) {
+            discardRenderedFxPreview();
             waveform.clearFxRegionPeaks();
             return;
         }
+        final File cacheDir = requireContext().getCacheDir();
+        final boolean hasOffline = !chain.offlineProcessors().isEmpty();
         new Thread(() -> {
-            final float[] peaks = FxPreviewPeaks.renderRegion(raw, chain,
-                    buckets, DspChain.SAMPLE_RATE, startFrac, endFrac);
+            File tempOut = null;
+            if (hasOffline) {
+                try {
+                    tempOut = File.createTempFile(
+                            "takeone_fxpreview_live_", ".wav", cacheDir);
+                } catch (Exception ignored) {}
+            }
+            final FxPreviewPeaks.LiveRegionResult res =
+                    FxPreviewPeaks.renderRegionLive(raw, chain, baseBuckets,
+                            DspChain.SAMPLE_RATE, startFrac, endFrac, tempOut);
+            final File createdTemp = tempOut;
             handler.post(() -> {
-                if (!isAdded() || waveform == null || !fxPanelOpen) return;
-                if (gen != fxPreviewGeneration) return;
-                if (peaks == null) {
+                if (!isAdded() || waveform == null || !fxPanelOpen
+                        || gen != fxPreviewGeneration) {
+                    if (createdTemp != null) {
+                        // noinspection ResultOfMethodCallIgnored
+                        createdTemp.delete();
+                    }
+                    return;
+                }
+                if (res == null || res.peaks == null) {
+                    if (createdTemp != null) {
+                        // noinspection ResultOfMethodCallIgnored
+                        createdTemp.delete();
+                    }
+                    discardRenderedFxPreview();
                     waveform.clearFxRegionPeaks();
+                    return;
+                }
+                if (res.lengthChanged) {
+                    if (fxRenderedPreviewFile != null
+                            && fxRenderedPreviewFile != res.renderedWav) {
+                        // noinspection ResultOfMethodCallIgnored
+                        fxRenderedPreviewFile.delete();
+                    }
+                    fxRenderedPreviewFile = res.renderedWav;
+                    fxRenderedPreviewTotalFrames = res.newTotalFrames;
+                    fxRenderedPreviewStartFrame = res.startFrame;
+                    fxRenderedPreviewEndFrame = res.newRegionEndFrame;
+                    fxRenderedPreviewWaveLoaded = true;
+                    waveform.setFxRegionStretchedPeaks(res.peaks, startFrac,
+                            endFrac, res.newTotalFrames);
+                    fxPreviewPlayheadFrame = Math.max(
+                            fxRenderedPreviewStartFrame,
+                            Math.min(fxRenderedPreviewEndFrame,
+                                    Math.round(waveform.playheadFraction()
+                                            * fxRenderedPreviewTotalFrames)));
+                    refreshZoomValue();
+                    if (timerText != null && studioPreviewPlayer == null) {
+                        long shownFrame = userScrolledWhilePaused
+                                ? fxPreviewPlayheadFrame
+                                : fxRenderedPreviewTotalFrames;
+                        timerText.setText(formatTimer(shownFrame * 1000L
+                                / RecordingEngine.SAMPLE_RATE));
+                    }
+                    paintEditorStrip();
+                    paintFxPanelControls();
                 } else {
-                    waveform.setFxRegionPeaks(peaks, startFrac, endFrac);
+                    if (createdTemp != null) {
+                        // noinspection ResultOfMethodCallIgnored
+                        createdTemp.delete();
+                    }
+                    if (fxRenderedPreviewWaveLoaded
+                            || fxRenderedPreviewFile != null) {
+                        discardRenderedFxPreview();
+                    }
+                    waveform.setFxRegionPeaks(res.peaks, startFrac, endFrac);
+                    refreshZoomValue();
                 }
             });
         }, "takeone-fx-region").start();
@@ -5646,3 +5811,4 @@ public class StudioFragment extends Fragment {
         return (MainActivity) requireActivity();
     }
 }
+

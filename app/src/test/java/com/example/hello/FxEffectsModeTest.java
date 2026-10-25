@@ -454,4 +454,72 @@ public class FxEffectsModeTest {
         assertTrue("The restored mode must still shade its target",
                 restoredWf.hasFxRegion());
     }
+
+    @Test
+    public void durationChangingEffectsUpdateTimelineInRealTimeAndPreserveFxScrollBounds()
+            throws Exception {
+        int frames = 48000; // 1.0 s take -> 20 buckets at 20 Hz
+        File raw = createFloatWav("realtime_stretch.wav", frames, 1);
+
+        DspChain.Config cfg = new DspChain.Config();
+        cfg.applyPreset(DspChain.Preset.CLEAR_ALL);
+        // 0.5x speed doubles the selected region's duration!
+        DspChain.EffectSlot speed =
+                cfg.addOrFocusSlot(DspChain.EffectType.CHANGE_SPEED_AND_PITCH);
+        speed.value = 50; // 0.50x speed
+        cfg.save(ctx);
+
+        DspChain chain = new DspChain(1, cfg);
+        File previewWav = new File(ctx.getCacheDir(), "live_preview_stretch.wav");
+        FxPreviewPeaks.LiveRegionResult res = FxPreviewPeaks.renderRegionLive(
+                raw, chain, 20, 48000, 0.25f, 0.75f, previewWav);
+        assertNotNull("Live region result must not be null", res);
+        assertTrue("Change Speed must report lengthChanged", res.lengthChanged);
+        // Original take: 48,000 frames; selected [0.25, 0.75) = 24,000 frames
+        // At 0.5x speed, selected region becomes 48,000 frames -> total 72,000 frames (30 buckets)!
+        assertEquals(72000L, res.newTotalFrames);
+        assertEquals(20, res.peaks.length);
+
+        WaveformView wf = new WaveformView(ctx);
+        for (int i = 0; i < 20; i++) wf.push(0.4f);
+        wf.setLive(false);
+        wf.setFxRegionBounds(0.25f, 0.75f);
+        wf.setFxRegionStretchedPeaks(res.peaks, 0.25f, 0.75f, res.newTotalFrames);
+
+        // Total bars updated in real time from 20 -> 30 (5 prefix + 20 stretched + 5 suffix)
+        assertEquals(30, wf.getHistoryCount());
+        assertEquals(20, wf.getBaseHistoryCount());
+        assertTrue("FX region must remain active after stretch", wf.hasFxRegion());
+        assertEquals(5f / 30f, wf.fxRegionStartFraction(), 0.02f);
+        assertEquals(25f / 30f, wf.fxRegionEndFraction(), 0.02f);
+
+        // Scrolling/clamping in FX mode must stay bounded to the stretched FX region!
+        wf.setPlayheadFraction(0.01f);
+        assertEquals("Playhead must clamp to stretched FX region start",
+                5f / 30f, wf.playheadFraction(), 0.02f);
+        wf.setPlayheadFraction(0.99f);
+        assertEquals("Playhead must clamp to stretched FX region end",
+                25f / 30f, wf.playheadFraction(), 0.02f);
+
+        // Closing FX mode restores the original 20 dry bars and [0.25, 0.75] bounds
+        wf.clearFxRegion();
+        assertEquals(20, wf.getHistoryCount());
+        assertFalse(wf.hasFxRegion());
+        previewWav.delete();
+    }
+
+    @Test
+    public void audioGeneratorDurationTimerResizesRegionAtAllValuesIncludingDefault() {
+        AudioGeneratorTool gen = new AudioGeneratorTool();
+        gen.prepare(48000, 1);
+        // Even at default 5.0 s (500 raw) or custom 2.0 s (200 raw), outFrames follows gen_dur:
+        float[] in = new float[24000]; // 0.5 s selection
+        float[] outDefault5s = gen.processOfflineRegion(in, 24000, 1);
+        assertEquals(48000 * 5, outDefault5s.length);
+
+        gen.getParam("gen_dur").setFloat(2.0f);
+        float[] out2s = gen.processOfflineRegion(in, 24000, 1);
+        assertEquals(48000 * 2, out2s.length);
+    }
 }
+
