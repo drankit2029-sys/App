@@ -108,6 +108,11 @@ public class FxUiSweepDeviceTest {
         engine.attachExisting(ctx, input, "FX Verify " + effectId,
                 info.channels, RecordingEngine.payloadBytesOf(input));
 
+        // The rack sits behind the Pro gate. The manager exposes this hook for
+        // instrumentation tests; without it the paywall sheet stands in front of
+        // the panel and nothing can be driven.
+        TrialAndBillingManager.setTestOverridePro(Boolean.TRUE);
+
         JSONObject result = new JSONObject();
         result.put("effect", effectId);
         result.put("title", type.title);
@@ -135,12 +140,32 @@ public class FxUiSweepDeviceTest {
 
         final WaveformView waveform = root.findViewById(R.id.waveform);
         final TextView fxChip = root.findViewById(R.id.btnDspFx);
-        ui(activity, () -> {
-            waveform.selectRange(0f, 1f);
-            fxChip.performClick();
-        });
-        awaitFxPanel(frag);
-        assertTrue("The rack must open", frag.isFxPanelOpen());
+
+        // The bars are loaded from the working file on a worker, and FX mode
+        // needs a region first, so wait for the bars and then make sure a
+        // selection actually took before asking for the panel.
+        for (int i = 0; i < 80 && waveform.historyCount() <= 1; i++) {
+            Thread.sleep(100);
+        }
+        ui(activity, () -> waveform.selectRange(0f, 1f));
+        if (!waveform.hasSelection()) {
+            ui(activity, () -> {
+                waveform.toggleSelectionAtPlayhead();
+                waveform.selectRange(0f, 1f);
+            });
+        }
+        boolean selected = waveform.hasSelection();
+        for (int attempt = 0; attempt < 3 && !frag.isFxPanelOpen(); attempt++) {
+            ui(activity, fxChip::performClick);
+            awaitFxPanel(frag);
+        }
+        capture(device, new File(work, "panel-open.jpg"));
+        result.put("barsLoaded", waveform.historyCount());
+        result.put("regionSelected", selected);
+        result.put("paywallVisible", device.findObject(
+                By.textContains("Pro Studio")) != null);
+        assertTrue("The rack must open (bars=" + waveform.historyCount()
+                + ", selection=" + selected + ")", frag.isFxPanelOpen());
 
         // ---- start recording only now that the UI is settled
         String videoPath = "/data/local/tmp/fx-" + effectId + ".mp4";
@@ -271,6 +296,7 @@ public class FxUiSweepDeviceTest {
         result.put("shots", shots);
         write(new File(work, "shots.json"), shots.toString(2));
         write(new File(work, "result.json"), result.toString(2));
+        TrialAndBillingManager.setTestOverridePro(null);
         System.out.println("FX UI sweep " + effectId + ": " + shots.length()
                 + " parameter states captured, degraded=" + degraded[0]);
     }
