@@ -57,6 +57,31 @@ def waveform_check(peaks: dict) -> dict:
     }
 
 
+def video_state(path: Path, result: dict) -> dict:
+    """A recording is only evidence if it was finalised: screenrecord writes the
+    moov atom when it stops, so a truncated file is reported rather than assumed."""
+    import subprocess
+    name = result.get("videoName")
+    if not name:
+        return {"present": False, "detail": "no recording was started"}
+    video = path / name
+    if not video.is_file():
+        return {"present": False, "detail": f"{name} missing"}
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "default=noprint_wrappers=1:nokey=1", str(video)],
+        capture_output=True, text=True)
+    duration = probe.stdout.strip()
+    valid = probe.returncode == 0 and duration not in ("", "N/A")
+    return {
+        "present": True,
+        "valid": valid,
+        "bytes": video.stat().st_size,
+        "duration_s": round(float(duration), 2) if valid else None,
+        "detail": "" if valid else (probe.stderr.strip()[:120] or "not finalised"),
+    }
+
+
 def device_summary(path: Path) -> dict:
     result = load(path / "result.json")
     if result is None:
@@ -74,7 +99,7 @@ def device_summary(path: Path) -> dict:
         "notes": result.get("notes", []),
         "problems": result.get("problems", []),
         "recorded": bool(result.get("recorded")),
-        "video": result.get("videoName"),
+        "video": video_state(path, result),
         "waveform": waveforms,
         "logcat_errors": raw_log[:600],
     }
@@ -178,14 +203,16 @@ def main() -> int:
     # ---- device tier ----------------------------------------------------------
     lines.append("## Device sweeps (real UI, video, waveform)")
     lines.append("")
-    lines.append("| effect | param states | shots | recorded | degraded | "
-                 "waveform | bars changed | peak corr | problems |")
-    lines.append("|---|---|---|---|---|---|---|---|---|")
+    lines.append("| effect | param states | shots | video | video length | "
+                 "degraded | waveform | bars changed | peak corr | problems |")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|")
     for d in sorted(device, key=lambda d: d.get("effect", "")):
         wf = d.get("waveform", {})
+        vid = d.get("video", {}) if isinstance(d.get("video"), dict) else {}
         lines.append(
             f"| {d.get('effect')} | {d.get('params_driven', 0)} | {d.get('shots', 0)} | "
-            f"{'yes' if d.get('recorded') else 'no'} | "
+            f"{'ok' if vid.get('valid') else ('missing' if not vid.get('present') else 'not finalised')} | "
+            f"{vid.get('duration_s') if vid.get('duration_s') is not None else '-'} | "
             f"{'yes' if d.get('degraded') else 'no'} | {wf.get('verdict', '?')} | "
             f"{wf.get('bars_changed_pct', '')}% | {wf.get('peak_correlation', '')} | "
             f"{len(d.get('problems', []))} |")
