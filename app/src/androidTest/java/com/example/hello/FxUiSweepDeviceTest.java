@@ -198,27 +198,33 @@ public class FxUiSweepDeviceTest {
         Thread.sleep(SETTLE_MS);
         result.put("rackClearedThroughUi", clearedThroughUi);
 
-        // ---- add the effect through the real dialog, with a programmatic fallback
-        if (!addEffectThroughDialog(type.title, device)) {
+        // ---- add the effect through the real dialog, verify it landed, and fall
+        // back to the production config only if the dialog could not be driven
+        boolean addedThroughUi = addEffectThroughDialog(type.title, device)
+                && rackHasEffect(frag, type);
+        if (!addedThroughUi) {
             degraded[0] = true;
             try {
-                problems.put("the Add Effect dialog could not be driven; the rack "
-                        + "was populated programmatically for this effect");
+                problems.put("the Add Effect dialog did not add " + type.title
+                        + "; the rack was populated programmatically instead");
             } catch (Throwable ignored) {
                 // reporting only
             }
             ui(activity, () -> {
                 try {
                     DspChain.Config cfg = dspConfigOf(frag);
-                    cfg.addOrFocusSlot(fxType);
-                    cfg.save(activity);
-                    rebuildRack(frag);
+                    if (!rackHasEffect(frag, fxType)) {
+                        cfg.addOrFocusSlot(fxType);
+                        cfg.save(activity);
+                        rebuildRack(frag);
+                    }
                 } catch (Throwable t) {
                     System.out.println("programmatic fallback failed: " + t);
                 }
             });
             Thread.sleep(SETTLE_MS);
         }
+        result.put("addedThroughUi", addedThroughUi);
 
         // ---- open the inspector so every parameter has a control
         device.dumpWindowHierarchy(new File(work, "hierarchy-rack-open.xml"));
@@ -235,6 +241,7 @@ public class FxUiSweepDeviceTest {
         String primaryParam = FxVerifySupportDevice.primaryParamId(type);
 
         int shotIndex = 0;
+        int controlsFound = 0;
         for (FxParameter param : params) {
             String noControl = uiOwnsNoControl(type, param.id);
             if (noControl != null) {
@@ -253,6 +260,8 @@ public class FxUiSweepDeviceTest {
                 degraded[0] = true;
                 problems.put("no UI control found for parameter " + param.id
                         + " (" + param.name + ")");
+            } else {
+                controlsFound++;
             }
             for (int value : values) {
                 String label = param.id + "=" + param.formatRaw(value);
@@ -294,11 +303,12 @@ public class FxUiSweepDeviceTest {
         }
 
         // ---- bake the rack and capture the rendered waveform evidence
-        if (shotIndex == 0) {
+        if (controlsFound == 0) {
             // Nothing was driven: the run must not read as a pass with no
             // evidence behind it, so leave the hierarchy for the next look.
             device.dumpWindowHierarchy(new File(work, "hierarchy-no-controls.xml"));
             result.put("shotCount", 0);
+            result.put("controlsFound", 0);
             result.put("problems", problems);
             result.put("notes", notes);
             write(new File(work, "result.json"), result.toString(2));
@@ -306,6 +316,7 @@ public class FxUiSweepDeviceTest {
             org.junit.Assert.fail("No parameter control was reachable for "
                     + effectId + "; see hierarchy-*.xml in the artifact");
         }
+        result.put("controlsFound", controlsFound);
         ui(activity, frag::applyEffectsToSelection);
         Thread.sleep(800);
         File wet = new File(work, "wet.wav");
@@ -397,23 +408,73 @@ public class FxUiSweepDeviceTest {
         return found;
     }
 
-    /** Uses the real search dialog; returns false when it cannot be driven. */
+    /**
+     * Adds the effect through the real searchable dialog and reports whether it
+     * actually landed: the dialog dismisses itself when a row is tapped, so a
+     * closed dialog is the success signal. The soft keyboard has to be put away
+     * first, otherwise the tap aimed at the row hits the keyboard instead.
+     */
     private static boolean addEffectThroughDialog(String title, UiDevice device)
             throws Exception {
         try {
             UiObject2 add = findText(device, "+ Add Effect");
             if (add == null) return false;
             add.click();
-            Thread.sleep(500);
+            Thread.sleep(600);
             UiObject2 box = device.findObject(By.clazz("android.widget.EditText"));
             if (box == null) return false;
             box.setText(title);
-            Thread.sleep(500);
-            UiObject2 row = device.findObject(By.text(title));
-            if (row == null) return false;
-            row.click();
             Thread.sleep(600);
-            return true;
+            hideKeyboard(device);
+
+            for (int attempt = 0; attempt < 3; attempt++) {
+                UiObject2 row = device.findObject(By.text(title));
+                if (row != null) {
+                    row.click();
+                    Thread.sleep(800);
+                }
+                if (!dialogOpen(device)) return true;
+                // The row may sit under the keyboard's old position: scroll the
+                // dialog's own list and try again.
+                UiObject2 search = device.findObject(
+                        By.clazz("android.widget.EditText"));
+                if (search != null) {
+                    search.swipe(Direction.UP, 0.6f);
+                    Thread.sleep(400);
+                }
+            }
+            return !dialogOpen(device);
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    private static boolean dialogOpen(UiDevice device) {
+        return device.findObject(By.text("Add Effect")) != null;
+    }
+
+    /** Back closes the IME first when it is up; re-opens the dialog if it was not. */
+    private static void hideKeyboard(UiDevice device) throws Exception {
+        device.pressBack();
+        Thread.sleep(400);
+        if (!dialogOpen(device)) {
+            // The back press closed the dialog instead of the keyboard.
+            UiObject2 add = findText(device, "+ Add Effect");
+            if (add != null) {
+                add.click();
+                Thread.sleep(500);
+            }
+        }
+    }
+
+    /** True when the rack already holds a slot for this effect. */
+    private static boolean rackHasEffect(StudioFragment frag, DspChain.EffectType type) {
+        try {
+            DspChain.Config cfg = dspConfigOf(frag);
+            for (DspChain.EffectSlot slot : cfg.slots) {
+                if (slot.type == type) return true;
+            }
+            return false;
         } catch (Throwable t) {
             return false;
         }
