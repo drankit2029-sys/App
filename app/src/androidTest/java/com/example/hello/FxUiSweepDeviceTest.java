@@ -167,14 +167,23 @@ public class FxUiSweepDeviceTest {
         assertTrue("The rack must open (bars=" + waveform.historyCount()
                 + ", selection=" + selected + ")", frag.isFxPanelOpen());
 
-        // ---- start recording only now that the UI is settled
+        // ---- start recording only now that the UI is settled. Any recording
+        // left by an earlier attempt is removed first, so the file on the device
+        // always matches the offsets this attempt logs.
         String videoPath = "/data/local/tmp/fx-" + effectId + ".mp4";
+        try {
+            instr.getUiAutomation()
+                    .executeShellCommand("rm -f " + videoPath).close();
+        } catch (Throwable ignored) {
+            // a stale file only affects the frame offsets, not the screenshots
+        }
         ParcelFileDescriptor recorder = startScreenRecord(videoPath);
         long streamStart = 0L;
         if (recorder != null) {
             drain(recorder);
             Thread.sleep(1200);
             streamStart = SystemClock.elapsedRealtime();
+            result.put("videoStartedElapsedMs", streamStart);
         } else {
             problems.put("screenrecord could not be started");
         }
