@@ -41,7 +41,13 @@ def read_float_wav(path: str | Path) -> tuple[np.ndarray, int]:
         raise ValueError(f"missing fmt/data chunk: {path}")
     audio_format, channels, sample_rate = struct.unpack_from("<HHI", fmt, 0)
     bits = struct.unpack_from("<H", fmt, 14)[0]
-    if audio_format != 3 or bits != 32:
+    is_float = audio_format == 3
+    if audio_format == 0xFFFE and bits == 32 and len(fmt) >= 40:
+        # WAVE_FORMAT_EXTENSIBLE: the sub-format GUID's first two bytes say
+        # which encoding the samples actually use (03 00 = IEEE float).
+        sub = struct.unpack_from("<H", fmt, 24)[0]
+        is_float = sub == 0x0003
+    if not is_float or bits != 32:
         raise ValueError(
             f"{path}: expected IEEE float 32-bit, got format={audio_format} bits={bits}")
     usable = min(len(data), data_size)

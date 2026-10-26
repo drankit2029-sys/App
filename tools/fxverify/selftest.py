@@ -113,7 +113,7 @@ def main() -> int:
                    probe="stereo", channels=2, inFrames=FRAMES, outFrames=FRAMES)
 
         manifest = {
-            "effect": "selftest",
+            "effect": "amplify",
             "title": "Harness self-test",
             "sampleRate": SR,
             "frames": FRAMES,
