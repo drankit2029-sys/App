@@ -12,10 +12,14 @@ set -euo pipefail
 
 root="${1:?usage: extract_frames.sh <run-directory>}"
 found=0
+# Android's sh has no /dev/fd, so the shot manifests go through a temp file
+# rather than process substitution.
+list="$(mktemp)"
 
+find "$root" -name 'shots.json' | sort > "$list"
 while IFS= read -r shots; do
   dir="$(dirname "$shots")"
-  video="$(find "$dir" -maxdepth 2 -name '*.mp4' | head -1 || true)"
+  video="$(find "$dir" "$dir/.." -maxdepth 2 -name '*.mp4' 2>/dev/null | head -1 || true)"
   if [ -z "$video" ]; then
     echo "no video beside $shots"
     continue
@@ -46,6 +50,7 @@ PY
   ffmpeg -v error -y -i "$video" -vf "fps=1/3,scale=200:-1,tile=6x5" \
     -frames:v 1 "$dir/filmstrip.jpg" 2>/dev/null || true
   echo "$dir: frames + filmstrip written"
-done < <(find "$root" -name 'shots.json' | sort)
+done < "$list"
+rm -f "$list"
 
 echo "processed $found effect recordings"

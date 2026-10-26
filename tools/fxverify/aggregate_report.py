@@ -17,8 +17,6 @@ import json
 import math
 from pathlib import Path
 
-import numpy as np
-
 
 def load(path: Path):
     try:
@@ -28,31 +26,36 @@ def load(path: Path):
 
 
 def corr(a, b) -> float:
-    a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
-    if a.size == 0 or b.size == 0:
+    """Pearson correlation over the shared prefix; lists, so the aggregator
+    needs nothing but the standard library to run anywhere."""
+    n = min(len(a), len(b))
+    if n < 2:
         return 0.0
-    a, b = a[:min(len(a), len(b))], b[:min(len(a), len(b))]
-    if a.std() < 1e-12 or b.std() < 1e-12:
-        return 0.0
-    return float(np.corrcoef(a, b)[0, 1])
+    xs = [float(v) for v in a[:n]]
+    ys = [float(v) for v in b[:n]]
+    mx, my = sum(xs) / n, sum(ys) / n
+    dx = [v - mx for v in xs]
+    dy = [v - my for v in ys]
+    num = sum(p * q for p, q in zip(dx, dy))
+    den = math.sqrt(sum(p * p for p in dx) * sum(q * q for q in dy))
+    return num / den if den > 1e-12 else 0.0
 
 
 def waveform_check(peaks: dict) -> dict:
-    dry = np.asarray(peaks.get("dry", []), dtype=float)
-    wet = np.asarray(peaks.get("wet", []), dtype=float)
+    dry = [float(v) for v in peaks.get("dry", [])]
+    wet = [float(v) for v in peaks.get("wet", [])]
     n = min(len(dry), len(wet))
-    dry, wet = dry[:n], wet[:n]
     if n == 0:
         return {"verdict": "missing", "detail": "no peak arrays"}
-    delta = wet - dry
-    changed = int(np.count_nonzero(np.abs(delta) > 1e-3))
+    delta = [wet[i] - dry[i] for i in range(n)]
+    changed = sum(1 for d in delta if abs(d) > 1e-3)
     return {
         "verdict": "changed" if changed else "unchanged",
         "bars": n,
         "bars_changed": changed,
         "bars_changed_pct": round(100.0 * changed / n, 1),
-        "max_bar_delta": round(float(np.max(np.abs(delta))), 4),
-        "mean_abs_delta": round(float(np.mean(np.abs(delta))), 4),
+        "max_bar_delta": round(max(abs(d) for d in delta), 4),
+        "mean_abs_delta": round(sum(abs(d) for d in delta) / n, 4),
         "peak_correlation": round(corr(dry, wet), 4),
     }
 
@@ -65,6 +68,12 @@ def video_state(path: Path, result: dict) -> dict:
     if not name:
         return {"present": False, "detail": "no recording was started"}
     video = path / name
+    if not video.is_file():
+        # The recording is pulled beside the effect directory, not inside it.
+        video = path.parent / name
+    if not video.is_file():
+        found = list(path.parent.glob("*.mp4")) + list(path.glob("*.mp4"))
+        video = found[0] if found else video
     if not video.is_file():
         return {"present": False, "detail": f"{name} missing"}
     probe = subprocess.run(
@@ -82,48 +91,65 @@ def video_state(path: Path, result: dict) -> dict:
     }
 
 
-def device_summary(path: Path) -> dict:
+def device_parameter_rows(path: Path) -> list[dict]:
+    """One row per parameter, since the run's unit of evidence is a parameter."""
     result = load(path / "result.json")
     if result is None:
-        return {"effect": path.name, "status": "missing", "detail": "no result.json"}
-    peaks = load(path / "peaks.json")
-    waveforms = waveform_check(peaks) if peaks else {"verdict": "missing"}
-    logcat = result.get("logcatErrors") or {}
-    raw_log = (logcat.get("raw") or "").strip()
-    return {
-        "effect": result.get("effect", path.name),
-        "status": "ok",
-        "degraded": bool(result.get("degraded")),
-        "shots": result.get("shotCount", 0),
-        "params_driven": len(result.get("driven", [])),
-        "notes": result.get("notes", []),
-        "problems": result.get("problems", []),
-        "recorded": bool(result.get("recorded")),
-        "video": video_state(path, result),
-        "waveform": waveforms,
-        "logcat_errors": raw_log[:600],
-    }
+        return []
+    applied = load(path / "applied.json") or {}
+    applied_by_param = {p.get("param"): p
+                        for p in applied.get("params", [])}
+    effect = result.get("effect", path.name.replace("fxverify-", ""))
+    rows = []
+    for entry in result.get("params", []):
+        pid = entry.get("param")
+        peaks = load(path / f"peaks-{pid}.json")
+        wf = waveform_check(peaks) if peaks else {"verdict": "missing"}
+        rec = applied_by_param.get(pid, {})
+        rows.append({
+            "effect": effect,
+            "param": pid,
+            "paramName": entry.get("paramName"),
+            "inPill": entry.get("inPill"),
+            "control": entry.get("control"),
+            "steps": entry.get("steps"),
+            "bakedValue": entry.get("bakedValueDisplay"),
+            "declaredApplied": bool(entry.get("applied")),
+            "appliedVerdict": rec.get("verdict"),
+            "rms_delta_db": rec.get("rms_delta_db"),
+            "max_abs_diff": rec.get("max_abs_diff"),
+            "length_ratio": rec.get("length_ratio"),
+            "maxDelta": entry.get("maxDelta"),
+            "waveform": wf,
+            "video": video_state(path.parent, {"videoName": entry.get("video")}),
+            "problems": [p for p in (result.get("problems") or [])
+                         if str(p).startswith(f"{pid}:")],
+        })
+    return rows
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--root", required=True)
+    ap.add_argument("--root", action="append", required=True,
+                    help="run directory to aggregate; repeat for several roots")
     ap.add_argument("--report", default=None)
     ap.add_argument("--json-out", default=None)
     args = ap.parse_args()
 
-    root = Path(args.root)
-    dsp_dirs = sorted({p.parent for p in root.rglob("verdicts.json")})
-    device_dirs = sorted({p.parent for p in root.rglob("result.json")})
-    format_files = sorted(root.rglob("verify_formats.json"))
+    roots = [Path(r) for r in args.root]
+    dsp_dirs = sorted({p.parent for r in roots for p in r.rglob("verdicts.json")})
+    device_dirs = sorted({p.parent for r in roots for p in r.rglob("result.json")
+                          if p.is_file()})
+    format_files = sorted({p for r in roots for p in r.rglob("verify_formats.json")})
 
     dsp = [load(d / "verdicts.json") for d in dsp_dirs]
     dsp = [d for d in dsp if d]
-    device = [device_summary(d) for d in device_dirs]
+    device = []
+    for d in device_dirs:
+        device.extend(device_parameter_rows(d))
     formats = [load(f) for f in format_files]
     formats = [f for f in formats if f]
 
-    device = [d for d in device if d.get("status") != "missing" or d.get("detail")]
     by_effect = {}
     for job in dsp:
         by_effect[job["summary"]["effect"]] = job["summary"]
@@ -185,14 +211,20 @@ def main() -> int:
 
     # ---- anchors --------------------------------------------------------------
     failing_anchors = []
+    passed = evaluated = missing = 0
     for job in dsp:
         for anchor in job.get("anchors", []):
-            if anchor["verdict"] != "ok":
+            if anchor["verdict"] == "missing":
+                missing += 1
+            elif anchor["verdict"] == "ok":
+                passed += 1
+                evaluated += 1
+            else:
+                evaluated += 1
                 failing_anchors.append((job["summary"]["effect"], anchor))
-    lines.append(f"### Anchors")
-    lines.append(f"Physical assertions passed: "
-                 f"{sum(1 for job in dsp for a in job.get('anchors', []) if a['verdict'] == 'ok')}"
-                 f"/{sum(len(job.get('anchors', [])) for job in dsp)}")
+    lines.append("### Anchors")
+    lines.append(f"Physical assertions: {passed} passed of {evaluated} evaluated "
+                 f"({missing} not applicable to the effect in question)")
     if failing_anchors:
         lines.append("")
         for effect, anchor in failing_anchors:
@@ -200,35 +232,38 @@ def main() -> int:
                          f"{anchor.get('detail', anchor.get('required', ''))}")
     lines.append("")
 
-    # ---- device tier ----------------------------------------------------------
-    lines.append("## Device sweeps (real UI, video, waveform)")
+    # ---- device tier: one row per parameter -----------------------------------
+    lines.append("## Device swings through the panel (one parameter at a time)")
     lines.append("")
-    lines.append("| effect | param states | shots | video | video length | "
-                 "degraded | waveform | bars changed | peak corr | problems |")
-    lines.append("|---|---|---|---|---|---|---|---|---|---|")
-    for d in sorted(device, key=lambda d: d.get("effect", "")):
+    lines.append("| effect | parameter | edited in | control | dial states "
+                 "captured | waveform in pill | bars changed | applied via "
+                 "Apply path | audio after apply | RMS delta dB | length ratio |")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|---|")
+    for d in sorted(device, key=lambda d: (d.get("effect", ""), d.get("param", ""))):
         wf = d.get("waveform", {})
-        vid = d.get("video", {}) if isinstance(d.get("video"), dict) else {}
-        lines.append(
-            f"| {d.get('effect')} | {d.get('params_driven', 0)} | {d.get('shots', 0)} | "
-            f"{'ok' if vid.get('valid') else ('missing' if not vid.get('present') else 'not finalised')} | "
-            f"{vid.get('duration_s') if vid.get('duration_s') is not None else '-'} | "
-            f"{'yes' if d.get('degraded') else 'no'} | {wf.get('verdict', '?')} | "
-            f"{wf.get('bars_changed_pct', '')}% | {wf.get('peak_correlation', '')} | "
-            f"{len(d.get('problems', []))} |")
+        line = (f"| {d.get('effect')} | {d.get('param')} ({d.get('paramName')}) | "
+                f"{d.get('inPill')} | {d.get('control')} | {d.get('steps', 0)} | "
+                f"{wf.get('verdict', '?')} | "
+                f"{wf.get('bars_changed_pct', '-')}% | "
+                f"{'yes' if d.get('declaredApplied') else 'no'} ("
+                f"{d.get('bakedValue')}) | "
+                f"{d.get('appliedVerdict', '-')} | "
+                f"{d.get('rms_delta_db', '-')} | "
+                f"{d.get('length_ratio', '-') if d.get('length_ratio') else '-'} |")
+        lines.append(line)
     lines.append("")
-    flagged = [d for d in device if d.get("degraded") or d.get("problems")
-               or (d.get("waveform", {}).get("verdict") == "unchanged")]
+    flagged = [d for d in device if d.get("problems")
+               or d.get("appliedVerdict") not in (None, "applied")]
     if flagged:
         lines.append("### Device findings")
         for d in flagged:
-            lines.append(f"- **{d.get('effect')}**"
-                         f"{' (degraded)' if d.get('degraded') else ''}"
-                         f"{' (waveform unchanged)' if d.get('waveform', {}).get('verdict') == 'unchanged' else ''}")
             for p in d.get("problems", []):
-                lines.append(f"  - {p}")
-            if d.get("logcat_errors"):
-                lines.append(f"  - logcat: {d['logcat_errors'].splitlines()[0][:200]}")
+                lines.append(f"- **{d.get('effect')}/{d.get('param')}**: {p}")
+            if d.get("declaredApplied") and d.get("appliedVerdict") != "applied":
+                lines.append(f"- **{d.get('effect')}/{d.get('param')}**: "
+                             f"the apply path returned success but the audio reads "
+                             f"\"{d.get('appliedVerdict')}\" "
+                             f"(max|diff={d.get('max_abs_diff')})")
         lines.append("")
 
     # ---- formats --------------------------------------------------------------

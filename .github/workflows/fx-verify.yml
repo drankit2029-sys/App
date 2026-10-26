@@ -176,7 +176,7 @@ jobs:
     # Emulator jobs are opt-in, as in verify.yml: a push runs the JVM tiers only.
     if: ${{ github.event_name == 'workflow_dispatch' && !inputs.skip_device && !inputs.smoke_only }}
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       max-parallel: 40
@@ -229,12 +229,10 @@ jobs:
             adb install -r -t "$(find apks -name 'app-debug.apk' | head -1)"
             adb install -r -t "$(find apks -name 'app-debug-androidTest.apk' | head -1)"
             mkdir -p fx-out
-            for attempt in 1 2 3; do adb wait-for-device; adb shell am instrument -w -e class com.example.hello.FxUiSweepDeviceTest -e fxEffect "${{ matrix.effect }}" "$(adb shell pm list instrumentation | grep AndroidJUnitRunner | head -1 | sed 's/.*instrumentation://; s/ .*//' | tr -d '\r')" > fx-out/instrumentation.txt 2>&1; grep -q "OK (" fx-out/instrumentation.txt && break; echo "attempt $attempt did not report OK"; sleep 15; done
+            for attempt in 1 2 3; do adb wait-for-device; adb shell am instrument -w -e class com.example.hello.FxPanelDialDeviceTest -e fxEffect "${{ matrix.effect }}" "$(adb shell pm list instrumentation | grep AndroidJUnitRunner | head -1 | sed 's/.*instrumentation://; s/ .*//' | tr -d '\r')" > fx-out/instrumentation.txt 2>&1; grep -q "OK (" fx-out/instrumentation.txt && break; echo "attempt $attempt did not report OK"; sleep 15; done
             cat fx-out/instrumentation.txt
             adb pull "/sdcard/Android/data/$APP_ID/files/takes/fxverify-${{ matrix.effect }}" fx-out/ || true
-            adb pull "/data/local/tmp/fx-${{ matrix.effect }}.mp4" fx-out/ || true
             adb shell logcat -d -v brief > fx-out/logcat-full.txt || true
-            adb shell rm -f "/data/local/tmp/fx-${{ matrix.effect }}.mp4" || true
             grep -q "OK (" fx-out/instrumentation.txt || { echo "instrumentation did not report OK"; exit 1; }
       - name: Upload the sweep evidence
         if: always()
@@ -351,10 +349,9 @@ jobs:
             adb install -r -t "$(find apks -name 'app-debug.apk' | head -1)"
             adb install -r -t "$(find apks -name 'app-debug-androidTest.apk' | head -1)"
             mkdir -p smoke
-            for attempt in 1 2 3; do adb wait-for-device; adb shell am instrument -w -e class com.example.hello.FxUiSweepDeviceTest -e fxEffect hpf "$(adb shell pm list instrumentation | grep AndroidJUnitRunner | head -1 | sed 's/.*instrumentation://; s/ .*//' | tr -d '\r')" > smoke/instrumentation.txt 2>&1; grep -q "OK (" smoke/instrumentation.txt && break; echo "attempt $attempt did not report OK"; sleep 15; done
+            for attempt in 1 2 3; do adb wait-for-device; adb shell am instrument -w -e class com.example.hello.FxPanelDialDeviceTest -e fxEffect hpf "$(adb shell pm list instrumentation | grep AndroidJUnitRunner | head -1 | sed 's/.*instrumentation://; s/ .*//' | tr -d '\r')" > smoke/instrumentation.txt 2>&1; grep -q "OK (" smoke/instrumentation.txt && break; echo "attempt $attempt did not report OK"; sleep 15; done
             cat smoke/instrumentation.txt
             adb pull "/sdcard/Android/data/$APP_ID/files/takes/fxverify-hpf" smoke/ || true
-            adb pull "/data/local/tmp/fx-hpf.mp4" smoke/ || true
             adb shell ls -l "/sdcard/Android/data/$APP_ID/files/takes/fxverify-hpf" > smoke/files.txt 2>&1 || true
             cat smoke/files.txt
             adb shell logcat -d -v brief > smoke/logcat-full.txt || true
@@ -382,6 +379,8 @@ jobs:
           path: artifacts
       - name: Install analysis dependencies
         run: python3 -m pip install --quiet numpy
+      - name: Verify the applied audio per parameter
+        run: python3 tools/fxverify/verify_applied.py --root artifacts
       - name: Merge the verdicts into one report
         run: |
           mkdir -p fx-report

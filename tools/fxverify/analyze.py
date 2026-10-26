@@ -262,11 +262,19 @@ def evaluate_series(cases: list[dict], records: dict) -> list[dict]:
 
 # --------------------------------------------------------------------- anchors
 
-def run_series_anchors(expectations: dict, series: list[dict]) -> list[dict]:
+def run_series_anchors(expectations: dict, series: list[dict],
+                       effect: str = "") -> list[dict]:
+    # Keyed by effect as well as parameter: several effects expose a parameter
+    # with the same id (freq, cutoff), and an anchor written for one of them must
+    # not be judged against another's series.
     index = {(s["param"], s["probe"]): s for s in series}
     results = []
     for anchor in expectations.get("series_anchors", []):
         entry = {"id": anchor["id"], "why": anchor["why"], "kind": "series"}
+        if anchor.get("effect") and effect and anchor["effect"] != effect:
+            entry.update({"verdict": "missing", "detail": "anchor targets another effect"})
+            results.append(entry)
+            continue
         match = index.get((anchor["seriesParam"], anchor.get("probe")))
         if not match:
             entry.update({"verdict": "missing", "detail": "series not rendered"})
@@ -275,8 +283,9 @@ def run_series_anchors(expectations: dict, series: list[dict]) -> list[dict]:
         if match.get("metric") != anchor["metric"]:
             entry.update({
                 "verdict": "not_met",
-                "detail": f"strongest monotone metric was {match.get('metric')} "
-                          f"(rho {match.get('rho')}), not {anchor['metric']}",
+                "detail": f"the strongest monotone metric was {match.get('metric')} "
+                          f"(rho {match.get('rho')}), not {anchor['metric']}; "
+                          f"the control still moved the audio, just along another axis",
             })
             results.append(entry)
             continue
@@ -323,12 +332,18 @@ def run_bespoke_anchors(expectations: dict, case_dir: Path,
                 detail = f"peak {peak_db:.2f} dBFS vs limit {limit:.2f} dBFS"
             elif check == "gap_floor_lower":
                 delta = dotted(rec, "cmp.wet_probe.gap_floor_db_delta")
-                ok = delta is not None and delta <= -anchor["min_db"]
-                detail = f"gap floor moved {delta:.2f} dB"
+                if delta is None:
+                    ok, detail = False, "the probe did not expose a gap floor"
+                else:
+                    ok = delta <= -anchor["min_db"]
+                    detail = f"gap floor moved {delta:.2f} dB"
             elif check == "hum_lower":
                 delta = dotted(rec, "cmp.wet_probe.hum_energy_db_delta")
-                ok = delta is not None and delta <= -anchor["min_db"]
-                detail = f"hum energy moved {delta:.2f} dB"
+                if delta is None:
+                    ok, detail = False, "the probe did not expose hum energy"
+                else:
+                    ok = delta <= -anchor["min_db"]
+                    detail = f"hum energy moved {delta:.2f} dB"
             elif check == "transients_fewer":
                 ok = rec["wet"]["transients"] < rec["dry"]["transients"]
                 detail = f"transients {rec['dry']['transients']} -> {rec['wet']['transients']}"
@@ -428,7 +443,7 @@ def analyse_dir(case_dir: Path, expectations: dict, keep_anomalies: bool) -> dic
                 and "verdict" in records[c["id"]]]
     series = evaluate_series(cases, {k: v for k, v in records.items() if "wet" in v})
     by_id = {c["id"]: dict(c, effect=effect) for c in cases}
-    anchors = run_series_anchors(expectations, series)
+    anchors = run_series_anchors(expectations, series, effect)
     anchors += run_bespoke_anchors(expectations, case_dir, by_id, records)
 
     summary = {

@@ -81,6 +81,16 @@ def band_energies(x: np.ndarray, sr: int) -> dict:
 
 def verify_one(entry: dict, work: Path, source: np.ndarray, source_sr: int,
                source_duration: float) -> dict:
+    try:
+        return _verify_one(entry, work, source, source_sr, source_duration)
+    except Exception as exc:  # noqa: BLE001 - a failed check is a result
+        return {"id": entry.get("id", "?"), "file": entry.get("file"),
+                "checks": [], "status": "failed",
+                "problems": [f"verification threw {type(exc).__name__}: {exc}"]}
+
+
+def _verify_one(entry: dict, work: Path, source: np.ndarray, source_sr: int,
+                source_duration: float) -> dict:
     result = {"id": entry["id"], "file": entry.get("file"),
               "checks": [], "problems": []}
     if entry.get("skipped"):
@@ -197,16 +207,25 @@ def main() -> int:
     args = ap.parse_args()
 
     work = Path(args.dir)
-    manifest = json.loads((work / "formats.json").read_text(encoding="utf-8"))
-    source_path = work / manifest.get("input", "input.wav")
-    source_data, source_sr = M.read_float_wav(source_path)
-    source = source_data[:, 0] if source_data.shape[1] == 1 else source_data.mean(axis=1)
-    source_duration = len(source) / source_sr
+    payload: dict = {"source_duration_s": 0.0, "results": [], "failed": [],
+                     "skipped": []}
+    out = Path(args.out) if args.out else work / "verify_formats.json"
+    try:
+        manifest = json.loads((work / "formats.json").read_text(encoding="utf-8"))
+        source_path = work / manifest.get("input", "input.wav")
+        source_data, source_sr = M.read_float_wav(source_path)
+        source = source_data[:, 0] if source_data.shape[1] == 1 else source_data.mean(axis=1)
+        source_duration = len(source) / source_sr
+        results = [verify_one(entry, work, source, source_sr, source_duration)
+                   for entry in manifest["results"]]
+        payload = {"source_duration_s": source_duration, "results": results,
+                   "failed": [r["id"] for r in results if r["status"] == "failed"],
+                   "skipped": [r["id"] for r in results if r["status"] == "skipped"]}
+    except Exception as exc:  # noqa: BLE001 - report rather than crash
+        payload["error"] = f"{type(exc).__name__}: {exc}"
+        print(f"verification could not run: {payload['error']}")
 
-    results = [verify_one(entry, work, source, source_sr, source_duration)
-               for entry in manifest["results"]]
-
-    for r in results:
+    for r in payload["results"]:
         flag = {"ok": "PASS", "skipped": "SKIP", "failed": "FAIL"}[r["status"]]
         print(f"[{flag}] {r['id']:<8} {r.get('file', ''):<24} "
               f"{r.get('probe', {}).get('codec', ''):<10} "
@@ -214,13 +233,9 @@ def main() -> int:
         for problem in r["problems"]:
             print(f"        {problem}")
 
-    payload = {"source_duration_s": source_duration, "results": results,
-               "failed": [r["id"] for r in results if r["status"] == "failed"],
-               "skipped": [r["id"] for r in results if r["status"] == "skipped"]}
-    out = Path(args.out) if args.out else work / "verify_formats.json"
     out.write_text(json.dumps(payload, indent=1), encoding="utf-8")
     print(f"\nfailed: {payload['failed']}  skipped: {payload['skipped']}")
-    return 1 if payload["failed"] else 0
+    return 1 if payload["failed"] or payload.get("error") else 0
 
 
 if __name__ == "__main__":
