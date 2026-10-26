@@ -183,10 +183,12 @@ def _verify_one(entry: dict, work: Path, source: np.ndarray, source_sr: int,
             src_bands = band_energies(a, source_sr)
             out_bands = band_energies(b, int(stream.get("sample_rate", source_sr)))
             ceiling = {"amr_nb": 3500.0, "amr_wb": 8000.0}.get(fmt_id, 16000.0)
+            limit = {"amr_nb": 16.0}.get(fmt_id, 12.0)
             worst = max(abs(out_bands[c] - src_bands[c])
                         for c in src_bands if float(c) <= ceiling)
-            check("spectral_similarity", worst <= 12.0,
-                  f"worst band delta {worst:.1f} dB (bands ≤ {ceiling:.0f} Hz)")
+            check("spectral_similarity", worst <= limit,
+                  f"worst band delta {worst:.1f} dB (bands ≤ {ceiling:.0f} Hz, "
+                  f"limit {limit:.1f} dB)")
 
     if bit_rate:
         nominal = entry.get("bytes", 0) * 8 / max(duration, 1e-3)

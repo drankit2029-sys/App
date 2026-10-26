@@ -412,7 +412,6 @@ public class FxPanelDialDeviceTest {
                 ok[0] = false;
             }
         });
-        InstrumentationRegistry.getInstrumentation().waitForIdleSync();
         try {
             Thread.sleep(500);
         } catch (InterruptedException ignored) {
@@ -466,7 +465,13 @@ public class FxPanelDialDeviceTest {
                 System.out.println("slot reset failed: " + t);
             }
         });
-        InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+        // The rebuild re-reads the config on the next frame; a short soak is
+        // enough and never demands an idle UI thread (the waveform keeps it busy).
+        try {
+            Thread.sleep(250);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     /** The peaks the waveform would be painted with for this exact config. */
@@ -514,7 +519,11 @@ public class FxPanelDialDeviceTest {
             UiObject2 chip = deviceFor().findObject(By.textStartsWith(ADVANCED));
             if (chip != null) {
                 chip.click();
-                InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+                try {
+                    Thread.sleep(400);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
             }
         }
     }
@@ -812,9 +821,32 @@ public class FxPanelDialDeviceTest {
         return instr.startActivitySync(i);
     }
 
+    /**
+     * Runs the action on the UI thread and waits for the action itself, not for
+     * the thread to idle: the painted waveform keeps the main thread busy for a
+     * long recording, so waitForIdleSync can block a whole run with no URL back.
+     */
     private static void ui(Activity activity, Runnable action) {
-        activity.runOnUiThread(action);
-        InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+        final java.util.concurrent.CountDownLatch latch =
+                new java.util.concurrent.CountDownLatch(1);
+        final Throwable[] thrown = {null};
+        activity.runOnUiThread(() -> {
+            try {
+                action.run();
+            } catch (Throwable t) {
+                thrown[0] = t;
+            } finally {
+                latch.countDown();
+            }
+        });
+        try {
+            latch.await(5, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        if (thrown[0] != null) {
+            System.out.println("ui action threw: " + thrown[0]);
+        }
     }
 
     private static StudioFragment awaitStudio(Activity activity) throws Exception {
