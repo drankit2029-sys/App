@@ -221,11 +221,13 @@ public class FxUiSweepDeviceTest {
         }
 
         // ---- open the inspector so every parameter has a control
-        if (!expandEffect(root, activity)) {
-            problems.put("no Expand effect control was found; parameters were "
+        device.dumpWindowHierarchy(new File(work, "hierarchy-rack-open.xml"));
+        if (!expandEffect(root, activity, device, type.title, work)) {
+            problems.put("the effect inspector could not be opened; parameters were "
                     + "driven from the rack card where possible");
         }
         Thread.sleep(SETTLE_MS);
+        device.dumpWindowHierarchy(new File(work, "hierarchy-expanded.xml"));
 
         AudioProcessor proto = FxRackChain.getPrototypeProcessor(effectId);
         assertNotNull("No prototype processor for " + effectId, proto);
@@ -292,6 +294,18 @@ public class FxUiSweepDeviceTest {
         }
 
         // ---- bake the rack and capture the rendered waveform evidence
+        if (shotIndex == 0) {
+            // Nothing was driven: the run must not read as a pass with no
+            // evidence behind it, so leave the hierarchy for the next look.
+            device.dumpWindowHierarchy(new File(work, "hierarchy-no-controls.xml"));
+            result.put("shotCount", 0);
+            result.put("problems", problems);
+            result.put("notes", notes);
+            write(new File(work, "result.json"), result.toString(2));
+            TrialAndBillingManager.setTestOverridePro(null);
+            org.junit.Assert.fail("No parameter control was reachable for "
+                    + effectId + "; see hierarchy-*.xml in the artifact");
+        }
         ui(activity, frag::applyEffectsToSelection);
         Thread.sleep(800);
         File wet = new File(work, "wet.wav");
@@ -405,14 +419,71 @@ public class FxUiSweepDeviceTest {
         }
     }
 
-    private static boolean expandEffect(View root, Activity activity) throws Exception {
+    /**
+     * Opens the per-effect inspector. Three routes are tried, because the
+     * expand affordance is an image button with only a content description:
+     * the accessibility tree across windows, the in-process view tree, and
+     * finally tapping the card itself.
+     */
+    private static boolean expandEffect(View root, Activity activity, UiDevice device,
+                                        String title, File work) throws Exception {
+        try {
+            UiObject2 expand = device.findObject(By.desc("Expand effect"));
+            if (expand != null) {
+                expand.click();
+                Thread.sleep(600);
+                if (inspectorOpen(root)) return true;
+            }
+        } catch (Throwable ignored) {
+            // fall through to the in-process routes
+        }
         List<View> found = new ArrayList<>();
-        collectByDescription(root, "Expand effect", found);
-        if (found.isEmpty()) return false;
-        View target = found.get(0);
-        ui(activity, target::performClick);
-        Thread.sleep(400);
-        return true;
+        for (View windowRoot : allWindowRoots(root)) {
+            collectByDescription(windowRoot, "Expand effect", found);
+        }
+        if (!found.isEmpty()) {
+            View target = found.get(0);
+            ui(activity, target::performClick);
+            Thread.sleep(600);
+            if (inspectorOpen(root)) return true;
+        }
+        try {
+            UiObject2 cardTitle = device.findObject(By.text(title));
+            if (cardTitle != null) {
+                cardTitle.click();
+                Thread.sleep(600);
+                if (inspectorOpen(root)) return true;
+            }
+        } catch (Throwable ignored) {
+            // reported by the caller
+        }
+        device.dumpWindowHierarchy(new File(work, "hierarchy-no-inspector.xml"));
+        return false;
+    }
+
+    /** The inspector's own header, used to tell whether expansion worked. */
+    private static boolean inspectorOpen(View root) {
+        for (View windowRoot : allWindowRoots(root)) {
+            if (containsTextStarting(windowRoot, "All parameters")
+                    || containsText(windowRoot, "Reset effect")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean containsTextStarting(View v, String prefix) {
+        if (v instanceof TextView) {
+            CharSequence cs = ((TextView) v).getText();
+            if (cs != null && cs.toString().startsWith(prefix)) return true;
+        }
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) {
+                if (containsTextStarting(g.getChildAt(i), prefix)) return true;
+            }
+        }
+        return false;
     }
 
     private static void tapStepper(UiDevice device, boolean up) {
