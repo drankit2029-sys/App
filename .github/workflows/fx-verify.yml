@@ -241,7 +241,7 @@ jobs:
 
   format-matrix:
     needs: build
-    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.skip_device }}
+    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.skip_device && !inputs.smoke_only }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -339,6 +339,8 @@ jobs:
             adb pull "/data/local/tmp/fx-hpf.mp4" smoke/ || true
             adb shell ls -l "/sdcard/Android/data/$APP_ID/files/takes/fxverify-hpf" > smoke/files.txt 2>&1 || true
             cat smoke/files.txt
+            adb shell logcat -d -v brief > smoke/logcat-full.txt || true
+            grep -E "FATAL|ANR in|ActivityManager: Start proc" smoke/logcat-full.txt | tail -20 || true
             grep -q "OK (" smoke/instrumentation.txt || { echo "smoke check failed"; exit 1; }
       - name: Upload the smoke evidence
         if: always()

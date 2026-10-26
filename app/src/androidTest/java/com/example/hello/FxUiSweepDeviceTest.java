@@ -4,7 +4,9 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 import android.app.Activity;
+import android.app.Instrumentation;
 import android.content.Context;
+import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.os.ParcelFileDescriptor;
@@ -14,23 +16,24 @@ import android.view.ViewGroup;
 import android.widget.ImageView;
 import android.widget.TextView;
 
-import androidx.test.core.app.ActivityScenario;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
+import androidx.test.rule.GrantPermissionRule;
 import androidx.test.uiautomator.By;
+import androidx.test.uiautomator.Direction;
 import androidx.test.uiautomator.UiDevice;
 import androidx.test.uiautomator.UiObject2;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import java.io.BufferedReader;
-import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.io.FileOutputStream;
 import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
@@ -41,15 +44,20 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Tier 2 of the FX verification harness: the effect driven through the real UI
- * on a device, one effect per job.
+ * Tier 2 of the FX verification harness: one effect driven through the real UI
+ * on a device.
  *
  * <p>Every parameter of the effect under test is walked through the control the
- * user actually touches (the dial on the card, or the chip/slider in the
+ * user actually touches (the dial on the rack card, or the chip/slider in the
  * expanded inspector), a screenshot is taken at each step, and a screen
- * recording covers the whole sweep. The dry and baked renders plus the app's
- * own waveform peaks are written next to the shots so the waveform claim can be
+ * recording covers the sweep. The dry and baked renders plus the app's own
+ * waveform peaks are written next to the shots, so the waveform claim can be
  * checked numerically as well as visually.
+ *
+ * <p>Launching mirrors the repo's other device tests
+ * ({@code Instrumentation.startActivitySync} with explicit flags) rather than
+ * ActivityScenario, and recording starts only once the studio is up: this
+ * project's notes record UiAutomator wedging while a recording is running.
  *
  * <p>Run with: {@code -e fxEffect <id>}.
  */
@@ -58,6 +66,10 @@ public class FxUiSweepDeviceTest {
 
     private static final int SCREEN_BUCKETS = 600;
     private static final long SETTLE_MS = 320L;
+
+    @Rule
+    public GrantPermissionRule mic = GrantPermissionRule.grant(
+            android.Manifest.permission.RECORD_AUDIO);
 
     @Test
     public void sweepEveryParameterThroughTheUi() throws Exception {
@@ -71,13 +83,17 @@ public class FxUiSweepDeviceTest {
         assertNotNull("Unknown effect " + effectId, type);
         final DspChain.EffectType fxType = type;
 
-        Context ctx = InstrumentationRegistry.getInstrumentation().getTargetContext();
-        UiDevice device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation());
+        Instrumentation instr = InstrumentationRegistry.getInstrumentation();
+        Context ctx = instr.getTargetContext();
+        UiDevice device = UiDevice.getInstance(instr);
         File work = new File(RecordingEngine.takesDir(ctx), "fxverify-" + effectId);
         work.mkdirs();
-        for (File f : work.listFiles()) {
-            //noinspection ResultOfMethodCallIgnored
-            f.delete();
+        File[] stale = work.listFiles();
+        if (stale != null) {
+            for (File f : stale) {
+                //noinspection ResultOfMethodCallIgnored
+                f.delete();
+            }
         }
 
         // ---- the uploaded clip is the input, exactly as the app would load it
@@ -101,53 +117,57 @@ public class FxUiSweepDeviceTest {
         JSONArray driven = new JSONArray();
         JSONArray problems = new JSONArray();
         JSONArray notes = new JSONArray();
-        boolean degraded = false;
+        final boolean[] degraded = {false};
 
-        // ---- start recording before the UI moves
-        String videoPath = "/data/local/tmp/fx-" + effectId + ".mp4";
-        ParcelFileDescriptor recorder = startScreenRecord(videoPath);
-        long streamStart = 0L;
-        if (recorder != null) {
-            Thread.sleep(1200);
-            streamStart = SystemClock.elapsedRealtime();
-        } else {
-            problems.put("screenrecord could not be started");
-        }
-
-        ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class);
+        // ---- bring the studio up with the take attached
+        Activity activity = launch(instr);
+        assertNotNull("MainActivity did not start", activity);
         final File inputFile = input;
-        scenario.onActivity(a -> a.openStudioWithEdit(inputFile, 991L, "FX Verify"));
-        StudioFragment frag = awaitStudio(scenario);
+        ui(activity, () -> ((MainActivity) activity).openStudioWithEdit(
+                inputFile, 991L, "FX Verify"));
+        StudioFragment frag = awaitStudio(activity);
         assertNotNull("Studio fragment never appeared", frag);
 
         final View[] rootHolder = new View[1];
-        scenario.onActivity(a -> rootHolder[0] = frag.getView());
+        ui(activity, () -> rootHolder[0] = frag.getView());
         View root = rootHolder[0];
         assertNotNull("Studio view missing", root);
 
         final WaveformView waveform = root.findViewById(R.id.waveform);
         final TextView fxChip = root.findViewById(R.id.btnDspFx);
-        scenario.onActivity(a -> {
+        ui(activity, () -> {
             waveform.selectRange(0f, 1f);
             fxChip.performClick();
         });
         awaitFxPanel(frag);
         assertTrue("The rack must open", frag.isFxPanelOpen());
 
+        // ---- start recording only now that the UI is settled
+        String videoPath = "/data/local/tmp/fx-" + effectId + ".mp4";
+        ParcelFileDescriptor recorder = startScreenRecord(videoPath);
+        long streamStart = 0L;
+        if (recorder != null) {
+            drain(recorder);
+            Thread.sleep(1200);
+            streamStart = SystemClock.elapsedRealtime();
+        } else {
+            problems.put("screenrecord could not be started");
+        }
+
         // ---- add the effect through the real dialog, with a programmatic fallback
-        if (!addEffectThroughDialog(effectId, type.title, work, device)) {
-            degraded = true;
+        if (!addEffectThroughDialog(type.title, device)) {
+            degraded[0] = true;
             try {
                 problems.put("the Add Effect dialog could not be driven; the rack "
                         + "was populated programmatically for this effect");
             } catch (Throwable ignored) {
                 // reporting only
             }
-            scenario.onActivity(a -> {
+            ui(activity, () -> {
                 try {
                     DspChain.Config cfg = dspConfigOf(frag);
                     cfg.addOrFocusSlot(fxType);
-                    cfg.save(a);
+                    cfg.save(activity);
                     rebuildRack(frag);
                 } catch (Throwable t) {
                     System.out.println("programmatic fallback failed: " + t);
@@ -156,9 +176,8 @@ public class FxUiSweepDeviceTest {
             Thread.sleep(SETTLE_MS);
         }
 
-        // ---- expand the inspector so every parameter has a control
-        boolean expanded = expandEffect(root, scenario);
-        if (!expanded) {
+        // ---- open the inspector so every parameter has a control
+        if (!expandEffect(root, activity)) {
             problems.put("no Expand effect control was found; parameters were "
                     + "driven from the rack card where possible");
         }
@@ -181,17 +200,11 @@ public class FxUiSweepDeviceTest {
                 continue;
             }
             int[] values = valuesFor(param);
-            String controlKind;
             View control = findParamControl(root, param, type, primaryParam);
-            if (control instanceof TeleValue) {
-                controlKind = "TeleValue";
-            } else if (control instanceof TextView) {
-                controlKind = "chip";
-            } else {
-                controlKind = "missing";
-            }
+            String controlKind = control instanceof TeleValue ? "TeleValue"
+                    : control instanceof TextView ? "chip" : "missing";
             if ("missing".equals(controlKind)) {
-                degraded = true;
+                degraded[0] = true;
                 problems.put("no UI control found for parameter " + param.id
                         + " (" + param.name + ")");
             }
@@ -200,13 +213,12 @@ public class FxUiSweepDeviceTest {
                 try {
                     if (control instanceof TeleValue) {
                         TeleValue tv = (TeleValue) control;
-                        scenario.onActivity(a -> tv.setValue(value, true));
-                        // One real touch on the control, so the touch path is
-                        // exercised too and not just the programmatic setter.
-                        tapStepper(device, param.name, value >= param.defaultRaw);
+                        ui(activity, () -> tv.setValue(value, true));
+                        // One real touch too, so the control's own touch path is
+                        // exercised and not only the programmatic setter.
+                        tapStepper(device, value >= param.defaultRaw);
                     } else if (control instanceof TextView) {
-                        TextView chip = (TextView) control;
-                        clickChipToState(scenario, chip, param, value);
+                        clickChipToState(activity, (TextView) control, param, value);
                     }
                     Thread.sleep(SETTLE_MS);
                 } catch (Throwable t) {
@@ -236,7 +248,7 @@ public class FxUiSweepDeviceTest {
         }
 
         // ---- bake the rack and capture the rendered waveform evidence
-        scenario.onActivity(a -> frag.applyEffectsToSelection());
+        ui(activity, frag::applyEffectsToSelection);
         Thread.sleep(800);
         File wet = new File(work, "wet.wav");
         copy(input, wet);
@@ -247,11 +259,11 @@ public class FxUiSweepDeviceTest {
         if (logcatErrors.length() > 0) {
             result.put("logcatErrors", logcatErrors);
         }
-        stopScreenRecord(recorder, device, videoPath);
+        stopScreenRecord(recorder, videoPath);
         result.put("videoPath", videoPath);
         result.put("videoName", new File(videoPath).getName());
         result.put("recorded", recorder != null);
-        result.put("degraded", degraded);
+        result.put("degraded", degraded[0]);
         result.put("shotCount", shots.length());
         result.put("driven", driven);
         result.put("problems", problems);
@@ -260,17 +272,29 @@ public class FxUiSweepDeviceTest {
         write(new File(work, "shots.json"), shots.toString(2));
         write(new File(work, "result.json"), result.toString(2));
         System.out.println("FX UI sweep " + effectId + ": " + shots.length()
-                + " parameter states captured, degraded=" + degraded);
+                + " parameter states captured, degraded=" + degraded[0]);
     }
 
     // ------------------------------------------------------------------ plumbing
 
-    private static StudioFragment awaitStudio(ActivityScenario<MainActivity> scenario)
-            throws Exception {
+    /** The repo's device-test launch pattern. */
+    private static Activity launch(Instrumentation instr) {
+        Intent i = new Intent(instr.getTargetContext(), MainActivity.class);
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+        return instr.startActivitySync(i);
+    }
+
+    private static void ui(Activity activity, Runnable action) {
+        activity.runOnUiThread(action);
+        InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+    }
+
+    private static StudioFragment awaitStudio(Activity activity) throws Exception {
         for (int i = 0; i < 100; i++) {
             final StudioFragment[] holder = new StudioFragment[1];
-            scenario.onActivity(a -> holder[0] = (StudioFragment)
-                    a.getSupportFragmentManager().findFragmentByTag("STU"));
+            ui(activity, () -> holder[0] = (StudioFragment)
+                    ((MainActivity) activity).getSupportFragmentManager()
+                            .findFragmentByTag("STU"));
             if (holder[0] != null && holder[0].getView() != null) return holder[0];
             Thread.sleep(100);
         }
@@ -282,17 +306,16 @@ public class FxUiSweepDeviceTest {
     }
 
     /** Uses the real search dialog; returns false when it cannot be driven. */
-    private static boolean addEffectThroughDialog(String effectId, String title,
-                                                  File work, UiDevice device)
+    private static boolean addEffectThroughDialog(String title, UiDevice device)
             throws Exception {
         try {
             UiObject2 add = device.findObject(By.text("+ Add Effect"));
             if (add == null) {
-                // The panel scrolls: the add button may be below the fold.
+                // The panel scrolls: the add button can sit below the fold.
                 for (int i = 0; i < 4 && add == null; i++) {
                     UiObject2 list = device.findObject(
                             By.res(device.getCurrentPackageName(), "fxScroll"));
-                    if (list != null) list.scroll(androidx.test.uiautomator.Direction.DOWN, 0.8f);
+                    if (list != null) list.scroll(Direction.DOWN, 0.8f);
                     Thread.sleep(250);
                     add = device.findObject(By.text("+ Add Effect"));
                 }
@@ -314,18 +337,17 @@ public class FxUiSweepDeviceTest {
         }
     }
 
-    private static boolean expandEffect(View root, ActivityScenario<MainActivity> scenario)
-            throws Exception {
+    private static boolean expandEffect(View root, Activity activity) throws Exception {
         List<View> found = new ArrayList<>();
         collectByDescription(root, "Expand effect", found);
         if (found.isEmpty()) return false;
         View target = found.get(0);
-        scenario.onActivity(a -> target.performClick());
+        ui(activity, target::performClick);
         Thread.sleep(400);
         return true;
     }
 
-    private static void tapStepper(UiDevice device, String paramName, boolean up) {
+    private static void tapStepper(UiDevice device, boolean up) {
         try {
             List<UiObject2> steps = device.findObjects(
                     By.desc(up ? "increase" : "decrease"));
@@ -338,8 +360,8 @@ public class FxUiSweepDeviceTest {
         }
     }
 
-    private static void clickChipToState(ActivityScenario<MainActivity> scenario,
-                                         TextView chip, FxParameter param, int value)
+    private static void clickChipToState(Activity activity, TextView chip,
+                                         FxParameter param, int value)
             throws Exception {
         int guard = 0;
         while (guard++ < 16) {
@@ -353,7 +375,7 @@ public class FxUiSweepDeviceTest {
                 matches = true;
             }
             if (matches) return;
-            scenario.onActivity(a -> chip.performClick());
+            ui(activity, chip::performClick);
             Thread.sleep(120);
         }
     }
@@ -430,21 +452,6 @@ public class FxUiSweepDeviceTest {
         return null;
     }
 
-    /** {@code StudioFragment.dspConfig} is private; the fallback needs it. */
-    private static DspChain.Config dspConfigOf(StudioFragment frag) throws Exception {
-        Field f = StudioFragment.class.getDeclaredField("dspConfig");
-        f.setAccessible(true);
-        return (DspChain.Config) f.get(frag);
-    }
-
-    /** {@code StudioFragment.rebuildFxRackList()} is private too. */
-    private static void rebuildRack(StudioFragment frag) throws Exception {
-        java.lang.reflect.Method m =
-                StudioFragment.class.getDeclaredMethod("rebuildFxRackList");
-        m.setAccessible(true);
-        m.invoke(frag);
-    }
-
     /** The activity's decor plus every dialog window the process owns. */
     private static List<View> allWindowRoots(View activityRoot) {
         List<View> roots = new ArrayList<>();
@@ -487,8 +494,8 @@ public class FxUiSweepDeviceTest {
     }
 
     private static void collectByDescription(View v, String desc, List<View> out) {
-        if (v instanceof ImageView && desc.contentEquals(
-                v.getContentDescription() == null ? "" : v.getContentDescription())) {
+        CharSequence cd = v.getContentDescription();
+        if (v instanceof ImageView && cd != null && desc.contentEquals(cd)) {
             out.add(v);
         }
         if (v instanceof ViewGroup) {
@@ -514,8 +521,7 @@ public class FxUiSweepDeviceTest {
     }
 
     private static void capture(UiDevice device, File out) {
-        File png = new File(out.getParentFile(), out.getName()
-                .replace(".jpg", ".png"));
+        File png = new File(out.getParentFile(), out.getName().replace(".jpg", ".png"));
         try {
             if (!device.takeScreenshot(png)) return;
             Bitmap bmp = BitmapFactory.decodeFile(png.getAbsolutePath());
@@ -542,17 +548,27 @@ public class FxUiSweepDeviceTest {
         }
     }
 
-    private static void stopScreenRecord(ParcelFileDescriptor pfd, UiDevice device,
-                                         String path) {
-        try {
-            if (pfd != null) pfd.close();
-        } catch (Throwable ignored) {
-            // closed below anyway
-        }
+    /** Keeps the command's pipe clear so the recording cannot block on it. */
+    private static void drain(ParcelFileDescriptor pfd) {
+        Thread t = new Thread(() -> {
+            try (InputStream in = new ParcelFileDescriptor.AutoCloseInputStream(pfd)) {
+                byte[] buf = new byte[4096];
+                while (in.read(buf) >= 0) {
+                    // screenrecord only chats when asked to; nothing to keep.
+                }
+            } catch (Throwable ignored) {
+                // closed on stop
+            }
+        }, "screenrecord-drain");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    private static void stopScreenRecord(ParcelFileDescriptor pfd, String path) {
         try {
             InstrumentationRegistry.getInstrumentation().getUiAutomation()
                     .executeShellCommand("pkill -INT screenrecord").close();
-            Thread.sleep(1500);
+            Thread.sleep(1800);
         } catch (Throwable ignored) {
             // the time limit will end it
         }
@@ -575,10 +591,9 @@ public class FxUiSweepDeviceTest {
             }
         }
         p.waitFor();
-        String pkg = ctx.getPackageName();
-        String filtered = sb.toString().replace(pkg, "<pkg>");
-        out.put("raw", filtered.length() > 4000
-                ? filtered.substring(0, 4000) : filtered);
+        String filtered = sb.toString().replace(ctx.getPackageName(), "<pkg>");
+        if (filtered.isEmpty()) return out;
+        out.put("raw", filtered.length() > 4000 ? filtered.substring(0, 4000) : filtered);
         return out;
     }
 
@@ -622,5 +637,20 @@ public class FxUiSweepDeviceTest {
                 StandardCharsets.UTF_8)) {
             w.write(text);
         }
+    }
+
+    /** {@code StudioFragment.dspConfig} is private; the fallback needs it. */
+    private static DspChain.Config dspConfigOf(StudioFragment frag) throws Exception {
+        Field f = StudioFragment.class.getDeclaredField("dspConfig");
+        f.setAccessible(true);
+        return (DspChain.Config) f.get(frag);
+    }
+
+    /** {@code StudioFragment.rebuildFxRackList()} is private too. */
+    private static void rebuildRack(StudioFragment frag) throws Exception {
+        java.lang.reflect.Method m =
+                StudioFragment.class.getDeclaredMethod("rebuildFxRackList");
+        m.setAccessible(true);
+        m.invoke(frag);
     }
 }
