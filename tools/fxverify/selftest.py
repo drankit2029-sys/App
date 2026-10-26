@@ -99,6 +99,16 @@ def main() -> int:
             write_case(work, cases, dry, f"series_amp_gain_{i}", dry * gain,
                        kind="series", param="amp_gain", seriesIndex=i,
                        valueRaw=int(gain * 100))
+        # 10. A 0 dB gain must be bit-transparent.
+        write_case(work, cases, dry, "amp_gain_0_tone", dry.copy(), valueRaw=0)
+        # 11. A channel swap must exchange left and right.
+        left = tone(hz=440.0)
+        right = tone(hz=660.0)
+        stereo = np.hstack([left, right])
+        write_case(work, cases, stereo, "st_swap_1_stereo",
+                   np.hstack([right, left]),
+                   param="st_swap", type="BOOLEAN", unit="", valueRaw=1,
+                   probe="stereo", channels=2, inFrames=FRAMES, outFrames=FRAMES)
 
         manifest = {
             "effect": "selftest",
@@ -144,12 +154,17 @@ def main() -> int:
 
         anchors = {a["id"]: a for a in out["anchors"]}
         if anchors.get("amplify_gain_lifts_level", {}).get("verdict") != "ok":
-            failures.append("anchor amplify_gain_lifts_level did not fire")
+            failures.append(f"anchor amplify_gain_lifts_level did not fire: "
+                            f"{anchors.get('amplify_gain_lifts_level')}")
         reverse = anchors.get("timeline_reverse_mirrors")
-        if reverse is None or reverse.get("verdict") not in ("ok", None):
-            failures.append(f"anchor timeline_reverse_mirrors: {reverse}")
-        elif reverse["verdict"] != "ok":
+        if reverse is None or reverse.get("verdict") != "ok":
             failures.append(f"anchor timeline_reverse_mirrors not met: {reverse}")
+        identity = anchors.get("amplify_is_transparent_at_zero")
+        if identity is None or identity.get("verdict") != "ok":
+            failures.append(f"anchor amplify_is_transparent_at_zero not met: {identity}")
+        swap = anchors.get("stereo_swap_exchanges_channels")
+        if swap is None or swap.get("verdict") != "ok":
+            failures.append(f"anchor stereo_swap_exchanges_channels not met: {swap}")
 
     if failures:
         print("SELFTEST FAILED:")

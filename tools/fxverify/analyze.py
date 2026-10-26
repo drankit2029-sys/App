@@ -35,9 +35,10 @@ SERIES_METRICS = [
     "cmp.corr", "cmp.band_delta_db.63", "cmp.band_delta_db.250",
     "cmp.band_delta_db.1000", "cmp.band_delta_db.4000",
     "cmp.band_delta_db.8000", "wet.crest_db", "wet.rms_db",
-    "wet_probe.impulse_tail_db_delta", "wet_probe.gap_floor_db_delta",
-    "wet_probe.hum_energy_db_delta", "wet_probe.sibilance_db_delta",
-    "wet_probe.thd_db_delta", "wet_probe.fundamental_hz_delta",
+    "cmp.wet_probe.impulse_tail_db_delta", "cmp.wet_probe.gap_floor_db_delta",
+    "cmp.wet_probe.hum_energy_db_delta", "cmp.wet_probe.sibilance_db_delta",
+    "cmp.wet_probe.thd_db_delta", "cmp.wet_probe.fundamental_hz",
+    "cmp.wet_probe.plosive_energy_db_delta",
 ]
 
 
@@ -147,7 +148,13 @@ def evaluate_case(case: dict, rec: dict, expectations: dict) -> dict:
     expected = inferred_expectation(case)
     verdict = "ok"
     evidence = {}
-    if expected:
+    if not changed:
+        # Nothing moved, so there is no expectation to judge: this is either a
+        # neutral setting or a control that did not reach the audio at all.
+        verdict = "no_change"
+        if not case.get("isDefaultValue"):
+            warns.append("no measurable change from this control")
+    elif expected:
         key, min_abs, why = expected
         value = dotted(rec, key)
         evidence = {"expectation": why, "metric": key,
@@ -160,12 +167,8 @@ def evaluate_case(case: dict, rec: dict, expectations: dict) -> dict:
         else:
             verdict = "expectation_not_met"
             warns.append(f"{why}: |{key}| = {abs(float(value)):.4f} < {min_abs}")
-    elif changed:
-        verdict = "weak"
     else:
-        verdict = "no_change"
-        if not case.get("isDefaultValue"):
-            warns.append("no measurable change from this control")
+        verdict = "weak"
 
     if fails:
         verdict = "fail"
@@ -352,6 +355,21 @@ def run_bespoke_anchors(expectations: dict, case_dir: Path,
                 rms_db = rec["wet"]["rms_db"]
                 ok = abs(rms_db - anchor["target_db"]) <= anchor["tolerance_db"]
                 detail = f"RMS {rms_db:.2f} dBFS vs target {anchor['target_db']:.2f}"
+            elif check == "channels_swapped":
+                dry, wet, sr = _load_pair(case_dir, case)
+                frames = min(len(dry), len(wet))
+                if dry.shape[1] < 2 or wet.shape[1] < 2:
+                    ok, detail = False, "stereo pair required"
+                else:
+                    left_to_right = float(np.corrcoef(dry[:frames, 0], wet[:frames, 1])[0, 1])
+                    right_to_left = float(np.corrcoef(dry[:frames, 1], wet[:frames, 0])[0, 1])
+                    ok = (left_to_right >= anchor["min_corr"]
+                          and right_to_left >= anchor["min_corr"])
+                    detail = (f"L->R {left_to_right:.3f}, R->L {right_to_left:.3f}")
+            elif check == "identity":
+                diff = rec["cmp"]["max_abs_diff"]
+                ok = diff < 1e-6
+                detail = f"max |wet - dry| = {diff:.3e}"
             elif check == "not_silent":
                 ok = rec["wet"]["rms_db"] > -60.0
                 detail = f"RMS {rec['wet']['rms_db']:.2f} dBFS"
@@ -379,9 +397,13 @@ def analyse_dir(case_dir: Path, expectations: dict, keep_anomalies: bool) -> dic
             records[case["id"]] = {"error": case.get("error", "not rendered")}
             continue
         probe = case["probe"]
-        if probe not in dry_cache:
-            dry_cache[probe] = M.read_float_wav(case_dir / case["dry"])
-        dry, sr = dry_cache[probe]
+        # Cache by the reference file itself, not by probe name: the same probe
+        # is reused across cases, but a manifest may legitimately point two cases
+        # at different references.
+        dry_key = case["dry"]
+        if dry_key not in dry_cache:
+            dry_cache[dry_key] = M.read_float_wav(case_dir / case["dry"])
+        dry, sr = dry_cache[dry_key]
         wet, _ = M.read_float_wav(case_dir / case["wet"])
         case = dict(case, effect=effect)
         rec = {
@@ -391,7 +413,9 @@ def analyse_dir(case_dir: Path, expectations: dict, keep_anomalies: bool) -> dic
         }
         rec["verdict"] = evaluate_case(case, rec, expectations)
         records[case["id"]] = rec
-        if rec["verdict"]["verdict"] == "fail" or rec["verdict"]["warns"]:
+        # Keep the render itself only when the case failed or missed its
+        # expectation: everything else is already summarised by the metrics.
+        if rec["verdict"]["verdict"] in ("fail", "expectation_not_met"):
             anomalies.append(case["id"])
 
     verdicts = [records[c["id"]]["verdict"] for c in cases

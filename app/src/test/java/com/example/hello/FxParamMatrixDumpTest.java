@@ -116,10 +116,11 @@ public class FxParamMatrixDumpTest {
     @Test
     public void dumpParameterMatrix() throws Exception {
         String effectId = arg("FX_EFFECT");
-        if (effectId == null || effectId.isEmpty()) {
-            throw new IllegalStateException(
-                    "Set FX_EFFECT to the effect id this shard should render");
-        }
+        // Runs in the fx-verify workflow, one shard per effect. The normal unit
+        // suite has no effect selected, so this test steps aside there.
+        org.junit.Assume.assumeTrue(
+                "FX_EFFECT not set: this shard test runs from fx-verify.yml",
+                effectId != null && !effectId.isEmpty());
         boolean full = "1".equals(arg("FX_FULL"));
         int frames = full ? FULL_FRAMES : 12 * SR;
         int maxCases = intArg("FX_MAX_CASES", 1500);

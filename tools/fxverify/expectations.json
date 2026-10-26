@@ -1,5 +1,5 @@
 {
-  "_comment": "Authored expectations for the FX verification harness. Series anchors assert that turning one control across its range moves one named metric monotonically; bespoke anchors live in analyze.py because they need their own logic.",
+  "_comment": "Authored expectations for the FX verification harness. Series anchors assert that turning one control across its range moves one named metric monotonically; bespoke anchors live in analyze.py because they need their own logic. Metric names are the analyser's dotted paths (cmp.*, wet.*).",
   "invariants": {
     "max_wet_peak": 1.0,
     "hard_peak_fail": 10.0,
@@ -12,8 +12,8 @@
       "id": "hpf_cutoff_lowers_low_band",
       "effect": "hpf",
       "seriesParam": "cutoff",
-      "probe": "sweep",
-      "metric": "band_delta_db.63",
+      "probe": "tone",
+      "metric": "cmp.band_delta_db.63",
       "direction": "decreasing",
       "min_abs": 3.0,
       "why": "Raising a high-pass cutoff must attenuate the 63 Hz octave progressively harder."
@@ -23,7 +23,7 @@
       "effect": "highpass",
       "seriesParam": "freq",
       "probe": "sweep",
-      "metric": "band_delta_db.250",
+      "metric": "cmp.band_delta_db.250",
       "direction": "decreasing",
       "min_abs": 3.0,
       "why": "The dedicated high-pass must behave like the legacy low cut."
@@ -33,7 +33,7 @@
       "effect": "lowpass",
       "seriesParam": "freq",
       "probe": "sweep",
-      "metric": "band_delta_db.8000",
+      "metric": "cmp.band_delta_db.8000",
       "direction": "increasing",
       "min_abs": 3.0,
       "why": "Lowering a low-pass cutoff must remove the 8 kHz octave."
@@ -43,7 +43,7 @@
       "effect": "amplify",
       "seriesParam": "amp_gain",
       "probe": "tone",
-      "metric": "rms_delta_db",
+      "metric": "cmp.rms_delta_db",
       "direction": "increasing",
       "min_abs": 6.0,
       "why": "A gain control must raise level monotonically."
@@ -53,7 +53,7 @@
       "effect": "basstreble",
       "seriesParam": "bass",
       "probe": "sweep",
-      "metric": "band_delta_db.63",
+      "metric": "cmp.band_delta_db.250",
       "direction": "increasing",
       "min_abs": 2.0,
       "why": "The bass shelf must lift the low octave as it is raised."
@@ -63,7 +63,7 @@
       "effect": "basstreble",
       "seriesParam": "treble",
       "probe": "sweep",
-      "metric": "band_delta_db.8000",
+      "metric": "cmp.band_delta_db.8000",
       "direction": "increasing",
       "min_abs": 2.0,
       "why": "The treble shelf must lift the high octave as it is raised."
@@ -73,7 +73,7 @@
       "effect": "reverb",
       "seriesParam": "rv_wet",
       "probe": "impulse",
-      "metric": "impulse_tail_db_delta",
+      "metric": "cmp.wet_probe.impulse_tail_db_delta",
       "direction": "increasing",
       "min_abs": 1.5,
       "why": "More wet signal must add more energy after each impulse."
@@ -83,7 +83,7 @@
       "effect": "reverb",
       "seriesParam": "rv_size",
       "probe": "impulse",
-      "metric": "impulse_tail_db_delta",
+      "metric": "cmp.wet_probe.impulse_tail_db_delta",
       "direction": "increasing",
       "min_abs": 0.5,
       "why": "A larger room must lengthen the reverb tail."
@@ -93,7 +93,7 @@
       "effect": "echo",
       "seriesParam": "echo_time",
       "probe": "impulse",
-      "metric": "impulse_tail_db_delta",
+      "metric": "cmp.wet_probe.impulse_tail_db_delta",
       "direction": "increasing",
       "min_abs": 0.5,
       "why": "A longer echo delay must place repeat energy further into the tail window."
@@ -103,7 +103,7 @@
       "effect": "changepitch",
       "seriesParam": "pitch_semitones",
       "probe": "tone",
-      "metric": "wet_probe.fundamental_hz",
+      "metric": "cmp.wet_probe.fundamental_hz",
       "direction": "increasing",
       "min_abs": 200.0,
       "why": "Shifting up by semitones must raise the measured fundamental."
@@ -113,7 +113,7 @@
       "effect": "distort",
       "seriesParam": "dist_drive",
       "probe": "tone",
-      "metric": "wet_probe.thd_db",
+      "metric": "cmp.wet_probe.thd_db",
       "direction": "increasing",
       "min_abs": 3.0,
       "why": "More drive must add harmonic content to a pure tone."
@@ -123,7 +123,7 @@
       "effect": "specnr",
       "seriesParam": "snr_reduction",
       "probe": "noise",
-      "metric": "band_delta_db.4000",
+      "metric": "cmp.band_delta_db.4000",
       "direction": "decreasing",
       "min_abs": 1.0,
       "why": "More reduction must take more high-band noise out."
@@ -157,6 +157,66 @@
       "direction": "decreasing",
       "min_abs": 0.2,
       "why": "A higher speed multiplier must shorten the render."
+    },
+    {
+      "id": "limiter_drive_lifts_level",
+      "effect": "limiter",
+      "seriesParam": "drive",
+      "probe": "tone",
+      "metric": "cmp.rms_delta_db",
+      "direction": "increasing",
+      "min_abs": 1.0,
+      "why": "Pushing more drive into a limiter must raise the output level until the ceiling holds it."
+    },
+    {
+      "id": "amplify_peak_ceiling_moves_level",
+      "effect": "amplify",
+      "seriesParam": "amp_peak",
+      "probe": "tone",
+      "metric": "cmp.rms_delta_db",
+      "direction": "increasing",
+      "min_abs": 3.0,
+      "why": "The peak-normalise dial must lift a -10 dBFS tone as it rises."
+    },
+    {
+      "id": "output_gain_moves_level",
+      "effect": "eq6",
+      "seriesParam": "out",
+      "probe": "sweep",
+      "metric": "cmp.rms_delta_db",
+      "direction": "increasing",
+      "min_abs": 3.0,
+      "why": "The EQ output trim must change level monotonically."
+    },
+    {
+      "id": "tremolo_depth_modulates",
+      "effect": "tremolo",
+      "seriesParam": "tr_depth",
+      "probe": "tone",
+      "metric": "cmp.nrmse",
+      "direction": "increasing",
+      "min_abs": 0.05,
+      "why": "More tremolo depth must move the signal further from the dry tone."
+    },
+    {
+      "id": "wah_depth_sweeps",
+      "effect": "wah",
+      "seriesParam": "wah_depth",
+      "probe": "tone",
+      "metric": "cmp.nrmse",
+      "direction": "increasing",
+      "min_abs": 0.05,
+      "why": "A deeper wah must move the tone further from the dry signal."
+    },
+    {
+      "id": "distortion_drive_departs_from_dry",
+      "effect": "distort",
+      "seriesParam": "dist_drive",
+      "probe": "tone",
+      "metric": "cmp.nrmse",
+      "direction": "increasing",
+      "min_abs": 0.02,
+      "why": "More drive must reshape the waveform further from the dry tone."
     }
   ],
   "bespoke_anchors": [
@@ -255,6 +315,14 @@
       "why": "Zero width must collapse both channels toward identical content."
     },
     {
+      "id": "stereo_swap_exchanges_channels",
+      "effect": "stereoimg",
+      "case": "st_swap_1_stereo",
+      "check": "channels_swapped",
+      "min_corr": 0.9,
+      "why": "Swap must exchange the two channels exactly."
+    },
+    {
       "id": "normalize_reaches_target",
       "effect": "normalize",
       "case": "norm_target_-6000_tone",
@@ -269,9 +337,16 @@
       "case": "gen_start_1000_silence",
       "check": "not_silent",
       "why": "The generator must write audio rather than pass silence through."
+    },
+    {
+      "id": "amplify_is_transparent_at_zero",
+      "effect": "amplify",
+      "case": "amp_gain_0_tone",
+      "check": "identity",
+      "why": "0 dB of gain must leave the signal untouched."
     }
   ],
-  "silence_allowed": ["gate", "gateexp", "truncsil", "silence", "specnr", "noise"],
+  "silence_allowed": ["gate", "gateexp", "truncsil", "specnr", "noise"],
   "clipping_allowed": ["distort", "bricklim", "limiter", "clipfix", "amplify",
-                       "normalize", "loudness", "brickwall"]
+                       "normalize", "loudness"]
 }
