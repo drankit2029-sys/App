@@ -103,7 +103,7 @@ jobs:
 
   dsp-matrix:
     needs: params
-    if: ${{ !inputs.skip_dsp }}
+    if: ${{ !inputs.skip_dsp && !inputs.smoke_only }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
@@ -218,23 +218,17 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -no-snapshot -gpu swiftshader_indirect -no-boot-anim -camera-back none
           script: |
-            EFFECT="${{ matrix.effect }}"
             adb shell settings put global stay_on_while_plugged_in 3
             adb shell input keyevent 82 || true
-            APP_APK=$(find apks -name 'app-debug.apk' | head -1)
-            TEST_APK=$(find apks -name 'app-debug-androidTest.apk' | head -1)
-            echo "installing $APP_APK and $TEST_APK"
-            adb install -r -t "$APP_APK"
-            adb install -r -t "$TEST_APK"
-            PKG=$(adb shell pm list instrumentation | grep AndroidJUnitRunner | head -1 | sed 's/.*instrumentation://; s/ .*//' | tr -d '\r')
-            echo "instrumentation runner: $PKG"
+            adb install -r -t "$(find apks -name 'app-debug.apk' | head -1)"
+            adb install -r -t "$(find apks -name 'app-debug-androidTest.apk' | head -1)"
             mkdir -p fx-out
-            adb shell am instrument -w -e class com.example.hello.FxUiSweepDeviceTest -e fxEffect "$EFFECT" "$PKG" > fx-out/instrumentation.txt 2>&1 || true
+            adb shell am instrument -w -e class com.example.hello.FxUiSweepDeviceTest -e fxEffect "${{ matrix.effect }}" "$(adb shell pm list instrumentation | grep AndroidJUnitRunner | head -1 | sed 's/.*instrumentation://; s/ .*//' | tr -d '\r')" > fx-out/instrumentation.txt 2>&1 || true
             cat fx-out/instrumentation.txt
-            adb pull "/sdcard/Android/data/$APP_ID/files/takes/fxverify-$EFFECT" fx-out/ || true
-            adb pull "/data/local/tmp/fx-$EFFECT.mp4" fx-out/ || true
+            adb pull "/sdcard/Android/data/$APP_ID/files/takes/fxverify-${{ matrix.effect }}" fx-out/ || true
+            adb pull "/data/local/tmp/fx-${{ matrix.effect }}.mp4" fx-out/ || true
             adb shell logcat -d -v brief > fx-out/logcat-full.txt || true
-            adb shell rm -f "/data/local/tmp/fx-$EFFECT.mp4" || true
+            adb shell rm -f "/data/local/tmp/fx-${{ matrix.effect }}.mp4" || true
             grep -q "OK (" fx-out/instrumentation.txt || { echo "instrumentation did not report OK"; exit 1; }
       - name: Upload the sweep evidence
         if: always()
@@ -280,14 +274,10 @@ jobs:
           emulator-options: -no-window -no-snapshot -gpu swiftshader_indirect -no-boot-anim -camera-back none
           script: |
             adb shell settings put global stay_on_while_plugged_in 3
-            APP_APK=$(find apks -name 'app-debug.apk' | head -1)
-            TEST_APK=$(find apks -name 'app-debug-androidTest.apk' | head -1)
-            echo "installing $APP_APK and $TEST_APK"
-            adb install -r -t "$APP_APK"
-            adb install -r -t "$TEST_APK"
-            PKG=$(adb shell pm list instrumentation | grep AndroidJUnitRunner | head -1 | sed 's/.*instrumentation://; s/ .*//' | tr -d '\r')
+            adb install -r -t "$(find apks -name 'app-debug.apk' | head -1)"
+            adb install -r -t "$(find apks -name 'app-debug-androidTest.apk' | head -1)"
             mkdir -p fx-formats
-            adb shell am instrument -w -e class com.example.hello.FormatMatrixDeviceTest "$PKG" > fx-formats/instrumentation.txt 2>&1 || true
+            adb shell am instrument -w -e class com.example.hello.FormatMatrixDeviceTest "$(adb shell pm list instrumentation | grep AndroidJUnitRunner | head -1 | sed 's/.*instrumentation://; s/ .*//' | tr -d '\r')" > fx-formats/instrumentation.txt 2>&1 || true
             cat fx-formats/instrumentation.txt
             adb pull "/sdcard/Android/data/$APP_ID/files/takes/fxverify-formats" fx-formats/ || true
             grep -q "OK (" fx-formats/instrumentation.txt || { echo "instrumentation did not report OK"; exit 1; }
@@ -340,14 +330,10 @@ jobs:
           emulator-options: -no-window -no-snapshot -gpu swiftshader_indirect -no-boot-anim -camera-back none
           script: |
             adb shell settings put global stay_on_while_plugged_in 3
-            APP_APK=$(find apks -name 'app-debug.apk' | head -1)
-            TEST_APK=$(find apks -name 'app-debug-androidTest.apk' | head -1)
-            echo "installing $APP_APK and $TEST_APK"
-            adb install -r -t "$APP_APK"
-            adb install -r -t "$TEST_APK"
-            PKG=$(adb shell pm list instrumentation | grep AndroidJUnitRunner | head -1 | sed 's/.*instrumentation://; s/ .*//' | tr -d '\r')
+            adb install -r -t "$(find apks -name 'app-debug.apk' | head -1)"
+            adb install -r -t "$(find apks -name 'app-debug-androidTest.apk' | head -1)"
             mkdir -p smoke
-            adb shell am instrument -w -e class com.example.hello.FxUiSweepDeviceTest -e fxEffect hpf "$PKG" > smoke/instrumentation.txt 2>&1 || true
+            adb shell am instrument -w -e class com.example.hello.FxUiSweepDeviceTest -e fxEffect hpf "$(adb shell pm list instrumentation | grep AndroidJUnitRunner | head -1 | sed 's/.*instrumentation://; s/ .*//' | tr -d '\r')" > smoke/instrumentation.txt 2>&1 || true
             cat smoke/instrumentation.txt
             adb pull "/sdcard/Android/data/$APP_ID/files/takes/fxverify-hpf" smoke/ || true
             adb pull "/data/local/tmp/fx-hpf.mp4" smoke/ || true

@@ -287,6 +287,16 @@ public class FxUiSweepDeviceTest {
             throws Exception {
         try {
             UiObject2 add = device.findObject(By.text("+ Add Effect"));
+            if (add == null) {
+                // The panel scrolls: the add button may be below the fold.
+                for (int i = 0; i < 4 && add == null; i++) {
+                    UiObject2 list = device.findObject(
+                            By.res(device.getCurrentPackageName(), "fxScroll"));
+                    if (list != null) list.scroll(androidx.test.uiautomator.Direction.DOWN, 0.8f);
+                    Thread.sleep(250);
+                    add = device.findObject(By.text("+ Add Effect"));
+                }
+            }
             if (add == null) return false;
             add.click();
             Thread.sleep(500);
