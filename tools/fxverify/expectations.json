@@ -1,0 +1,277 @@
+{
+  "_comment": "Authored expectations for the FX verification harness. Series anchors assert that turning one control across its range moves one named metric monotonically; bespoke anchors live in analyze.py because they need their own logic.",
+  "invariants": {
+    "max_wet_peak": 1.0,
+    "hard_peak_fail": 10.0,
+    "silence_floor_db": -80.0,
+    "neutral_identity_tolerance": 1e-4,
+    "length_tolerance_frames": 0
+  },
+  "series_anchors": [
+    {
+      "id": "hpf_cutoff_lowers_low_band",
+      "effect": "hpf",
+      "seriesParam": "cutoff",
+      "probe": "sweep",
+      "metric": "band_delta_db.63",
+      "direction": "decreasing",
+      "min_abs": 3.0,
+      "why": "Raising a high-pass cutoff must attenuate the 63 Hz octave progressively harder."
+    },
+    {
+      "id": "highpass_cutoff_lowers_low_band",
+      "effect": "highpass",
+      "seriesParam": "freq",
+      "probe": "sweep",
+      "metric": "band_delta_db.250",
+      "direction": "decreasing",
+      "min_abs": 3.0,
+      "why": "The dedicated high-pass must behave like the legacy low cut."
+    },
+    {
+      "id": "lowpass_cutoff_raises_high_band",
+      "effect": "lowpass",
+      "seriesParam": "freq",
+      "probe": "sweep",
+      "metric": "band_delta_db.8000",
+      "direction": "increasing",
+      "min_abs": 3.0,
+      "why": "Lowering a low-pass cutoff must remove the 8 kHz octave."
+    },
+    {
+      "id": "amplify_gain_lifts_level",
+      "effect": "amplify",
+      "seriesParam": "amp_gain",
+      "probe": "tone",
+      "metric": "rms_delta_db",
+      "direction": "increasing",
+      "min_abs": 6.0,
+      "why": "A gain control must raise level monotonically."
+    },
+    {
+      "id": "bass_control_lifts_low_band",
+      "effect": "basstreble",
+      "seriesParam": "bass",
+      "probe": "sweep",
+      "metric": "band_delta_db.63",
+      "direction": "increasing",
+      "min_abs": 2.0,
+      "why": "The bass shelf must lift the low octave as it is raised."
+    },
+    {
+      "id": "treble_control_lifts_high_band",
+      "effect": "basstreble",
+      "seriesParam": "treble",
+      "probe": "sweep",
+      "metric": "band_delta_db.8000",
+      "direction": "increasing",
+      "min_abs": 2.0,
+      "why": "The treble shelf must lift the high octave as it is raised."
+    },
+    {
+      "id": "reverb_wet_adds_tail",
+      "effect": "reverb",
+      "seriesParam": "rv_wet",
+      "probe": "impulse",
+      "metric": "impulse_tail_db_delta",
+      "direction": "increasing",
+      "min_abs": 1.5,
+      "why": "More wet signal must add more energy after each impulse."
+    },
+    {
+      "id": "reverb_size_lengthens_tail",
+      "effect": "reverb",
+      "seriesParam": "rv_size",
+      "probe": "impulse",
+      "metric": "impulse_tail_db_delta",
+      "direction": "increasing",
+      "min_abs": 0.5,
+      "why": "A larger room must lengthen the reverb tail."
+    },
+    {
+      "id": "echo_time_moves_tail",
+      "effect": "echo",
+      "seriesParam": "echo_time",
+      "probe": "impulse",
+      "metric": "impulse_tail_db_delta",
+      "direction": "increasing",
+      "min_abs": 0.5,
+      "why": "A longer echo delay must place repeat energy further into the tail window."
+    },
+    {
+      "id": "pitch_shift_raises_fundamental",
+      "effect": "changepitch",
+      "seriesParam": "pitch_semitones",
+      "probe": "tone",
+      "metric": "wet_probe.fundamental_hz",
+      "direction": "increasing",
+      "min_abs": 200.0,
+      "why": "Shifting up by semitones must raise the measured fundamental."
+    },
+    {
+      "id": "distortion_raises_harmonics",
+      "effect": "distort",
+      "seriesParam": "dist_drive",
+      "probe": "tone",
+      "metric": "wet_probe.thd_db",
+      "direction": "increasing",
+      "min_abs": 3.0,
+      "why": "More drive must add harmonic content to a pure tone."
+    },
+    {
+      "id": "noise_reduction_lowers_hiss",
+      "effect": "specnr",
+      "seriesParam": "snr_reduction",
+      "probe": "noise",
+      "metric": "band_delta_db.4000",
+      "direction": "decreasing",
+      "min_abs": 1.0,
+      "why": "More reduction must take more high-band noise out."
+    },
+    {
+      "id": "paulstretch_lengthens",
+      "effect": "paulstretch",
+      "seriesParam": "paul_factor",
+      "probe": "tone",
+      "metric": "cmp.length_ratio",
+      "direction": "increasing",
+      "min_abs": 1.0,
+      "why": "A larger stretch factor must make the render longer."
+    },
+    {
+      "id": "tempo_speeds_up",
+      "effect": "tempo",
+      "seriesParam": "tempo_percent",
+      "probe": "tone",
+      "metric": "cmp.length_ratio",
+      "direction": "decreasing",
+      "min_abs": 0.1,
+      "why": "A positive tempo change must shorten the render."
+    },
+    {
+      "id": "speed_multiplier_shortens",
+      "effect": "speedpitch",
+      "seriesParam": "speed_mult",
+      "probe": "tone",
+      "metric": "cmp.length_ratio",
+      "direction": "decreasing",
+      "min_abs": 0.2,
+      "why": "A higher speed multiplier must shorten the render."
+    }
+  ],
+  "bespoke_anchors": [
+    {
+      "id": "limiter_respects_ceiling",
+      "effect": "limiter",
+      "case": "drive_100_clipped",
+      "check": "peak_below",
+      "limit_db": -0.2,
+      "tolerance_db": 1.0,
+      "why": "A brickwall limiter must not let the output exceed its ceiling."
+    },
+    {
+      "id": "brickwall_respects_ceiling",
+      "effect": "bricklim",
+      "case": "lim_gain_2400_clipped",
+      "check": "peak_below",
+      "limit_db": -0.3,
+      "tolerance_db": 1.0,
+      "why": "Stage 4 brickwall limiter ceiling."
+    },
+    {
+      "id": "gate_closes_gaps",
+      "effect": "gate",
+      "case": "amt_100_gaps",
+      "check": "gap_floor_lower",
+      "min_db": 6.0,
+      "why": "A closed gate must push the silent gaps further down."
+    },
+    {
+      "id": "expander_closes_gaps",
+      "effect": "gateexp",
+      "case": "gate_thresh_-600_gaps",
+      "check": "gap_floor_lower",
+      "min_db": 3.0,
+      "why": "A downward expander must attenuate the gaps."
+    },
+    {
+      "id": "dehum_removes_mains_hum",
+      "effect": "dehum",
+      "case": "hum_depth_-4800_hum",
+      "check": "hum_lower",
+      "min_db": 6.0,
+      "why": "De-Hum at full depth must remove most of the 50 Hz family."
+    },
+    {
+      "id": "declick_removes_clicks",
+      "effect": "declick",
+      "case": "click_thresh_1_clicks",
+      "check": "transients_fewer",
+      "why": "Click Removal at its most sensitive must remove the click train."
+    },
+    {
+      "id": "clipfix_removes_clipping",
+      "effect": "clipfix",
+      "case": "clip_thresh_80_clipped",
+      "check": "clip_ratio_lower",
+      "why": "Clip Fix must reduce the time spent at the clip ceiling."
+    },
+    {
+      "id": "truncsil_shortens_gaps",
+      "effect": "truncsil",
+      "case": "ts_thresh_-2000_gaps",
+      "check": "shorter",
+      "why": "Truncate Silence must shorten a render containing long gaps."
+    },
+    {
+      "id": "fadeout_silences_tail",
+      "effect": "fade",
+      "case": "fade_type_1_tone",
+      "check": "tail_silent",
+      "why": "Fade Out must leave the end of the render silent."
+    },
+    {
+      "id": "timeline_reverse_mirrors",
+      "effect": "timeline",
+      "case": "tl_action_1_tone",
+      "check": "reverse_corr",
+      "min_corr": 0.9,
+      "why": "Reverse must match the time-reversed dry signal."
+    },
+    {
+      "id": "timeline_invert_flips_polarity",
+      "effect": "timeline",
+      "case": "tl_action_0_tone",
+      "check": "invert_corr",
+      "min_corr": 0.99,
+      "why": "Invert must equal the dry signal with polarity flipped."
+    },
+    {
+      "id": "stereo_width_mono_collapses",
+      "effect": "stereoimg",
+      "case": "st_width_0_stereo",
+      "check": "interchannel_up",
+      "min_corr": 0.9,
+      "why": "Zero width must collapse both channels toward identical content."
+    },
+    {
+      "id": "normalize_reaches_target",
+      "effect": "normalize",
+      "case": "norm_target_-6000_tone",
+      "check": "rms_near_db",
+      "target_db": -6.0,
+      "tolerance_db": 3.0,
+      "why": "Normalize must land close to its target level."
+    },
+    {
+      "id": "generator_produces_a_tone",
+      "effect": "generator",
+      "case": "gen_start_1000_silence",
+      "check": "not_silent",
+      "why": "The generator must write audio rather than pass silence through."
+    }
+  ],
+  "silence_allowed": ["gate", "gateexp", "truncsil", "silence", "specnr", "noise"],
+  "clipping_allowed": ["distort", "bricklim", "limiter", "clipfix", "amplify",
+                       "normalize", "loudness", "brickwall"]
+}

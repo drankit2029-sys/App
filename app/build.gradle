@@ -68,6 +68,8 @@ android {
     sourceSets {
         // Expose exported Room schemas to instrumentation/migration tests.
         androidTest.assets.srcDirs += files("$projectDir/schemas".toString())
+        // The FX verification harness renders the uploaded clip on a device.
+        androidTest.assets.srcDirs += files("$rootDir/tools/fxverify/fixtures".toString())
     }
 
     compileOptions {

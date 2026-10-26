@@ -9,3 +9,5 @@ captures
 .externalNativeBuild
 .cxx
 local.properties
+# Downloaded FX verification artifacts and frame extractions
+/fx-verify-runs/
