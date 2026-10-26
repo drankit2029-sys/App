@@ -342,7 +342,8 @@ public class FxPanelDialDeviceTest {
         entry.put("bakedValueDisplay", param.formatRaw(bestValue));
         File wet = new File(work, "wet-" + param.id + ".wav");
         copy(master, wet);
-        boolean applied = applyOne(activity, wet, master, info, type, param, bestValue);
+        boolean applied = applyOne(activity, wet, master, info, type, param,
+                bestValue, entry);
         entry.put("applied", applied);
         int emitted = 0;
         if (applied) {
@@ -371,14 +372,17 @@ public class FxPanelDialDeviceTest {
     private static boolean applyOne(Activity activity, File wet, File master,
                                     FxVerifySupportDevice.WavInfo info,
                                     DspChain.EffectType type, FxParameter param,
-                                    int value) {
+                                    int value, JSONObject entry) {
         final boolean[] ok = {false};
+        final java.util.concurrent.CountDownLatch applyLatch =
+                new java.util.concurrent.CountDownLatch(1);
         activity.runOnUiThread(() -> {
             try {
                 DspChain.Config cfg = new DspChain.Config();
                 cfg.applyPreset(DspChain.Preset.CLEAR_ALL);
                 DspChain.EffectSlot slot = cfg.addOrFocusSlot(type);
                 slot.enabled = true;
+                slot.wetDry = 1f;
                 applyParamToSlot(slot, type, param, value);
                 FormatConverter.WavInfo winfo = FormatConverter.readFloatWav(wet);
                 long totalFrames = winfo.dataBytes / 4 / Math.max(1, winfo.channels);
@@ -403,17 +407,41 @@ public class FxPanelDialDeviceTest {
                         EditEngine.applyDspToRange(wet, 0, regionEnd, inPlace, null);
                     }
                     ok[0] = done;
+                    if (!done) {
+                        putQuiet(entry, "applyError", "offline renderer rejected "
+                                + "the apply: " + offline.size() + " pass(es)");
+                    }
                 } else {
+                    if (!chain.isActive()) {
+                        putQuiet(entry, "applyError", "the chain reports no audible "
+                                + "effect for this configuration (Apply skips it)");
+                    }
                     ok[0] = EditEngine.applyDspToRange(
                             wet, 0, totalFrames, chain, null);
                 }
             } catch (Throwable t) {
-                System.out.println("apply " + param.id + " failed: " + t);
+                java.io.StringWriter sw = new java.io.StringWriter();
+                t.printStackTrace(new java.io.PrintWriter(sw));
+                String text = sw.toString();
+                putQuiet(entry, "applyError", text.substring(0,
+                        Math.min(1400, text.length())));
                 ok[0] = false;
+            } finally {
+                applyLatch.countDown();
             }
         });
+        // The offline renderers (WSOLA pitch/tempo, the stretchers) can take
+        // several seconds on a 30 s take with two slow cores: wait for the work,
+        // never for an idle thread, and carry the failure text into the artifact.
         try {
-            Thread.sleep(500);
+            if (!applyLatch.await(120, java.util.concurrent.TimeUnit.SECONDS)) {
+                putQuiet(entry, "applyError", "apply did not finish within 120 s");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        try {
+            Thread.sleep(300);
         } catch (InterruptedException ignored) {
             // fall through
         }
@@ -558,6 +586,15 @@ public class FxPanelDialDeviceTest {
 
     private static TextView asChip(View v) {
         return v instanceof TextView ? (TextView) v : null;
+    }
+
+    /** org.json throws checked exceptions; the manifest remembers, the test flows. */
+    private static void putQuiet(JSONObject o, String key, Object value) {
+        try {
+            o.put(key, value);
+        } catch (Exception ignored) {
+            // reporting only
+        }
     }
 
     /** The activity's decor plus every dialog window the process owns. */
