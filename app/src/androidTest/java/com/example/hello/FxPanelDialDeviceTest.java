@@ -384,6 +384,10 @@ public class FxPanelDialDeviceTest {
                 slot.enabled = true;
                 slot.wetDry = 1f;
                 applyParamToSlot(slot, type, param, value);
+                // Legacy stages still read their percentage fields, so mirror
+                // onSlotMutated exactly as the pill does before saving.
+                cfg.syncLegacyFieldsFromSlots();
+                cfg.activePresetId = DspChain.Preset.CUSTOM.id;
                 FormatConverter.WavInfo winfo = FormatConverter.readFloatWav(wet);
                 long totalFrames = winfo.dataBytes / 4 / Math.max(1, winfo.channels);
                 if (totalFrames <= 0) return;
