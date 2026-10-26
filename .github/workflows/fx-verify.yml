@@ -219,6 +219,12 @@ jobs:
           emulator-options: -no-window -no-snapshot -gpu swiftshader_indirect -no-boot-anim -camera-back none
           script: |
             adb shell settings put global stay_on_while_plugged_in 3
+            # A background launcher ANR freezes the whole display and every
+            # capture with it, so keep system error dialogs off the screen and
+            # stop the launcher we never use (the test starts the activity).
+            adb shell settings put global hide_error_dialogs 1
+            adb shell settings put global window_animation_scale 0
+            adb shell am force-stop com.google.android.apps.nexuslauncher || true
             adb shell input keyevent 82 || true
             adb install -r -t "$(find apks -name 'app-debug.apk' | head -1)"
             adb install -r -t "$(find apks -name 'app-debug-androidTest.apk' | head -1)"
@@ -274,6 +280,12 @@ jobs:
           emulator-options: -no-window -no-snapshot -gpu swiftshader_indirect -no-boot-anim -camera-back none
           script: |
             adb shell settings put global stay_on_while_plugged_in 3
+            # A background launcher ANR freezes the whole display and every
+            # capture with it, so keep system error dialogs off the screen and
+            # stop the launcher we never use (the test starts the activity).
+            adb shell settings put global hide_error_dialogs 1
+            adb shell settings put global window_animation_scale 0
+            adb shell am force-stop com.google.android.apps.nexuslauncher || true
             adb install -r -t "$(find apks -name 'app-debug.apk' | head -1)"
             adb install -r -t "$(find apks -name 'app-debug-androidTest.apk' | head -1)"
             mkdir -p fx-formats
@@ -330,6 +342,12 @@ jobs:
           emulator-options: -no-window -no-snapshot -gpu swiftshader_indirect -no-boot-anim -camera-back none
           script: |
             adb shell settings put global stay_on_while_plugged_in 3
+            # A background launcher ANR freezes the whole display and every
+            # capture with it, so keep system error dialogs off the screen and
+            # stop the launcher we never use (the test starts the activity).
+            adb shell settings put global hide_error_dialogs 1
+            adb shell settings put global window_animation_scale 0
+            adb shell am force-stop com.google.android.apps.nexuslauncher || true
             adb install -r -t "$(find apks -name 'app-debug.apk' | head -1)"
             adb install -r -t "$(find apks -name 'app-debug-androidTest.apk' | head -1)"
             mkdir -p smoke

@@ -179,6 +179,25 @@ public class FxUiSweepDeviceTest {
             problems.put("screenrecord could not be started");
         }
 
+        // ---- the rack may already hold the active preset's effects; clear it so
+        // the sweep drives exactly the effect under test and its card is the only
+        // one the inspector can expand.
+        boolean clearedThroughUi = clearRack(device);
+        ui(activity, () -> {
+            try {
+                DspChain.Config cfg = dspConfigOf(frag);
+                if (!cfg.slots.isEmpty()) {
+                    cfg.clearRack();
+                    cfg.save(activity);
+                    rebuildRack(frag);
+                }
+            } catch (Throwable t) {
+                System.out.println("rack clear fell back and failed: " + t);
+            }
+        });
+        Thread.sleep(SETTLE_MS);
+        result.put("rackClearedThroughUi", clearedThroughUi);
+
         // ---- add the effect through the real dialog, with a programmatic fallback
         if (!addEffectThroughDialog(type.title, device)) {
             degraded[0] = true;
@@ -331,21 +350,44 @@ public class FxUiSweepDeviceTest {
         for (int i = 0; i < 50 && !frag.isFxPanelOpen(); i++) Thread.sleep(100);
     }
 
+    /** Taps "Delete All" and then the sheet's confirmation, if the rack has slots. */
+    private static boolean clearRack(UiDevice device) throws Exception {
+        try {
+            UiObject2 delete = findText(device, "Delete All");
+            if (delete == null) return false;
+            if (!delete.isEnabled()) return true;
+            delete.click();
+            Thread.sleep(600);
+            List<UiObject2> confirmations = device.findObjects(By.text("Delete All"));
+            if (!confirmations.isEmpty()) {
+                confirmations.get(confirmations.size() - 1).click();
+                Thread.sleep(700);
+            }
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** Finds a text node, scrolling the rack once if it sits below the fold. */
+    private static UiObject2 findText(UiDevice device, String text) throws Exception {
+        UiObject2 found = device.findObject(By.text(text));
+        if (found != null) return found;
+        UiObject2 list = device.findObject(
+                By.res(device.getCurrentPackageName(), "fxScroll"));
+        for (int i = 0; i < 4 && found == null; i++) {
+            if (list != null) list.scroll(Direction.DOWN, 0.8f);
+            Thread.sleep(250);
+            found = device.findObject(By.text(text));
+        }
+        return found;
+    }
+
     /** Uses the real search dialog; returns false when it cannot be driven. */
     private static boolean addEffectThroughDialog(String title, UiDevice device)
             throws Exception {
         try {
-            UiObject2 add = device.findObject(By.text("+ Add Effect"));
-            if (add == null) {
-                // The panel scrolls: the add button can sit below the fold.
-                for (int i = 0; i < 4 && add == null; i++) {
-                    UiObject2 list = device.findObject(
-                            By.res(device.getCurrentPackageName(), "fxScroll"));
-                    if (list != null) list.scroll(Direction.DOWN, 0.8f);
-                    Thread.sleep(250);
-                    add = device.findObject(By.text("+ Add Effect"));
-                }
-            }
+            UiObject2 add = findText(device, "+ Add Effect");
             if (add == null) return false;
             add.click();
             Thread.sleep(500);
