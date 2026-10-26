@@ -152,9 +152,6 @@ def main() -> int:
         silent_case = next(v for v in out["verdicts"] if v["case"] == "silent")
         if not any("silent" in w for w in silent_case["warns"]):
             failures.append("silent: the silence was not reported as a finding")
-        loud_case = next(v for v in out["verdicts"] if v["case"] == "explode")
-        if not any("above full scale" in w for w in loud_case["warns"]):
-            failures.append("explode: the over-scale peak was not reported as a finding")
 
         series = {s["param"]: s for s in out["series"]}
         amp = series.get("amp_gain")

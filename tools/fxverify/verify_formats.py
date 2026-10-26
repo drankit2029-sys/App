@@ -177,11 +177,16 @@ def _verify_one(entry: dict, work: Path, source: np.ndarray, source_sr: int,
             check("fidelity", corr > 0.999 and nrmse < limit,
                   f"corr={corr:.6f} nrmse={nrmse:.2e} (limit {limit:.0e})")
         else:
+            # Lossy codecs reorder phase freely, so waveform correlation means
+            # nothing; band energies are the honest comparison, and the bands a
+            # codec cannot carry are excluded rather than punished.
             src_bands = band_energies(a, source_sr)
             out_bands = band_energies(b, int(stream.get("sample_rate", source_sr)))
-            worst = max(abs(out_bands[c] - src_bands[c]) for c in src_bands)
-            check("spectral_similarity", corr > 0.7 and worst <= 12.0,
-                  f"corr={corr:.3f} worst band delta {worst:.1f} dB")
+            ceiling = {"amr_nb": 3500.0, "amr_wb": 8000.0}.get(fmt_id, 16000.0)
+            worst = max(abs(out_bands[c] - src_bands[c])
+                        for c in src_bands if float(c) <= ceiling)
+            check("spectral_similarity", worst <= 12.0,
+                  f"worst band delta {worst:.1f} dB (bands ≤ {ceiling:.0f} Hz)")
 
     if bit_rate:
         nominal = entry.get("bytes", 0) * 8 / max(duration, 1e-3)
