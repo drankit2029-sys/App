@@ -417,31 +417,27 @@ public class FxUiSweepDeviceTest {
     private static boolean addEffectThroughDialog(String title, UiDevice device)
             throws Exception {
         try {
-            UiObject2 add = findText(device, "+ Add Effect");
-            if (add == null) return false;
-            add.click();
-            Thread.sleep(600);
+            if (!openAddDialog(device)) return false;
             UiObject2 box = device.findObject(By.clazz("android.widget.EditText"));
-            if (box == null) return false;
-            box.setText(title);
-            Thread.sleep(600);
-            hideKeyboard(device);
-
-            for (int attempt = 0; attempt < 3; attempt++) {
-                UiObject2 row = device.findObject(By.text(title));
-                if (row != null) {
-                    row.click();
-                    Thread.sleep(800);
-                }
-                if (!dialogOpen(device)) return true;
-                // The row may sit under the keyboard's old position: scroll the
-                // dialog's own list and try again.
-                UiObject2 search = device.findObject(
-                        By.clazz("android.widget.EditText"));
-                if (search != null) {
-                    search.swipe(Direction.UP, 0.6f);
-                    Thread.sleep(400);
-                }
+            if (box != null) {
+                box.setText(title);
+                Thread.sleep(600);
+            }
+            // 1) tap the filtered row (the keyboard may still be up, so this can miss)
+            if (tapRow(title, device)) return true;
+            // 2) put the keyboard away, then tap again
+            device.pressBack();
+            Thread.sleep(500);
+            if (!dialogOpen(device) && !openAddDialog(device)) return false;
+            if (tapRow(title, device)) return true;
+            // 3) reopen clean and scroll the dialog's list to the row
+            if (!dialogOpen(device) && !openAddDialog(device)) return false;
+            UiObject2 list = device.findObject(By.clazz("android.widget.ScrollView"));
+            for (int i = 0; i < 14; i++) {
+                if (tapRow(title, device)) return true;
+                if (list == null) break;
+                list.scroll(Direction.DOWN, 0.8f);
+                Thread.sleep(250);
             }
             return !dialogOpen(device);
         } catch (Throwable t) {
@@ -449,22 +445,25 @@ public class FxUiSweepDeviceTest {
         }
     }
 
-    private static boolean dialogOpen(UiDevice device) {
-        return device.findObject(By.text("Add Effect")) != null;
+    private static boolean openAddDialog(UiDevice device) throws Exception {
+        UiObject2 add = findText(device, "+ Add Effect");
+        if (add == null) return false;
+        add.click();
+        Thread.sleep(600);
+        return dialogOpen(device);
     }
 
-    /** Back closes the IME first when it is up; re-opens the dialog if it was not. */
-    private static void hideKeyboard(UiDevice device) throws Exception {
-        device.pressBack();
-        Thread.sleep(400);
-        if (!dialogOpen(device)) {
-            // The back press closed the dialog instead of the keyboard.
-            UiObject2 add = findText(device, "+ Add Effect");
-            if (add != null) {
-                add.click();
-                Thread.sleep(500);
-            }
-        }
+    /** Taps the effect's row and reports whether the dialog dismissed itself. */
+    private static boolean tapRow(String title, UiDevice device) throws Exception {
+        UiObject2 row = device.findObject(By.text(title));
+        if (row == null) return false;
+        row.click();
+        Thread.sleep(800);
+        return !dialogOpen(device);
+    }
+
+    private static boolean dialogOpen(UiDevice device) {
+        return device.findObject(By.text("Add Effect")) != null;
     }
 
     /** True when the rack already holds a slot for this effect. */
