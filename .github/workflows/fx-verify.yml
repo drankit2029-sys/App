@@ -216,7 +216,7 @@ jobs:
           arch: x86_64
           profile: Nexus 5X
           disable-animations: true
-          emulator-options: -no-window -no-snapshot -gpu swiftshader_indirect -no-boot-anim -camera-back none
+          emulator-options: -no-window -no-snapshot -gpu swiftshader_indirect -no-boot-anim -camera-back none -memory 3072
           script: |
             adb shell settings put global stay_on_while_plugged_in 3
             # A background launcher ANR freezes the whole display and every
@@ -229,7 +229,7 @@ jobs:
             adb install -r -t "$(find apks -name 'app-debug.apk' | head -1)"
             adb install -r -t "$(find apks -name 'app-debug-androidTest.apk' | head -1)"
             mkdir -p fx-out
-            adb shell am instrument -w -e class com.example.hello.FxUiSweepDeviceTest -e fxEffect "${{ matrix.effect }}" "$(adb shell pm list instrumentation | grep AndroidJUnitRunner | head -1 | sed 's/.*instrumentation://; s/ .*//' | tr -d '\r')" > fx-out/instrumentation.txt 2>&1 || true
+            for attempt in 1 2 3; do adb wait-for-device; adb shell am instrument -w -e class com.example.hello.FxUiSweepDeviceTest -e fxEffect "${{ matrix.effect }}" "$(adb shell pm list instrumentation | grep AndroidJUnitRunner | head -1 | sed 's/.*instrumentation://; s/ .*//' | tr -d '\r')" > fx-out/instrumentation.txt 2>&1; grep -q "OK (" fx-out/instrumentation.txt && break; echo "attempt $attempt did not report OK"; sleep 15; done
             cat fx-out/instrumentation.txt
             adb pull "/sdcard/Android/data/$APP_ID/files/takes/fxverify-${{ matrix.effect }}" fx-out/ || true
             adb pull "/data/local/tmp/fx-${{ matrix.effect }}.mp4" fx-out/ || true
@@ -277,7 +277,7 @@ jobs:
           arch: x86_64
           profile: Nexus 5X
           disable-animations: true
-          emulator-options: -no-window -no-snapshot -gpu swiftshader_indirect -no-boot-anim -camera-back none
+          emulator-options: -no-window -no-snapshot -gpu swiftshader_indirect -no-boot-anim -camera-back none -memory 3072
           script: |
             adb shell settings put global stay_on_while_plugged_in 3
             # A background launcher ANR freezes the whole display and every
@@ -289,7 +289,7 @@ jobs:
             adb install -r -t "$(find apks -name 'app-debug.apk' | head -1)"
             adb install -r -t "$(find apks -name 'app-debug-androidTest.apk' | head -1)"
             mkdir -p fx-formats
-            adb shell am instrument -w -e class com.example.hello.FormatMatrixDeviceTest "$(adb shell pm list instrumentation | grep AndroidJUnitRunner | head -1 | sed 's/.*instrumentation://; s/ .*//' | tr -d '\r')" > fx-formats/instrumentation.txt 2>&1 || true
+            for attempt in 1 2 3; do adb wait-for-device; adb shell am instrument -w -e class com.example.hello.FormatMatrixDeviceTest "$(adb shell pm list instrumentation | grep AndroidJUnitRunner | head -1 | sed 's/.*instrumentation://; s/ .*//' | tr -d '\r')" > fx-formats/instrumentation.txt 2>&1; grep -q "OK (" fx-formats/instrumentation.txt && break; echo "attempt $attempt did not report OK"; sleep 15; done
             cat fx-formats/instrumentation.txt
             adb pull "/sdcard/Android/data/$APP_ID/files/takes/fxverify-formats" fx-formats/ || true
             grep -q "OK (" fx-formats/instrumentation.txt || { echo "instrumentation did not report OK"; exit 1; }
@@ -339,7 +339,7 @@ jobs:
           arch: x86_64
           profile: Nexus 5X
           disable-animations: true
-          emulator-options: -no-window -no-snapshot -gpu swiftshader_indirect -no-boot-anim -camera-back none
+          emulator-options: -no-window -no-snapshot -gpu swiftshader_indirect -no-boot-anim -camera-back none -memory 3072
           script: |
             adb shell settings put global stay_on_while_plugged_in 3
             # A background launcher ANR freezes the whole display and every
@@ -351,7 +351,7 @@ jobs:
             adb install -r -t "$(find apks -name 'app-debug.apk' | head -1)"
             adb install -r -t "$(find apks -name 'app-debug-androidTest.apk' | head -1)"
             mkdir -p smoke
-            adb shell am instrument -w -e class com.example.hello.FxUiSweepDeviceTest -e fxEffect hpf "$(adb shell pm list instrumentation | grep AndroidJUnitRunner | head -1 | sed 's/.*instrumentation://; s/ .*//' | tr -d '\r')" > smoke/instrumentation.txt 2>&1 || true
+            for attempt in 1 2 3; do adb wait-for-device; adb shell am instrument -w -e class com.example.hello.FxUiSweepDeviceTest -e fxEffect hpf "$(adb shell pm list instrumentation | grep AndroidJUnitRunner | head -1 | sed 's/.*instrumentation://; s/ .*//' | tr -d '\r')" > smoke/instrumentation.txt 2>&1; grep -q "OK (" smoke/instrumentation.txt && break; echo "attempt $attempt did not report OK"; sleep 15; done
             cat smoke/instrumentation.txt
             adb pull "/sdcard/Android/data/$APP_ID/files/takes/fxverify-hpf" smoke/ || true
             adb pull "/data/local/tmp/fx-hpf.mp4" smoke/ || true
