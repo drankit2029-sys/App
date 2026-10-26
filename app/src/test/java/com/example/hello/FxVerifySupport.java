@@ -125,10 +125,13 @@ public final class FxVerifySupport {
                     byte[] fmt = new byte[(int) Math.min(size, 40)];
                     r.readFully(fmt);
                     ByteBuffer b = ByteBuffer.wrap(fmt).order(ByteOrder.LITTLE_ENDIAN);
-                    format = b.getShort() & 0xFFFF;
-                    channels = b.getShort() & 0xFFFF;
-                    sampleRate = b.getInt();
-                    bits = b.getShort() & 0xFFFF;
+                    // Absolute offsets: the buffer position walks as fields are
+                    // read, and bitsPerSample lives at 14 behind byteRate and
+                    // blockAlign.
+                    format = b.getShort(0) & 0xFFFF;
+                    channels = b.getShort(2) & 0xFFFF;
+                    sampleRate = b.getInt(4);
+                    bits = b.getShort(14) & 0xFFFF;
                 } else if ("data".equals(tag)) {
                     dataStart = pos + 8;
                     dataBytes = Math.min(size, len - dataStart);

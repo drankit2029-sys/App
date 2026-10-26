@@ -134,7 +134,16 @@ jobs:
           FX_EFFECT: ${{ matrix.effect }}
         run: |
           chmod +x ./gradlew
-          ./gradlew :app:testDebugUnitTest --tests '*FxParamMatrixDumpTest' --stacktrace
+          # Robolectric fetches its android-all jar at test time, outside the
+          # Gradle cache; retry as the repo's other test steps do.
+          for i in 1 2 3; do
+            if ./gradlew :app:testDebugUnitTest --tests '*FxParamMatrixDumpTest' --stacktrace; then
+              echo "shard $FX_EFFECT passed on attempt $i"; exit 0
+            fi
+            echo "shard $FX_EFFECT failed on attempt $i; retrying"
+            sleep 15
+          done
+          exit 1
       - name: Measure the renders
         run: |
           python3 -m pip install --quiet numpy
