@@ -111,19 +111,51 @@ def main() -> int:
     # ---- DSP matrix -----------------------------------------------------------
     lines.append("## Parameter matrix (off-device DSP)")
     lines.append("")
-    lines.append("| effect | params | cases | hard fail | expectation "
-                 "not met | single-point ok | weak | no change | series "
-                 "monotone | anchors |")
-    lines.append("|---|---|---|---|---|---|---|---|---|---|")
+    lines.append("| effect | params | cases | hard fail | blow-up | "
+                 "non-finite | expectation not met | single-point ok | weak | "
+                 "findings | series monotone | anchors |")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|")
     total_fails = 0
     for effect in sorted(by_effect):
         s = by_effect[effect]
         total_fails += s["fails"]
         lines.append(
             f"| {effect} | {s.get('params_covered', 0)} | {s['cases']} | "
-            f"{s['fails']} | {s['expectation_not_met']} | {s['single_point_ok']} | "
-            f"{s['weak']} | {s['no_change']} | {s['series_ok']}/{s['series_total']} | "
+            f"{s['fails']} | {s.get('blow_ups', 0)} | {s.get('nonfinite', 0)} | "
+            f"{s['expectation_not_met']} | {s['single_point_ok']} | "
+            f"{s['weak']} | {s.get('findings', 0)} | "
+            f"{s['series_ok']}/{s['series_total']} | "
             f"{s['anchors_ok']}/{s['anchors_total']} |")
+    lines.append("")
+
+    # ---- DSP findings ---------------------------------------------------------
+    divergent = [s for s in by_effect.values()
+                 if s.get("blow_ups") or s.get("nonfinite")]
+    lines.append("### DSP findings worth reading")
+    if divergent:
+        lines.append("")
+        lines.append("These renders went numerically unstable (divergence or "
+                     "non-finite samples) at a setting inside the control's own range:")
+        for s in sorted(divergent, key=lambda s: s["effect"]):
+            lines.append(f"- **{s['effect']}**: {s.get('blow_ups', 0)} divergent, "
+                         f"{s.get('nonfinite', 0)} with non-finite samples")
+    else:
+        lines.append("")
+        lines.append("No divergent or non-finite renders.")
+    noisy = sorted((s for s in by_effect.values()
+                    if s.get("findings") and not (s.get("blow_ups") or s.get("nonfinite"))),
+                   key=lambda s: -s["findings"])
+    if noisy:
+        lines.append("")
+        lines.append("Effects whose extremes produce a finding (silence or over-scale "
+                     "output), all of which are plausible at the end of a control's range "
+                     "and are listed so they can be read rather than assumed:")
+        lines.append("")
+        lines.append("| effect | findings | silent | over-scale |")
+        lines.append("|---|---|---|---|")
+        for s in noisy[:15]:
+            lines.append(f"| {s['effect']} | {s['findings']} | {s.get('silent', 0)} | "
+                         f"{s.get('above_full_scale', 0)} |")
     lines.append("")
 
     # ---- anchors --------------------------------------------------------------

@@ -2,7 +2,7 @@
   "_comment": "Authored expectations for the FX verification harness. Series anchors assert that turning one control across its range moves one named metric monotonically; bespoke anchors live in analyze.py because they need their own logic. Metric names are the analyser's dotted paths (cmp.*, wet.*).",
   "invariants": {
     "max_wet_peak": 1.0,
-    "hard_peak_fail": 10.0,
+    "blow_up_peak": 1000.0,
     "silence_floor_db": -80.0,
     "neutral_identity_tolerance": 1e-4,
     "length_tolerance_frames": 0

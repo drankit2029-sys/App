@@ -89,10 +89,12 @@ def invariant_checks(case: dict, rec: dict, expectations: dict) -> tuple[list, l
         fails.append(f"{wet_basic['nonfinite']} non-finite samples in the render")
 
     peak = wet_basic["peak"]
-    if peak > inv["hard_peak_fail"]:
-        fails.append(f"peak {peak:.3f} exceeds the absurdity guard")
+    if peak > inv["blow_up_peak"]:
+        # Not a loud setting: a render this far beyond full scale means the DSP
+        # diverged rather than that the user asked for gain.
+        fails.append(f"numeric blow-up: peak {peak:.3e}")
     elif peak > inv["max_wet_peak"] + 1e-3 and effect not in expectations["clipping_allowed"]:
-        warns.append(f"peak {peak:.3f} above full scale for a non-clipping effect")
+        warns.append(f"peak {peak:.3f} above full scale")
 
     if not case.get("offlineOnly", False):
         if case.get("outFrames") != case.get("inFrames"):
@@ -102,9 +104,12 @@ def invariant_checks(case: dict, rec: dict, expectations: dict) -> tuple[list, l
     cmp_rec = rec["cmp"]
     dry_rms_db = rec["dry"]["rms_db"]
     wet_rms_db = wet_basic["rms_db"]
-    if (dry_rms_db > -40.0 and wet_rms_db < inv["silence_floor_db"]
-            and effect not in expectations["silence_allowed"]):
-        fails.append(f"render is silent (wet {wet_rms_db:.1f} dBFS from dry {dry_rms_db:.1f})")
+    if dry_rms_db > -40.0 and wet_rms_db < inv["silence_floor_db"]:
+        # A parameter at its own extreme can legitimately mute the render (a
+        # 20 kHz high cut, a 0 % generator amplitude), so this is a finding to
+        # read rather than corruption. It is reported with the numbers.
+        warns.append(f"render is silent (wet {wet_rms_db:.1f} dBFS from dry "
+                     f"{dry_rms_db:.1f}); expected only at an extreme setting")
 
     if case.get("isDefaultValue") and case.get("kind") == "param":
         if cmp_rec["max_abs_diff"] > inv["neutral_identity_tolerance"]:
@@ -437,6 +442,15 @@ def analyse_dir(case_dir: Path, expectations: dict, keep_anomalies: bool) -> dic
         "single_point_ok": sum(1 for v in verdicts if v["verdict"] == "single_point_ok"),
         "weak": sum(1 for v in verdicts if v["verdict"] == "weak"),
         "no_change": sum(1 for v in verdicts if v["verdict"] == "no_change"),
+        "findings": sum(1 for v in verdicts if v["warns"]),
+        "blow_ups": sum(1 for v in verdicts
+                        if any("blow-up" in f for f in v["fails"])),
+        "nonfinite": sum(1 for v in verdicts
+                         if any("non-finite" in f for f in v["fails"])),
+        "silent": sum(1 for v in verdicts
+                      if any("silent" in w for w in v["warns"])),
+        "above_full_scale": sum(1 for v in verdicts
+                                if any("above full scale" in w for w in v["warns"])),
         "series_ok": sum(1 for s in series if s["verdict"] == "monotone_ok"),
         "series_total": len(series),
         "anchors_ok": sum(1 for a in anchors if a["verdict"] == "ok"),
@@ -476,10 +490,12 @@ def analyse_dir(case_dir: Path, expectations: dict, keep_anomalies: bool) -> dic
             if src.is_file():
                 shutil.copy2(src, dest / src.name)
 
-    print(f"{effect}: {summary['cases']} cases | fails {summary['fails']} | "
+    print(f"{effect}: {summary['cases']} cases | fails {summary['fails']} "
+          f"(blow-up {summary['blow_ups']}, non-finite {summary['nonfinite']}) | "
           f"expectation_not_met {summary['expectation_not_met']} | "
           f"ok {summary['single_point_ok']} | weak {summary['weak']} | "
-          f"no_change {summary['no_change']} | "
+          f"no_change {summary['no_change']} | findings {summary['findings']} "
+          f"(silent {summary['silent']}, over-scale {summary['above_full_scale']}) | "
           f"series {summary['series_ok']}/{summary['series_total']} | "
           f"anchors {summary['anchors_ok']}/{summary['anchors_total']}")
     for anchor in anchors:

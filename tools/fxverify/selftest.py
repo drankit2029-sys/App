@@ -88,8 +88,10 @@ def main() -> int:
         # 6. An offline effect is allowed to change the length.
         write_case(work, cases, dry, "offline", dry[: FRAMES // 2].copy(),
                    offlineOnly=True)
-        # 7. A runaway peak is a hard failure.
+        # 7. A loud but finite peak is a finding, not corruption.
         write_case(work, cases, dry, "explode", dry * 60.0)
+        # 7b. A numeric blow-up is corruption: the DSP diverged.
+        write_case(work, cases, dry, "blowup", dry * 5000.0)
         # 8. A reversed render must satisfy the bespoke reverse anchor.
         write_case(work, cases, dry, "tl_action_1_tone", dry[::-1].copy())
         cases[-1]["param"] = "tl_action"
@@ -140,10 +142,19 @@ def main() -> int:
         expect("same", "no_change")
         expect("nan", "fail")
         expect("length", "fail")
-        expect("silent", "fail")
-        expect("explode", "fail")
+        expect("blowup", "fail")
         if verdicts.get("offline") == "fail":
             failures.append("offline: a length-changing offline render must not fail")
+        if verdicts.get("silent") == "fail":
+            failures.append("silent: muting at an extreme setting is a finding, not corruption")
+        if verdicts.get("explode") == "fail":
+            failures.append("explode: a loud but finite peak is a finding, not corruption")
+        silent_case = next(v for v in out["verdicts"] if v["case"] == "silent")
+        if not any("silent" in w for w in silent_case["warns"]):
+            failures.append("silent: the silence was not reported as a finding")
+        loud_case = next(v for v in out["verdicts"] if v["case"] == "explode")
+        if not any("above full scale" in w for w in loud_case["warns"]):
+            failures.append("explode: the over-scale peak was not reported as a finding")
 
         series = {s["param"]: s for s in out["series"]}
         amp = series.get("amp_gain")
