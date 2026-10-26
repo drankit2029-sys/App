@@ -221,8 +221,11 @@ jobs:
             EFFECT="${{ matrix.effect }}"
             adb shell settings put global stay_on_while_plugged_in 3
             adb shell input keyevent 82 || true
-            adb install -r -t apks/app-debug.apk
-            adb install -r -t apks/app-debug-androidTest.apk
+            APP_APK=$(find apks -name 'app-debug.apk' | head -1)
+            TEST_APK=$(find apks -name 'app-debug-androidTest.apk' | head -1)
+            echo "installing $APP_APK and $TEST_APK"
+            adb install -r -t "$APP_APK"
+            adb install -r -t "$TEST_APK"
             PKG=$(adb shell pm list instrumentation | grep AndroidJUnitRunner | head -1 | sed 's/.*instrumentation://; s/ .*//' | tr -d '\r')
             echo "instrumentation runner: $PKG"
             mkdir -p fx-out
@@ -277,8 +280,11 @@ jobs:
           emulator-options: -no-window -no-snapshot -gpu swiftshader_indirect -no-boot-anim -camera-back none
           script: |
             adb shell settings put global stay_on_while_plugged_in 3
-            adb install -r -t apks/app-debug.apk
-            adb install -r -t apks/app-debug-androidTest.apk
+            APP_APK=$(find apks -name 'app-debug.apk' | head -1)
+            TEST_APK=$(find apks -name 'app-debug-androidTest.apk' | head -1)
+            echo "installing $APP_APK and $TEST_APK"
+            adb install -r -t "$APP_APK"
+            adb install -r -t "$TEST_APK"
             PKG=$(adb shell pm list instrumentation | grep AndroidJUnitRunner | head -1 | sed 's/.*instrumentation://; s/ .*//' | tr -d '\r')
             mkdir -p fx-formats
             adb shell am instrument -w -e class com.example.hello.FormatMatrixDeviceTest "$PKG" > fx-formats/instrumentation.txt 2>&1 || true
@@ -334,8 +340,11 @@ jobs:
           emulator-options: -no-window -no-snapshot -gpu swiftshader_indirect -no-boot-anim -camera-back none
           script: |
             adb shell settings put global stay_on_while_plugged_in 3
-            adb install -r -t apks/app-debug.apk
-            adb install -r -t apks/app-debug-androidTest.apk
+            APP_APK=$(find apks -name 'app-debug.apk' | head -1)
+            TEST_APK=$(find apks -name 'app-debug-androidTest.apk' | head -1)
+            echo "installing $APP_APK and $TEST_APK"
+            adb install -r -t "$APP_APK"
+            adb install -r -t "$TEST_APK"
             PKG=$(adb shell pm list instrumentation | grep AndroidJUnitRunner | head -1 | sed 's/.*instrumentation://; s/ .*//' | tr -d '\r')
             mkdir -p smoke
             adb shell am instrument -w -e class com.example.hello.FxUiSweepDeviceTest -e fxEffect hpf "$PKG" > smoke/instrumentation.txt 2>&1 || true
