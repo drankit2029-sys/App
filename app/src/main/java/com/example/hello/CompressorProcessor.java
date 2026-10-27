@@ -114,9 +114,13 @@ final class CompressorProcessor extends AudioProcessor {
 
             float targetGain;
             if (upward.getBoolean()) {
+                // Upward (expand) mode pulls below-threshold material down:
+                // expansion means a wider dynamic range, so the gain must be
+                // negative here. The previous sign boosted quiet passages by
+                // the full ratio (up to +40 dB) and blew up the render.
                 if (over < 0f) {
                     float slope = 1f - 1f / Math.max(1.0001f, r);
-                    targetGain = -slope * over;
+                    targetGain = Math.max(-60f, slope * over);
                 } else {
                     targetGain = 0f;
                 }

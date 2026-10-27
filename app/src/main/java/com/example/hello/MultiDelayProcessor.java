@@ -105,6 +105,7 @@ final class MultiDelayProcessor extends AudioProcessor {
             float inR = ch > 1 ? buf[base + 1] : inL;
             float wetL = 0f;
             float wetR = 0f;
+            float ampSum = 0f;
             for (int k = 1; k <= taps; k++) {
                 int offset;
                 float amp;
@@ -121,6 +122,7 @@ final class MultiDelayProcessor extends AudioProcessor {
                     offset = delayFrames * k;
                     amp = (float) Math.pow(levelLin, (taps - k + 1));
                 }
+                ampSum += Math.abs(amp);
                 if (offset >= maxFrames) offset = maxFrames - 1;
                 int pos = (writePos - offset + maxFrames) % maxFrames;
                 wetL += delayLine[pos * ch] * amp;
@@ -136,11 +138,29 @@ final class MultiDelayProcessor extends AudioProcessor {
 
             float outL = inL + wetL;
             float outR = inR + wetR;
+            if (!Float.isFinite(outL) || Math.abs(outL) > 1e4f) {
+                outL = inL;
+                wetL = 0f;
+            }
+            if (!Float.isFinite(outR) || Math.abs(outR) > 1e4f) {
+                outR = inR;
+                wetR = 0f;
+            }
             buf[base] = outL;
             if (ch > 1) buf[base + 1] = outR;
 
-            delayLine[writePos * ch] = outL;
-            if (ch > 1) delayLine[writePos * ch + 1] = outR;
+            // The delay line is the feedback path: its loop gain is the sum of
+            // the tap amplitudes. With a level above 0 dB and many echoes that
+            // sum exceeds unity and the repeats compound without bound, so the
+            // stored signal is attenuated to keep the loop stable while the
+            // audible taps keep the requested level.
+            float regen = ampSum > 0.9f ? 0.9f / ampSum : 1f;
+            float storeL = inL + wetL * regen;
+            float storeR = inR + wetR * regen;
+            delayLine[writePos * ch] = Float.isFinite(storeL) ? storeL : 0f;
+            if (ch > 1) {
+                delayLine[writePos * ch + 1] = Float.isFinite(storeR) ? storeR : 0f;
+            }
             writePos = (writePos + 1) % (delayLine.length / ch);
         }
     }

@@ -115,6 +115,11 @@ final class ChorusFlangerProcessor extends AudioProcessor {
         float wet = mix.getCurrentRaw() / 100f;
         float dry = 1f - wet;
         double fb = (modeIdx == 2) ? 0.0 : (feedback.getCurrentRaw() / 100.0);
+        // The ring path feeds back half of the recursive term on top of the
+        // recursive feedback itself, so a coefficient near 1 compounds past
+        // unity and the processor diverges (non-finite samples). Cap the
+        // coefficient where the loop stays stable and keep the state finite.
+        fb = Math.max(-0.7, Math.min(0.7, fb));
 
         for (int f = 0; f < frames; f++) {
             for (int c = 0; c < ch; c++) {
@@ -128,6 +133,11 @@ final class ChorusFlangerProcessor extends AudioProcessor {
                 while (readPos >= size) readPos -= size;
                 float delayed = Dsp.hermiteInterp(ring[c], mask, (float) readPos);
                 float wetSample = delayed + feedbackState[c] * (float) fb;
+                if (!Float.isFinite(wetSample) || Math.abs(wetSample) > 1e4f) {
+                    // Never let a bad state poison the rest of the render.
+                    feedbackState[c] = 0f;
+                    wetSample = delayed;
+                }
                 feedbackState[c] = wetSample;
                 buf[idx] = in * dry + wetSample * wet;
                 ring[c][writePos & mask] = in + wetSample * (float) fb * 0.5f;

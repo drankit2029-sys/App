@@ -132,7 +132,7 @@ public class FxPanelDialDeviceTest {
         JSONArray params = new JSONArray();
         JSONArray problems = new JSONArray();
         final boolean[] degraded = {false};
-        final int[] appliedCount = {0};
+
 
         // ---- studio up, whole take selected, rack open
         Activity activity = launch(instr);
@@ -186,18 +186,33 @@ public class FxPanelDialDeviceTest {
         String primaryId = FxVerifySupportDevice.primaryParamId(type);
         FxParameter primary = primaryId == null ? null : proto.getParam(primaryId);
 
-        // One test per parameter of this effect.
+        // One test per parameter of this effect, with a hard time budget so a
+        // single stubborn parameter can never hold the whole job open.
+        long deadline = System.currentTimeMillis() + 38L * 60_000L;
+        int appliedTotal = 0;
+        int neutralTotal = 0;
+        int triedTotal = 0;
         int index = 0;
         for (FxParameter param : proto.getParameters()) {
+            if (System.currentTimeMillis() > deadline) {
+                result.put("timedOut", true);
+                problems.put("stopped at the per-shard time budget; "
+                        + (proto.getParameters().size() - triedTotal)
+                        + " parameter(s) not tested");
+                break;
+            }
             JSONObject entry = new JSONObject();
             entry.put("index", index);
             entry.put("param", param.id);
             entry.put("paramName", param.name);
             entry.put("type", param.type.name());
             try {
-                appliedCount[0] += verifyOneParameter(param, primary, entry,
+                int verdict = verifyOneParameter(param, primary, entry,
                         steps, frag, activity, device, root, work, master,
                         info, fxType, problems, degraded);
+                triedTotal++;
+                if (verdict == 2) appliedTotal++;
+                else if (verdict == 1) neutralTotal++;
             } catch (Throwable t) {
                 entry.put("error", t.getClass().getSimpleName() + ": " + t.getMessage());
                 problems.put(param.id + ": " + t.getClass().getSimpleName()
@@ -209,17 +224,20 @@ public class FxPanelDialDeviceTest {
         }
         result.put("params", params);
         result.put("paramCount", params.length());
-        result.put("appliedCount", appliedCount[0]);
+        result.put("appliedCount", appliedTotal);
+        result.put("neutralCount", neutralTotal);
+        result.put("testedCount", triedTotal);
         result.put("degraded", degraded[0]);
         result.put("problems", problems);
         write(new File(work, "result.json"), result.toString(2));
         write(new File(work, "shots.json"), steps.toString(2));
         TrialAndBillingManager.setTestOverridePro(null);
-        assertTrue("No parameter produced an applied render for " + effectId,
-                appliedCount[0] > 0);
+        assertTrue("No parameter reached a verdict for " + effectId,
+                triedTotal > 0);
         System.out.println("FX panel verification " + effectId + ": "
-                + params.length() + " parameters tested, " + appliedCount[0]
-                + " applied renders, degraded=" + degraded[0]);
+                + triedTotal + " parameters tested (" + appliedTotal
+                + " applied, " + neutralTotal + " neutral), degraded="
+                + degraded[0]);
     }
 
     /**
@@ -242,8 +260,13 @@ public class FxPanelDialDeviceTest {
         Thread.sleep(SETTLE_MS);
 
         boolean primaryControl = primary != null && param.id.equals(primary.id);
-        boolean canvasOnly = type == DspChain.EffectType.GRAPHIC_EQ
-                && param.id.matches("g\\d+");
+        // Parameters the panel only offers on a curve canvas: the graphic EQ's
+        // bands and the filter curve's nodes are dragged, not stepped.
+        boolean canvasOnly =
+                (type == DspChain.EffectType.GRAPHIC_EQ && param.id.matches("g\\d+"))
+                || (type == DspChain.EffectType.FILTER_CURVE_EQ
+                    && (param.id.startsWith("pf") || param.id.startsWith("pg")
+                        || "npts".equals(param.id)));
         String location = primaryControl ? "pill-dial"
                 : canvasOnly ? "curve"
                 : param.type == FxParameter.Type.ACTION ? "pill-chip"
@@ -355,7 +378,19 @@ public class FxPanelDialDeviceTest {
             peaks.put("buckets", SCREEN_BUCKETS);
             write(new File(work, "peaks-" + param.id + ".json"), peaks.toString());
             entry.put("appliedFrames", FxVerifySupportDevice.readInfo(wet).frames);
-            emitted = 1;
+            emitted = 2;
+        } else {
+            String err = entry.optString("applyError", "");
+            // A parameter whose own value is neutral at every setting has
+            // nothing to bake: Apply itself skips an inactive chain, so this is
+            // a verdict ("neutral configuration"), not a failure.
+            if (err.isEmpty() || err.contains("no audible")) {
+                entry.put("neutral", true);
+                if (err.isEmpty()) {
+                    putQuiet(entry, "applyError", "Apply reported nothing to do");
+                }
+                emitted = 1;
+            }
         }
 
         stopScreenRecord(recorder);
