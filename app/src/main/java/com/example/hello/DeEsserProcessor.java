@@ -29,7 +29,6 @@ final class DeEsserProcessor extends AudioProcessor {
     private int channels = 2;
     private BiquadFilter band = new BiquadFilter();
     private BiquadFilter splitLow = new BiquadFilter();
-    private BiquadFilter splitHigh = new BiquadFilter();
     private float reductionDb = 0f;
 
     DeEsserProcessor() {
@@ -66,7 +65,6 @@ final class DeEsserProcessor extends AudioProcessor {
     public void reset() {
         band.reset();
         splitLow.reset();
-        splitHigh.reset();
         reductionDb = 0f;
     }
 
@@ -81,8 +79,6 @@ final class DeEsserProcessor extends AudioProcessor {
         band.setSections(new float[][]{Dsp.rbjBandPass(sampleRate, f, qq)},
                 channels);
         splitLow.setSections(new float[][]{Dsp.rbjLowPass(sampleRate, f, 0.7071)},
-                channels);
-        splitHigh.setSections(new float[][]{Dsp.rbjHighPass(sampleRate, f, 0.7071)},
                 channels);
     }
 
@@ -104,11 +100,8 @@ final class DeEsserProcessor extends AudioProcessor {
             band.process(side, n, ch);
 
             float[] lowBand = new float[n * ch];
-            float[] highBand = new float[n * ch];
             System.arraycopy(buf, offset * ch, lowBand, 0, lowBand.length);
-            System.arraycopy(buf, offset * ch, highBand, 0, highBand.length);
             splitLow.process(lowBand, n, ch);
-            splitHigh.process(highBand, n, ch);
 
             double fullEnergy = 0;
             double bandEnergy = 0;
@@ -138,8 +131,9 @@ final class DeEsserProcessor extends AudioProcessor {
                     } else if (wideband) {
                         buf[idx + c] *= g;
                     } else {
-                        buf[idx + c] = lowBand[f * ch + c]
-                                + highBand[f * ch + c] * g;
+                        float low = lowBand[f * ch + c];
+                        float high = buf[idx + c] - low;
+                        buf[idx + c] = low + high * g;
                     }
                 }
             }

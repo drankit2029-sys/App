@@ -77,9 +77,11 @@ final class ClipFixProcessor extends AudioProcessor {
                 // inside it the signal is flat, so an inner difference would
                 // report a zero slope and the spline would rebuild the very
                 // plateau it is meant to replace.
+                int p0 = Math.max(0, start - 3);
+                int p1 = Math.min(frames - 1, end + 1);
                 float d0 = (buf[(start - 1) * ch + c]
-                        - buf[(start - 3) * ch + c]) * 0.5f;
-                float d1 = (buf[(end + 1) * ch + c]
+                        - buf[p0 * ch + c]) * 0.5f;
+                float d1 = (buf[p1 * ch + c]
                         - buf[end * ch + c]) * 0.5f;
                 int width = end - start;
                 for (int i = start; i < end; i++) {

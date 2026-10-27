@@ -72,6 +72,7 @@ public class StudioFragment extends Fragment {
     private TextView btnCutDelete;
     private TextView btnDspFx;
     private TextView btnEditUndo;
+    private TextView btnEditRedo;
 
     // Inline FX Window views (replaces telePanel when open)
     private View fxPanel;
@@ -81,6 +82,7 @@ public class StudioFragment extends Fragment {
     private android.widget.LinearLayout fxListContainer;
     private TextView fxHint;
     private boolean fxPanelOpen = false;
+    private boolean fxEverOpened = false;
     private boolean teleWasVisibleBeforeFx = true;
     /**
      * The region the FX rack commits to, frozen when the rack opens.
@@ -409,6 +411,7 @@ public class StudioFragment extends Fragment {
         btnCutDelete = v.findViewById(R.id.btnCutDelete);
         btnDspFx = v.findViewById(R.id.btnDspFx);
         btnEditUndo = v.findViewById(R.id.btnEditUndo);
+        btnEditRedo = v.findViewById(R.id.btnEditRedo);
 
         fxPanel = v.findViewById(R.id.fxPanel);
         fxTitle = v.findViewById(R.id.fxTitle);
@@ -534,13 +537,21 @@ public class StudioFragment extends Fragment {
             });
         }
 
-        // 6) "Undo" Button
+        // 6) "Undo" & "Redo" Buttons
         if (btnEditUndo != null) {
             PressAnim.applySoft(btnEditUndo, 0.95f);
             btnEditUndo.setOnClickListener(view -> {
                 if (replaceModeArmed || fxPanelOpen) return;
                 if (!ensurePausedForEditing()) return;
                 performStudioUndo();
+            });
+        }
+        if (btnEditRedo != null) {
+            PressAnim.applySoft(btnEditRedo, 0.95f);
+            btnEditRedo.setOnClickListener(view -> {
+                if (replaceModeArmed || fxPanelOpen) return;
+                if (!ensurePausedForEditing()) return;
+                performStudioRedo();
             });
         }
 
@@ -740,6 +751,7 @@ public class StudioFragment extends Fragment {
     public void onSaveInstanceState(@NonNull Bundle outState) {
         super.onSaveInstanceState(outState);
         outState.putBoolean("fxPanelOpen", fxPanelOpen);
+        outState.putBoolean("fxEverOpened", fxEverOpened);
         outState.putBoolean("replaceModeArmed", replaceModeArmed);
         outState.putBoolean("inSelectAndReplaceEditor", inSelectAndReplaceEditor);
         outState.putBoolean("userScrolledWhilePaused", userScrolledWhilePaused);
@@ -767,6 +779,7 @@ public class StudioFragment extends Fragment {
     private void restoreEditingMode(@Nullable Bundle state) {
         if (state == null || waveform == null) return;
         boolean fxWasOpen = state.getBoolean("fxPanelOpen", false);
+        fxEverOpened = state.getBoolean("fxEverOpened", false) || fxWasOpen;
         boolean selActive = state.getBoolean("selActive", false);
         float selStart = state.getFloat("selStart", 0f);
         float selEnd = state.getFloat("selEnd", 1f);
@@ -3178,9 +3191,9 @@ public class StudioFragment extends Fragment {
             setChipIconAndTint(btnDspFx, R.drawable.ic_edit_fx, col);
         }
 
-        // 6) Undo Button: disabled while Replace mode is on.
+        // 6) Undo & Redo Buttons: disabled while Replace mode is on.
+        EditEngine.UndoJournal uj = activeUndoJournal();
         if (btnEditUndo != null) {
-            EditEngine.UndoJournal uj = activeUndoJournal();
             boolean canUndo = othersEnabled && uj != null && uj.canUndo();
             btnEditUndo.setEnabled(canUndo);
             btnEditUndo.setClickable(canUndo);
@@ -3188,6 +3201,15 @@ public class StudioFragment extends Fragment {
             int col = canUndo ? 0xFFF2F4F7 : 0xFF5D6672;
             btnEditUndo.setTextColor(col);
             setChipIconAndTint(btnEditUndo, R.drawable.ic_edit_undo, col);
+        }
+        if (btnEditRedo != null) {
+            boolean canRedo = othersEnabled && uj != null && uj.canRedo();
+            btnEditRedo.setEnabled(canRedo);
+            btnEditRedo.setClickable(canRedo);
+            btnEditRedo.setAlpha(canRedo ? 1f : 0.35f);
+            int col = canRedo ? 0xFFF2F4F7 : 0xFF5D6672;
+            btnEditRedo.setTextColor(col);
+            setChipIconAndTint(btnEditRedo, R.drawable.ic_edit_redo, col);
         }
 
         if (hintText != null && canEdit) {
@@ -3293,12 +3315,13 @@ public class StudioFragment extends Fragment {
             // snapshot itself is still taken by crop/delete AFTER they
             // validate the range, so a rejected edit leaves no orphan.
             undoRecorded = uj == null || uj.wouldRecord(raw);
-            if (undoRecorded) waveform.recordUndoPeaks();
             if (isTrim) {
                 EditEngine.cropToSelection(raw, start, end, uj);
+                if (undoRecorded) waveform.recordUndoPeaks();
                 waveform.cropToSelectionBuckets();
             } else {
                 EditEngine.deleteSelection(raw, start, end, uj);
+                if (undoRecorded) waveform.recordUndoPeaks();
                 waveform.deleteSelectionBuckets();
             }
             dspBakedToRaw = false;
@@ -3319,11 +3342,9 @@ public class StudioFragment extends Fragment {
             OptionsSheet.showTopPopup(requireContext(),
                     isTrim ? "Audio trimmed" : "Selection deleted");
         } catch (IllegalArgumentException iae) {
-            if (undoRecorded) waveform.popUndoPeaks();
             Toast.makeText(requireContext(), iae.getMessage(),
                     Toast.LENGTH_SHORT).show();
         } catch (Exception e) {
-            if (undoRecorded) waveform.popUndoPeaks();
             Toast.makeText(requireContext(), "Edit failed",
                     Toast.LENGTH_SHORT).show();
         }
@@ -3361,7 +3382,42 @@ public class StudioFragment extends Fragment {
                 if (timerText != null) {
                     timerText.setText(formatTimer(engine.durationMs()));
                 }
-                OptionsSheet.showTopPopup(requireContext(), "Edit undone");
+            }
+        } catch (Exception ignored) {}
+        paint();
+    }
+
+    private void performStudioRedo() {
+        if (!isAdded()) return;
+        stopStudioPreview();
+        File raw = engine.rawFile;
+        EditEngine.UndoJournal uj = activeUndoJournal();
+        if (raw == null || uj == null || !uj.canRedo()) return;
+        try {
+            if (uj.redo(raw)) {
+                dspBakedToRaw = false;
+                dspSubRangeBaked = false;
+                lastEditWasSubRangeBake = false;
+                userScrolledWhilePaused = false;
+                engine.abortStreaming();
+                engine.dataBytes = RecordingEngine.payloadBytesOf(raw);
+                long total = engine.totalFrames();
+                engine.seekCursorFrame(total);
+                if (waveform != null) {
+                    if (!waveform.popRedoPeaks()) {
+                        waveform.loadFromFloatWavTwentyHz(raw, () -> {
+                            waveform.syncFramesPerBar(engine.totalFrames());
+                            refreshZoomValue();
+                        });
+                    } else {
+                        waveform.syncFramesPerBar(total);
+                        waveform.setPlayheadFraction(1f);
+                        refreshZoomValue();
+                    }
+                }
+                if (timerText != null) {
+                    timerText.setText(formatTimer(engine.durationMs()));
+                }
             }
         } catch (Exception ignored) {}
         paint();
@@ -3393,6 +3449,7 @@ public class StudioFragment extends Fragment {
         }
         fxPanelOpen = open;
         if (open) {
+            fxEverOpened = true;
             teleWasVisibleBeforeFx =
                     telePanel.getVisibility() == View.VISIBLE;
             // Freeze the apply target: the selection at the moment the rack
@@ -3644,7 +3701,21 @@ public class StudioFragment extends Fragment {
      */
     private void syncFxBakeRequired() {
         if (engine == null) return;
+        boolean userConfiguredOrOpenedFx = fxPanelOpen || fxEverOpened;
+        if (!userConfiguredOrOpenedFx && isAdded()) {
+            try {
+                android.content.SharedPreferences sp = requireContext()
+                        .getSharedPreferences("takeone", Context.MODE_PRIVATE);
+                userConfiguredOrOpenedFx = sp.contains("dsp_slots_json")
+                        || sp.contains("dsp_mode")
+                        || sp.contains("dsp_noise")
+                        || sp.contains("dsp_deess")
+                        || sp.contains("dsp_comp")
+                        || sp.contains("dsp_hpf");
+            } catch (Exception ignored) {}
+        }
         engine.setFxBakeRequired(!dspBakedToRaw
+                && userConfiguredOrOpenedFx
                 && dspConfig != null && dspConfig.isActive());
     }
 
@@ -4482,13 +4553,15 @@ public class StudioFragment extends Fragment {
                     new android.graphics.drawable.ColorDrawable(0x00000000));
             window.setDimAmount(0.62f);
             android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
-            int dialogWidth = Math.round(dm.widthPixels * 0.94f);
-            int maxHeight = Math.round(dm.heightPixels * 0.84f);
+            int dialogWidth = Math.min(Math.round(dm.widthPixels * 0.86f),
+                    Math.round(350 * density));
+            int maxHeight = Math.round(dm.heightPixels * 0.82f);
             root.measure(View.MeasureSpec.makeMeasureSpec(
                             dialogWidth, View.MeasureSpec.EXACTLY),
                     View.MeasureSpec.makeMeasureSpec(
                             maxHeight, View.MeasureSpec.AT_MOST));
             int dialogHeight = Math.min(maxHeight, root.getMeasuredHeight());
+            window.setGravity(android.view.Gravity.CENTER);
             window.setLayout(dialogWidth, dialogHeight);
         }
     }
@@ -5593,18 +5666,27 @@ public class StudioFragment extends Fragment {
                     chain.offlineProcessors();
             if (!offline.isEmpty()) {
                 long regionEnd = end;
+                boolean firstOffline = true;
                 for (AudioProcessor proc : offline) {
+                    FormatConverter.WavInfo curInfo = FormatConverter.readFloatWav(raw);
+                    long curTotalBefore = curInfo.dataBytes / 4 / Math.max(1, curInfo.channels);
                     long newTotal = EditEngine.applyLengthChangingEffectToRange(
-                            raw, start, regionEnd, proc, uj);
+                            raw, start, regionEnd, proc, firstOffline ? uj : null);
                     if (newTotal < 0) {
-                        waveform.popUndoPeaks();
+                        if (firstOffline) {
+                            waveform.discardTopUndoPeaks();
+                        } else if (uj != null && uj.canUndo()) {
+                            uj.undo(raw);
+                            waveform.discardTopUndoPeaks();
+                        }
                         peaksPushed = false;
                         Toast.makeText(requireContext(),
                                 "This effect could not be applied here",
                                 Toast.LENGTH_SHORT).show();
                         return false;
                     }
-                    regionEnd = start + (newTotal - (totalFrames - regionEnd));
+                    firstOffline = false;
+                    regionEnd = start + (newTotal - (curTotalBefore - regionEnd));
                 }
                 // The offline pass rewrote the region: run the remaining
                 // in-place processors over the new boundaries.
@@ -5642,7 +5724,7 @@ public class StudioFragment extends Fragment {
             boolean snapshotRecorded =
                     EditEngine.applyDspToRange(raw, start, end, chain, uj);
             if (!snapshotRecorded) {
-                waveform.popUndoPeaks();
+                waveform.discardTopUndoPeaks();
                 peaksPushed = false;
             }
             lastEditWasSubRangeBake = false;
@@ -5678,7 +5760,7 @@ public class StudioFragment extends Fragment {
             waveform.clearSelection();
             OptionsSheet.showTopPopup(requireContext(), "Effects applied");
         } catch (Exception e) {
-            if (peaksPushed && waveform != null) waveform.popUndoPeaks();
+            if (peaksPushed && waveform != null) waveform.discardTopUndoPeaks();
             Toast.makeText(requireContext(), "FX failed",
                     Toast.LENGTH_SHORT).show();
             return false;

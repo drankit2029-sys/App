@@ -139,8 +139,10 @@ public final class FormatConverter {
                 done += want;
                 if (cb != null) {
                     int pct = (int) (done * 100 / Math.max(1, totalSamples));
-                    lastPct = pct;
-                    cb.onProgress(pct);
+                    if (pct != lastPct) {
+                        lastPct = pct;
+                        cb.onProgress(pct);
+                    }
                 }
             }
         } finally {
@@ -183,8 +185,10 @@ public final class FormatConverter {
                 done += want;
                 if (cb != null) {
                     int pct = (int) (done * 100 / Math.max(1, totalSamples));
-                    lastPct = pct;
-                    cb.onProgress(pct);
+                    if (pct != lastPct) {
+                        lastPct = pct;
+                        cb.onProgress(pct);
+                    }
                 }
             }
             long pcmBytes = totalSamples * 2;
@@ -259,8 +263,10 @@ public final class FormatConverter {
                 done += want;
                 if (cb != null) {
                     int pct = (int) (done * 100 / Math.max(1, totalSamples));
-                    lastPct = pct;
-                    cb.onProgress(pct);
+                    if (pct != lastPct) {
+                        lastPct = pct;
+                        cb.onProgress(pct);
+                    }
                 }
             }
             long pcmBytes = totalSamples * 3;
@@ -331,7 +337,6 @@ public final class FormatConverter {
             boolean inputEos = false;
             boolean outEos = false;
             int lastPct = -1;
-            long lastCbAt = 0;
             long drainDeadline = 0;
 
             while (!outEos) {
@@ -377,8 +382,10 @@ public final class FormatConverter {
                             if (cb != null) {
                                 int pct = (int) (framesDone * 100
                                         / Math.max(1, totalFrames));
-                                lastPct = pct;
-                                cb.onProgress(pct);
+                                if (pct != lastPct) {
+                                    lastPct = pct;
+                                    cb.onProgress(pct);
+                                }
                             }
                         }
                     }
@@ -1030,7 +1037,6 @@ public final class FormatConverter {
             boolean inEos = false;
             boolean outEos = false;
             int lastPct = -1;
-            long lastCbAt = 0;
             long drainDeadline = 0;
             try {
                 r.seek(info.dataStart);
@@ -1112,8 +1118,10 @@ public final class FormatConverter {
                     }
                     if (cb != null) {
                         int pct = (int) (framesDone * 100 / Math.max(1, totalFrames));
-                        lastPct = pct;
-                        cb.onProgress(pct);
+                        if (pct != lastPct) {
+                            lastPct = pct;
+                            cb.onProgress(pct);
+                        }
                     }
                 }
             } finally {

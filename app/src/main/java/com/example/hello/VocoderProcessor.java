@@ -26,6 +26,7 @@ final class VocoderProcessor extends AudioProcessor {
             "vc_noise", "Noise Mix", "%", 0, 100, 1, 15));
 
     private int sampleRate = DspChain.SAMPLE_RATE;
+    private int lastBuiltSampleRate = 0;
     private int channels = 2;
     private BiquadFilter[] bandFilters = new BiquadFilter[0];
     private BiquadFilter[] carrierFilters = new BiquadFilter[0];
@@ -84,7 +85,8 @@ final class VocoderProcessor extends AudioProcessor {
     private void rebuild() {
         int count = BAND_OPTIONS[Math.max(0, Math.min(BAND_OPTIONS.length - 1,
                 bands.getEnumIndex()))];
-        if (bandFilters.length == count) return;
+        if (bandFilters.length == count && lastBuiltSampleRate == sampleRate) return;
+        lastBuiltSampleRate = sampleRate;
         bandFilters = new BiquadFilter[count];
         carrierFilters = new BiquadFilter[count];
         bandCenters = new float[count];
@@ -96,6 +98,10 @@ final class VocoderProcessor extends AudioProcessor {
             bandCenters[i] = f;
             bandFilters[i] = new BiquadFilter();
             carrierFilters[i] = new BiquadFilter();
+            float[][] sec = new float[][]{
+                    Dsp.rbjBandPass(sampleRate, f, 4f)};
+            bandFilters[i].setSections(sec, 1);
+            carrierFilters[i].setSections(sec, 1);
         }
     }
 
@@ -110,13 +116,6 @@ final class VocoderProcessor extends AudioProcessor {
         float relCoef = 1f / Math.max(1, release.getCurrentRaw());
         double sawInc = (double) pitch.getCurrentRaw() / sampleRate;
         int carrierIdx = carrier.getEnumIndex();
-
-        for (int b = 0; b < count; b++) {
-            float[][] sec = new float[][]{
-                    Dsp.rbjBandPass(sampleRate, bandCenters[b], 4f)};
-            bandFilters[b].setSections(sec, 1);
-            carrierFilters[b].setSections(sec, 1);
-        }
         float[] probe = new float[1];
         float[] cProbe = new float[1];
         for (int f = 0; f < frames; f++) {

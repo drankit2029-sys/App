@@ -140,13 +140,15 @@ final class MultibandCompressorProcessor extends AudioProcessor {
         float gHighLin = Dsp.dbToLin(highGain.getFloat());
 
         float[] low = new float[frames * ch];
+        float[] midHigh = new float[frames * ch];
         float[] high = new float[frames * ch];
         float[] mid = new float[frames * ch];
         System.arraycopy(buf, 0, low, 0, low.length);
         lowPass.process(low, frames, ch);
-        System.arraycopy(buf, 0, high, 0, high.length);
+        for (int i = 0; i < midHigh.length; i++) midHigh[i] = buf[i] - low[i];
+        System.arraycopy(midHigh, 0, high, 0, high.length);
         highPass.process(high, frames, ch);
-        for (int i = 0; i < mid.length; i++) mid[i] = buf[i] - low[i] - high[i];
+        for (int i = 0; i < mid.length; i++) mid[i] = midHigh[i] - high[i];
 
         final int block = 64;
         int offset = 0;

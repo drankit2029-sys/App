@@ -125,6 +125,19 @@ public class FxEffectsModeTest {
                 SELECTED_CHIP_TEXT, btnDspFx.getCurrentTextColor());
     }
 
+    @Test
+    public void defaultPresetIsEnabledOnFirstOpeningFxPanel() {
+        ctx.getSharedPreferences("takeone", Context.MODE_PRIVATE)
+                .edit().clear().commit();
+        DspChain.Config cfg = DspChain.Config.load(ctx);
+        assertEquals(DspChain.Preset.VOICE_POLISH.id, cfg.activePresetId);
+        assertTrue("Default FX preset must be active on first open", cfg.isActive());
+        assertEquals(4, cfg.enabledSlotCount());
+        for (DspChain.EffectSlot slot : cfg.slots) {
+            assertTrue("Default slot " + slot.type.id + " must be enabled", slot.enabled);
+        }
+    }
+
     /** Text colour the studio uses for a selected (highlighted) chip. */
     private static final int SELECTED_CHIP_TEXT = 0xFFFFFFFF;
 

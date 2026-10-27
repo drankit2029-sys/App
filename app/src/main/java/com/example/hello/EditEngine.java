@@ -19,7 +19,7 @@ public final class EditEngine {
 
     private static final int CHUNK_BYTES = 65536;
     private static final long MAX_UNDO_BYTES = 30L * 1024L * 1024L;
-    private static final int MAX_UNDO_STEPS = 3;
+    public static final int MAX_UNDO_STEPS = 10;
 
     private EditEngine() {}
 
@@ -33,10 +33,11 @@ public final class EditEngine {
         }
     }
 
-    /** Bounded 3-step undo journal storing pre-edit snapshots in takes/.undo/. */
+    /** Bounded 10-step undo/redo journal storing snapshots in takes/.undo/. */
     public static final class UndoJournal {
         private final File undoDir;
         private final Deque<File> stack = new ArrayDeque<>();
+        private final Deque<File> redoStack = new ArrayDeque<>();
         private int seq = 0;
 
         public UndoJournal(File takesDir) {
@@ -46,12 +47,46 @@ public final class EditEngine {
         }
 
         public synchronized boolean canUndo() {
-            return !stack.isEmpty() && stack.peekFirst().exists();
+            while (!stack.isEmpty() && !stack.peekFirst().exists()) {
+                stack.pollFirst();
+            }
+            return !stack.isEmpty();
+        }
+
+        public synchronized boolean canRedo() {
+            while (!redoStack.isEmpty() && !redoStack.peekFirst().exists()) {
+                redoStack.pollFirst();
+            }
+            return !redoStack.isEmpty();
+        }
+
+        public synchronized int undoDepth() {
+            while (!stack.isEmpty() && !stack.peekFirst().exists()) {
+                stack.pollFirst();
+            }
+            return stack.size();
+        }
+
+        public synchronized int redoDepth() {
+            while (!redoStack.isEmpty() && !redoStack.peekFirst().exists()) {
+                redoStack.pollFirst();
+            }
+            return redoStack.size();
         }
 
         /** True when {@link #recordSnapshot(File)} would accept `raw`. */
         public synchronized boolean wouldRecord(File raw) {
             return raw != null && raw.exists() && raw.length() <= MAX_UNDO_BYTES;
+        }
+
+        public synchronized void clearRedo() {
+            while (!redoStack.isEmpty()) {
+                File old = redoStack.pollFirst();
+                if (old != null) {
+                    // noinspection ResultOfMethodCallIgnored
+                    old.delete();
+                }
+            }
         }
 
         /**
@@ -67,6 +102,8 @@ public final class EditEngine {
             if (!wouldRecord(raw)) {
                 return false;
             }
+            // noinspection ResultOfMethodCallIgnored
+            undoDir.mkdirs();
             while (stack.size() >= MAX_UNDO_STEPS) {
                 File old = stack.removeLast();
                 // noinspection ResultOfMethodCallIgnored
@@ -80,6 +117,7 @@ public final class EditEngine {
                 int n;
                 while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
                 stack.addFirst(snap);
+                clearRedo();
                 return true;
             } catch (Exception e) {
                 // noinspection ResultOfMethodCallIgnored
@@ -88,23 +126,105 @@ public final class EditEngine {
             }
         }
 
-        /** Restores the most recent snapshot over `raw`. */
+        /** Restores the most recent snapshot over `raw` and pushes current state to redo. */
         public synchronized boolean undo(File raw) {
             if (!canUndo() || raw == null) return false;
             File snap = stack.pollFirst();
             if (snap == null || !snap.exists()) return false;
+
+            File redoSnap = null;
+            if (wouldRecord(raw)) {
+                // noinspection ResultOfMethodCallIgnored
+                undoDir.mkdirs();
+                while (redoStack.size() >= MAX_UNDO_STEPS) {
+                    File oldRedo = redoStack.removeLast();
+                    // noinspection ResultOfMethodCallIgnored
+                    oldRedo.delete();
+                }
+                redoSnap = new File(undoDir,
+                        raw.getName() + "." + (++seq) + ".redo");
+                try (FileInputStream curIn = new FileInputStream(raw);
+                     FileOutputStream redoOut = new FileOutputStream(redoSnap)) {
+                    byte[] buf = new byte[CHUNK_BYTES];
+                    int n;
+                    while ((n = curIn.read(buf)) > 0) redoOut.write(buf, 0, n);
+                } catch (Exception ignored) {
+                    // noinspection ResultOfMethodCallIgnored
+                    redoSnap.delete();
+                    redoSnap = null;
+                }
+            }
+
             try (FileInputStream in = new FileInputStream(snap);
                  RandomAccessFile out = new RandomAccessFile(raw, "rw")) {
                 out.setLength(0);
                 byte[] buf = new byte[CHUNK_BYTES];
                 int n;
                 while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                if (redoSnap != null) {
+                    redoStack.addFirst(redoSnap);
+                }
                 return true;
             } catch (Exception e) {
+                if (redoSnap != null) {
+                    // noinspection ResultOfMethodCallIgnored
+                    redoSnap.delete();
+                }
                 return false;
             } finally {
                 // noinspection ResultOfMethodCallIgnored
                 snap.delete();
+            }
+        }
+
+        /** Re-applies the most recently undone edit over `raw` and pushes current state to undo. */
+        public synchronized boolean redo(File raw) {
+            if (!canRedo() || raw == null) return false;
+            File redoSnap = redoStack.pollFirst();
+            if (redoSnap == null || !redoSnap.exists()) return false;
+
+            File undoSnap = null;
+            if (wouldRecord(raw)) {
+                // noinspection ResultOfMethodCallIgnored
+                undoDir.mkdirs();
+                while (stack.size() >= MAX_UNDO_STEPS) {
+                    File oldUndo = stack.removeLast();
+                    // noinspection ResultOfMethodCallIgnored
+                    oldUndo.delete();
+                }
+                undoSnap = new File(undoDir,
+                        raw.getName() + "." + (++seq) + ".undo");
+                try (FileInputStream curIn = new FileInputStream(raw);
+                     FileOutputStream undoOut = new FileOutputStream(undoSnap)) {
+                    byte[] buf = new byte[CHUNK_BYTES];
+                    int n;
+                    while ((n = curIn.read(buf)) > 0) undoOut.write(buf, 0, n);
+                } catch (Exception ignored) {
+                    // noinspection ResultOfMethodCallIgnored
+                    undoSnap.delete();
+                    undoSnap = null;
+                }
+            }
+
+            try (FileInputStream in = new FileInputStream(redoSnap);
+                 RandomAccessFile out = new RandomAccessFile(raw, "rw")) {
+                out.setLength(0);
+                byte[] buf = new byte[CHUNK_BYTES];
+                int n;
+                while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                if (undoSnap != null) {
+                    stack.addFirst(undoSnap);
+                }
+                return true;
+            } catch (Exception e) {
+                if (undoSnap != null) {
+                    // noinspection ResultOfMethodCallIgnored
+                    undoSnap.delete();
+                }
+                return false;
+            } finally {
+                // noinspection ResultOfMethodCallIgnored
+                redoSnap.delete();
             }
         }
 
@@ -113,6 +233,7 @@ public final class EditEngine {
                 // noinspection ResultOfMethodCallIgnored
                 stack.pollFirst().delete();
             }
+            clearRedo();
         }
     }
 

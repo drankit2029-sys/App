@@ -19,6 +19,10 @@ final class StereoImagingProcessor extends AudioProcessor {
     private final FxParameter swap = addParameter(FxParameter.boolParam(
             "st_swap", "Swap L/R", false));
 
+    private static final int HAAS_DELAY = 24;
+    private final float[] haasHist = new float[HAAS_DELAY];
+    private int haasPos = 0;
+
     StereoImagingProcessor() {
     }
 
@@ -48,6 +52,8 @@ final class StereoImagingProcessor extends AudioProcessor {
 
     @Override
     public void reset() {
+        java.util.Arrays.fill(haasHist, 0f);
+        haasPos = 0;
     }
 
     @Override
@@ -77,14 +83,11 @@ final class StereoImagingProcessor extends AudioProcessor {
                 gr = t * 1.15f;
             }
             float centerGain = centerPct < 0f ? (1f + centerPct * 0.7f) : (1f + centerPct * 0.3f);
-            int haasDelay = 24;
-            float[] hist = new float[haasDelay];
-            int hPos = 0;
             for (int f = 0; f < frames; f++) {
                 float x = buf[f];
-                float delayed = hist[hPos];
-                hist[hPos] = x;
-                hPos = (hPos + 1) % haasDelay;
+                float delayed = haasHist[haasPos];
+                haasHist[haasPos] = x;
+                haasPos = (haasPos + 1) % HAAS_DELAY;
                 float l = x * signL;
                 float r = (x * 0.75f + delayed * 0.25f) * signR;
                 float mid = (l + r) * 0.5f * centerGain;
@@ -117,10 +120,10 @@ final class StereoImagingProcessor extends AudioProcessor {
             float side = (l - r) * 0.5f;
             if (centerPct > 0f) {
                 // Isolate the centre: attenuate the side content.
-                side *= (1f - centerPct / 100f);
+                side *= (1f - centerPct);
             } else if (centerPct < 0f) {
                 // Remove the centre: attenuate the mid content.
-                mid *= (1f + centerPct / 100f);
+                mid *= (1f + centerPct);
             }
             side *= widthPct;
             float outL = mid + side;

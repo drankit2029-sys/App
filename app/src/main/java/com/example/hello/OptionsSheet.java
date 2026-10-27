@@ -848,17 +848,16 @@ public final class OptionsSheet {
     public static void styleAsTopPopup(Dialog dialog) {
         Window w = dialog.getWindow();
         if (w == null) return;
-        Context ctx = dialog.getContext();
-        DisplayMetrics dm = ctx.getResources().getDisplayMetrics();
         w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
         w.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
         w.addFlags(WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL);
         w.setDimAmount(0f);
         WindowManager.LayoutParams lp = w.getAttributes();
-        lp.width = dm.widthPixels - dp(ctx, 24);
+        lp.width = WindowManager.LayoutParams.WRAP_CONTENT;
         lp.height = WindowManager.LayoutParams.WRAP_CONTENT;
-        lp.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
-        lp.y = dp(ctx, 12);
+        lp.gravity = Gravity.CENTER;
+        lp.x = 0;
+        lp.y = 0;
         w.setAttributes(lp);
         View decor = w.getDecorView();
         if (decor != null) decor.setPadding(0, 0, 0, 0);
@@ -877,8 +876,9 @@ public final class OptionsSheet {
         w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
         w.setDimAmount(0.62f);
         WindowManager.LayoutParams lp = w.getAttributes();
-        int maxW = dp(ctx, maxWidthDp);
-        lp.width = Math.min(dm.widthPixels - dp(ctx, 48), maxW);
+        int cappedDp = Math.min(maxWidthDp, isLand ? 380 : 330);
+        int maxW = dp(ctx, cappedDp);
+        lp.width = Math.min(Math.round(dm.widthPixels * 0.84f), maxW);
         lp.height = WindowManager.LayoutParams.WRAP_CONTENT;
         lp.gravity = Gravity.CENTER;
         lp.horizontalMargin = 0f;

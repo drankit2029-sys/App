@@ -27,8 +27,6 @@ final class FadeProcessor extends AudioProcessor {
     private int sampleRate = DspChain.SAMPLE_RATE;
     private int channels = 2;
     private BiquadFilter closingLp = new BiquadFilter();
-    private long regionFrames = 0;
-    private long frameCounter = 0;
 
     FadeProcessor() {
     }
@@ -63,7 +61,6 @@ final class FadeProcessor extends AudioProcessor {
 
     @Override
     public void reset() {
-        frameCounter = 0;
         closingLp.reset();
     }
 

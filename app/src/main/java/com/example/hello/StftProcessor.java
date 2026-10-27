@@ -24,8 +24,6 @@ abstract class StftProcessor {
     private final float[] window;
     private float[] re;
     private float[] im;
-    private float[] mag;
-    private float[] phase;
 
     protected StftProcessor(int fftSize, int overlap) {
         setGeometry(fftSize, overlap);
@@ -42,8 +40,6 @@ abstract class StftProcessor {
     private void allocate() {
         re = new float[fftSize];
         im = new float[fftSize];
-        mag = new float[fftSize / 2 + 1];
-        phase = new float[fftSize / 2 + 1];
     }
 
     /** Rebuilds the FFT geometry (call when the size or overlap changes). */

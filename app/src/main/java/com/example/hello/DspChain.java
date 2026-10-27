@@ -848,9 +848,9 @@ public final class DspChain {
                 c.customNoisePct = clamp(p.getInt("dsp_custom_noise", 35));
                 c.customDeEssPct = clamp(p.getInt("dsp_custom_deess", 30));
                 c.customCompPct = clamp(p.getInt("dsp_custom_comp", 30));
-                c.activePresetId = p.getString("dsp_preset_id", Preset.CLEAR_ALL.id);
-
                 String slotsJson = p.getString("dsp_slots_json", null);
+                c.activePresetId = p.getString("dsp_preset_id",
+                        slotsJson != null ? Preset.CLEAR_ALL.id : Preset.VOICE_POLISH.id);
                 if (slotsJson != null) {
                     c.slots.clear();
                     JSONArray arr = new JSONArray(slotsJson);
@@ -882,11 +882,13 @@ public final class DspChain {
                 } else {
                     c.syncSlotsFromLegacyFields();
                     if (c.slots.isEmpty()) {
-                        // Seed default starter pills for the UI rack
-                        c.slots.add(new EffectSlot(EffectType.NOISE_SUPPRESSION, false, 50, false));
-                        c.slots.add(new EffectSlot(EffectType.DE_ESSER, false, 45, false));
-                        c.slots.add(new EffectSlot(EffectType.COMPRESSOR, false, 40, false));
-                        c.slots.add(new EffectSlot(EffectType.LOW_CUT_HPF, false, 80, false));
+                        // Seed default starter pills for the UI rack with Voice Polish enabled
+                        c.slots.add(new EffectSlot(EffectType.NOISE_SUPPRESSION, true, 50, false));
+                        c.slots.add(new EffectSlot(EffectType.DE_ESSER, true, 45, false));
+                        c.slots.add(new EffectSlot(EffectType.COMPRESSOR, true, 40, false));
+                        c.slots.add(new EffectSlot(EffectType.LOW_CUT_HPF, true, 80, false));
+                        c.activePresetId = Preset.VOICE_POLISH.id;
+                        c.syncLegacyFieldsFromSlots();
                     }
                 }
                 int savedMode = p.getInt("dsp_mode", -1);
@@ -1021,13 +1023,6 @@ public final class DspChain {
     /** Stable instance key of a rack entry, used to bind it to a processor. */
     static String slotInstanceKey(EffectSlot s) {
         return "slot:" + s.type.id + ":" + s.instanceId;
-    }
-
-    private static boolean isLegacyProcessor(AudioProcessor p) {
-        String id = p.getId();
-        return "hpf".equals(id) || "noise".equals(id) || "gate".equals(id)
-                || "tone".equals(id) || "deess".equals(id)
-                || "comp".equals(id) || "limiter".equals(id);
     }
 
     /**
@@ -1448,33 +1443,23 @@ public final class DspChain {
                     for (int i = 0; i < common; i++) {
                         next[i] = buf[i] * dryWeight + next[i] * mix;
                     }
+                    for (int i = common; i < next.length; i++) {
+                        next[i] *= mix;
+                    }
                 }
                 buf = next;
                 curFrames = buf.length / Math.max(1, channels);
             }
         }
         if (hasInPlaceProcessors() && curFrames > 0) {
-            prepareOffline(raw, startFrame, endFrame, sampleRate, channels);
             reset();
+            prepareOffline(raw, startFrame, endFrame, sampleRate, channels);
             int chunk = 4096;
             float[] block = new float[chunk * channels];
             for (int off = 0; off < curFrames; off += chunk) {
                 int n = Math.min(chunk, curFrames - off);
                 System.arraycopy(buf, off * channels, block, 0, n * channels);
-                for (AudioProcessor p : rack.processors()) {
-                    if (!p.isEnabled() || p.isOfflineOnly() || !p.isAudible()) continue;
-                    float mix = p.getWetDryMix();
-                    if (mix >= 1.0f || (mix > 0.0f && p.handlesOwnWetDryMix())) {
-                        p.processInPlace(block, n, channels);
-                    } else if (mix > 0.0f) {
-                        float[] dry = new float[n * channels];
-                        System.arraycopy(block, 0, dry, 0, n * channels);
-                        p.processInPlace(block, n, channels);
-                        for (int i = 0; i < n * channels; i++) {
-                            block[i] = dry[i] * (1f - mix) + block[i] * mix;
-                        }
-                    }
-                }
+                rack.processInPlace(block, n);
                 System.arraycopy(block, 0, buf, off * channels, n * channels);
             }
         }

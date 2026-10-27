@@ -71,8 +71,8 @@ public final class TeleDialogs {
         w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
         w.setDimAmount(0.62f);
         WindowManager.LayoutParams lp = w.getAttributes();
-        int maxW = dp(ctx, isLand ? 460 : 400);
-        lp.width = Math.min(dm.widthPixels - dp(ctx, 32), maxW);
+        int maxW = dp(ctx, isLand ? 380 : 340);
+        lp.width = Math.min(Math.round(dm.widthPixels * 0.86f), maxW);
         lp.height = WindowManager.LayoutParams.WRAP_CONTENT;
         lp.gravity = Gravity.CENTER;
         w.setAttributes(lp);

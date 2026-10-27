@@ -138,13 +138,24 @@ public class EditEngineTest {
     }
 
     @Test
-    public void undoJournalIsBoundedToThreeSteps() throws Exception {
+    public void undoJournalIsBoundedToTenStepsAndSupportsRedo() throws Exception {
         File raw = dcRaw("bounded.wav", 48000);
         EditEngine.UndoJournal undo =
                 new EditEngine.UndoJournal(tmp.getRoot());
-        for (int i = 0; i < 4; i++) undo.recordSnapshot(raw);
-        for (int i = 0; i < 3; i++) assertTrue(undo.undo(raw));
+        for (int i = 0; i < 12; i++) undo.recordSnapshot(raw);
+        assertEquals(10, undo.undoDepth());
+        assertFalse(undo.canRedo());
+        for (int i = 0; i < 10; i++) assertTrue(undo.undo(raw));
         assertFalse(undo.canUndo());
+        assertEquals(10, undo.redoDepth());
+        for (int i = 0; i < 10; i++) assertTrue(undo.redo(raw));
+        assertFalse(undo.canRedo());
+        assertEquals(10, undo.undoDepth());
+        // Recording a new snapshot clears the redo stack
+        assertTrue(undo.undo(raw));
+        assertTrue(undo.canRedo());
+        assertTrue(undo.recordSnapshot(raw));
+        assertFalse(undo.canRedo());
     }
 
     @Test

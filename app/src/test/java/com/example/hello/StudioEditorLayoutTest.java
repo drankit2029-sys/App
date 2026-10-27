@@ -40,7 +40,7 @@ public class StudioEditorLayoutTest {
     private static final int[] EDITOR_IDS = {
             R.id.editorStrip, R.id.btnPreviewPlay, R.id.btnSelectRange,
             R.id.btnReplaceSeg, R.id.btnTrimCrop, R.id.btnCutDelete,
-            R.id.btnDspFx, R.id.btnEditUndo,
+            R.id.btnDspFx, R.id.btnEditUndo, R.id.btnEditRedo,
     };
 
     private static final int[] STUDIO_IDS = {
@@ -127,7 +127,7 @@ public class StudioEditorLayoutTest {
         int[] iconButtons = {
                 R.id.teleEditBtn, R.id.telePauseBtn, R.id.teleMirrorBtn,
                 R.id.btnPreviewPlay, R.id.btnSelectRange, R.id.btnReplaceSeg,
-                R.id.btnTrimCrop, R.id.btnDspFx, R.id.btnEditUndo
+                R.id.btnTrimCrop, R.id.btnDspFx, R.id.btnEditUndo, R.id.btnEditRedo
         };
         for (int id : iconButtons) {
             TextView tv = root.findViewById(id);

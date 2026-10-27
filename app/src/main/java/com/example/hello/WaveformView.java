@@ -81,6 +81,8 @@ public class WaveformView extends View {
 
     private final Deque<float[]> undoPeakStack = new ArrayDeque<>();
     private final Deque<Float> undoFramesPerBar = new ArrayDeque<>();
+    private final Deque<float[]> redoPeakStack = new ArrayDeque<>();
+    private final Deque<Float> redoFramesPerBar = new ArrayDeque<>();
     private float[] savedReplaceTailPeaks = null;
     private float[] stashedParentPeaks = null;
     private int stashedParentSelStart = 0;
@@ -245,20 +247,72 @@ public class WaveformView extends View {
     /** Snapshots the current in-memory waveform peaks before an edit operation. */
     public synchronized void recordUndoPeaks() {
         if (count <= 0) return;
-        while (undoPeakStack.size() >= 3) {
+        while (undoPeakStack.size() >= EditEngine.MAX_UNDO_STEPS) {
             undoPeakStack.removeLast();
+        }
+        while (undoFramesPerBar.size() >= EditEngine.MAX_UNDO_STEPS) {
+            undoFramesPerBar.removeLast();
         }
         undoPeakStack.addFirst(Arrays.copyOf(history, count));
         undoFramesPerBar.addFirst(framesPerBar);
+        redoPeakStack.clear();
+        redoFramesPerBar.clear();
     }
 
-    /** Restores the most recent in-memory waveform peak snapshot on Undo. */
+    /** Discards the most recently recorded undo peak snapshot when an edit aborts before modifying the waveform. */
+    public synchronized void discardTopUndoPeaks() {
+        if (!undoPeakStack.isEmpty()) undoPeakStack.pollFirst();
+        if (!undoFramesPerBar.isEmpty()) undoFramesPerBar.pollFirst();
+    }
+
+    /** Restores the most recent in-memory waveform peak snapshot on Undo and saves current peaks for Redo. */
     public synchronized boolean popUndoPeaks() {
         if (undoPeakStack.isEmpty()) return false;
         float[] snap = undoPeakStack.pollFirst();
         Float snapFrames = undoFramesPerBar.pollFirst();
         if (snap == null) return false;
         dropFxBaseLocked();
+        if (count > 0) {
+            while (redoPeakStack.size() >= EditEngine.MAX_UNDO_STEPS) {
+                redoPeakStack.removeLast();
+            }
+            while (redoFramesPerBar.size() >= EditEngine.MAX_UNDO_STEPS) {
+                redoFramesPerBar.removeLast();
+            }
+            redoPeakStack.addFirst(Arrays.copyOf(history, count));
+            redoFramesPerBar.addFirst(framesPerBar);
+        }
+        if (snapFrames != null) framesPerBar = snapFrames;
+        if (history.length < snap.length) {
+            history = new float[Math.max(COLS, snap.length)];
+        }
+        Arrays.fill(history, 0f);
+        System.arraycopy(snap, 0, history, 0, snap.length);
+        count = snap.length;
+        playheadPos = count;
+        playheadIndex = count;
+        selectionActive = false;
+        postInvalidateOnAnimation();
+        return true;
+    }
+
+    /** Restores the most recent in-memory waveform peak snapshot on Redo and saves current peaks for Undo. */
+    public synchronized boolean popRedoPeaks() {
+        if (redoPeakStack.isEmpty()) return false;
+        float[] snap = redoPeakStack.pollFirst();
+        Float snapFrames = redoFramesPerBar.pollFirst();
+        if (snap == null) return false;
+        dropFxBaseLocked();
+        if (count > 0) {
+            while (undoPeakStack.size() >= EditEngine.MAX_UNDO_STEPS) {
+                undoPeakStack.removeLast();
+            }
+            while (undoFramesPerBar.size() >= EditEngine.MAX_UNDO_STEPS) {
+                undoFramesPerBar.removeLast();
+            }
+            undoPeakStack.addFirst(Arrays.copyOf(history, count));
+            undoFramesPerBar.addFirst(framesPerBar);
+        }
         if (snapFrames != null) framesPerBar = snapFrames;
         if (history.length < snap.length) {
             history = new float[Math.max(COLS, snap.length)];
@@ -679,6 +733,8 @@ public class WaveformView extends View {
         stashedParentFramesPerBar = framesPerBar;
         undoPeakStack.clear();
         undoFramesPerBar.clear();
+        redoPeakStack.clear();
+        redoFramesPerBar.clear();
         Arrays.fill(history, 0f);
         count = 0;
         playheadPos = 0f;
@@ -699,6 +755,8 @@ public class WaveformView extends View {
         stashedParentPeaks = null;
         undoPeakStack.clear();
         undoFramesPerBar.clear();
+        redoPeakStack.clear();
+        redoFramesPerBar.clear();
 
         if (!commitReplacement) {
             if (history.length < parent.length) {

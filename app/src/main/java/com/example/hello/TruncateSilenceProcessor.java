@@ -117,37 +117,33 @@ final class TruncateSilenceProcessor extends AudioProcessor {
         }
         if (spans.isEmpty()) return in.clone();
 
-        // Rebuild the region, keeping only the head of every silent span.
-        java.io.ByteArrayOutputStream out =
-                new java.io.ByteArrayOutputStream(frames * channels * 4);
-        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        // Rebuild the region directly in a pre-sized float[] array.
+        int outFrames = 0;
         int cursor = 0;
         for (int[] span : spans) {
             int keep = Math.min(keepFrames, span[1] - span[0]);
-            appendSamples(bytes, in, cursor, span[0], channels);
-            appendSamples(bytes, in, span[0], span[0] + keep, channels);
+            outFrames += Math.max(0, span[0] - cursor) + Math.max(0, keep);
             cursor = span[1];
         }
-        appendSamples(bytes, in, cursor, frames, channels);
-
-        byte[] raw = bytes.toByteArray();
-        java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(raw)
-                .order(java.nio.ByteOrder.LITTLE_ENDIAN);
-        float[] result = new float[raw.length / 4];
-        bb.asFloatBuffer().get(result);
+        outFrames += Math.max(0, frames - cursor);
+        float[] result = new float[outFrames * channels];
+        int writeIdx = 0;
+        cursor = 0;
+        for (int[] span : spans) {
+            int keep = Math.min(keepFrames, span[1] - span[0]);
+            writeIdx = copySlice(in, cursor, span[0], channels, result, writeIdx);
+            writeIdx = copySlice(in, span[0], span[0] + keep, channels, result, writeIdx);
+            cursor = span[1];
+        }
+        copySlice(in, cursor, frames, channels, result, writeIdx);
         return result;
     }
 
-    private static void appendSamples(java.io.ByteArrayOutputStream out,
-                                      float[] src, int fromFrame, int toFrame,
-                                      int channels) {
+    private static int copySlice(float[] src, int fromFrame, int toFrame,
+                                 int channels, float[] dst, int writeIdx) {
         int count = Math.max(0, toFrame - fromFrame) * channels;
-        if (count <= 0) return;
-        float[] chunk = new float[count];
-        System.arraycopy(src, fromFrame * channels, chunk, 0, count);
-        byte[] b = new byte[count * 4];
-        java.nio.ByteBuffer.wrap(b).order(java.nio.ByteOrder.LITTLE_ENDIAN)
-                .asFloatBuffer().put(chunk);
-        out.write(b, 0, b.length);
+        if (count <= 0) return writeIdx;
+        System.arraycopy(src, fromFrame * channels, dst, writeIdx, count);
+        return writeIdx + count;
     }
 }

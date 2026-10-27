@@ -552,6 +552,21 @@
                         android:text="Undo"
                         android:textColor="@color/text_hint"
                         android:textSize="11sp" />
+
+                    <TextView
+                        android:id="@+id/btnEditRedo"
+                        android:layout_width="wrap_content"
+                        android:layout_height="28dp"
+                        android:layout_marginStart="6dp"
+                        android:background="@drawable/bg_chip"
+                        android:drawableStart="@drawable/ic_edit_redo"
+                        android:drawablePadding="5dp"
+                        android:gravity="center"
+                        android:paddingLeft="10dp"
+                        android:paddingRight="11dp"
+                        android:text="Redo"
+                        android:textColor="@color/text_hint"
+                        android:textSize="11sp" />
                 </LinearLayout>
             </HorizontalScrollView>
 

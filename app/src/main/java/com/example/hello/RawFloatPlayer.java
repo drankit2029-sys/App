@@ -325,9 +325,9 @@ public final class RawFloatPlayer {
             DspChain preChain = this.dspChain;
             if (preChain != null && preChain.isActive()) {
                 try {
+                    preChain.reset();
                     preChain.prepareOffline(file, startFramePos, limitFrame,
                             RecordingEngine.SAMPLE_RATE, channels);
-                    preChain.reset();
                 } catch (Exception ignored) {}
             }
             if (preChain != null && preChain.isActive()
@@ -364,7 +364,9 @@ public final class RawFloatPlayer {
                                 (double) curOut / Math.max(1, outFrames)
                                         * (limitFrame - startFramePos));
                     }
-                    framePos = limitFrame;
+                    if (!stop) {
+                        framePos = limitFrame;
+                    }
                 }
             }
             while (!stop && framePos < limitFrame) {
