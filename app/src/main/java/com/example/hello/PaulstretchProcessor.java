@@ -74,14 +74,18 @@ final class PaulstretchProcessor extends AudioProcessor {
         double stretch = factor.getFloat();
         if (Math.abs(stretch - 1.0) < 1e-6) return in.clone();
 
-        int fftSize = 4096;
-        int hop = Math.max(1, (int) (resolution.getFloat() * sampleRate));
-        if (hop < 64) hop = 64;
-        // The output hop is the input hop scaled by the stretch factor.
-        int outHop = Math.max(1, (int) Math.round(hop * stretch));
+        int targetWin = Math.max(512, (int) Math.round(resolution.getFloat() * sampleRate));
+        int fftSize = 1024;
+        while (fftSize < targetWin && fftSize < 8192) fftSize <<= 1;
+        int outHop = fftSize / 2;
+        double inStep = outHop / Math.max(0.1, stretch);
         int outFrames = Math.max(1, (int) Math.round(frames * stretch));
         float[] out = new float[outFrames * channels];
-        float[] win = Dsp.hannWindow(fftSize);
+        float[] win = new float[fftSize];
+        for (int i = 0; i < fftSize; i++) {
+            float x = (2.0f * i / (fftSize - 1)) - 1.0f;
+            win[i] = (float) Math.pow(Math.max(0.0, 1.0 - x * x), 1.25);
+        }
 
         int bins = fftSize / 2 + 1;
         float[] re = new float[fftSize];
@@ -89,12 +93,13 @@ final class PaulstretchProcessor extends AudioProcessor {
         float[] mag = new float[bins];
 
         for (int c = 0; c < channels; c++) {
-            int inPos = 0;
+            double inPos = 0.0;
             int outPos = 0;
-            while (inPos < frames && outPos < outFrames) {
+            while (outPos < outFrames) {
+                int baseIn = (int) Math.round(inPos);
                 for (int i = 0; i < fftSize; i++) {
-                    int src = inPos + i;
-                    float s = (src < frames) ? in[src * channels + c] : 0f;
+                    int src = baseIn + i;
+                    float s = (src >= 0 && src < frames) ? in[src * channels + c] : 0f;
                     re[i] = s * win[i];
                     im[i] = 0f;
                 }
@@ -114,11 +119,9 @@ final class PaulstretchProcessor extends AudioProcessor {
                 }
                 Dsp.fft(re, im, true);
                 for (int i = 0; i < fftSize && outPos + i < outFrames; i++) {
-                    float x = (float) i / fftSize;
-                    float w = (float) Math.pow(Math.max(0.0, 1.0 - x * x), 1.25);
-                    out[(outPos + i) * channels + c] += re[i] * w * 0.25f;
+                    out[(outPos + i) * channels + c] += re[i] * win[i] * 0.85f;
                 }
-                inPos += hop;
+                inPos += inStep;
                 outPos += outHop;
             }
         }

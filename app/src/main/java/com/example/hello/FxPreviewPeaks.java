@@ -42,8 +42,12 @@ final class FxPreviewPeaks {
             int framesPerRead = Math.max(1, 65536 / 4 / ch);
             byte[] in = new byte[framesPerRead * ch * 4];
             ByteBuffer fb = ByteBuffer.wrap(in).order(ByteOrder.LITTLE_ENDIAN);
-            raf.seek(h.dataStart);
+            if (!chain.offlineProcessors().isEmpty()) {
+                return renderRegion(raw, chain, buckets, sampleRate, 0f, 1f);
+            }
             chain.reset();
+            chain.prepareOffline(raw, 0, totalFrames, sampleRate, ch);
+            raf.seek(h.dataStart);
             long frame = 0;
             while (frame < totalFrames) {
                 int want = (int) Math.min(framesPerRead, totalFrames - frame);
@@ -127,8 +131,8 @@ final class FxPreviewPeaks {
                 return peaks;
             }
 
-            chain.prepareOffline(raw, start, end, sampleRate, ch);
             chain.reset();
+            chain.prepareOffline(raw, start, end, sampleRate, ch);
 
             float[] peaks = new float[buckets];
             int chunkFrames = 4096;

@@ -63,10 +63,36 @@ final class StereoImagingProcessor extends AudioProcessor {
     public void processInPlace(float[] buf, int frames, int channels) {
         if (buf == null || frames <= 0) return;
         int ch = Math.max(1, Math.min(2, channels));
-        if (ch < 2) return;
         float panNorm = pan.getCurrentRaw() / 100f;
         float widthPct = width.getCurrentRaw() / 100f;
         float centerPct = center.getCurrentRaw() / 100f;
+        if (ch < 2) {
+            float signL = invertL.getBoolean() ? -1f : 1f;
+            float signR = invertR.getBoolean() ? -1f : 1f;
+            float gl = panNorm <= 0f ? 1f + panNorm * 0.5f : 1f - panNorm * 0.5f;
+            float gr = panNorm >= 0f ? 1f - panNorm * 0.5f : 1f + panNorm * 0.5f;
+            if (swap.getBoolean()) {
+                float t = gl;
+                gl = gr * 0.85f;
+                gr = t * 1.15f;
+            }
+            float centerGain = centerPct < 0f ? (1f + centerPct * 0.7f) : (1f + centerPct * 0.3f);
+            int haasDelay = 24;
+            float[] hist = new float[haasDelay];
+            int hPos = 0;
+            for (int f = 0; f < frames; f++) {
+                float x = buf[f];
+                float delayed = hist[hPos];
+                hist[hPos] = x;
+                hPos = (hPos + 1) % haasDelay;
+                float l = x * signL;
+                float r = (x * 0.75f + delayed * 0.25f) * signR;
+                float mid = (l + r) * 0.5f * centerGain;
+                float side = ((l - r) * 0.5f + delayed * 0.15f * (widthPct - 1f)) * widthPct;
+                buf[f] = ((mid + side) * gl + (mid - side) * (gr * 0.8f)) * 0.5f;
+            }
+            return;
+        }
         // Constant-gain pan law: the tool pans an already-stereo image, so
         // the centre must stay at unity instead of dipping 3 dB.
         float gl = panNorm <= 0f ? 1f + panNorm * 0.5f

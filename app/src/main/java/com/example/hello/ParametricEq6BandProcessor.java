@@ -20,7 +20,7 @@ final class ParametricEq6BandProcessor extends AudioProcessor {
     private final FxParameter b1f = addParameter(
             FxParameter.intParam("b1f", "Low Cut", " Hz", 20, 500, 1, 80));
     private final FxParameter b1s = addParameter(
-            FxParameter.enumParam("b1s", "Cut Slope", CUT_LABELS, 1));
+            FxParameter.enumParam("b1s", "Low Cut Slope", CUT_LABELS, 1));
     private final FxParameter b2t = addParameter(
             FxParameter.enumParam("b2t", "Band 2 Type", SHELF_LABELS, 0));
     private final FxParameter b2f = addParameter(
@@ -52,7 +52,7 @@ final class ParametricEq6BandProcessor extends AudioProcessor {
     private final FxParameter b6f = addParameter(
             FxParameter.intParam("b6f", "High Cut", " Hz", 4000, 20000, 1, 20000));
     private final FxParameter b6s = addParameter(
-            FxParameter.enumParam("b6s", "Cut Slope", CUT_LABELS, 1));
+            FxParameter.enumParam("b6s", "High Cut Slope", CUT_LABELS, 1));
 
     private final BiquadFilter filter = new BiquadFilter();
     private int sampleRate = DspChain.SAMPLE_RATE;

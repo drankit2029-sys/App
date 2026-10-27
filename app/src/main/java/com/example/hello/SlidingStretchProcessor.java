@@ -75,8 +75,8 @@ final class SlidingStretchProcessor extends AudioProcessor {
     @Override
     public float[] processOfflineRegion(float[] in, int frames, int channels) {
         if (in == null || frames <= 0) return in;
-        double r0 = 1.0 + initialTempo.getFloat() / 100.0;
-        double r1 = 1.0 + finalTempo.getFloat() / 100.0;
+        double r0 = 1.0 / Math.max(0.20, 1.0 + initialTempo.getFloat() / 100.0);
+        double r1 = 1.0 / Math.max(0.20, 1.0 + finalTempo.getFloat() / 100.0);
         double p0 = initialPitch.getFloat();
         double p1 = finalPitch.getFloat();
         if (Math.abs(r0 - 1.0) < 1e-6 && Math.abs(r1 - 1.0) < 1e-6

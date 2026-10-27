@@ -162,7 +162,7 @@ final class BrickwallLimiterProcessor extends AudioProcessor {
                 holdCounter--;
             } else {
                 gainDb += relCoef * (requiredDb - gainDb);
-                if (gainDb > 0f) gainDb = 0f;
+                if (gainDb < 0f) gainDb = 0f;
             }
 
             float g = Dsp.dbToLin(-gainDb);

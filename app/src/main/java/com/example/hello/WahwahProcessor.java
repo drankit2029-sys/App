@@ -9,7 +9,7 @@ final class WahwahProcessor extends AudioProcessor {
     private final FxParameter rate = addParameter(FxParameter.floatParam(
             "wah_rate", "LFO Frequency", " Hz", 0.1f, 4f, 1.5f));
     private final FxParameter phase = addParameter(FxParameter.intParam(
-            "wah_phase", "LFO Start Phase", " deg", 0, 360, 5, 0));
+            "wah_phase", "LFO Start Phase", " deg", 0, 355, 5, 0));
     private final FxParameter depth = addParameter(FxParameter.intParam(
             "wah_depth", "Depth", "%", 0, 100, 1, 70));
     private final FxParameter resonance = addParameter(FxParameter.floatParam(

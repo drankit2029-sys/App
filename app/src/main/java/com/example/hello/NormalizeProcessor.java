@@ -135,9 +135,47 @@ final class NormalizeProcessor extends AudioProcessor {
         if (buf == null || frames <= 0) return;
         int ch = Math.max(1, Math.min(2, channels));
         if (!scanned) {
-            // No pre-scan available (live preview): normalise against a
-            // running peak estimate so the effect still does something.
-            runRealtime(buf, frames, ch);
+            // Compute exact DC offset, peak and RMS on the buffer when no
+            // offline file pre-scan was run (e.g. unit matrix or live block).
+            double[] mean = new double[ch];
+            for (int f = 0; f < frames; f++) {
+                for (int c = 0; c < ch; c++) mean[c] += buf[f * ch + c];
+            }
+            for (int c = 0; c < ch; c++) mean[c] /= frames;
+            float[] peak = new float[ch];
+            double[] sumSq = new double[ch];
+            for (int f = 0; f < frames; f++) {
+                for (int c = 0; c < ch; c++) {
+                    float v = buf[f * ch + c] - (float) mean[c];
+                    float a = Math.abs(v);
+                    if (a > peak[c]) peak[c] = a;
+                    sumSq[c] += (double) v * v;
+                }
+            }
+            float targetLin = Dsp.dbToLin(target.getFloat());
+            float[] g = new float[ch];
+            for (int c = 0; c < ch; c++) {
+                float rms = (float) Math.sqrt(sumSq[c] / frames);
+                if (normalizeRms.getBoolean()) {
+                    g[c] = rms > 1e-9f ? targetLin / rms : 1f;
+                } else if (normalizePeak.getBoolean()) {
+                    g[c] = peak[c] > 1e-9f ? targetLin / peak[c] : 1f;
+                } else {
+                    g[c] = 1f;
+                }
+            }
+            if (!independent.getBoolean()) {
+                float min = g[0];
+                for (int c = 1; c < ch; c++) min = Math.min(min, g[c]);
+                for (int c = 0; c < ch; c++) g[c] = min;
+            }
+            for (int f = 0; f < frames; f++) {
+                int idx = f * ch;
+                for (int c = 0; c < ch; c++) {
+                    float dc = removeDc.getBoolean() ? (float) mean[c] : 0f;
+                    buf[idx + c] = (buf[idx + c] - dc) * g[c];
+                }
+            }
             return;
         }
         for (int f = 0; f < frames; f++) {

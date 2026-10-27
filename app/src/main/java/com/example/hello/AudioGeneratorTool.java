@@ -136,17 +136,24 @@ final class AudioGeneratorTool extends AudioProcessor {
         for (int f = 0; f < frames; f++) {
             float white = nextNoise();
             float s;
-            if (waveIdx == 0 || waveIdx == 1) {
+            if (waveIdx == 0) {
                 s = white;
-            } else if (waveIdx == 2) {
+            } else if (waveIdx == 1) {
                 // Pink (Paul Kellet's economy filter).
                 pinkB0 = 0.99765f * pinkB0 + white * 0.0990460f;
                 pinkB1 = 0.96300f * pinkB1 + white * 0.2965164f;
                 s = (pinkB0 + pinkB1 + white * 0.1848f) * 0.4f;
-            } else {
+            } else if (waveIdx == 2) {
                 // Brown (leaky integrator).
                 brown = (brown + white * 0.02f) * 0.998f;
                 s = brown * 3.5f;
+            } else if (waveIdx == 3) {
+                // Blue / differentiated high-frequency noise.
+                s = (white - pinkB0) * 0.5f;
+                pinkB0 = white;
+            } else {
+                // Velvet / sparse impulse noise.
+                s = Math.abs(white) > 0.85f ? (white > 0f ? 1f : -1f) : 0f;
             }
             for (int c = 0; c < ch; c++) out[f * ch + c] = s * amp;
         }

@@ -114,10 +114,6 @@ final class CompressorProcessor extends AudioProcessor {
 
             float targetGain;
             if (upward.getBoolean()) {
-                // Upward (expand) mode pulls below-threshold material down:
-                // expansion means a wider dynamic range, so the gain must be
-                // negative here. The previous sign boosted quiet passages by
-                // the full ratio (up to +40 dB) and blew up the render.
                 if (over < 0f) {
                     float slope = 1f - 1f / Math.max(1.0001f, r);
                     targetGain = Math.max(-60f, slope * over);
@@ -126,24 +122,25 @@ final class CompressorProcessor extends AudioProcessor {
                 }
             } else {
                 targetGain = DynamicsDetector.softKneeGainDb(over, r, kneeDb);
-                // Noise floor freeze: never boost material below the floor.
-                if (levelDb < floorDb && targetGain > -0.01f) {
-                    targetGain = 0f;
-                }
             }
 
-            // Auto make-up compensates part of the gain reduction the
-            // compressor is actually applying, so a quiet passage is never
-            // lifted and the overall level cannot rise. In upward (expand) mode
-            // the attenuation IS the effect, so compensating it would cancel
-            // the expansion entirely (and could boost quiet material).
-            float slope = 1f - 1f / Math.max(1.0001f, r);
             float reduction = Math.max(0f, -targetGain);
-            avgReductionDb += (reduction - avgReductionDb) * 0.002f;
+            if (levelDb >= floorDb) {
+                avgReductionDb += (reduction - avgReductionDb) * 0.002f;
+            }
             makeupDb = (autoMakeup.getBoolean() && !upward.getBoolean())
                     ? Math.min(24f, avgReductionDb * 0.5f) : 0f;
 
-            float target = targetGain + makeupDb;
+            // Noise-floor freeze: attenuate make-up gain and apply gentle
+            // downward floor damping when signal drops below floorDb.
+            float floorScale = 1f;
+            float floorAttenDb = 0f;
+            if (levelDb < floorDb) {
+                float below = floorDb - levelDb;
+                floorScale = Math.max(0f, 1f - below / 12f);
+                floorAttenDb = -Math.min(12f, below * 0.25f);
+            }
+            float target = targetGain + makeupDb * floorScale + floorAttenDb;
             float step = (target - gainDb) / n;
             FxTelemetry.publishGainReductionDb(targetGain);
             for (int f = 0; f < n; f++) {

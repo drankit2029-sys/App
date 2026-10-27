@@ -12,7 +12,7 @@ final class TremoloProcessor extends AudioProcessor {
     private final FxParameter waveform = addParameter(FxParameter.enumParam(
             "tr_wave", "Waveform", WAVEFORMS, 0));
     private final FxParameter phase = addParameter(FxParameter.intParam(
-            "tr_phase", "Starting Phase", " deg", 0, 360, 5, 0));
+            "tr_phase", "Starting Phase", " deg", 0, 355, 5, 0));
     private final FxParameter depth = addParameter(FxParameter.intParam(
             "tr_depth", "Depth", "%", 0, 100, 1, 40));
     private final FxParameter rate = addParameter(FxParameter.floatParam(

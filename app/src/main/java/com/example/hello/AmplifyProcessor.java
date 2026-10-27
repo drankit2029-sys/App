@@ -57,7 +57,21 @@ final class AmplifyProcessor extends AudioProcessor {
 
     @Override
     public boolean isAudible() {
-        return isEnabled() && Math.abs(gain.getFloat()) > 0.01f;
+        return isEnabled() && (Math.abs(gain.getFloat()) > 0.01f
+                || Math.abs(newPeak.getFloat()) > 0.01f);
+    }
+
+    private float computeEffectiveGainDb(float peakDb) {
+        float requested = gain.getFloat();
+        float ceiling = newPeak.getFloat();
+        float maxAllowed = ceiling - peakDb;
+        if (Math.abs(requested) <= 0.01f && Math.abs(ceiling) > 0.01f) {
+            requested = maxAllowed;
+        }
+        if (!allowClip.getBoolean() && requested > maxAllowed) {
+            requested = maxAllowed;
+        }
+        return requested;
     }
 
     /**
@@ -70,31 +84,33 @@ final class AmplifyProcessor extends AudioProcessor {
         if (raw == null) return;
         float[] sel = EditEngine.readFloatSelection(raw, startFrame, endFrame);
         if (sel == null || sel.length == 0) return;
-        int ch = Math.max(1, Math.min(2, channels));
         float peak = 0f;
         for (int i = 0; i < sel.length; i++) {
             float a = Math.abs(sel[i]);
             if (a > peak) peak = a;
         }
-        measuredPeakDb = Dsp.linToDb(peak);
-        float requested = gain.getFloat();
-        if (!allowClip.getBoolean()) {
-            float ceiling = newPeak.getFloat();
-            // Never exceed the requested new peak level.
-            float maxAllowed = ceiling - measuredPeakDb;
-            if (requested > maxAllowed) requested = maxAllowed;
-        }
-        appliedGainDb = requested;
+        measuredPeakDb = Dsp.linToDb(Math.max(1e-6f, peak));
+        appliedGainDb = computeEffectiveGainDb(measuredPeakDb);
         scanned = true;
     }
 
     @Override
     public void processInPlace(float[] buf, int frames, int channels) {
         if (buf == null || frames <= 0) return;
-        float db = scanned ? appliedGainDb : gain.getFloat();
-        float g = Dsp.dbToLin(db);
-        if (g == 1f) return;
         int n = Math.min(buf.length, frames * Math.max(1, Math.min(2, channels)));
+        float db;
+        if (scanned) {
+            db = appliedGainDb;
+        } else {
+            float peak = 0f;
+            for (int i = 0; i < n; i++) {
+                float a = Math.abs(buf[i]);
+                if (a > peak) peak = a;
+            }
+            db = computeEffectiveGainDb(Dsp.linToDb(Math.max(1e-6f, peak)));
+        }
+        if (Math.abs(db) <= 1e-4f) return;
+        float g = Dsp.dbToLin(db);
         for (int i = 0; i < n; i++) buf[i] *= g;
     }
 }

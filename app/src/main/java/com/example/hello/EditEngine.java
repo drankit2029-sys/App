@@ -515,6 +515,9 @@ public final class EditEngine {
             for (int i = 0; i < common; i++) {
                 rendered[i] = region[i] * dryWeight + rendered[i] * mix;
             }
+            for (int i = common; i < rendered.length; i++) {
+                rendered[i] *= mix;
+            }
         }
 
         if (undo != null) undo.recordSnapshot(raw);
@@ -575,12 +578,10 @@ public final class EditEngine {
         boolean snapshotRecorded = true;
         if (undo != null) snapshotRecorded = undo.recordSnapshot(raw);
 
-        // Two-pass processors (Amplify, Normalize, Loudness) measure the
-        // exact range that is about to be rendered before the first sample
-        // is written.
-        chain.prepareOffline(raw, startFrame, endFrame, info.sampleRate, ch);
-
+        // Reset filter/envelope states first, then run two-pass measurement
+        // (Amplify, Normalize, Loudness) so scanned state is preserved.
         chain.reset();
+        chain.prepareOffline(raw, startFrame, endFrame, info.sampleRate, ch);
         final int latencyFrames = Math.max(0, chain.getLatencyFrames());
         long frameBytes = ch * 4L;
         // Never let the fades eat more than half of a very short range, and

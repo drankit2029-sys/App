@@ -202,8 +202,10 @@ final class LoudnessNormalizationProcessor extends AudioProcessor {
         if (buf == null || frames <= 0) return;
         int ch = Math.max(1, Math.min(2, channels));
         if (!scanned) {
-            runRealtime(buf, frames, ch);
-            return;
+            float lufs = (mode.getEnumIndex() == 1)
+                    ? measureRmsDbfs(buf, frames, ch)
+                    : measureIntegratedLufs(buf, frames, ch);
+            appliedGainDb = (lufs <= -69.5f) ? 0f : (target.getFloat() - lufs);
         }
         float gain = Dsp.dbToLin(appliedGainDb);
         if (gain == 1f) return;

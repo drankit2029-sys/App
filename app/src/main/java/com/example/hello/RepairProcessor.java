@@ -76,15 +76,19 @@ final class RepairProcessor extends AudioProcessor {
         float[] a = lpcCoefficients(pre, p);
         float[] b = lpcCoefficients(post, p);
 
+        float localPeak = 1e-4f;
+        for (int i = 0; i < context; i++) {
+            localPeak = Math.max(localPeak, Math.max(Math.abs(pre[i]), Math.abs(post[i])));
+        }
         int len = end - start;
         for (int i = 0; i < len; i++) {
             float t = (i + 1f) / (len + 1f);
-            // Equal-power cross-fade between the two predictions.
-            float wf = (float) Math.sin(t * Math.PI * 0.5);
-            float wb = (float) Math.cos(t * Math.PI * 0.5);
+            float wf = (float) Math.cos(t * Math.PI * 0.5);
+            float wb = (float) Math.sin(t * Math.PI * 0.5);
             float fwd = predictForward(pre, context, i, a);
             float bwd = predictBackward(post, context, len - 1 - i, b);
-            buf[start + i] = fwd * wf + bwd * wb;
+            float v = fwd * wf + bwd * wb;
+            buf[start + i] = Math.max(-localPeak, Math.min(localPeak, v));
         }
     }
 
@@ -123,12 +127,18 @@ final class RepairProcessor extends AudioProcessor {
      */
     static float[] lpcCoefficients(float[] x, int order) {
         int n = x.length;
+        if (n <= order + 1) return new float[order];
+        float[] w = Dsp.hannWindow(n);
+        float[] xw = new float[n];
+        for (int i = 0; i < n; i++) xw[i] = x[i] * w[i];
         float[] r = new float[order + 1];
         for (int k = 0; k <= order; k++) {
             double sum = 0;
-            for (int i = k; i < n; i++) sum += (double) x[i] * x[i - k];
-            r[k] = (float) (sum / Math.max(1, n - k));
+            for (int i = k; i < n; i++) sum += (double) xw[i] * xw[i - k];
+            // Biased autocorrelation (1/n) guarantees positive-definiteness.
+            r[k] = (float) (sum / n);
         }
+        r[0] *= 1.0001f; // diagonal loading for numerical stability
         if (r[0] <= 1e-12f) return new float[order];
 
         float[] a = new float[order + 1];
@@ -139,10 +149,11 @@ final class RepairProcessor extends AudioProcessor {
             System.arraycopy(a, 0, prev, 0, a.length);
             double acc = r[i];
             for (int j = 1; j < i; j++) acc += prev[j] * r[i - j];
-            float k = (float) (acc / err);
+            float k = (float) (-acc / err);
+            k = Math.max(-0.98f, Math.min(0.98f, k));
             a[i] = k;
             for (int j = 1; j < i; j++) {
-                a[j] = prev[j] - k * prev[i - j];
+                a[j] = prev[j] + k * prev[i - j];
             }
             err *= (1f - k * k);
             if (err <= 1e-12f) {
@@ -183,15 +194,16 @@ final class RepairProcessor extends AudioProcessor {
             if (!repairedAny && frames >= 64) {
                 int worstIdx = -1;
                 float worstDiff = 0f;
-                for (int i = 32; i < frames - 32; i++) {
+                int margin = Math.min(frames / 4, Math.max(32, maxFrames));
+                for (int i = margin; i < frames - margin; i++) {
                     float diff = Math.abs(mono[i] - 0.5f * (mono[i - 1] + mono[i + 1]));
                     if (diff > worstDiff) {
                         worstDiff = diff;
                         worstIdx = i;
                     }
                 }
-                if (worstIdx >= 32 && worstDiff > 0.25f) {
-                    int half = Math.max(1, Math.min(maxFrames / 2, 16));
+                if (worstIdx >= margin && worstDiff > 1e-4f) {
+                    int half = Math.max(2, Math.min(maxFrames / 2, margin - 16));
                     repairRegion(mono, Math.max(16, worstIdx - half),
                             Math.min(frames - 16, worstIdx + half));
                 }

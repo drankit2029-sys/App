@@ -110,7 +110,7 @@ final class ProDeEsserProcessor extends AudioProcessor {
         updateCoefficients();
         final boolean broadband = mode.getCurrentRaw() != 0;
         final float maxCutDb = 6f + 18f * amount;
-        final float threshDb = 1.0f - 11.5f * amount;
+        final float threshDb = -3.0f - 18.0f * amount;
         final float aSibAtt = blockCoef(0.0015f);
         final float aSibRel = blockCoef(0.080f);
         final float aFullAtt = blockCoef(0.010f);

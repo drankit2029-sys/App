@@ -72,7 +72,7 @@ final class ChangeTempoProcessor extends AudioProcessor {
     private double stretchFactor() {
         double pct = percent.getFloat();
         if (pct != 0f) {
-            return 1.0 + pct / 100.0;
+            return 1.0 / Math.max(0.20, 1.0 + pct / 100.0);
         }
         int from = bpmFrom.getCurrentRaw();
         int to = bpmTo.getCurrentRaw();

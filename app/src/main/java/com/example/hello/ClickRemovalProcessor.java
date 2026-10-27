@@ -61,21 +61,21 @@ final class ClickRemovalProcessor extends AudioProcessor {
         float thr = threshold.getCurrentRaw() / 100f;
         int maxSpike = Math.max(1,
                 (int) (maxWidth.getCurrentRaw() * 0.001f * sampleRate));
+        int halfWin = Math.max(1, Math.min(64, maxWidth.getCurrentRaw()));
 
         for (int c = 0; c < ch; c++) {
             boolean[] bad = new boolean[frames];
             boolean any = false;
-            for (int f = 16; f < frames - 16; f++) {
-                // Local RMS over a 33-sample context.
+            int ctx = Math.max(16, halfWin * 2);
+            for (int f = ctx; f < frames - ctx; f++) {
                 double sum = 0;
-                for (int k = -16; k <= 16; k++) {
+                for (int k = -ctx; k <= ctx; k++) {
                     double v = buf[(f + k) * ch + c];
                     sum += v * v;
                 }
-                float rms = (float) Math.sqrt(sum / 33.0);
-                // Deviation from the straight line through the neighbours.
-                float predicted = 0.5f * (buf[(f - 1) * ch + c]
-                        + buf[(f + 1) * ch + c]);
+                float rms = (float) Math.sqrt(sum / (2.0 * ctx + 1.0));
+                float predicted = 0.5f * (buf[(f - halfWin) * ch + c]
+                        + buf[(f + halfWin) * ch + c]);
                 float residual = Math.abs(buf[f * ch + c] - predicted);
                 float ratio = residual / Math.max(1e-6f, rms);
                 if (ratio > thr) {
@@ -84,16 +84,15 @@ final class ClickRemovalProcessor extends AudioProcessor {
                 }
             }
             if (!any) continue;
-            // Merge consecutive flagged samples into runs and interpolate.
             int f = 0;
             while (f < frames) {
                 if (!bad[f]) {
                     f++;
                     continue;
                 }
-                int start = f;
+                int start = Math.max(2, f - halfWin / 2);
                 while (f < frames && bad[f]) f++;
-                int end = f; // exclusive
+                int end = Math.min(frames - 2, f + halfWin / 2);
                 int width = end - start;
                 if (width > maxSpike) continue;
                 if (start < 1 || end >= frames - 1) continue;
