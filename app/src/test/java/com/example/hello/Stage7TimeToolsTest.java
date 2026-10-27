@@ -79,12 +79,12 @@ public class Stage7TimeToolsTest {
         int frames = SR / 4;
         float[] buf = sine(frames, 1, 440, 0.5f);
         ChangeTempoProcessor p = new ChangeTempoProcessor();
-        p.getParam("tempo_percent").setFloat(100f); // twice as long
+        p.getParam("tempo_percent").setFloat(100f); // twice as fast -> half as long
         p.prepare(SR, 1);
         float[] out = p.processOfflineRegion(buf, frames, 1);
         int outFrames = out.length;
-        assertTrue("Duration did not double: " + outFrames,
-                Math.abs(outFrames - frames * 2) < frames / 10);
+        assertTrue("Duration did not halve: " + outFrames,
+                Math.abs(outFrames - frames / 2) < frames / 10);
     }
 
     @Test

@@ -60,7 +60,7 @@ public class Stage4to7AudioChangeTest {
         // Loudness: a -16 LUFS target on a quiet signal must lift it.
         LoudnessNormalizationProcessor loud = new LoudnessNormalizationProcessor();
         loud.getParam("loud_target").setFloat(-16f);
-        assertModifies("Loudness", loud, sine(9600, 2, 1000, 0.02f), 9600, 2);
+        assertModifies("Loudness", loud, sine(48000, 2, 1000, 0.1f), 48000, 2);
     }
 
     @Test
