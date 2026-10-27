@@ -1,10 +1,10 @@
 PROJECT DUMP — TakeOne
-Generated: 2026-10-27T22:35:45
+Generated: 2026-10-28T05:09:33
 Root: /mnt/sdcard/Download/App
-APK md5: 5fecfacd129c26a3ea621eaf3b47d454
-HEAD: fccc715 Align SaveFormat size estimates with the new calculator
+APK md5: 48aa5dea01de6be9eeab5020ff0ebfcb
+HEAD: 0780447 Apply studio audit: default Voice Polish, 10-step undo/redo, UI polish
 Branch: verify/fx-matrix
-Files: 319 source files
+Files: 321 source files
 =================================================================================
 =================================================================================
 FILE: .github/workflows/build-apk.yml
@@ -876,6 +876,1751 @@ This file gives coding agents the context needed to work on this repository.
 ## Notes
 - Environment is aarch64; local gradle execution fails on x86_64 aapt2. Use CI.
 - Large test matrices parallelise on GitHub Actions (~40 concurrent jobs available).
+
+=================================================================================
+FILE: Takeone Audit And Changes.txt
+=================================================================================
+========================================================================================
+TAKEONE STUDIO — DEEP AUDIT, BUG FIXES & FEATURE IMPLEMENTATION REPORT
+========================================================================================
+
+SUMMARY OF CHANGES
+------------------
+1. Default FX Preset Enabled on First Opening (`DspChain.java`, `StudioFragment.java`):
+   - In `DspChain.Config.load(Context)`, when no saved slot configuration exists yet, the 4 starter slots (`NOISE_SUPPRESSION`, `DE_ESSER`, `COMPRESSOR`, `LOW_CUT_HPF`) are now seeded with `enabled = true`, `activePresetId` is set to `Preset.VOICE_POLISH.id`, and legacy fields are synced via `syncLegacyFieldsFromSlots()`.
+   - In `StudioFragment`, added `fxEverOpened` tracking so opening the FX panel immediately arms the active default preset for live preview and bake on Save, while untouched dry recordings continue to use fast-path `StreamingEncoder` adoption.
+
+2. Disabled Undo Popup (`StudioFragment.java`):
+   - Removed `OptionsSheet.showTopPopup(requireContext(), "Edit undone");` from `StudioFragment.performStudioUndo()` and kept `performStudioRedo()` silent.
+
+3. Robust 10-Step Undo & 10-Step Redo (`EditEngine.java`, `WaveformView.java`, `StudioFragment.java`, `fragment_studio.xml`, `ic_edit_redo.xml`):
+   - Increased `EditEngine.MAX_UNDO_STEPS` from 3 to 10.
+   - Added a bounded 10-step `redoStack` to `EditEngine.UndoJournal` (`canRedo()`, `redo(File)`, `undoDepth()`, `redoDepth()`, `clearRedo()`) that automatically clears when a new edit snapshot is recorded.
+   - Upgraded `WaveformView` with 10-step `undoPeakStack`/`undoFramesPerBar` and `redoPeakStack`/`redoFramesPerBar` deques (`popUndoPeaks()`, `popRedoPeaks()`, `discardTopUndoPeaks()`), fixing an unbounded memory leak on `undoFramesPerBar`.
+   - Added `ic_edit_redo.xml` and `@+id/btnEditRedo` to both portrait and landscape `fragment_studio.xml` layouts and wired `performStudioRedo()` and button state styling in `StudioFragment`.
+
+4. Small Centered Popups with Large Rounded Corners (`bg_modal.xml`, `dialog_result.xml`, `OptionsSheet.java`, `TeleDialogs.java`, `StudioFragment.java`):
+   - Increased `@drawable/bg_modal` corner radius from `22dp` to `28dp`.
+   - Updated `layout/dialog_result.xml` from `match_parent` width to a compact `wrap_content` pill layout with `240dp` max text width.
+   - Updated `OptionsSheet.styleAsTopPopup(Dialog)` to use `WRAP_CONTENT` width and height with `Gravity.CENTER` instead of stretching across `dm.widthPixels - dp(ctx, 24)` at the top of the screen.
+   - Tightened centered modal width caps in `OptionsSheet.styleAsCenteredWithMaxWidth`, `TeleDialogs.style`, and `StudioFragment.showEffectDetailModal`.
+
+5. Deep File-by-File Audit Fixes (Bugs, Edge Cases & Dead Code):
+   - `app/src/main/res/mipmap/ic_launcher_round.xml`: Removed trailing non-XML plain text after `</layer-list>` that broke XML parsing.
+   - `app/src/main/res/layout-land/fragment_studio.xml`: Replaced dead, unwired `fxPreviewBtn`/`fxApplyBtn` buttons in the landscape FX panel with `@+id/fxHint` matching portrait.
+   - `MultibandCompressorProcessor.java`: Replaced independent LP/HP subtraction (`mid = buf - low - high`) with a complementary cascade split (`midHigh = buf - low`, `mid = midHigh - high`) to eliminate IIR phase-cancellation notches.
+   - `DeEsserProcessor.java`: Removed `splitHigh` and computed the complementary high band as `buf[idx + c] - lowBand[f * ch + c]` to eliminate the 180° phase-cancellation notch at the crossover frequency.
+   - `ClipFixProcessor.java`: Clamped `start - 3` and `end + 1` slope indices (`Math.max(0, start - 3)`, `Math.min(frames - 1, end + 1)`) to prevent `ArrayIndexOutOfBoundsException` when clipping starts at frame 1 or 2.
+   - `StereoImagingProcessor.java`: Promoted mono Haas delay buffer (`haasHist`, `haasPos`) to persistent instance fields reset in `reset()`, and removed the duplicate `/ 100f` division on `centerPct` that made stereo Center Isolation 100x too weak.
+   - `VocoderProcessor.java`: Moved filter `setSections(...)` initialization from `processInPlace()` into `rebuild()` so filter states are not wiped at every block boundary.
+   - `TruncateSilenceProcessor.java`: Removed unused `ByteArrayOutputStream` allocation and redundant byte-buffer conversions, copying `float[]` slices directly.
+   - `DspChain.java` & `RawFloatPlayer.java`: Fixed `reset()` / `prepareOffline()` call order so two-pass processors (`Normalize`, `LoudnessNormalization`, `Amplify`) keep their scanned state; scaled offline tail samples by `mix`; guarded `if (!stop) framePos = limitFrame;` on offline preview pause; removed dead `isLegacyProcessor`.
+   - `FormatConverter.java`, `FadeProcessor.java`, `StftProcessor.java`: Added `if (pct != lastPct)` progress throttling across all encoders in `FormatConverter` and removed unused fields (`lastCbAt`, `regionFrames`, `frameCounter`, `mag`, `phase`).
+
+========================================================================================
+FILE 1/25: app/src/main/java/com/example/hello/DspChain.java
+TITLE: Enable Default FX Preset (Voice Polish) on First Open, Fix Offline Region Render & Remove Dead Code
+========================================================================================
+EXPLANATION OF CHANGES:
+1. Default FX Preset Enabled on First Open (`Config.load(Context)`):
+   - Previously, when `dsp_slots_json` was absent on first install/launch, `Config.load()` defaulted `activePresetId` to `Preset.CLEAR_ALL.id` and seeded the 4 starter slots (`NOISE_SUPPRESSION`, `DE_ESSER`, `COMPRESSOR`, `LOW_CUT_HPF`) with `enabled = false`.
+   - Changed the default `activePresetId` when `slotsJson == null` to `Preset.VOICE_POLISH.id`, seeded all 4 starter slots with `enabled = true`, and called `c.syncLegacyFieldsFromSlots()` so the FX rack opens with all 4 default effects enabled (`Effects Rack · 4 on`, `Preset: Voice Polish ▾`).
+   - Preserved `new DspChain.Config()` (the no-arg constructor) as inactive so unit tests expecting an empty default constructor continue to pass.
+
+2. Offline + In-Place Region Rendering Fixes (`renderRegionOfflineAndInPlace`):
+   - Previously, `prepareOffline(...)` was called BEFORE `reset()`, which immediately wiped the two-pass analysis state (`scanned = false`) on `NormalizeProcessor`, `LoudnessNormalizationProcessor`, and `AmplifyProcessor`. Swapped the order so `reset()` runs before `prepareOffline(...)`.
+   - When an offline processor lengthened a region (`next.length > buf.length`) with a partial wet/dry mix (`mix < 0.999f`), samples beyond `common = Math.min(buf.length, next.length)` were left unscaled at 100% wet instead of `next[i] *= mix`. Added tail scaling for `[common, next.length)`.
+   - Replaced the manual per-processor loop over `rack.processors()` with `rack.processInPlace(block, n)` so automatic safety limiting and shared tone slot mix rules are respected.
+
+3. Dead Code Removal:
+   - Removed the unused private helper `isLegacyProcessor(AudioProcessor)`.
+----------------------------------------------------------------------------------------
+UNIFIED DIFF:
+--- a/app/src/main/java/com/example/hello/DspChain.java
++++ b/app/src/main/java/com/example/hello/DspChain.java
+@@ -848,9 +848,9 @@
+                 c.customNoisePct = clamp(p.getInt("dsp_custom_noise", 35));
+                 c.customDeEssPct = clamp(p.getInt("dsp_custom_deess", 30));
+                 c.customCompPct = clamp(p.getInt("dsp_custom_comp", 30));
+-                c.activePresetId = p.getString("dsp_preset_id", Preset.CLEAR_ALL.id);
+-
+                 String slotsJson = p.getString("dsp_slots_json", null);
++                c.activePresetId = p.getString("dsp_preset_id",
++                        slotsJson != null ? Preset.CLEAR_ALL.id : Preset.VOICE_POLISH.id);
+                 if (slotsJson != null) {
+                     c.slots.clear();
+                     JSONArray arr = new JSONArray(slotsJson);
+@@ -882,11 +882,13 @@
+                 } else {
+                     c.syncSlotsFromLegacyFields();
+                     if (c.slots.isEmpty()) {
+-                        // Seed default starter pills for the UI rack
+-                        c.slots.add(new EffectSlot(EffectType.NOISE_SUPPRESSION, false, 50, false));
+-                        c.slots.add(new EffectSlot(EffectType.DE_ESSER, false, 45, false));
+-                        c.slots.add(new EffectSlot(EffectType.COMPRESSOR, false, 40, false));
+-                        c.slots.add(new EffectSlot(EffectType.LOW_CUT_HPF, false, 80, false));
++                        // Seed default starter pills for the UI rack with Voice Polish enabled
++                        c.slots.add(new EffectSlot(EffectType.NOISE_SUPPRESSION, true, 50, false));
++                        c.slots.add(new EffectSlot(EffectType.DE_ESSER, true, 45, false));
++                        c.slots.add(new EffectSlot(EffectType.COMPRESSOR, true, 40, false));
++                        c.slots.add(new EffectSlot(EffectType.LOW_CUT_HPF, true, 80, false));
++                        c.activePresetId = Preset.VOICE_POLISH.id;
++                        c.syncLegacyFieldsFromSlots();
+                     }
+                 }
+                 int savedMode = p.getInt("dsp_mode", -1);
+@@ -1021,13 +1023,6 @@
+     /** Stable instance key of a rack entry, used to bind it to a processor. */
+     static String slotInstanceKey(EffectSlot s) {
+         return "slot:" + s.type.id + ":" + s.instanceId;
+-    }
+-
+-    private static boolean isLegacyProcessor(AudioProcessor p) {
+-        String id = p.getId();
+-        return "hpf".equals(id) || "noise".equals(id) || "gate".equals(id)
+-                || "tone".equals(id) || "deess".equals(id)
+-                || "comp".equals(id) || "limiter".equals(id);
+     }
+ 
+     /**
+@@ -1448,33 +1443,23 @@
+                     for (int i = 0; i < common; i++) {
+                         next[i] = buf[i] * dryWeight + next[i] * mix;
+                     }
++                    for (int i = common; i < next.length; i++) {
++                        next[i] *= mix;
++                    }
+                 }
+                 buf = next;
+                 curFrames = buf.length / Math.max(1, channels);
+             }
+         }
+         if (hasInPlaceProcessors() && curFrames > 0) {
++            reset();
+             prepareOffline(raw, startFrame, endFrame, sampleRate, channels);
+-            reset();
+             int chunk = 4096;
+             float[] block = new float[chunk * channels];
+             for (int off = 0; off < curFrames; off += chunk) {
+                 int n = Math.min(chunk, curFrames - off);
+                 System.arraycopy(buf, off * channels, block, 0, n * channels);
+-                for (AudioProcessor p : rack.processors()) {
+-                    if (!p.isEnabled() || p.isOfflineOnly() || !p.isAudible()) continue;
+-                    float mix = p.getWetDryMix();
+-                    if (mix >= 1.0f || (mix > 0.0f && p.handlesOwnWetDryMix())) {
+-                        p.processInPlace(block, n, channels);
+-                    } else if (mix > 0.0f) {
+-                        float[] dry = new float[n * channels];
+-                        System.arraycopy(block, 0, dry, 0, n * channels);
+-                        p.processInPlace(block, n, channels);
+-                        for (int i = 0; i < n * channels; i++) {
+-                            block[i] = dry[i] * (1f - mix) + block[i] * mix;
+-                        }
+-                    }
+-                }
++                rack.processInPlace(block, n);
+                 System.arraycopy(block, 0, buf, off * channels, n * channels);
+             }
+         }
+
+
+========================================================================================
+FILE 2/25: app/src/main/java/com/example/hello/EditEngine.java
+TITLE: Upgrade UndoJournal to 10-Step Undo and 10-Step Redo
+========================================================================================
+EXPLANATION OF CHANGES:
+1. Increased Undo Capacity to 10 Steps:
+   - Changed `MAX_UNDO_STEPS` from `private static final int MAX_UNDO_STEPS = 3;` to `public static final int MAX_UNDO_STEPS = 10;`.
+
+2. Added Bounded 10-Step Redo Stack (`UndoJournal`):
+   - Added `private final Deque<File> redoStack = new ArrayDeque<>();`.
+   - Added `canRedo()`, `undoDepth()`, `redoDepth()`, `clearRedo()`, and `redo(File raw)`.
+   - Updated `canUndo()` and `canRedo()` to prune any stale/non-existent snapshot files from the head of their respective deques before checking `!isEmpty()`.
+   - Updated `recordSnapshot(File raw)` to call `clearRedo()` whenever a brand-new edit is recorded so stale redo states cannot be applied on top of a new timeline branch.
+   - Updated `undo(File raw)` to snapshot the current pre-undo `raw` file into a `.redo` file on `redoStack` (bounded to 10 steps) before restoring the `.undo` snapshot.
+   - Implemented `redo(File raw)` to snapshot the current `raw` file onto the undo `stack` (bounded to 10 steps) before restoring the `.redo` snapshot.
+   - Updated `clear()` to clear and delete both undo and redo snapshot files.
+----------------------------------------------------------------------------------------
+UNIFIED DIFF:
+--- a/app/src/main/java/com/example/hello/EditEngine.java
++++ b/app/src/main/java/com/example/hello/EditEngine.java
+@@ -19,7 +19,7 @@
+ 
+     private static final int CHUNK_BYTES = 65536;
+     private static final long MAX_UNDO_BYTES = 30L * 1024L * 1024L;
+-    private static final int MAX_UNDO_STEPS = 3;
++    public static final int MAX_UNDO_STEPS = 10;
+ 
+     private EditEngine() {}
+ 
+@@ -33,10 +33,11 @@
+         }
+     }
+ 
+-    /** Bounded 3-step undo journal storing pre-edit snapshots in takes/.undo/. */
++    /** Bounded 10-step undo/redo journal storing snapshots in takes/.undo/. */
+     public static final class UndoJournal {
+         private final File undoDir;
+         private final Deque&lt;File&gt; stack = new ArrayDeque<>();
++        private final Deque<File> redoStack = new ArrayDeque<>();
+         private int seq = 0;
+ 
+         public UndoJournal(File takesDir) {
+@@ -46,12 +47,46 @@
+         }
+ 
+         public synchronized boolean canUndo() {
+-            return !stack.isEmpty() && stack.peekFirst().exists();
++            while (!stack.isEmpty() && !stack.peekFirst().exists()) {
++                stack.pollFirst();
++            }
++            return !stack.isEmpty();
++        }
++
++        public synchronized boolean canRedo() {
++            while (!redoStack.isEmpty() && !redoStack.peekFirst().exists()) {
++                redoStack.pollFirst();
++            }
++            return !redoStack.isEmpty();
++        }
++
++        public synchronized int undoDepth() {
++            while (!stack.isEmpty() && !stack.peekFirst().exists()) {
++                stack.pollFirst();
++            }
++            return stack.size();
++        }
++
++        public synchronized int redoDepth() {
++            while (!redoStack.isEmpty() && !redoStack.peekFirst().exists()) {
++                redoStack.pollFirst();
++            }
++            return redoStack.size();
+         }
+ 
+         /** True when {@link #recordSnapshot(File)} would accept `raw`. */
+         public synchronized boolean wouldRecord(File raw) {
+             return raw != null && raw.exists() && raw.length() <= MAX_UNDO_BYTES;
++        }
++
++        public synchronized void clearRedo() {
++            while (!redoStack.isEmpty()) {
++                File old = redoStack.pollFirst();
++                if (old != null) {
++                    // noinspection ResultOfMethodCallIgnored
++                    old.delete();
++                }
++            }
+         }
+ 
+         /**
+@@ -67,6 +102,8 @@
+             if (!wouldRecord(raw)) {
+                 return false;
+             }
++            // noinspection ResultOfMethodCallIgnored
++            undoDir.mkdirs();
+             while (stack.size() >= MAX_UNDO_STEPS) {
+                 File old = stack.removeLast();
+                 // noinspection ResultOfMethodCallIgnored
+@@ -80,6 +117,7 @@
+                 int n;
+                 while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                 stack.addFirst(snap);
++                clearRedo();
+                 return true;
+             } catch (Exception e) {
+                 // noinspection ResultOfMethodCallIgnored
+@@ -88,19 +126,50 @@
+             }
+         }
+ 
+-        /** Restores the most recent snapshot over `raw`. */
++        /** Restores the most recent snapshot over `raw` and pushes current state to redo. */
+         public synchronized boolean undo(File raw) {
+             if (!canUndo() || raw == null) return false;
+             File snap = stack.pollFirst();
+             if (snap == null || !snap.exists()) return false;
++
++            File redoSnap = null;
++            if (wouldRecord(raw)) {
++                // noinspection ResultOfMethodCallIgnored
++                undoDir.mkdirs();
++                while (redoStack.size() >= MAX_UNDO_STEPS) {
++                    File oldRedo = redoStack.removeLast();
++                    // noinspection ResultOfMethodCallIgnored
++                    oldRedo.delete();
++                }
++                redoSnap = new File(undoDir,
++                        raw.getName() + "." + (++seq) + ".redo");
++                try (FileInputStream curIn = new FileInputStream(raw);
++                     FileOutputStream redoOut = new FileOutputStream(redoSnap)) {
++                    byte[] buf = new byte[CHUNK_BYTES];
++                    int n;
++                    while ((n = curIn.read(buf)) > 0) redoOut.write(buf, 0, n);
++                } catch (Exception ignored) {
++                    // noinspection ResultOfMethodCallIgnored
++                    redoSnap.delete();
++                    redoSnap = null;
++                }
++            }
++
+             try (FileInputStream in = new FileInputStream(snap);
+                  RandomAccessFile out = new RandomAccessFile(raw, "rw")) {
+                 out.setLength(0);
+                 byte[] buf = new byte[CHUNK_BYTES];
+                 int n;
+                 while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
++                if (redoSnap != null) {
++                    redoStack.addFirst(redoSnap);
++                }
+                 return true;
+             } catch (Exception e) {
++                if (redoSnap != null) {
++                    // noinspection ResultOfMethodCallIgnored
++                    redoSnap.delete();
++                }
+                 return false;
+             } finally {
+                 // noinspection ResultOfMethodCallIgnored
+@@ -108,11 +177,63 @@
+             }
+         }
+ 
++        /** Re-applies the most recently undone edit over `raw` and pushes current state to undo. */
++        public synchronized boolean redo(File raw) {
++            if (!canRedo() || raw == null) return false;
++            File redoSnap = redoStack.pollFirst();
++            if (redoSnap == null || !redoSnap.exists()) return false;
++
++            File undoSnap = null;
++            if (wouldRecord(raw)) {
++                // noinspection ResultOfMethodCallIgnored
++                undoDir.mkdirs();
++                while (stack.size() >= MAX_UNDO_STEPS) {
++                    File oldUndo = stack.removeLast();
++                    // noinspection ResultOfMethodCallIgnored
++                    oldUndo.delete();
++                }
++                undoSnap = new File(undoDir,
++                        raw.getName() + "." + (++seq) + ".undo");
++                try (FileInputStream curIn = new FileInputStream(raw);
++                     FileOutputStream undoOut = new FileOutputStream(undoSnap)) {
++                    byte[] buf = new byte[CHUNK_BYTES];
++                    int n;
++                    while ((n = curIn.read(buf)) > 0) undoOut.write(buf, 0, n);
++                } catch (Exception ignored) {
++                    // noinspection ResultOfMethodCallIgnored
++                    undoSnap.delete();
++                    undoSnap = null;
++                }
++            }
++
++            try (FileInputStream in = new FileInputStream(redoSnap);
++                 RandomAccessFile out = new RandomAccessFile(raw, "rw")) {
++                out.setLength(0);
++                byte[] buf = new byte[CHUNK_BYTES];
++                int n;
++                while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
++                if (undoSnap != null) {
++                    stack.addFirst(undoSnap);
++                }
++                return true;
++            } catch (Exception e) {
++                if (undoSnap != null) {
++                    // noinspection ResultOfMethodCallIgnored
++                    undoSnap.delete();
++                }
++                return false;
++            } finally {
++                // noinspection ResultOfMethodCallIgnored
++                redoSnap.delete();
++            }
++        }
++
+         public synchronized void clear() {
+             while (!stack.isEmpty()) {
+                 // noinspection ResultOfMethodCallIgnored
+                 stack.pollFirst().delete();
+             }
++            clearRedo();
+         }
+     }
+ 
+
+
+========================================================================================
+FILE 3/25: app/src/main/java/com/example/hello/WaveformView.java
+TITLE: 10-Step Waveform Peak Undo/Redo, Memory Leak Fix & Aborted Edit Rollback
+========================================================================================
+EXPLANATION OF CHANGES:
+1. Added 10-Step Waveform Peak Redo & Fixed `undoFramesPerBar` Leak:
+   - Added `redoPeakStack` and `redoFramesPerBar` deques alongside `undoPeakStack` and `undoFramesPerBar`.
+   - Updated `recordUndoPeaks()` to bound both `undoPeakStack` and `undoFramesPerBar` to `EditEngine.MAX_UNDO_STEPS` (10) — fixing a leak where `undoFramesPerBar` was never trimmed when `undoPeakStack` overflowed — and to clear `redoPeakStack` and `redoFramesPerBar` on every new edit.
+   - Updated `popUndoPeaks()` to push the current waveform peaks and `framesPerBar` onto `redoPeakStack` / `redoFramesPerBar` (bounded to 10 steps) before restoring the undo snapshot.
+   - Added `popRedoPeaks()` to restore the most recent redo peak snapshot and push the current state back onto `undoPeakStack` / `undoFramesPerBar`.
+   - Added `discardTopUndoPeaks()` so that if an edit or FX commit fails before modifying the waveform, the pre-pushed undo snapshot can be discarded without polluting `redoPeakStack`.
+   - Updated `enterSubEditorMode()` and `exitSubEditorMode()` to also clear `redoPeakStack` and `redoFramesPerBar`.
+----------------------------------------------------------------------------------------
+UNIFIED DIFF:
+--- a/app/src/main/java/com/example/hello/WaveformView.java
++++ b/app/src/main/java/com/example/hello/WaveformView.java
+@@ -81,6 +81,8 @@
+ 
+     private final Deque<float[]> undoPeakStack = new ArrayDeque<>();
+     private final Deque<Float> undoFramesPerBar = new ArrayDeque<>();
++    private final Deque<float[]> redoPeakStack = new ArrayDeque<>();
++    private final Deque&lt;Float&gt; redoFramesPerBar = new ArrayDeque<>();
+     private float[] savedReplaceTailPeaks = null;
+     private float[] stashedParentPeaks = null;
+     private int stashedParentSelStart = 0;
+@@ -245,20 +247,72 @@
+     /** Snapshots the current in-memory waveform peaks before an edit operation. */
+     public synchronized void recordUndoPeaks() {
+         if (count <= 0) return;
+-        while (undoPeakStack.size() >= 3) {
++        while (undoPeakStack.size() >= EditEngine.MAX_UNDO_STEPS) {
+             undoPeakStack.removeLast();
++        }
++        while (undoFramesPerBar.size() >= EditEngine.MAX_UNDO_STEPS) {
++            undoFramesPerBar.removeLast();
+         }
+         undoPeakStack.addFirst(Arrays.copyOf(history, count));
+         undoFramesPerBar.addFirst(framesPerBar);
+-    }
+-
+-    /** Restores the most recent in-memory waveform peak snapshot on Undo. */
++        redoPeakStack.clear();
++        redoFramesPerBar.clear();
++    }
++
++    /** Discards the most recently recorded undo peak snapshot when an edit aborts before modifying the waveform. */
++    public synchronized void discardTopUndoPeaks() {
++        if (!undoPeakStack.isEmpty()) undoPeakStack.pollFirst();
++        if (!undoFramesPerBar.isEmpty()) undoFramesPerBar.pollFirst();
++    }
++
++    /** Restores the most recent in-memory waveform peak snapshot on Undo and saves current peaks for Redo. */
+     public synchronized boolean popUndoPeaks() {
+         if (undoPeakStack.isEmpty()) return false;
+         float[] snap = undoPeakStack.pollFirst();
+         Float snapFrames = undoFramesPerBar.pollFirst();
+         if (snap == null) return false;
+         dropFxBaseLocked();
++        if (count > 0) {
++            while (redoPeakStack.size() >= EditEngine.MAX_UNDO_STEPS) {
++                redoPeakStack.removeLast();
++            }
++            while (redoFramesPerBar.size() >= EditEngine.MAX_UNDO_STEPS) {
++                redoFramesPerBar.removeLast();
++            }
++            redoPeakStack.addFirst(Arrays.copyOf(history, count));
++            redoFramesPerBar.addFirst(framesPerBar);
++        }
++        if (snapFrames != null) framesPerBar = snapFrames;
++        if (history.length < snap.length) {
++            history = new float[Math.max(COLS, snap.length)];
++        }
++        Arrays.fill(history, 0f);
++        System.arraycopy(snap, 0, history, 0, snap.length);
++        count = snap.length;
++        playheadPos = count;
++        playheadIndex = count;
++        selectionActive = false;
++        postInvalidateOnAnimation();
++        return true;
++    }
++
++    /** Restores the most recent in-memory waveform peak snapshot on Redo and saves current peaks for Undo. */
++    public synchronized boolean popRedoPeaks() {
++        if (redoPeakStack.isEmpty()) return false;
++        float[] snap = redoPeakStack.pollFirst();
++        Float snapFrames = redoFramesPerBar.pollFirst();
++        if (snap == null) return false;
++        dropFxBaseLocked();
++        if (count > 0) {
++            while (undoPeakStack.size() >= EditEngine.MAX_UNDO_STEPS) {
++                undoPeakStack.removeLast();
++            }
++            while (undoFramesPerBar.size() >= EditEngine.MAX_UNDO_STEPS) {
++                undoFramesPerBar.removeLast();
++            }
++            undoPeakStack.addFirst(Arrays.copyOf(history, count));
++            undoFramesPerBar.addFirst(framesPerBar);
++        }
+         if (snapFrames != null) framesPerBar = snapFrames;
+         if (history.length < snap.length) {
+             history = new float[Math.max(COLS, snap.length)];
+@@ -679,6 +733,8 @@
+         stashedParentFramesPerBar = framesPerBar;
+         undoPeakStack.clear();
+         undoFramesPerBar.clear();
++        redoPeakStack.clear();
++        redoFramesPerBar.clear();
+         Arrays.fill(history, 0f);
+         count = 0;
+         playheadPos = 0f;
+@@ -699,6 +755,8 @@
+         stashedParentPeaks = null;
+         undoPeakStack.clear();
+         undoFramesPerBar.clear();
++        redoPeakStack.clear();
++        redoFramesPerBar.clear();
+ 
+         if (!commitReplacement) {
+             if (history.length < parent.length) {
+
+
+========================================================================================
+FILE 4/25: app/src/main/java/com/example/hello/StudioFragment.java
+TITLE: Disable Undo Popup, Wire Redo Button, Enable First-Open FX Tracking & Compact Modal Width
+========================================================================================
+EXPLANATION OF CHANGES:
+1. Disabled Undo Popup:
+   - Removed `OptionsSheet.showTopPopup(requireContext(), "Edit undone");` from `performStudioUndo()`.
+   - Implemented `performStudioRedo()` without any popup banner.
+
+2. Wired Redo Chip (`btnEditRedo`):
+   - Bound `btnEditRedo = v.findViewById(R.id.btnEditRedo)` in `onViewCreated`.
+   - Wired its click listener (guarded by `if (replaceModeArmed || fxPanelOpen) return; if (!ensurePausedForEditing()) return;`) to `performStudioRedo()`.
+   - Updated `paintEditorStrip()` to enable/disable and tint `btnEditRedo` (`R.drawable.ic_edit_redo`) based on `othersEnabled && uj != null && uj.canRedo()`.
+
+3. Clean Waveform Undo/Redo Bookkeeping on Edits & FX Commits:
+   - In `runEditOperation(boolean isTrim)`, moved `waveform.recordUndoPeaks()` to run right after `EditEngine.cropToSelection` / `EditEngine.deleteSelection` succeeds (before mutating the waveform buckets), so a rejected edit never touches the waveform undo/redo stacks.
+   - In `commitDspFx()`, replaced error-path `waveform.popUndoPeaks()` calls with `waveform.discardTopUndoPeaks()`, and when iterating over multiple offline processors, passed `uj` only on the first offline processor and recomputed `curTotalBefore` before each offline processor so multi-offline-effect commits record a single undo step and compute exact region end frames.
+
+4. First-Open Default FX Activation (`fxEverOpened` & `syncFxBakeRequired`):
+   - Added `fxEverOpened` (saved/restored across configuration changes in `onSaveInstanceState` / `restoreEditingMode` and set to `true` when `setFxPanelVisible(true)` is called).
+   - Updated `syncFxBakeRequired()` to check whether the user has opened the FX panel (`fxPanelOpen || fxEverOpened`) or saved DSP preferences in `SharedPreferences("takeone")`, ensuring default Voice Polish effects are active as soon as the FX panel is opened while untouched dry recording sessions still adopt `StreamingEncoder` fast-path encoding.
+
+5. Compact Centered Effect Detail Modal (`showEffectDetailModal`):
+   - Capped `dialogWidth` to `Math.min(Math.round(dm.widthPixels * 0.86f), Math.round(350 * density))` with `window.setGravity(Gravity.CENTER)` instead of spanning 94% of the screen width.
+----------------------------------------------------------------------------------------
+UNIFIED DIFF:
+--- a/app/src/main/java/com/example/hello/StudioFragment.java
++++ b/app/src/main/java/com/example/hello/StudioFragment.java
+@@ -72,6 +72,7 @@
+     private TextView btnCutDelete;
+     private TextView btnDspFx;
+     private TextView btnEditUndo;
++    private TextView btnEditRedo;
+ 
+     // Inline FX Window views (replaces telePanel when open)
+     private View fxPanel;
+@@ -81,6 +82,7 @@
+     private android.widget.LinearLayout fxListContainer;
+     private TextView fxHint;
+     private boolean fxPanelOpen = false;
++    private boolean fxEverOpened = false;
+     private boolean teleWasVisibleBeforeFx = true;
+     /**
+      * The region the FX rack commits to, frozen when the rack opens.
+@@ -409,6 +411,7 @@
+         btnCutDelete = v.findViewById(R.id.btnCutDelete);
+         btnDspFx = v.findViewById(R.id.btnDspFx);
+         btnEditUndo = v.findViewById(R.id.btnEditUndo);
++        btnEditRedo = v.findViewById(R.id.btnEditRedo);
+ 
+         fxPanel = v.findViewById(R.id.fxPanel);
+         fxTitle = v.findViewById(R.id.fxTitle);
+@@ -534,13 +537,21 @@
+             });
+         }
+ 
+-        // 6) "Undo" Button
++        // 6) "Undo" & "Redo" Buttons
+         if (btnEditUndo != null) {
+             PressAnim.applySoft(btnEditUndo, 0.95f);
+             btnEditUndo.setOnClickListener(view -> {
+                 if (replaceModeArmed || fxPanelOpen) return;
+                 if (!ensurePausedForEditing()) return;
+                 performStudioUndo();
++            });
++        }
++        if (btnEditRedo != null) {
++            PressAnim.applySoft(btnEditRedo, 0.95f);
++            btnEditRedo.setOnClickListener(view -> {
++                if (replaceModeArmed || fxPanelOpen) return;
++                if (!ensurePausedForEditing()) return;
++                performStudioRedo();
+             });
+         }
+ 
+@@ -740,6 +751,7 @@
+     public void onSaveInstanceState(@NonNull Bundle outState) {
+         super.onSaveInstanceState(outState);
+         outState.putBoolean("fxPanelOpen", fxPanelOpen);
++        outState.putBoolean("fxEverOpened", fxEverOpened);
+         outState.putBoolean("replaceModeArmed", replaceModeArmed);
+         outState.putBoolean("inSelectAndReplaceEditor", inSelectAndReplaceEditor);
+         outState.putBoolean("userScrolledWhilePaused", userScrolledWhilePaused);
+@@ -767,6 +779,7 @@
+     private void restoreEditingMode(@Nullable Bundle state) {
+         if (state == null || waveform == null) return;
+         boolean fxWasOpen = state.getBoolean("fxPanelOpen", false);
++        fxEverOpened = state.getBoolean("fxEverOpened", false) || fxWasOpen;
+         boolean selActive = state.getBoolean("selActive", false);
+         float selStart = state.getFloat("selStart", 0f);
+         float selEnd = state.getFloat("selEnd", 1f);
+@@ -3178,9 +3191,9 @@
+             setChipIconAndTint(btnDspFx, R.drawable.ic_edit_fx, col);
+         }
+ 
+-        // 6) Undo Button: disabled while Replace mode is on.
++        // 6) Undo & Redo Buttons: disabled while Replace mode is on.
++        EditEngine.UndoJournal uj = activeUndoJournal();
+         if (btnEditUndo != null) {
+-            EditEngine.UndoJournal uj = activeUndoJournal();
+             boolean canUndo = othersEnabled && uj != null && uj.canUndo();
+             btnEditUndo.setEnabled(canUndo);
+             btnEditUndo.setClickable(canUndo);
+@@ -3188,6 +3201,15 @@
+             int col = canUndo ? 0xFFF2F4F7 : 0xFF5D6672;
+             btnEditUndo.setTextColor(col);
+             setChipIconAndTint(btnEditUndo, R.drawable.ic_edit_undo, col);
++        }
++        if (btnEditRedo != null) {
++            boolean canRedo = othersEnabled && uj != null && uj.canRedo();
++            btnEditRedo.setEnabled(canRedo);
++            btnEditRedo.setClickable(canRedo);
++            btnEditRedo.setAlpha(canRedo ? 1f : 0.35f);
++            int col = canRedo ? 0xFFF2F4F7 : 0xFF5D6672;
++            btnEditRedo.setTextColor(col);
++            setChipIconAndTint(btnEditRedo, R.drawable.ic_edit_redo, col);
+         }
+ 
+         if (hintText != null && canEdit) {
+@@ -3293,12 +3315,13 @@
+             // snapshot itself is still taken by crop/delete AFTER they
+             // validate the range, so a rejected edit leaves no orphan.
+             undoRecorded = uj == null || uj.wouldRecord(raw);
+-            if (undoRecorded) waveform.recordUndoPeaks();
+             if (isTrim) {
+                 EditEngine.cropToSelection(raw, start, end, uj);
++                if (undoRecorded) waveform.recordUndoPeaks();
+                 waveform.cropToSelectionBuckets();
+             } else {
+                 EditEngine.deleteSelection(raw, start, end, uj);
++                if (undoRecorded) waveform.recordUndoPeaks();
+                 waveform.deleteSelectionBuckets();
+             }
+             dspBakedToRaw = false;
+@@ -3319,11 +3342,9 @@
+             OptionsSheet.showTopPopup(requireContext(),
+                     isTrim ? "Audio trimmed" : "Selection deleted");
+         } catch (IllegalArgumentException iae) {
+-            if (undoRecorded) waveform.popUndoPeaks();
+             Toast.makeText(requireContext(), iae.getMessage(),
+                     Toast.LENGTH_SHORT).show();
+         } catch (Exception e) {
+-            if (undoRecorded) waveform.popUndoPeaks();
+             Toast.makeText(requireContext(), "Edit failed",
+                     Toast.LENGTH_SHORT).show();
+         }
+@@ -3361,7 +3382,42 @@
+                 if (timerText != null) {
+                     timerText.setText(formatTimer(engine.durationMs()));
+                 }
+-                OptionsSheet.showTopPopup(requireContext(), "Edit undone");
++            }
++        } catch (Exception ignored) {}
++        paint();
++    }
++
++    private void performStudioRedo() {
++        if (!isAdded()) return;
++        stopStudioPreview();
++        File raw = engine.rawFile;
++        EditEngine.UndoJournal uj = activeUndoJournal();
++        if (raw == null || uj == null || !uj.canRedo()) return;
++        try {
++            if (uj.redo(raw)) {
++                dspBakedToRaw = false;
++                dspSubRangeBaked = false;
++                lastEditWasSubRangeBake = false;
++                userScrolledWhilePaused = false;
++                engine.abortStreaming();
++                engine.dataBytes = RecordingEngine.payloadBytesOf(raw);
++                long total = engine.totalFrames();
++                engine.seekCursorFrame(total);
++                if (waveform != null) {
++                    if (!waveform.popRedoPeaks()) {
++                        waveform.loadFromFloatWavTwentyHz(raw, () -> {
++                            waveform.syncFramesPerBar(engine.totalFrames());
++                            refreshZoomValue();
++                        });
++                    } else {
++                        waveform.syncFramesPerBar(total);
++                        waveform.setPlayheadFraction(1f);
++                        refreshZoomValue();
++                    }
++                }
++                if (timerText != null) {
++                    timerText.setText(formatTimer(engine.durationMs()));
++                }
+             }
+         } catch (Exception ignored) {}
+         paint();
+@@ -3393,6 +3449,7 @@
+         }
+         fxPanelOpen = open;
+         if (open) {
++            fxEverOpened = true;
+             teleWasVisibleBeforeFx =
+                     telePanel.getVisibility() == View.VISIBLE;
+             // Freeze the apply target: the selection at the moment the rack
+@@ -3644,7 +3701,21 @@
+      */
+     private void syncFxBakeRequired() {
+         if (engine == null) return;
++        boolean userConfiguredOrOpenedFx = fxPanelOpen || fxEverOpened;
++        if (!userConfiguredOrOpenedFx && isAdded()) {
++            try {
++                android.content.SharedPreferences sp = requireContext()
++                        .getSharedPreferences("takeone", Context.MODE_PRIVATE);
++                userConfiguredOrOpenedFx = sp.contains("dsp_slots_json")
++                        || sp.contains("dsp_mode")
++                        || sp.contains("dsp_noise")
++                        || sp.contains("dsp_deess")
++                        || sp.contains("dsp_comp")
++                        || sp.contains("dsp_hpf");
++            } catch (Exception ignored) {}
++        }
+         engine.setFxBakeRequired(!dspBakedToRaw
++                && userConfiguredOrOpenedFx
+                 && dspConfig != null && dspConfig.isActive());
+     }
+ 
+@@ -4482,13 +4553,15 @@
+                     new android.graphics.drawable.ColorDrawable(0x00000000));
+             window.setDimAmount(0.62f);
+             android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+-            int dialogWidth = Math.round(dm.widthPixels * 0.94f);
+-            int maxHeight = Math.round(dm.heightPixels * 0.84f);
++            int dialogWidth = Math.min(Math.round(dm.widthPixels * 0.86f),
++                    Math.round(350 * density));
++            int maxHeight = Math.round(dm.heightPixels * 0.82f);
+             root.measure(View.MeasureSpec.makeMeasureSpec(
+                             dialogWidth, View.MeasureSpec.EXACTLY),
+                     View.MeasureSpec.makeMeasureSpec(
+                             maxHeight, View.MeasureSpec.AT_MOST));
+             int dialogHeight = Math.min(maxHeight, root.getMeasuredHeight());
++            window.setGravity(android.view.Gravity.CENTER);
+             window.setLayout(dialogWidth, dialogHeight);
+         }
+     }
+@@ -5593,18 +5666,27 @@
+                     chain.offlineProcessors();
+             if (!offline.isEmpty()) {
+                 long regionEnd = end;
++                boolean firstOffline = true;
+                 for (AudioProcessor proc : offline) {
++                    FormatConverter.WavInfo curInfo = FormatConverter.readFloatWav(raw);
++                    long curTotalBefore = curInfo.dataBytes / 4 / Math.max(1, curInfo.channels);
+                     long newTotal = EditEngine.applyLengthChangingEffectToRange(
+-                            raw, start, regionEnd, proc, uj);
++                            raw, start, regionEnd, proc, firstOffline ? uj : null);
+                     if (newTotal < 0) {
+-                        waveform.popUndoPeaks();
++                        if (firstOffline) {
++                            waveform.discardTopUndoPeaks();
++                        } else if (uj != null && uj.canUndo()) {
++                            uj.undo(raw);
++                            waveform.discardTopUndoPeaks();
++                        }
+                         peaksPushed = false;
+                         Toast.makeText(requireContext(),
+                                 "This effect could not be applied here",
+                                 Toast.LENGTH_SHORT).show();
+                         return false;
+                     }
+-                    regionEnd = start + (newTotal - (totalFrames - regionEnd));
++                    firstOffline = false;
++                    regionEnd = start + (newTotal - (curTotalBefore - regionEnd));
+                 }
+                 // The offline pass rewrote the region: run the remaining
+                 // in-place processors over the new boundaries.
+@@ -5642,7 +5724,7 @@
+             boolean snapshotRecorded =
+                     EditEngine.applyDspToRange(raw, start, end, chain, uj);
+             if (!snapshotRecorded) {
+-                waveform.popUndoPeaks();
++                waveform.discardTopUndoPeaks();
+                 peaksPushed = false;
+             }
+             lastEditWasSubRangeBake = false;
+@@ -5678,7 +5760,7 @@
+             waveform.clearSelection();
+             OptionsSheet.showTopPopup(requireContext(), "Effects applied");
+         } catch (Exception e) {
+-            if (peaksPushed && waveform != null) waveform.popUndoPeaks();
++            if (peaksPushed && waveform != null) waveform.discardTopUndoPeaks();
+             Toast.makeText(requireContext(), "FX failed",
+                     Toast.LENGTH_SHORT).show();
+             return false;
+
+
+========================================================================================
+FILE 5/25: app/src/main/java/com/example/hello/OptionsSheet.java
+TITLE: Small Centered Popups with Wrap-Content Width
+========================================================================================
+EXPLANATION OF CHANGES:
+1. Centered Compact Result Popups (`styleAsTopPopup`):
+   - Changed `lp.width` from `dm.widthPixels - dp(ctx, 24)` to `WindowManager.LayoutParams.WRAP_CONTENT`.
+   - Changed `lp.gravity` from `Gravity.TOP | Gravity.CENTER_HORIZONTAL` (with `lp.y = dp(ctx, 12)`) to `Gravity.CENTER` (with `lp.x = 0; lp.y = 0;`).
+   - Result popups (`showResult` / `showTopPopup`) now appear as compact, centered floating pills in the middle of the screen instead of stretching across the entire screen width.
+
+2. Tighter Centered Dialog Width Cap (`styleAsCenteredWithMaxWidth`):
+   - Capped `maxWidthDp` to `Math.min(maxWidthDp, isLand ? 380 : 330)` and `Math.round(dm.widthPixels * 0.84f)` so modal dialogs sit compactly in the center of the screen.
+----------------------------------------------------------------------------------------
+UNIFIED DIFF:
+--- a/app/src/main/java/com/example/hello/OptionsSheet.java
++++ b/app/src/main/java/com/example/hello/OptionsSheet.java
+@@ -848,17 +848,16 @@
+     public static void styleAsTopPopup(Dialog dialog) {
+         Window w = dialog.getWindow();
+         if (w == null) return;
+-        Context ctx = dialog.getContext();
+-        DisplayMetrics dm = ctx.getResources().getDisplayMetrics();
+         w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+         w.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+         w.addFlags(WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL);
+         w.setDimAmount(0f);
+         WindowManager.LayoutParams lp = w.getAttributes();
+-        lp.width = dm.widthPixels - dp(ctx, 24);
++        lp.width = WindowManager.LayoutParams.WRAP_CONTENT;
+         lp.height = WindowManager.LayoutParams.WRAP_CONTENT;
+-        lp.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+-        lp.y = dp(ctx, 12);
++        lp.gravity = Gravity.CENTER;
++        lp.x = 0;
++        lp.y = 0;
+         w.setAttributes(lp);
+         View decor = w.getDecorView();
+         if (decor != null) decor.setPadding(0, 0, 0, 0);
+@@ -877,8 +876,9 @@
+         w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+         w.setDimAmount(0.62f);
+         WindowManager.LayoutParams lp = w.getAttributes();
+-        int maxW = dp(ctx, maxWidthDp);
+-        lp.width = Math.min(dm.widthPixels - dp(ctx, 48), maxW);
++        int cappedDp = Math.min(maxWidthDp, isLand ? 380 : 330);
++        int maxW = dp(ctx, cappedDp);
++        lp.width = Math.min(Math.round(dm.widthPixels * 0.84f), maxW);
+         lp.height = WindowManager.LayoutParams.WRAP_CONTENT;
+         lp.gravity = Gravity.CENTER;
+         lp.horizontalMargin = 0f;
+
+
+========================================================================================
+FILE 6/25: app/src/main/java/com/example/hello/TeleDialogs.java
+TITLE: Compact Centered Teleprompter Editor Modal Width
+========================================================================================
+EXPLANATION OF CHANGES:
+1. Tighter Width Cap (`style(Dialog d)`):
+   - Reduced `maxW` from `dp(ctx, isLand ? 460 : 400)` to `dp(ctx, isLand ? 380 : 340)` and capped `lp.width` at `Math.min(Math.round(dm.widthPixels * 0.86f), maxW)` so the teleprompter dialog is compact and centered.
+----------------------------------------------------------------------------------------
+UNIFIED DIFF:
+--- a/app/src/main/java/com/example/hello/TeleDialogs.java
++++ b/app/src/main/java/com/example/hello/TeleDialogs.java
+@@ -71,8 +71,8 @@
+         w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+         w.setDimAmount(0.62f);
+         WindowManager.LayoutParams lp = w.getAttributes();
+-        int maxW = dp(ctx, isLand ? 460 : 400);
+-        lp.width = Math.min(dm.widthPixels - dp(ctx, 32), maxW);
++        int maxW = dp(ctx, isLand ? 380 : 340);
++        lp.width = Math.min(Math.round(dm.widthPixels * 0.86f), maxW);
+         lp.height = WindowManager.LayoutParams.WRAP_CONTENT;
+         lp.gravity = Gravity.CENTER;
+         w.setAttributes(lp);
+
+
+========================================================================================
+FILE 7/25: app/src/main/res/drawable/bg_modal.xml
+TITLE: Increase Modal Corner Radius to 28dp for Large Rounded Corners
+========================================================================================
+EXPLANATION OF CHANGES:
+1. Large Rounded Corners:
+   - Increased `<corners android:radius="22dp" />` to `<corners android:radius="28dp" />` so all popups and modal dialogs render with large rounded corners.
+----------------------------------------------------------------------------------------
+UNIFIED DIFF:
+--- a/app/src/main/res/drawable/bg_modal.xml
++++ b/app/src/main/res/drawable/bg_modal.xml
+@@ -1,6 +1,6 @@
+ &lt;?xml version=&quot;1.0&quot; encoding=&quot;utf-8&quot;?&gt;
+ &lt;shape xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot; android:shape=&quot;rectangle&quot;&gt;
+     &lt;solid android:color=&quot;@color/surface&quot; /&gt;
+-    &lt;corners android:radius=&quot;22dp&quot; /&gt;
++    &lt;corners android:radius=&quot;28dp&quot; /&gt;
+     &lt;stroke android:width=&quot;1dp&quot; android:color=&quot;@color/divider&quot; /&gt;
+ &lt;/shape&gt;
+
+
+========================================================================================
+FILE 8/25: app/src/main/res/layout/dialog_result.xml
+TITLE: Compact Wrap-Content Layout for Centered Result Popups
+========================================================================================
+EXPLANATION OF CHANGES:
+1. Compact Centered Layout:
+   - Changed the root `LinearLayout` width from `match_parent` to `wrap_content` with comfortable horizontal/vertical padding (`18dp` start, `22dp` end, `14dp` top/bottom).
+   - Changed the inner text `LinearLayout` from `0dp` + `layout_weight="1"` to `wrap_content`, and constrained `resultTitle` and `resultMessage` with `android:maxWidth="240dp"`.
+   - Preserved all existing resource IDs (`resultIconBg`, `resultIcon`, `resultTitle`, `resultMessage`, `resultOk`) and the exact 2-level parent hierarchy around `resultTitle`.
+----------------------------------------------------------------------------------------
+UNIFIED DIFF:
+--- a/app/src/main/res/layout/dialog_result.xml
++++ b/app/src/main/res/layout/dialog_result.xml
+@@ -1,15 +1,15 @@
+ &lt;?xml version=&quot;1.0&quot; encoding=&quot;utf-8&quot;?&gt;
+ <LinearLayout xmlns:android="https://www.google.com/search?q=http://schemas.android.com/apk/res/android"
+-    android:layout_width="match_parent"
++    android:layout_width="wrap_content"
+     android:layout_height="wrap_content"
+     android:background="@drawable/bg_modal"
+     android:elevation="16dp"
+     android:gravity="center_vertical"
+     android:orientation="horizontal"
+-    android:paddingStart="14dp"
+-    android:paddingTop="12dp"
+-    android:paddingEnd="14dp"
+-    android:paddingBottom="12dp">
++    android:paddingStart="18dp"
++    android:paddingTop="14dp"
++    android:paddingEnd="22dp"
++    android:paddingBottom="14dp">
+ 
+     <FrameLayout
+         android:id="@+id/resultIconBg"
+@@ -26,17 +26,17 @@
+     &lt;/FrameLayout&gt;
+ 
+     <LinearLayout
+-        android:layout_width="0dp"
++        android:layout_width="wrap_content"
+         android:layout_height="wrap_content"
+         android:layout_marginStart="12dp"
+-        android:layout_marginEnd="10dp"
+-        android:layout_weight="1"
++        android:layout_marginEnd="6dp"
+         android:orientation="vertical">
+ 
+         <TextView
+             android:id="@+id/resultTitle"
+-            android:layout_width="match_parent"
++            android:layout_width="wrap_content"
+             android:layout_height="wrap_content"
++            android:maxWidth="240dp"
+             android:ellipsize="end"
+             android:maxLines="1"
+             android:textColor="@color/text_primary"
+@@ -45,8 +45,9 @@
+ 
+         <TextView
+             android:id="@+id/resultMessage"
+-            android:layout_width="match_parent"
++            android:layout_width="wrap_content"
+             android:layout_height="wrap_content"
++            android:maxWidth="240dp"
+             android:layout_marginTop="2dp"
+             android:ellipsize="end"
+             android:maxLines="2"
+
+
+========================================================================================
+FILE 9/25: app/src/main/res/drawable/ic_edit_redo.xml
+TITLE: New Clockwise Redo Vector Icon Drawable
+========================================================================================
+EXPLANATION OF CHANGES:
+1. Added `ic_edit_redo.xml`:
+   - Created a 13dp x 13dp clockwise redo arrow vector drawable matching the exact stroke width (`2.2`) and styling of `ic_edit_undo.xml`.
+----------------------------------------------------------------------------------------
+UNIFIED DIFF:
+--- /dev/null
++++ b/app/src/main/res/drawable/ic_edit_redo.xml
+@@ -0,0 +1,21 @@
++&lt;?xml version=&quot;1.0&quot; encoding=&quot;utf-8&quot;?&gt;
++<vector xmlns:android="https://www.google.com/search?q=http://schemas.android.com/apk/res/android"
++    android:width="13dp"
++    android:height="13dp"
++    android:viewportWidth="24"
++    android:viewportHeight="24">
++    <path
++        android:fillColor="#00000000"
++        android:pathData="M21,7v6h-6"
++        android:strokeWidth="2.2"
++        android:strokeColor="#FFFFFFFF"
++        android:strokeLineCap="round"
++        android:strokeLineJoin="round" />
++    <path
++        android:fillColor="#00000000"
++        android:pathData="M3,17a9,9 0,0 1,9 -9,9 9,0 0,1 6,2.3L21,13"
++        android:strokeWidth="2.2"
++        android:strokeColor="#FFFFFFFF"
++        android:strokeLineCap="round"
++        android:strokeLineJoin="round" />
++&lt;/vector&gt;
+
+
+========================================================================================
+FILE 10/25: app/src/main/res/layout/fragment_studio.xml
+TITLE: Add Redo Chip (btnEditRedo) to Portrait Studio Editor Strip
+========================================================================================
+EXPLANATION OF CHANGES:
+1. Added `@+id/btnEditRedo`:
+   - Added the `Redo` chip (`@+id/btnEditRedo`) with `@drawable/ic_edit_redo` immediately after `@+id/btnEditUndo` in the portrait Studio editor strip.
+----------------------------------------------------------------------------------------
+UNIFIED DIFF:
+--- a/app/src/main/res/layout/fragment_studio.xml
++++ b/app/src/main/res/layout/fragment_studio.xml
+@@ -552,6 +552,21 @@
+                         android:text="Undo"
+                         android:textColor="@color/text_hint"
+                         android:textSize="11sp" />
++
++                    <TextView
++                        android:id="@+id/btnEditRedo"
++                        android:layout_width="wrap_content"
++                        android:layout_height="28dp"
++                        android:layout_marginStart="6dp"
++                        android:background="@drawable/bg_chip"
++                        android:drawableStart="@drawable/ic_edit_redo"
++                        android:drawablePadding="5dp"
++                        android:gravity="center"
++                        android:paddingLeft="10dp"
++                        android:paddingRight="11dp"
++                        android:text="Redo"
++                        android:textColor="@color/text_hint"
++                        android:textSize="11sp" />
+                 </LinearLayout>
+             </HorizontalScrollView>
+ 
+
+
+========================================================================================
+FILE 11/25: app/src/main/res/layout-land/fragment_studio.xml
+TITLE: Add Redo Chip (btnEditRedo) & Fix Dead Landscape FX Buttons
+========================================================================================
+EXPLANATION OF CHANGES:
+1. Added `@+id/btnEditRedo`:
+   - Added the `Redo` chip (`@+id/btnEditRedo`) with `@drawable/ic_edit_redo` immediately after `@+id/btnEditUndo` in the landscape Studio editor strip.
+
+2. Replaced Dead `fxPreviewBtn` / `fxApplyBtn` with `@+id/fxHint`:
+   - The landscape layout still had obsolete, unwired `fxPreviewBtn` and `fxApplyBtn` buttons at the bottom of `fxPanel` instead of `@+id/fxHint`, leaving two dead buttons in landscape and `fxHint == null`. Replaced that block with `@+id/fxHint` matching the portrait layout.
+----------------------------------------------------------------------------------------
+UNIFIED DIFF:
+--- a/app/src/main/res/layout-land/fragment_studio.xml
++++ b/app/src/main/res/layout-land/fragment_studio.xml
+@@ -366,38 +366,14 @@
+                     android:orientation="vertical" />
+             &lt;/ScrollView&gt;
+ 
+-            <LinearLayout
++            <TextView
++                android:id="@+id/fxHint"
+                 android:layout_width="match_parent"
+                 android:layout_height="wrap_content"
+-                android:gravity="center_vertical"
+-                android:orientation="horizontal">
+-
+-                <TextView
+-                    android:id="@+id/fxPreviewBtn"
+-                    android:layout_width="0dp"
+-                    android:layout_height="34dp"
+-                    android:layout_marginEnd="5dp"
+-                    android:layout_weight="1"
+-                    android:background="@drawable/bg_btn_ghost"
+-                    android:fontFamily="sans-serif-medium"
+-                    android:gravity="center"
+-                    android:text="▶ Preview FX"
+-                    android:textColor="@color/text_primary"
+-                    android:textSize="12sp" />
+-
+-                <TextView
+-                    android:id="@+id/fxApplyBtn"
+-                    android:layout_width="0dp"
+-                    android:layout_height="34dp"
+-                    android:layout_marginStart="5dp"
+-                    android:layout_weight="1"
+-                    android:background="@drawable/bg_btn_primary"
+-                    android:fontFamily="sans-serif-medium"
+-                    android:gravity="center"
+-                    android:text="Apply to Selection"
+-                    android:textColor="@color/white"
+-                    android:textSize="12sp" />
+-            </LinearLayout>
++                android:layout_marginTop="6dp"
++                android:text="Toggles preview live during ▶ Play and bake into selection or take on Save"
++                android:textColor="@color/text_hint"
++                android:textSize="10.5sp" />
+         </LinearLayout>
+ 
+         <!-- Right Pane: DAW Console (dB Meter | Waveform + Editor Strip + Timer) -->
+@@ -561,6 +537,21 @@
+                             android:text="Undo"
+                             android:textColor="@color/text_hint"
+                             android:textSize="11sp" />
++
++                        <TextView
++                            android:id="@+id/btnEditRedo"
++                            android:layout_width="wrap_content"
++                            android:layout_height="28dp"
++                            android:layout_marginStart="6dp"
++                            android:background="@drawable/bg_chip"
++                            android:drawableStart="@drawable/ic_edit_redo"
++                            android:drawablePadding="5dp"
++                            android:gravity="center"
++                            android:paddingLeft="10dp"
++                            android:paddingRight="11dp"
++                            android:text="Redo"
++                            android:textColor="@color/text_hint"
++                            android:textSize="11sp" />
+                     </LinearLayout>
+                 </HorizontalScrollView>
+ 
+
+
+========================================================================================
+FILE 12/25: app/src/main/res/mipmap/ic_launcher_round.xml
+TITLE: Fix Corrupted XML Resource File
+========================================================================================
+EXPLANATION OF CHANGES:
+1. Removed Trailing Non-XML Text:
+   - `app/src/main/res/mipmap/ic_launcher_round.xml` had plain-text notes (`ISSUE 4: CI WORKFLOW...`) appended after `</layer-list>`, causing XML parsers and AAPT2 resource compilation to fail with a `ParseError`. Removed the trailing non-XML lines.
+----------------------------------------------------------------------------------------
+UNIFIED DIFF:
+--- a/app/src/main/res/mipmap/ic_launcher_round.xml
++++ b/app/src/main/res/mipmap/ic_launcher_round.xml
+@@ -3,13 +3,3 @@
+     &lt;item android:drawable=&quot;@drawable/ic_launcher_background&quot; /&gt;
+     &lt;item android:drawable=&quot;@drawable/ic_launcher_foreground&quot; /&gt;
+ &lt;/layer-list&gt;
+-
+-
+-================================================================================
+-ISSUE 4: CI WORKFLOW — ADD RELEASE APP BUNDLE (.AAB) GENERATION
+-================================================================================
+-PROBLEM DETAILS:
+-  - `.github/workflows/build-apk.yml` only builds and uploads `app-debug.apk`.
+-  - Google Play requires an Android App Bundle (`.aab`) generated via
+-    `./gradlew bundleRelease`.
+-
+
+
+========================================================================================
+FILE 13/25: app/src/main/java/com/example/hello/MultibandCompressorProcessor.java
+TITLE: Fix 3-Band Crossover Phase Cancellation Bug
+========================================================================================
+EXPLANATION OF CHANGES:
+1. Complementary Cascade Crossover Split:
+   - Previously, `low` and `high` were filtered independently from `buf` using 4th-order Butterworth IIR filters and subtracted from `buf` (`mid[i] = buf[i] - low[i] - high[i]`). Because 4th-order IIR filters introduce a 360° phase rotation around their cutoff frequencies, subtracting `low` and `high` from the zero-phase dry `buf` created a faulty `mid` band that did not complement the phase-shifted `low` and `high` bands when band gains/compressors differed.
+   - Replaced with a complementary cascade split (`midHigh[i] = buf[i] - low[i]`, then filter `midHigh` through `highPass` to obtain `high`, and `mid[i] = midHigh[i] - high[i]`), guaranteeing `low + mid + high == buf` to within floating-point precision (`< 1e-7`).
+----------------------------------------------------------------------------------------
+UNIFIED DIFF:
+--- a/app/src/main/java/com/example/hello/MultibandCompressorProcessor.java
++++ b/app/src/main/java/com/example/hello/MultibandCompressorProcessor.java
+@@ -140,13 +140,15 @@
+         float gHighLin = Dsp.dbToLin(highGain.getFloat());
+ 
+         float[] low = new float[frames * ch];
++        float[] midHigh = new float[frames * ch];
+         float[] high = new float[frames * ch];
+         float[] mid = new float[frames * ch];
+         System.arraycopy(buf, 0, low, 0, low.length);
+         lowPass.process(low, frames, ch);
+-        System.arraycopy(buf, 0, high, 0, high.length);
++        for (int i = 0; i < midHigh.length; i++) midHigh[i] = buf[i] - low[i];
++        System.arraycopy(midHigh, 0, high, 0, high.length);
+         highPass.process(high, frames, ch);
+-        for (int i = 0; i < mid.length; i++) mid[i] = buf[i] - low[i] - high[i];
++        for (int i = 0; i < mid.length; i++) mid[i] = midHigh[i] - high[i];
+ 
+         final int block = 64;
+         int offset = 0;
+
+
+========================================================================================
+FILE 14/25: app/src/main/java/com/example/hello/DeEsserProcessor.java
+TITLE: Fix Split-Band Crossover Notch Bug
+========================================================================================
+EXPLANATION OF CHANGES:
+1. Complementary High-Band Extraction:
+   - Previously, `DeEsserProcessor` used a 2nd-order Butterworth low-pass (`splitLow`) and a 2nd-order Butterworth high-pass (`splitHigh`) at the same frequency and summed `lowBand + highBand * g`. Because 2nd-order Butterworth LP and HP outputs are 180° out of phase at the crossover frequency, summing them at `g = 1.0` (0 dB reduction) cancelled the signal at the crossover frequency!
+   - Removed `splitHigh` and computed the high band complementarily as `float high = buf[idx + c] - low;`, eliminating the crossover notch completely.
+----------------------------------------------------------------------------------------
+UNIFIED DIFF:
+--- a/app/src/main/java/com/example/hello/DeEsserProcessor.java
++++ b/app/src/main/java/com/example/hello/DeEsserProcessor.java
+@@ -29,7 +29,6 @@
+     private int channels = 2;
+     private BiquadFilter band = new BiquadFilter();
+     private BiquadFilter splitLow = new BiquadFilter();
+-    private BiquadFilter splitHigh = new BiquadFilter();
+     private float reductionDb = 0f;
+ 
+     DeEsserProcessor() {
+@@ -66,7 +65,6 @@
+     public void reset() {
+         band.reset();
+         splitLow.reset();
+-        splitHigh.reset();
+         reductionDb = 0f;
+     }
+ 
+@@ -81,8 +79,6 @@
+         band.setSections(new float[][]{Dsp.rbjBandPass(sampleRate, f, qq)},
+                 channels);
+         splitLow.setSections(new float[][]{Dsp.rbjLowPass(sampleRate, f, 0.7071)},
+-                channels);
+-        splitHigh.setSections(new float[][]{Dsp.rbjHighPass(sampleRate, f, 0.7071)},
+                 channels);
+     }
+ 
+@@ -104,11 +100,8 @@
+             band.process(side, n, ch);
+ 
+             float[] lowBand = new float[n * ch];
+-            float[] highBand = new float[n * ch];
+             System.arraycopy(buf, offset * ch, lowBand, 0, lowBand.length);
+-            System.arraycopy(buf, offset * ch, highBand, 0, highBand.length);
+             splitLow.process(lowBand, n, ch);
+-            splitHigh.process(highBand, n, ch);
+ 
+             double fullEnergy = 0;
+             double bandEnergy = 0;
+@@ -138,8 +131,9 @@
+                     } else if (wideband) {
+                         buf[idx + c] *= g;
+                     } else {
+-                        buf[idx + c] = lowBand[f * ch + c]
+-                                + highBand[f * ch + c] * g;
++                        float low = lowBand[f * ch + c];
++                        float high = buf[idx + c] - low;
++                        buf[idx + c] = low + high * g;
+                     }
+                 }
+             }
+
+
+========================================================================================
+FILE 15/25: app/src/main/java/com/example/hello/ClipFixProcessor.java
+TITLE: Fix Negative Array Index Crash (ArrayIndexOutOfBoundsException)
+========================================================================================
+EXPLANATION OF CHANGES:
+1. Boundary Index Clamping:
+   - Previously, when a clipped run started at `start == 1` or `start == 2`, computing the left shoulder slope accessed `buf[(start - 3) * ch + c]`, throwing an `ArrayIndexOutOfBoundsException` on negative index `-2` or `-1`.
+   - Clamped the lookback and lookahead frame indices with `int p0 = Math.max(0, start - 3);` and `int p1 = Math.min(frames - 1, end + 1);`.
+----------------------------------------------------------------------------------------
+UNIFIED DIFF:
+--- a/app/src/main/java/com/example/hello/ClipFixProcessor.java
++++ b/app/src/main/java/com/example/hello/ClipFixProcessor.java
+@@ -77,9 +77,11 @@
+                 // inside it the signal is flat, so an inner difference would
+                 // report a zero slope and the spline would rebuild the very
+                 // plateau it is meant to replace.
++                int p0 = Math.max(0, start - 3);
++                int p1 = Math.min(frames - 1, end + 1);
+                 float d0 = (buf[(start - 1) * ch + c]
+-                        - buf[(start - 3) * ch + c]) * 0.5f;
+-                float d1 = (buf[(end + 1) * ch + c]
++                        - buf[p0 * ch + c]) * 0.5f;
++                float d1 = (buf[p1 * ch + c]
+                         - buf[end * ch + c]) * 0.5f;
+                 int width = end - start;
+                 for (int i = start; i < end; i++) {
+
+
+========================================================================================
+FILE 16/25: app/src/main/java/com/example/hello/StereoImagingProcessor.java
+TITLE: Fix Mono Haas Delay Reset Per Block & 100x Weak Center Isolation Bug
+========================================================================================
+EXPLANATION OF CHANGES:
+1. Persistent Mono Haas Delay Buffer:
+   - Previously, the mono Haas delay line (`float[] hist = new float[haasDelay]; int hPos = 0;`) was allocated and zeroed inside `processInPlace()` on every audio chunk, losing delay history at every block boundary. Promoted `haasHist` and `haasPos` to instance fields cleared in `reset()`.
+
+2. Fixed Double `/ 100f` Division on `centerPct`:
+   - `centerPct` was already normalized to `[-1.0, 1.0]` on line 68 (`float centerPct = center.getCurrentRaw() / 100f;`), but lines 120 and 123 divided it by `100f` a second time (`side *= (1f - centerPct / 100f)` and `mid *= (1f + centerPct / 100f)`), making stereo Center Isolation / Removal 100x too weak (maximum 1% attenuation instead of 100%). Removed the duplicate `/ 100f` division.
+----------------------------------------------------------------------------------------
+UNIFIED DIFF:
+--- a/app/src/main/java/com/example/hello/StereoImagingProcessor.java
++++ b/app/src/main/java/com/example/hello/StereoImagingProcessor.java
+@@ -18,6 +18,10 @@
+             "st_invr", "Invert Right", false));
+     private final FxParameter swap = addParameter(FxParameter.boolParam(
+             "st_swap", "Swap L/R", false));
++
++    private static final int HAAS_DELAY = 24;
++    private final float[] haasHist = new float[HAAS_DELAY];
++    private int haasPos = 0;
+ 
+     StereoImagingProcessor() {
+     }
+@@ -48,6 +52,8 @@
+ 
+     @Override
+     public void reset() {
++        java.util.Arrays.fill(haasHist, 0f);
++        haasPos = 0;
+     }
+ 
+     @Override
+@@ -77,14 +83,11 @@
+                 gr = t * 1.15f;
+             }
+             float centerGain = centerPct < 0f ? (1f + centerPct * 0.7f) : (1f + centerPct * 0.3f);
+-            int haasDelay = 24;
+-            float[] hist = new float[haasDelay];
+-            int hPos = 0;
+             for (int f = 0; f < frames; f++) {
+                 float x = buf[f];
+-                float delayed = hist[hPos];
+-                hist[hPos] = x;
+-                hPos = (hPos + 1) % haasDelay;
++                float delayed = haasHist[haasPos];
++                haasHist[haasPos] = x;
++                haasPos = (haasPos + 1) % HAAS_DELAY;
+                 float l = x * signL;
+                 float r = (x * 0.75f + delayed * 0.25f) * signR;
+                 float mid = (l + r) * 0.5f * centerGain;
+@@ -117,10 +120,10 @@
+             float side = (l - r) * 0.5f;
+             if (centerPct > 0f) {
+                 // Isolate the centre: attenuate the side content.
+-                side *= (1f - centerPct / 100f);
++                side *= (1f - centerPct);
+             } else if (centerPct < 0f) {
+                 // Remove the centre: attenuate the mid content.
+-                mid *= (1f + centerPct / 100f);
++                mid *= (1f + centerPct);
+             }
+             side *= widthPct;
+             float outL = mid + side;
+
+
+========================================================================================
+FILE 17/25: app/src/main/java/com/example/hello/VocoderProcessor.java
+TITLE: Fix Per-Block Biquad Filter State Reset Bug
+========================================================================================
+EXPLANATION OF CHANGES:
+1. Preserve Bandpass Filter State Across Blocks:
+   - Previously, `processInPlace()` called `bandFilters[b].setSections(sec, 1)` and `carrierFilters[b].setSections(sec, 1)` at the start of every block. Because `BiquadFilter.setSections()` reallocates internal state arrays (`z1`, `z2`), all 16 analysis and synthesis filters were zeroed at every block boundary.
+   - Moved `setSections(...)` into `rebuild()` and tracked `lastBuiltSampleRate` so filter states persist smoothly across streaming blocks.
+----------------------------------------------------------------------------------------
+UNIFIED DIFF:
+--- a/app/src/main/java/com/example/hello/VocoderProcessor.java
++++ b/app/src/main/java/com/example/hello/VocoderProcessor.java
+@@ -26,6 +26,7 @@
+             "vc_noise", "Noise Mix", "%", 0, 100, 1, 15));
+ 
+     private int sampleRate = DspChain.SAMPLE_RATE;
++    private int lastBuiltSampleRate = 0;
+     private int channels = 2;
+     private BiquadFilter[] bandFilters = new BiquadFilter[0];
+     private BiquadFilter[] carrierFilters = new BiquadFilter[0];
+@@ -84,7 +85,8 @@
+     private void rebuild() {
+         int count = BAND_OPTIONS[Math.max(0, Math.min(BAND_OPTIONS.length - 1,
+                 bands.getEnumIndex()))];
+-        if (bandFilters.length == count) return;
++        if (bandFilters.length == count && lastBuiltSampleRate == sampleRate) return;
++        lastBuiltSampleRate = sampleRate;
+         bandFilters = new BiquadFilter[count];
+         carrierFilters = new BiquadFilter[count];
+         bandCenters = new float[count];
+@@ -96,6 +98,10 @@
+             bandCenters[i] = f;
+             bandFilters[i] = new BiquadFilter();
+             carrierFilters[i] = new BiquadFilter();
++            float[][] sec = new float[][]{
++                    Dsp.rbjBandPass(sampleRate, f, 4f)};
++            bandFilters[i].setSections(sec, 1);
++            carrierFilters[i].setSections(sec, 1);
+         }
+     }
+ 
+@@ -110,13 +116,6 @@
+         float relCoef = 1f / Math.max(1, release.getCurrentRaw());
+         double sawInc = (double) pitch.getCurrentRaw() / sampleRate;
+         int carrierIdx = carrier.getEnumIndex();
+-
+-        for (int b = 0; b < count; b++) {
+-            float[][] sec = new float[][]{
+-                    Dsp.rbjBandPass(sampleRate, bandCenters[b], 4f)};
+-            bandFilters[b].setSections(sec, 1);
+-            carrierFilters[b].setSections(sec, 1);
+-        }
+         float[] probe = new float[1];
+         float[] cProbe = new float[1];
+         for (int f = 0; f < frames; f++) {
+
+
+========================================================================================
+FILE 18/25: app/src/main/java/com/example/hello/TruncateSilenceProcessor.java
+TITLE: Remove Dead Stream Allocation & Redundant Byte Conversions
+========================================================================================
+EXPLANATION OF CHANGES:
+1. Direct `float[]` Slice Copy:
+   - Removed the unused `ByteArrayOutputStream out = new ByteArrayOutputStream(frames * channels * 4)` allocation and replaced the `float[] -> byte[] -> ByteArrayOutputStream -> ByteBuffer -> float[]` round-trip with direct `System.arraycopy` into a pre-sized `float[] result`.
+----------------------------------------------------------------------------------------
+UNIFIED DIFF:
+--- a/app/src/main/java/com/example/hello/TruncateSilenceProcessor.java
++++ b/app/src/main/java/com/example/hello/TruncateSilenceProcessor.java
+@@ -117,37 +117,33 @@
+         }
+         if (spans.isEmpty()) return in.clone();
+ 
+-        // Rebuild the region, keeping only the head of every silent span.
+-        java.io.ByteArrayOutputStream out =
+-                new java.io.ByteArrayOutputStream(frames * channels * 4);
+-        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
++        // Rebuild the region directly in a pre-sized float[] array.
++        int outFrames = 0;
+         int cursor = 0;
+         for (int[] span : spans) {
+             int keep = Math.min(keepFrames, span[1] - span[0]);
+-            appendSamples(bytes, in, cursor, span[0], channels);
+-            appendSamples(bytes, in, span[0], span[0] + keep, channels);
++            outFrames += Math.max(0, span[0] - cursor) + Math.max(0, keep);
+             cursor = span[1];
+         }
+-        appendSamples(bytes, in, cursor, frames, channels);
+-
+-        byte[] raw = bytes.toByteArray();
+-        java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(raw)
+-                .order(java.nio.ByteOrder.LITTLE_ENDIAN);
+-        float[] result = new float[raw.length / 4];
+-        bb.asFloatBuffer().get(result);
++        outFrames += Math.max(0, frames - cursor);
++        float[] result = new float[outFrames * channels];
++        int writeIdx = 0;
++        cursor = 0;
++        for (int[] span : spans) {
++            int keep = Math.min(keepFrames, span[1] - span[0]);
++            writeIdx = copySlice(in, cursor, span[0], channels, result, writeIdx);
++            writeIdx = copySlice(in, span[0], span[0] + keep, channels, result, writeIdx);
++            cursor = span[1];
++        }
++        copySlice(in, cursor, frames, channels, result, writeIdx);
+         return result;
+     }
+ 
+-    private static void appendSamples(java.io.ByteArrayOutputStream out,
+-                                      float[] src, int fromFrame, int toFrame,
+-                                      int channels) {
++    private static int copySlice(float[] src, int fromFrame, int toFrame,
++                                 int channels, float[] dst, int writeIdx) {
+         int count = Math.max(0, toFrame - fromFrame) * channels;
+-        if (count <= 0) return;
+-        float[] chunk = new float[count];
+-        System.arraycopy(src, fromFrame * channels, chunk, 0, count);
+-        byte[] b = new byte[count * 4];
+-        java.nio.ByteBuffer.wrap(b).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+-                .asFloatBuffer().put(chunk);
+-        out.write(b, 0, b.length);
++        if (count <= 0) return writeIdx;
++        System.arraycopy(src, fromFrame * channels, dst, writeIdx, count);
++        return writeIdx + count;
+     }
+ }
+
+
+========================================================================================
+FILE 19/25: app/src/main/java/com/example/hello/RawFloatPlayer.java
+TITLE: Fix Two-Pass Offline Preparation Order & Pause Playhead Jump
+========================================================================================
+EXPLANATION OF CHANGES:
+1. Call `reset()` Before `prepareOffline(...)`:
+   - Previously, `run()` called `preChain.prepareOffline(...)` and then immediately called `preChain.reset()`, wiping the pre-scanned gain/loudness state before playback started. Swapped the order so `preChain.reset()` runs before `preChain.prepareOffline(...)`.
+
+2. Preserve Playhead Position When Paused During Offline FX Preview:
+   - Guarded `if (!stop) { framePos = limitFrame; }` after the offline preview loop so pausing playback mid-preview keeps `framePos` at the paused frame instead of jumping to `limitFrame`.
+----------------------------------------------------------------------------------------
+UNIFIED DIFF:
+--- a/app/src/main/java/com/example/hello/RawFloatPlayer.java
++++ b/app/src/main/java/com/example/hello/RawFloatPlayer.java
+@@ -325,9 +325,9 @@
+             DspChain preChain = this.dspChain;
+             if (preChain != null && preChain.isActive()) {
+                 try {
++                    preChain.reset();
+                     preChain.prepareOffline(file, startFramePos, limitFrame,
+                             RecordingEngine.SAMPLE_RATE, channels);
+-                    preChain.reset();
+                 } catch (Exception ignored) {}
+             }
+             if (preChain != null && preChain.isActive()
+@@ -364,7 +364,9 @@
+                                 (double) curOut / Math.max(1, outFrames)
+                                         * (limitFrame - startFramePos));
+                     }
+-                    framePos = limitFrame;
++                    if (!stop) {
++                        framePos = limitFrame;
++                    }
+                 }
+             }
+             while (!stop && framePos < limitFrame) {
+
+
+========================================================================================
+FILE 20/25: app/src/main/java/com/example/hello/FormatConverter.java
+TITLE: Throttle Progress Callbacks & Remove Unused Variables
+========================================================================================
+EXPLANATION OF CHANGES:
+1. Progress Callback Throttling:
+   - In `toWav32`, `toWav16`, `toWav24`, `encodeMuxed`, and `toFlac`, `lastPct` was assigned without checking `if (pct != lastPct)`, causing `cb.onProgress(pct)` to fire on every single chunk even when the integer percentage had not changed. Added `if (pct != lastPct)` guards matching `toMp3`.
+   - Removed unused `long lastCbAt = 0;` local variables in `encodeMuxed` and `toFlac`.
+----------------------------------------------------------------------------------------
+UNIFIED DIFF:
+--- a/app/src/main/java/com/example/hello/FormatConverter.java
++++ b/app/src/main/java/com/example/hello/FormatConverter.java
+@@ -139,8 +139,10 @@
+                 done += want;
+                 if (cb != null) {
+                     int pct = (int) (done * 100 / Math.max(1, totalSamples));
+-                    lastPct = pct;
+-                    cb.onProgress(pct);
++                    if (pct != lastPct) {
++                        lastPct = pct;
++                        cb.onProgress(pct);
++                    }
+                 }
+             }
+         } finally {
+@@ -183,8 +185,10 @@
+                 done += want;
+                 if (cb != null) {
+                     int pct = (int) (done * 100 / Math.max(1, totalSamples));
+-                    lastPct = pct;
+-                    cb.onProgress(pct);
++                    if (pct != lastPct) {
++                        lastPct = pct;
++                        cb.onProgress(pct);
++                    }
+                 }
+             }
+             long pcmBytes = totalSamples * 2;
+@@ -259,8 +263,10 @@
+                 done += want;
+                 if (cb != null) {
+                     int pct = (int) (done * 100 / Math.max(1, totalSamples));
+-                    lastPct = pct;
+-                    cb.onProgress(pct);
++                    if (pct != lastPct) {
++                        lastPct = pct;
++                        cb.onProgress(pct);
++                    }
+                 }
+             }
+             long pcmBytes = totalSamples * 3;
+@@ -331,7 +337,6 @@
+             boolean inputEos = false;
+             boolean outEos = false;
+             int lastPct = -1;
+-            long lastCbAt = 0;
+             long drainDeadline = 0;
+ 
+             while (!outEos) {
+@@ -377,8 +382,10 @@
+                             if (cb != null) {
+                                 int pct = (int) (framesDone * 100
+                                         / Math.max(1, totalFrames));
+-                                lastPct = pct;
+-                                cb.onProgress(pct);
++                                if (pct != lastPct) {
++                                    lastPct = pct;
++                                    cb.onProgress(pct);
++                                }
+                             }
+                         }
+                     }
+@@ -1030,7 +1037,6 @@
+             boolean inEos = false;
+             boolean outEos = false;
+             int lastPct = -1;
+-            long lastCbAt = 0;
+             long drainDeadline = 0;
+             try {
+                 r.seek(info.dataStart);
+@@ -1112,8 +1118,10 @@
+                     }
+                     if (cb != null) {
+                         int pct = (int) (framesDone * 100 / Math.max(1, totalFrames));
+-                        lastPct = pct;
+-                        cb.onProgress(pct);
++                        if (pct != lastPct) {
++                            lastPct = pct;
++                            cb.onProgress(pct);
++                        }
+                     }
+                 }
+             } finally {
+
+
+========================================================================================
+FILE 21/25: app/src/main/java/com/example/hello/FadeProcessor.java
+TITLE: Remove Dead Fields in FadeProcessor
+========================================================================================
+EXPLANATION OF CHANGES:
+1. Removed Unused Fields:
+   - Removed unused `private long regionFrames = 0;` and `private long frameCounter = 0;` fields from `FadeProcessor`.
+----------------------------------------------------------------------------------------
+UNIFIED DIFF:
+--- a/app/src/main/java/com/example/hello/FadeProcessor.java
++++ b/app/src/main/java/com/example/hello/FadeProcessor.java
+@@ -27,8 +27,6 @@
+     private int sampleRate = DspChain.SAMPLE_RATE;
+     private int channels = 2;
+     private BiquadFilter closingLp = new BiquadFilter();
+-    private long regionFrames = 0;
+-    private long frameCounter = 0;
+ 
+     FadeProcessor() {
+     }
+@@ -63,7 +61,6 @@
+ 
+     @Override
+     public void reset() {
+-        frameCounter = 0;
+         closingLp.reset();
+     }
+ 
+
+
+========================================================================================
+FILE 22/25: app/src/main/java/com/example/hello/StftProcessor.java
+TITLE: Remove Unused Allocations in StftProcessor
+========================================================================================
+EXPLANATION OF CHANGES:
+1. Removed Unused `mag` and `phase` Arrays:
+   - Removed `private float[] mag;` and `private float[] phase;` from `StftProcessor`, which were allocated in `allocate()` but never used.
+----------------------------------------------------------------------------------------
+UNIFIED DIFF:
+--- a/app/src/main/java/com/example/hello/StftProcessor.java
++++ b/app/src/main/java/com/example/hello/StftProcessor.java
+@@ -24,8 +24,6 @@
+     private final float[] window;
+     private float[] re;
+     private float[] im;
+-    private float[] mag;
+-    private float[] phase;
+ 
+     protected StftProcessor(int fftSize, int overlap) {
+         setGeometry(fftSize, overlap);
+@@ -42,8 +40,6 @@
+     private void allocate() {
+         re = new float[fftSize];
+         im = new float[fftSize];
+-        mag = new float[fftSize / 2 + 1];
+-        phase = new float[fftSize / 2 + 1];
+     }
+ 
+     /** Rebuilds the FFT geometry (call when the size or overlap changes). */
+
+
+========================================================================================
+FILE 23/25: app/src/test/java/com/example/hello/EditEngineTest.java
+TITLE: Update Unit Test for 10-Step Undo & 10-Step Redo
+========================================================================================
+EXPLANATION OF CHANGES:
+1. Updated `undoJournalIsBoundedToTenStepsAndSupportsRedo`:
+   - Verifies 10-step undo depth cap, 10-step undo execution, 10-step redo depth cap, 10-step redo execution, and automatic clearing of the redo stack when a new snapshot is recorded.
+----------------------------------------------------------------------------------------
+UNIFIED DIFF:
+--- a/app/src/test/java/com/example/hello/EditEngineTest.java
++++ b/app/src/test/java/com/example/hello/EditEngineTest.java
+@@ -138,13 +138,24 @@
+     }
+ 
+     @Test
+-    public void undoJournalIsBoundedToThreeSteps() throws Exception {
++    public void undoJournalIsBoundedToTenStepsAndSupportsRedo() throws Exception {
+         File raw = dcRaw("bounded.wav", 48000);
+         EditEngine.UndoJournal undo =
+                 new EditEngine.UndoJournal(tmp.getRoot());
+-        for (int i = 0; i < 4; i++) undo.recordSnapshot(raw);
+-        for (int i = 0; i < 3; i++) assertTrue(undo.undo(raw));
++        for (int i = 0; i < 12; i++) undo.recordSnapshot(raw);
++        assertEquals(10, undo.undoDepth());
++        assertFalse(undo.canRedo());
++        for (int i = 0; i < 10; i++) assertTrue(undo.undo(raw));
+         assertFalse(undo.canUndo());
++        assertEquals(10, undo.redoDepth());
++        for (int i = 0; i < 10; i++) assertTrue(undo.redo(raw));
++        assertFalse(undo.canRedo());
++        assertEquals(10, undo.undoDepth());
++        // Recording a new snapshot clears the redo stack
++        assertTrue(undo.undo(raw));
++        assertTrue(undo.canRedo());
++        assertTrue(undo.recordSnapshot(raw));
++        assertFalse(undo.canRedo());
+     }
+ 
+     @Test
+
+
+========================================================================================
+FILE 24/25: app/src/test/java/com/example/hello/StudioEditorLayoutTest.java
+TITLE: Verify btnEditRedo in Portrait & Landscape Studio Layouts
+========================================================================================
+EXPLANATION OF CHANGES:
+1. Added `R.id.btnEditRedo` to `EDITOR_IDS` and `iconButtons`:
+   - Verifies that `btnEditRedo` is present and carries a start icon drawable in both portrait and landscape Studio layouts.
+----------------------------------------------------------------------------------------
+UNIFIED DIFF:
+--- a/app/src/test/java/com/example/hello/StudioEditorLayoutTest.java
++++ b/app/src/test/java/com/example/hello/StudioEditorLayoutTest.java
+@@ -40,7 +40,7 @@
+     private static final int[] EDITOR_IDS = {
+             R.id.editorStrip, R.id.btnPreviewPlay, R.id.btnSelectRange,
+             R.id.btnReplaceSeg, R.id.btnTrimCrop, R.id.btnCutDelete,
+-            R.id.btnDspFx, R.id.btnEditUndo,
++            R.id.btnDspFx, R.id.btnEditUndo, R.id.btnEditRedo,
+     };
+ 
+     private static final int[] STUDIO_IDS = {
+@@ -127,7 +127,7 @@
+         int[] iconButtons = {
+                 R.id.teleEditBtn, R.id.telePauseBtn, R.id.teleMirrorBtn,
+                 R.id.btnPreviewPlay, R.id.btnSelectRange, R.id.btnReplaceSeg,
+-                R.id.btnTrimCrop, R.id.btnDspFx, R.id.btnEditUndo
++                R.id.btnTrimCrop, R.id.btnDspFx, R.id.btnEditUndo, R.id.btnEditRedo
+         };
+         for (int id : iconButtons) {
+             TextView tv = root.findViewById(id);
+
+
+========================================================================================
+FILE 25/25: app/src/test/java/com/example/hello/FxEffectsModeTest.java
+TITLE: Verify Default FX Preset Is Enabled on First Open
+========================================================================================
+EXPLANATION OF CHANGES:
+1. Added `defaultPresetIsEnabledOnFirstOpeningFxPanel`:
+   - Verifies that `DspChain.Config.load(ctx)` with clean preferences defaults to `Preset.VOICE_POLISH.id`, reports `isActive() == true`, and enables all 4 starter slots.
+----------------------------------------------------------------------------------------
+UNIFIED DIFF:
+--- a/app/src/test/java/com/example/hello/FxEffectsModeTest.java
++++ b/app/src/test/java/com/example/hello/FxEffectsModeTest.java
+@@ -125,6 +125,19 @@
+                 SELECTED_CHIP_TEXT, btnDspFx.getCurrentTextColor());
+     }
+ 
++    @Test
++    public void defaultPresetIsEnabledOnFirstOpeningFxPanel() {
++        ctx.getSharedPreferences("takeone", Context.MODE_PRIVATE)
++                .edit().clear().commit();
++        DspChain.Config cfg = DspChain.Config.load(ctx);
++        assertEquals(DspChain.Preset.VOICE_POLISH.id, cfg.activePresetId);
++        assertTrue("Default FX preset must be active on first open", cfg.isActive());
++        assertEquals(4, cfg.enabledSlotCount());
++        for (DspChain.EffectSlot slot : cfg.slots) {
++            assertTrue("Default slot " + slot.type.id + " must be enabled", slot.enabled);
++        }
++    }
++
+     /** Text colour the studio uses for a selected (highlighted) chip. */
+     private static final int SELECTED_CHIP_TEXT = 0xFFFFFFFF;
+ 
+
 
 =================================================================================
 FILE: Takeone Conversion Pipeline Fixes.txt
@@ -24020,9 +25765,11 @@ final class ClipFixProcessor extends AudioProcessor {
                 // inside it the signal is flat, so an inner difference would
                 // report a zero slope and the spline would rebuild the very
                 // plateau it is meant to replace.
+                int p0 = Math.max(0, start - 3);
+                int p1 = Math.min(frames - 1, end + 1);
                 float d0 = (buf[(start - 1) * ch + c]
-                        - buf[(start - 3) * ch + c]) * 0.5f;
-                float d1 = (buf[(end + 1) * ch + c]
+                        - buf[p0 * ch + c]) * 0.5f;
+                float d1 = (buf[p1 * ch + c]
                         - buf[end * ch + c]) * 0.5f;
                 int width = end - start;
                 for (int i = start; i < end; i++) {
@@ -26876,7 +28623,6 @@ final class DeEsserProcessor extends AudioProcessor {
     private int channels = 2;
     private BiquadFilter band = new BiquadFilter();
     private BiquadFilter splitLow = new BiquadFilter();
-    private BiquadFilter splitHigh = new BiquadFilter();
     private float reductionDb = 0f;
 
     DeEsserProcessor() {
@@ -26913,7 +28659,6 @@ final class DeEsserProcessor extends AudioProcessor {
     public void reset() {
         band.reset();
         splitLow.reset();
-        splitHigh.reset();
         reductionDb = 0f;
     }
 
@@ -26928,8 +28673,6 @@ final class DeEsserProcessor extends AudioProcessor {
         band.setSections(new float[][]{Dsp.rbjBandPass(sampleRate, f, qq)},
                 channels);
         splitLow.setSections(new float[][]{Dsp.rbjLowPass(sampleRate, f, 0.7071)},
-                channels);
-        splitHigh.setSections(new float[][]{Dsp.rbjHighPass(sampleRate, f, 0.7071)},
                 channels);
     }
 
@@ -26951,11 +28694,8 @@ final class DeEsserProcessor extends AudioProcessor {
             band.process(side, n, ch);
 
             float[] lowBand = new float[n * ch];
-            float[] highBand = new float[n * ch];
             System.arraycopy(buf, offset * ch, lowBand, 0, lowBand.length);
-            System.arraycopy(buf, offset * ch, highBand, 0, highBand.length);
             splitLow.process(lowBand, n, ch);
-            splitHigh.process(highBand, n, ch);
 
             double fullEnergy = 0;
             double bandEnergy = 0;
@@ -26985,8 +28725,9 @@ final class DeEsserProcessor extends AudioProcessor {
                     } else if (wideband) {
                         buf[idx + c] *= g;
                     } else {
-                        buf[idx + c] = lowBand[f * ch + c]
-                                + highBand[f * ch + c] * g;
+                        float low = lowBand[f * ch + c];
+                        float high = buf[idx + c] - low;
+                        buf[idx + c] = low + high * g;
                     }
                 }
             }
@@ -29439,9 +31180,9 @@ public final class DspChain {
                 c.customNoisePct = clamp(p.getInt("dsp_custom_noise", 35));
                 c.customDeEssPct = clamp(p.getInt("dsp_custom_deess", 30));
                 c.customCompPct = clamp(p.getInt("dsp_custom_comp", 30));
-                c.activePresetId = p.getString("dsp_preset_id", Preset.CLEAR_ALL.id);
-
                 String slotsJson = p.getString("dsp_slots_json", null);
+                c.activePresetId = p.getString("dsp_preset_id",
+                        slotsJson != null ? Preset.CLEAR_ALL.id : Preset.VOICE_POLISH.id);
                 if (slotsJson != null) {
                     c.slots.clear();
                     JSONArray arr = new JSONArray(slotsJson);
@@ -29473,11 +31214,13 @@ public final class DspChain {
                 } else {
                     c.syncSlotsFromLegacyFields();
                     if (c.slots.isEmpty()) {
-                        // Seed default starter pills for the UI rack
-                        c.slots.add(new EffectSlot(EffectType.NOISE_SUPPRESSION, false, 50, false));
-                        c.slots.add(new EffectSlot(EffectType.DE_ESSER, false, 45, false));
-                        c.slots.add(new EffectSlot(EffectType.COMPRESSOR, false, 40, false));
-                        c.slots.add(new EffectSlot(EffectType.LOW_CUT_HPF, false, 80, false));
+                        // Seed default starter pills for the UI rack with Voice Polish enabled
+                        c.slots.add(new EffectSlot(EffectType.NOISE_SUPPRESSION, true, 50, false));
+                        c.slots.add(new EffectSlot(EffectType.DE_ESSER, true, 45, false));
+                        c.slots.add(new EffectSlot(EffectType.COMPRESSOR, true, 40, false));
+                        c.slots.add(new EffectSlot(EffectType.LOW_CUT_HPF, true, 80, false));
+                        c.activePresetId = Preset.VOICE_POLISH.id;
+                        c.syncLegacyFieldsFromSlots();
                     }
                 }
                 int savedMode = p.getInt("dsp_mode", -1);
@@ -29612,13 +31355,6 @@ public final class DspChain {
     /** Stable instance key of a rack entry, used to bind it to a processor. */
     static String slotInstanceKey(EffectSlot s) {
         return "slot:" + s.type.id + ":" + s.instanceId;
-    }
-
-    private static boolean isLegacyProcessor(AudioProcessor p) {
-        String id = p.getId();
-        return "hpf".equals(id) || "noise".equals(id) || "gate".equals(id)
-                || "tone".equals(id) || "deess".equals(id)
-                || "comp".equals(id) || "limiter".equals(id);
     }
 
     /**
@@ -30039,33 +31775,23 @@ public final class DspChain {
                     for (int i = 0; i < common; i++) {
                         next[i] = buf[i] * dryWeight + next[i] * mix;
                     }
+                    for (int i = common; i < next.length; i++) {
+                        next[i] *= mix;
+                    }
                 }
                 buf = next;
                 curFrames = buf.length / Math.max(1, channels);
             }
         }
         if (hasInPlaceProcessors() && curFrames > 0) {
-            prepareOffline(raw, startFrame, endFrame, sampleRate, channels);
             reset();
+            prepareOffline(raw, startFrame, endFrame, sampleRate, channels);
             int chunk = 4096;
             float[] block = new float[chunk * channels];
             for (int off = 0; off < curFrames; off += chunk) {
                 int n = Math.min(chunk, curFrames - off);
                 System.arraycopy(buf, off * channels, block, 0, n * channels);
-                for (AudioProcessor p : rack.processors()) {
-                    if (!p.isEnabled() || p.isOfflineOnly() || !p.isAudible()) continue;
-                    float mix = p.getWetDryMix();
-                    if (mix >= 1.0f || (mix > 0.0f && p.handlesOwnWetDryMix())) {
-                        p.processInPlace(block, n, channels);
-                    } else if (mix > 0.0f) {
-                        float[] dry = new float[n * channels];
-                        System.arraycopy(block, 0, dry, 0, n * channels);
-                        p.processInPlace(block, n, channels);
-                        for (int i = 0; i < n * channels; i++) {
-                            block[i] = dry[i] * (1f - mix) + block[i] * mix;
-                        }
-                    }
-                }
+                rack.processInPlace(block, n);
                 System.arraycopy(block, 0, buf, off * channels, n * channels);
             }
         }
@@ -30737,7 +32463,7 @@ public final class EditEngine {
 
     private static final int CHUNK_BYTES = 65536;
     private static final long MAX_UNDO_BYTES = 30L * 1024L * 1024L;
-    private static final int MAX_UNDO_STEPS = 3;
+    public static final int MAX_UNDO_STEPS = 10;
 
     private EditEngine() {}
 
@@ -30751,10 +32477,11 @@ public final class EditEngine {
         }
     }
 
-    /** Bounded 3-step undo journal storing pre-edit snapshots in takes/.undo/. */
+    /** Bounded 10-step undo/redo journal storing snapshots in takes/.undo/. */
     public static final class UndoJournal {
         private final File undoDir;
         private final Deque<File> stack = new ArrayDeque<>();
+        private final Deque<File> redoStack = new ArrayDeque<>();
         private int seq = 0;
 
         public UndoJournal(File takesDir) {
@@ -30764,12 +32491,46 @@ public final class EditEngine {
         }
 
         public synchronized boolean canUndo() {
-            return !stack.isEmpty() && stack.peekFirst().exists();
+            while (!stack.isEmpty() && !stack.peekFirst().exists()) {
+                stack.pollFirst();
+            }
+            return !stack.isEmpty();
+        }
+
+        public synchronized boolean canRedo() {
+            while (!redoStack.isEmpty() && !redoStack.peekFirst().exists()) {
+                redoStack.pollFirst();
+            }
+            return !redoStack.isEmpty();
+        }
+
+        public synchronized int undoDepth() {
+            while (!stack.isEmpty() && !stack.peekFirst().exists()) {
+                stack.pollFirst();
+            }
+            return stack.size();
+        }
+
+        public synchronized int redoDepth() {
+            while (!redoStack.isEmpty() && !redoStack.peekFirst().exists()) {
+                redoStack.pollFirst();
+            }
+            return redoStack.size();
         }
 
         /** True when {@link #recordSnapshot(File)} would accept `raw`. */
         public synchronized boolean wouldRecord(File raw) {
             return raw != null && raw.exists() && raw.length() <= MAX_UNDO_BYTES;
+        }
+
+        public synchronized void clearRedo() {
+            while (!redoStack.isEmpty()) {
+                File old = redoStack.pollFirst();
+                if (old != null) {
+                    // noinspection ResultOfMethodCallIgnored
+                    old.delete();
+                }
+            }
         }
 
         /**
@@ -30785,6 +32546,8 @@ public final class EditEngine {
             if (!wouldRecord(raw)) {
                 return false;
             }
+            // noinspection ResultOfMethodCallIgnored
+            undoDir.mkdirs();
             while (stack.size() >= MAX_UNDO_STEPS) {
                 File old = stack.removeLast();
                 // noinspection ResultOfMethodCallIgnored
@@ -30798,6 +32561,7 @@ public final class EditEngine {
                 int n;
                 while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
                 stack.addFirst(snap);
+                clearRedo();
                 return true;
             } catch (Exception e) {
                 // noinspection ResultOfMethodCallIgnored
@@ -30806,23 +32570,105 @@ public final class EditEngine {
             }
         }
 
-        /** Restores the most recent snapshot over `raw`. */
+        /** Restores the most recent snapshot over `raw` and pushes current state to redo. */
         public synchronized boolean undo(File raw) {
             if (!canUndo() || raw == null) return false;
             File snap = stack.pollFirst();
             if (snap == null || !snap.exists()) return false;
+
+            File redoSnap = null;
+            if (wouldRecord(raw)) {
+                // noinspection ResultOfMethodCallIgnored
+                undoDir.mkdirs();
+                while (redoStack.size() >= MAX_UNDO_STEPS) {
+                    File oldRedo = redoStack.removeLast();
+                    // noinspection ResultOfMethodCallIgnored
+                    oldRedo.delete();
+                }
+                redoSnap = new File(undoDir,
+                        raw.getName() + "." + (++seq) + ".redo");
+                try (FileInputStream curIn = new FileInputStream(raw);
+                     FileOutputStream redoOut = new FileOutputStream(redoSnap)) {
+                    byte[] buf = new byte[CHUNK_BYTES];
+                    int n;
+                    while ((n = curIn.read(buf)) > 0) redoOut.write(buf, 0, n);
+                } catch (Exception ignored) {
+                    // noinspection ResultOfMethodCallIgnored
+                    redoSnap.delete();
+                    redoSnap = null;
+                }
+            }
+
             try (FileInputStream in = new FileInputStream(snap);
                  RandomAccessFile out = new RandomAccessFile(raw, "rw")) {
                 out.setLength(0);
                 byte[] buf = new byte[CHUNK_BYTES];
                 int n;
                 while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                if (redoSnap != null) {
+                    redoStack.addFirst(redoSnap);
+                }
                 return true;
             } catch (Exception e) {
+                if (redoSnap != null) {
+                    // noinspection ResultOfMethodCallIgnored
+                    redoSnap.delete();
+                }
                 return false;
             } finally {
                 // noinspection ResultOfMethodCallIgnored
                 snap.delete();
+            }
+        }
+
+        /** Re-applies the most recently undone edit over `raw` and pushes current state to undo. */
+        public synchronized boolean redo(File raw) {
+            if (!canRedo() || raw == null) return false;
+            File redoSnap = redoStack.pollFirst();
+            if (redoSnap == null || !redoSnap.exists()) return false;
+
+            File undoSnap = null;
+            if (wouldRecord(raw)) {
+                // noinspection ResultOfMethodCallIgnored
+                undoDir.mkdirs();
+                while (stack.size() >= MAX_UNDO_STEPS) {
+                    File oldUndo = stack.removeLast();
+                    // noinspection ResultOfMethodCallIgnored
+                    oldUndo.delete();
+                }
+                undoSnap = new File(undoDir,
+                        raw.getName() + "." + (++seq) + ".undo");
+                try (FileInputStream curIn = new FileInputStream(raw);
+                     FileOutputStream undoOut = new FileOutputStream(undoSnap)) {
+                    byte[] buf = new byte[CHUNK_BYTES];
+                    int n;
+                    while ((n = curIn.read(buf)) > 0) undoOut.write(buf, 0, n);
+                } catch (Exception ignored) {
+                    // noinspection ResultOfMethodCallIgnored
+                    undoSnap.delete();
+                    undoSnap = null;
+                }
+            }
+
+            try (FileInputStream in = new FileInputStream(redoSnap);
+                 RandomAccessFile out = new RandomAccessFile(raw, "rw")) {
+                out.setLength(0);
+                byte[] buf = new byte[CHUNK_BYTES];
+                int n;
+                while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                if (undoSnap != null) {
+                    stack.addFirst(undoSnap);
+                }
+                return true;
+            } catch (Exception e) {
+                if (undoSnap != null) {
+                    // noinspection ResultOfMethodCallIgnored
+                    undoSnap.delete();
+                }
+                return false;
+            } finally {
+                // noinspection ResultOfMethodCallIgnored
+                redoSnap.delete();
             }
         }
 
@@ -30831,6 +32677,7 @@ public final class EditEngine {
                 // noinspection ResultOfMethodCallIgnored
                 stack.pollFirst().delete();
             }
+            clearRedo();
         }
     }
 
@@ -31845,8 +33692,6 @@ final class FadeProcessor extends AudioProcessor {
     private int sampleRate = DspChain.SAMPLE_RATE;
     private int channels = 2;
     private BiquadFilter closingLp = new BiquadFilter();
-    private long regionFrames = 0;
-    private long frameCounter = 0;
 
     FadeProcessor() {
     }
@@ -31881,7 +33726,6 @@ final class FadeProcessor extends AudioProcessor {
 
     @Override
     public void reset() {
-        frameCounter = 0;
         closingLp.reset();
     }
 
@@ -32707,8 +34551,10 @@ public final class FormatConverter {
                 done += want;
                 if (cb != null) {
                     int pct = (int) (done * 100 / Math.max(1, totalSamples));
-                    lastPct = pct;
-                    cb.onProgress(pct);
+                    if (pct != lastPct) {
+                        lastPct = pct;
+                        cb.onProgress(pct);
+                    }
                 }
             }
         } finally {
@@ -32751,8 +34597,10 @@ public final class FormatConverter {
                 done += want;
                 if (cb != null) {
                     int pct = (int) (done * 100 / Math.max(1, totalSamples));
-                    lastPct = pct;
-                    cb.onProgress(pct);
+                    if (pct != lastPct) {
+                        lastPct = pct;
+                        cb.onProgress(pct);
+                    }
                 }
             }
             long pcmBytes = totalSamples * 2;
@@ -32827,8 +34675,10 @@ public final class FormatConverter {
                 done += want;
                 if (cb != null) {
                     int pct = (int) (done * 100 / Math.max(1, totalSamples));
-                    lastPct = pct;
-                    cb.onProgress(pct);
+                    if (pct != lastPct) {
+                        lastPct = pct;
+                        cb.onProgress(pct);
+                    }
                 }
             }
             long pcmBytes = totalSamples * 3;
@@ -32899,7 +34749,6 @@ public final class FormatConverter {
             boolean inputEos = false;
             boolean outEos = false;
             int lastPct = -1;
-            long lastCbAt = 0;
             long drainDeadline = 0;
 
             while (!outEos) {
@@ -32945,8 +34794,10 @@ public final class FormatConverter {
                             if (cb != null) {
                                 int pct = (int) (framesDone * 100
                                         / Math.max(1, totalFrames));
-                                lastPct = pct;
-                                cb.onProgress(pct);
+                                if (pct != lastPct) {
+                                    lastPct = pct;
+                                    cb.onProgress(pct);
+                                }
                             }
                         }
                     }
@@ -33598,7 +35449,6 @@ public final class FormatConverter {
             boolean inEos = false;
             boolean outEos = false;
             int lastPct = -1;
-            long lastCbAt = 0;
             long drainDeadline = 0;
             try {
                 r.seek(info.dataStart);
@@ -33680,8 +35530,10 @@ public final class FormatConverter {
                     }
                     if (cb != null) {
                         int pct = (int) (framesDone * 100 / Math.max(1, totalFrames));
-                        lastPct = pct;
-                        cb.onProgress(pct);
+                        if (pct != lastPct) {
+                            lastPct = pct;
+                            cb.onProgress(pct);
+                        }
                     }
                 }
             } finally {
@@ -39209,13 +41061,15 @@ final class MultibandCompressorProcessor extends AudioProcessor {
         float gHighLin = Dsp.dbToLin(highGain.getFloat());
 
         float[] low = new float[frames * ch];
+        float[] midHigh = new float[frames * ch];
         float[] high = new float[frames * ch];
         float[] mid = new float[frames * ch];
         System.arraycopy(buf, 0, low, 0, low.length);
         lowPass.process(low, frames, ch);
-        System.arraycopy(buf, 0, high, 0, high.length);
+        for (int i = 0; i < midHigh.length; i++) midHigh[i] = buf[i] - low[i];
+        System.arraycopy(midHigh, 0, high, 0, high.length);
         highPass.process(high, frames, ch);
-        for (int i = 0; i < mid.length; i++) mid[i] = buf[i] - low[i] - high[i];
+        for (int i = 0; i < mid.length; i++) mid[i] = midHigh[i] - high[i];
 
         final int block = 64;
         int offset = 0;
@@ -40978,17 +42832,16 @@ public final class OptionsSheet {
     public static void styleAsTopPopup(Dialog dialog) {
         Window w = dialog.getWindow();
         if (w == null) return;
-        Context ctx = dialog.getContext();
-        DisplayMetrics dm = ctx.getResources().getDisplayMetrics();
         w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
         w.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
         w.addFlags(WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL);
         w.setDimAmount(0f);
         WindowManager.LayoutParams lp = w.getAttributes();
-        lp.width = dm.widthPixels - dp(ctx, 24);
+        lp.width = WindowManager.LayoutParams.WRAP_CONTENT;
         lp.height = WindowManager.LayoutParams.WRAP_CONTENT;
-        lp.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
-        lp.y = dp(ctx, 12);
+        lp.gravity = Gravity.CENTER;
+        lp.x = 0;
+        lp.y = 0;
         w.setAttributes(lp);
         View decor = w.getDecorView();
         if (decor != null) decor.setPadding(0, 0, 0, 0);
@@ -41007,8 +42860,9 @@ public final class OptionsSheet {
         w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
         w.setDimAmount(0.62f);
         WindowManager.LayoutParams lp = w.getAttributes();
-        int maxW = dp(ctx, maxWidthDp);
-        lp.width = Math.min(dm.widthPixels - dp(ctx, 48), maxW);
+        int cappedDp = Math.min(maxWidthDp, isLand ? 380 : 330);
+        int maxW = dp(ctx, cappedDp);
+        lp.width = Math.min(Math.round(dm.widthPixels * 0.84f), maxW);
         lp.height = WindowManager.LayoutParams.WRAP_CONTENT;
         lp.gravity = Gravity.CENTER;
         lp.horizontalMargin = 0f;
@@ -43469,9 +45323,9 @@ public final class RawFloatPlayer {
             DspChain preChain = this.dspChain;
             if (preChain != null && preChain.isActive()) {
                 try {
+                    preChain.reset();
                     preChain.prepareOffline(file, startFramePos, limitFrame,
                             RecordingEngine.SAMPLE_RATE, channels);
-                    preChain.reset();
                 } catch (Exception ignored) {}
             }
             if (preChain != null && preChain.isActive()
@@ -43508,7 +45362,9 @@ public final class RawFloatPlayer {
                                 (double) curOut / Math.max(1, outFrames)
                                         * (limitFrame - startFramePos));
                     }
-                    framePos = limitFrame;
+                    if (!stop) {
+                        framePos = limitFrame;
+                    }
                 }
             }
             while (!stop && framePos < limitFrame) {
@@ -47410,6 +49266,10 @@ final class StereoImagingProcessor extends AudioProcessor {
     private final FxParameter swap = addParameter(FxParameter.boolParam(
             "st_swap", "Swap L/R", false));
 
+    private static final int HAAS_DELAY = 24;
+    private final float[] haasHist = new float[HAAS_DELAY];
+    private int haasPos = 0;
+
     StereoImagingProcessor() {
     }
 
@@ -47439,6 +49299,8 @@ final class StereoImagingProcessor extends AudioProcessor {
 
     @Override
     public void reset() {
+        java.util.Arrays.fill(haasHist, 0f);
+        haasPos = 0;
     }
 
     @Override
@@ -47468,14 +49330,11 @@ final class StereoImagingProcessor extends AudioProcessor {
                 gr = t * 1.15f;
             }
             float centerGain = centerPct < 0f ? (1f + centerPct * 0.7f) : (1f + centerPct * 0.3f);
-            int haasDelay = 24;
-            float[] hist = new float[haasDelay];
-            int hPos = 0;
             for (int f = 0; f < frames; f++) {
                 float x = buf[f];
-                float delayed = hist[hPos];
-                hist[hPos] = x;
-                hPos = (hPos + 1) % haasDelay;
+                float delayed = haasHist[haasPos];
+                haasHist[haasPos] = x;
+                haasPos = (haasPos + 1) % HAAS_DELAY;
                 float l = x * signL;
                 float r = (x * 0.75f + delayed * 0.25f) * signR;
                 float mid = (l + r) * 0.5f * centerGain;
@@ -47508,10 +49367,10 @@ final class StereoImagingProcessor extends AudioProcessor {
             float side = (l - r) * 0.5f;
             if (centerPct > 0f) {
                 // Isolate the centre: attenuate the side content.
-                side *= (1f - centerPct / 100f);
+                side *= (1f - centerPct);
             } else if (centerPct < 0f) {
                 // Remove the centre: attenuate the mid content.
-                mid *= (1f + centerPct / 100f);
+                mid *= (1f + centerPct);
             }
             side *= widthPct;
             float outL = mid + side;
@@ -47552,8 +49411,6 @@ abstract class StftProcessor {
     private final float[] window;
     private float[] re;
     private float[] im;
-    private float[] mag;
-    private float[] phase;
 
     protected StftProcessor(int fftSize, int overlap) {
         setGeometry(fftSize, overlap);
@@ -47570,8 +49427,6 @@ abstract class StftProcessor {
     private void allocate() {
         re = new float[fftSize];
         im = new float[fftSize];
-        mag = new float[fftSize / 2 + 1];
-        phase = new float[fftSize / 2 + 1];
     }
 
     /** Rebuilds the FFT geometry (call when the size or overlap changes). */
@@ -48829,6 +50684,7 @@ public class StudioFragment extends Fragment {
     private TextView btnCutDelete;
     private TextView btnDspFx;
     private TextView btnEditUndo;
+    private TextView btnEditRedo;
 
     // Inline FX Window views (replaces telePanel when open)
     private View fxPanel;
@@ -48838,6 +50694,7 @@ public class StudioFragment extends Fragment {
     private android.widget.LinearLayout fxListContainer;
     private TextView fxHint;
     private boolean fxPanelOpen = false;
+    private boolean fxEverOpened = false;
     private boolean teleWasVisibleBeforeFx = true;
     /**
      * The region the FX rack commits to, frozen when the rack opens.
@@ -49166,6 +51023,7 @@ public class StudioFragment extends Fragment {
         btnCutDelete = v.findViewById(R.id.btnCutDelete);
         btnDspFx = v.findViewById(R.id.btnDspFx);
         btnEditUndo = v.findViewById(R.id.btnEditUndo);
+        btnEditRedo = v.findViewById(R.id.btnEditRedo);
 
         fxPanel = v.findViewById(R.id.fxPanel);
         fxTitle = v.findViewById(R.id.fxTitle);
@@ -49291,13 +51149,21 @@ public class StudioFragment extends Fragment {
             });
         }
 
-        // 6) "Undo" Button
+        // 6) "Undo" & "Redo" Buttons
         if (btnEditUndo != null) {
             PressAnim.applySoft(btnEditUndo, 0.95f);
             btnEditUndo.setOnClickListener(view -> {
                 if (replaceModeArmed || fxPanelOpen) return;
                 if (!ensurePausedForEditing()) return;
                 performStudioUndo();
+            });
+        }
+        if (btnEditRedo != null) {
+            PressAnim.applySoft(btnEditRedo, 0.95f);
+            btnEditRedo.setOnClickListener(view -> {
+                if (replaceModeArmed || fxPanelOpen) return;
+                if (!ensurePausedForEditing()) return;
+                performStudioRedo();
             });
         }
 
@@ -49497,6 +51363,7 @@ public class StudioFragment extends Fragment {
     public void onSaveInstanceState(@NonNull Bundle outState) {
         super.onSaveInstanceState(outState);
         outState.putBoolean("fxPanelOpen", fxPanelOpen);
+        outState.putBoolean("fxEverOpened", fxEverOpened);
         outState.putBoolean("replaceModeArmed", replaceModeArmed);
         outState.putBoolean("inSelectAndReplaceEditor", inSelectAndReplaceEditor);
         outState.putBoolean("userScrolledWhilePaused", userScrolledWhilePaused);
@@ -49524,6 +51391,7 @@ public class StudioFragment extends Fragment {
     private void restoreEditingMode(@Nullable Bundle state) {
         if (state == null || waveform == null) return;
         boolean fxWasOpen = state.getBoolean("fxPanelOpen", false);
+        fxEverOpened = state.getBoolean("fxEverOpened", false) || fxWasOpen;
         boolean selActive = state.getBoolean("selActive", false);
         float selStart = state.getFloat("selStart", 0f);
         float selEnd = state.getFloat("selEnd", 1f);
@@ -51935,9 +53803,9 @@ public class StudioFragment extends Fragment {
             setChipIconAndTint(btnDspFx, R.drawable.ic_edit_fx, col);
         }
 
-        // 6) Undo Button: disabled while Replace mode is on.
+        // 6) Undo & Redo Buttons: disabled while Replace mode is on.
+        EditEngine.UndoJournal uj = activeUndoJournal();
         if (btnEditUndo != null) {
-            EditEngine.UndoJournal uj = activeUndoJournal();
             boolean canUndo = othersEnabled && uj != null && uj.canUndo();
             btnEditUndo.setEnabled(canUndo);
             btnEditUndo.setClickable(canUndo);
@@ -51945,6 +53813,15 @@ public class StudioFragment extends Fragment {
             int col = canUndo ? 0xFFF2F4F7 : 0xFF5D6672;
             btnEditUndo.setTextColor(col);
             setChipIconAndTint(btnEditUndo, R.drawable.ic_edit_undo, col);
+        }
+        if (btnEditRedo != null) {
+            boolean canRedo = othersEnabled && uj != null && uj.canRedo();
+            btnEditRedo.setEnabled(canRedo);
+            btnEditRedo.setClickable(canRedo);
+            btnEditRedo.setAlpha(canRedo ? 1f : 0.35f);
+            int col = canRedo ? 0xFFF2F4F7 : 0xFF5D6672;
+            btnEditRedo.setTextColor(col);
+            setChipIconAndTint(btnEditRedo, R.drawable.ic_edit_redo, col);
         }
 
         if (hintText != null && canEdit) {
@@ -52050,12 +53927,13 @@ public class StudioFragment extends Fragment {
             // snapshot itself is still taken by crop/delete AFTER they
             // validate the range, so a rejected edit leaves no orphan.
             undoRecorded = uj == null || uj.wouldRecord(raw);
-            if (undoRecorded) waveform.recordUndoPeaks();
             if (isTrim) {
                 EditEngine.cropToSelection(raw, start, end, uj);
+                if (undoRecorded) waveform.recordUndoPeaks();
                 waveform.cropToSelectionBuckets();
             } else {
                 EditEngine.deleteSelection(raw, start, end, uj);
+                if (undoRecorded) waveform.recordUndoPeaks();
                 waveform.deleteSelectionBuckets();
             }
             dspBakedToRaw = false;
@@ -52076,11 +53954,9 @@ public class StudioFragment extends Fragment {
             OptionsSheet.showTopPopup(requireContext(),
                     isTrim ? "Audio trimmed" : "Selection deleted");
         } catch (IllegalArgumentException iae) {
-            if (undoRecorded) waveform.popUndoPeaks();
             Toast.makeText(requireContext(), iae.getMessage(),
                     Toast.LENGTH_SHORT).show();
         } catch (Exception e) {
-            if (undoRecorded) waveform.popUndoPeaks();
             Toast.makeText(requireContext(), "Edit failed",
                     Toast.LENGTH_SHORT).show();
         }
@@ -52118,7 +53994,42 @@ public class StudioFragment extends Fragment {
                 if (timerText != null) {
                     timerText.setText(formatTimer(engine.durationMs()));
                 }
-                OptionsSheet.showTopPopup(requireContext(), "Edit undone");
+            }
+        } catch (Exception ignored) {}
+        paint();
+    }
+
+    private void performStudioRedo() {
+        if (!isAdded()) return;
+        stopStudioPreview();
+        File raw = engine.rawFile;
+        EditEngine.UndoJournal uj = activeUndoJournal();
+        if (raw == null || uj == null || !uj.canRedo()) return;
+        try {
+            if (uj.redo(raw)) {
+                dspBakedToRaw = false;
+                dspSubRangeBaked = false;
+                lastEditWasSubRangeBake = false;
+                userScrolledWhilePaused = false;
+                engine.abortStreaming();
+                engine.dataBytes = RecordingEngine.payloadBytesOf(raw);
+                long total = engine.totalFrames();
+                engine.seekCursorFrame(total);
+                if (waveform != null) {
+                    if (!waveform.popRedoPeaks()) {
+                        waveform.loadFromFloatWavTwentyHz(raw, () -> {
+                            waveform.syncFramesPerBar(engine.totalFrames());
+                            refreshZoomValue();
+                        });
+                    } else {
+                        waveform.syncFramesPerBar(total);
+                        waveform.setPlayheadFraction(1f);
+                        refreshZoomValue();
+                    }
+                }
+                if (timerText != null) {
+                    timerText.setText(formatTimer(engine.durationMs()));
+                }
             }
         } catch (Exception ignored) {}
         paint();
@@ -52150,6 +54061,7 @@ public class StudioFragment extends Fragment {
         }
         fxPanelOpen = open;
         if (open) {
+            fxEverOpened = true;
             teleWasVisibleBeforeFx =
                     telePanel.getVisibility() == View.VISIBLE;
             // Freeze the apply target: the selection at the moment the rack
@@ -52401,7 +54313,21 @@ public class StudioFragment extends Fragment {
      */
     private void syncFxBakeRequired() {
         if (engine == null) return;
+        boolean userConfiguredOrOpenedFx = fxPanelOpen || fxEverOpened;
+        if (!userConfiguredOrOpenedFx && isAdded()) {
+            try {
+                android.content.SharedPreferences sp = requireContext()
+                        .getSharedPreferences("takeone", Context.MODE_PRIVATE);
+                userConfiguredOrOpenedFx = sp.contains("dsp_slots_json")
+                        || sp.contains("dsp_mode")
+                        || sp.contains("dsp_noise")
+                        || sp.contains("dsp_deess")
+                        || sp.contains("dsp_comp")
+                        || sp.contains("dsp_hpf");
+            } catch (Exception ignored) {}
+        }
         engine.setFxBakeRequired(!dspBakedToRaw
+                && userConfiguredOrOpenedFx
                 && dspConfig != null && dspConfig.isActive());
     }
 
@@ -53239,13 +55165,15 @@ public class StudioFragment extends Fragment {
                     new android.graphics.drawable.ColorDrawable(0x00000000));
             window.setDimAmount(0.62f);
             android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
-            int dialogWidth = Math.round(dm.widthPixels * 0.94f);
-            int maxHeight = Math.round(dm.heightPixels * 0.84f);
+            int dialogWidth = Math.min(Math.round(dm.widthPixels * 0.86f),
+                    Math.round(350 * density));
+            int maxHeight = Math.round(dm.heightPixels * 0.82f);
             root.measure(View.MeasureSpec.makeMeasureSpec(
                             dialogWidth, View.MeasureSpec.EXACTLY),
                     View.MeasureSpec.makeMeasureSpec(
                             maxHeight, View.MeasureSpec.AT_MOST));
             int dialogHeight = Math.min(maxHeight, root.getMeasuredHeight());
+            window.setGravity(android.view.Gravity.CENTER);
             window.setLayout(dialogWidth, dialogHeight);
         }
     }
@@ -54350,18 +56278,27 @@ public class StudioFragment extends Fragment {
                     chain.offlineProcessors();
             if (!offline.isEmpty()) {
                 long regionEnd = end;
+                boolean firstOffline = true;
                 for (AudioProcessor proc : offline) {
+                    FormatConverter.WavInfo curInfo = FormatConverter.readFloatWav(raw);
+                    long curTotalBefore = curInfo.dataBytes / 4 / Math.max(1, curInfo.channels);
                     long newTotal = EditEngine.applyLengthChangingEffectToRange(
-                            raw, start, regionEnd, proc, uj);
+                            raw, start, regionEnd, proc, firstOffline ? uj : null);
                     if (newTotal < 0) {
-                        waveform.popUndoPeaks();
+                        if (firstOffline) {
+                            waveform.discardTopUndoPeaks();
+                        } else if (uj != null && uj.canUndo()) {
+                            uj.undo(raw);
+                            waveform.discardTopUndoPeaks();
+                        }
                         peaksPushed = false;
                         Toast.makeText(requireContext(),
                                 "This effect could not be applied here",
                                 Toast.LENGTH_SHORT).show();
                         return false;
                     }
-                    regionEnd = start + (newTotal - (totalFrames - regionEnd));
+                    firstOffline = false;
+                    regionEnd = start + (newTotal - (curTotalBefore - regionEnd));
                 }
                 // The offline pass rewrote the region: run the remaining
                 // in-place processors over the new boundaries.
@@ -54399,7 +56336,7 @@ public class StudioFragment extends Fragment {
             boolean snapshotRecorded =
                     EditEngine.applyDspToRange(raw, start, end, chain, uj);
             if (!snapshotRecorded) {
-                waveform.popUndoPeaks();
+                waveform.discardTopUndoPeaks();
                 peaksPushed = false;
             }
             lastEditWasSubRangeBake = false;
@@ -54435,7 +56372,7 @@ public class StudioFragment extends Fragment {
             waveform.clearSelection();
             OptionsSheet.showTopPopup(requireContext(), "Effects applied");
         } catch (Exception e) {
-            if (peaksPushed && waveform != null) waveform.popUndoPeaks();
+            if (peaksPushed && waveform != null) waveform.discardTopUndoPeaks();
             Toast.makeText(requireContext(), "FX failed",
                     Toast.LENGTH_SHORT).show();
             return false;
@@ -56682,8 +58619,8 @@ public final class TeleDialogs {
         w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
         w.setDimAmount(0.62f);
         WindowManager.LayoutParams lp = w.getAttributes();
-        int maxW = dp(ctx, isLand ? 460 : 400);
-        lp.width = Math.min(dm.widthPixels - dp(ctx, 32), maxW);
+        int maxW = dp(ctx, isLand ? 380 : 340);
+        lp.width = Math.min(Math.round(dm.widthPixels * 0.86f), maxW);
         lp.height = WindowManager.LayoutParams.WRAP_CONTENT;
         lp.gravity = Gravity.CENTER;
         w.setAttributes(lp);
@@ -59212,38 +61149,34 @@ final class TruncateSilenceProcessor extends AudioProcessor {
         }
         if (spans.isEmpty()) return in.clone();
 
-        // Rebuild the region, keeping only the head of every silent span.
-        java.io.ByteArrayOutputStream out =
-                new java.io.ByteArrayOutputStream(frames * channels * 4);
-        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        // Rebuild the region directly in a pre-sized float[] array.
+        int outFrames = 0;
         int cursor = 0;
         for (int[] span : spans) {
             int keep = Math.min(keepFrames, span[1] - span[0]);
-            appendSamples(bytes, in, cursor, span[0], channels);
-            appendSamples(bytes, in, span[0], span[0] + keep, channels);
+            outFrames += Math.max(0, span[0] - cursor) + Math.max(0, keep);
             cursor = span[1];
         }
-        appendSamples(bytes, in, cursor, frames, channels);
-
-        byte[] raw = bytes.toByteArray();
-        java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(raw)
-                .order(java.nio.ByteOrder.LITTLE_ENDIAN);
-        float[] result = new float[raw.length / 4];
-        bb.asFloatBuffer().get(result);
+        outFrames += Math.max(0, frames - cursor);
+        float[] result = new float[outFrames * channels];
+        int writeIdx = 0;
+        cursor = 0;
+        for (int[] span : spans) {
+            int keep = Math.min(keepFrames, span[1] - span[0]);
+            writeIdx = copySlice(in, cursor, span[0], channels, result, writeIdx);
+            writeIdx = copySlice(in, span[0], span[0] + keep, channels, result, writeIdx);
+            cursor = span[1];
+        }
+        copySlice(in, cursor, frames, channels, result, writeIdx);
         return result;
     }
 
-    private static void appendSamples(java.io.ByteArrayOutputStream out,
-                                      float[] src, int fromFrame, int toFrame,
-                                      int channels) {
+    private static int copySlice(float[] src, int fromFrame, int toFrame,
+                                 int channels, float[] dst, int writeIdx) {
         int count = Math.max(0, toFrame - fromFrame) * channels;
-        if (count <= 0) return;
-        float[] chunk = new float[count];
-        System.arraycopy(src, fromFrame * channels, chunk, 0, count);
-        byte[] b = new byte[count * 4];
-        java.nio.ByteBuffer.wrap(b).order(java.nio.ByteOrder.LITTLE_ENDIAN)
-                .asFloatBuffer().put(chunk);
-        out.write(b, 0, b.length);
+        if (count <= 0) return writeIdx;
+        System.arraycopy(src, fromFrame * channels, dst, writeIdx, count);
+        return writeIdx + count;
     }
 }
 
@@ -59278,6 +61211,7 @@ final class VocoderProcessor extends AudioProcessor {
             "vc_noise", "Noise Mix", "%", 0, 100, 1, 15));
 
     private int sampleRate = DspChain.SAMPLE_RATE;
+    private int lastBuiltSampleRate = 0;
     private int channels = 2;
     private BiquadFilter[] bandFilters = new BiquadFilter[0];
     private BiquadFilter[] carrierFilters = new BiquadFilter[0];
@@ -59336,7 +61270,8 @@ final class VocoderProcessor extends AudioProcessor {
     private void rebuild() {
         int count = BAND_OPTIONS[Math.max(0, Math.min(BAND_OPTIONS.length - 1,
                 bands.getEnumIndex()))];
-        if (bandFilters.length == count) return;
+        if (bandFilters.length == count && lastBuiltSampleRate == sampleRate) return;
+        lastBuiltSampleRate = sampleRate;
         bandFilters = new BiquadFilter[count];
         carrierFilters = new BiquadFilter[count];
         bandCenters = new float[count];
@@ -59348,6 +61283,10 @@ final class VocoderProcessor extends AudioProcessor {
             bandCenters[i] = f;
             bandFilters[i] = new BiquadFilter();
             carrierFilters[i] = new BiquadFilter();
+            float[][] sec = new float[][]{
+                    Dsp.rbjBandPass(sampleRate, f, 4f)};
+            bandFilters[i].setSections(sec, 1);
+            carrierFilters[i].setSections(sec, 1);
         }
     }
 
@@ -59362,13 +61301,6 @@ final class VocoderProcessor extends AudioProcessor {
         float relCoef = 1f / Math.max(1, release.getCurrentRaw());
         double sawInc = (double) pitch.getCurrentRaw() / sampleRate;
         int carrierIdx = carrier.getEnumIndex();
-
-        for (int b = 0; b < count; b++) {
-            float[][] sec = new float[][]{
-                    Dsp.rbjBandPass(sampleRate, bandCenters[b], 4f)};
-            bandFilters[b].setSections(sec, 1);
-            carrierFilters[b].setSections(sec, 1);
-        }
         float[] probe = new float[1];
         float[] cProbe = new float[1];
         for (int f = 0; f < frames; f++) {
@@ -59624,6 +61556,8 @@ public class WaveformView extends View {
 
     private final Deque<float[]> undoPeakStack = new ArrayDeque<>();
     private final Deque<Float> undoFramesPerBar = new ArrayDeque<>();
+    private final Deque<float[]> redoPeakStack = new ArrayDeque<>();
+    private final Deque<Float> redoFramesPerBar = new ArrayDeque<>();
     private float[] savedReplaceTailPeaks = null;
     private float[] stashedParentPeaks = null;
     private int stashedParentSelStart = 0;
@@ -59788,20 +61722,72 @@ public class WaveformView extends View {
     /** Snapshots the current in-memory waveform peaks before an edit operation. */
     public synchronized void recordUndoPeaks() {
         if (count <= 0) return;
-        while (undoPeakStack.size() >= 3) {
+        while (undoPeakStack.size() >= EditEngine.MAX_UNDO_STEPS) {
             undoPeakStack.removeLast();
+        }
+        while (undoFramesPerBar.size() >= EditEngine.MAX_UNDO_STEPS) {
+            undoFramesPerBar.removeLast();
         }
         undoPeakStack.addFirst(Arrays.copyOf(history, count));
         undoFramesPerBar.addFirst(framesPerBar);
+        redoPeakStack.clear();
+        redoFramesPerBar.clear();
     }
 
-    /** Restores the most recent in-memory waveform peak snapshot on Undo. */
+    /** Discards the most recently recorded undo peak snapshot when an edit aborts before modifying the waveform. */
+    public synchronized void discardTopUndoPeaks() {
+        if (!undoPeakStack.isEmpty()) undoPeakStack.pollFirst();
+        if (!undoFramesPerBar.isEmpty()) undoFramesPerBar.pollFirst();
+    }
+
+    /** Restores the most recent in-memory waveform peak snapshot on Undo and saves current peaks for Redo. */
     public synchronized boolean popUndoPeaks() {
         if (undoPeakStack.isEmpty()) return false;
         float[] snap = undoPeakStack.pollFirst();
         Float snapFrames = undoFramesPerBar.pollFirst();
         if (snap == null) return false;
         dropFxBaseLocked();
+        if (count > 0) {
+            while (redoPeakStack.size() >= EditEngine.MAX_UNDO_STEPS) {
+                redoPeakStack.removeLast();
+            }
+            while (redoFramesPerBar.size() >= EditEngine.MAX_UNDO_STEPS) {
+                redoFramesPerBar.removeLast();
+            }
+            redoPeakStack.addFirst(Arrays.copyOf(history, count));
+            redoFramesPerBar.addFirst(framesPerBar);
+        }
+        if (snapFrames != null) framesPerBar = snapFrames;
+        if (history.length < snap.length) {
+            history = new float[Math.max(COLS, snap.length)];
+        }
+        Arrays.fill(history, 0f);
+        System.arraycopy(snap, 0, history, 0, snap.length);
+        count = snap.length;
+        playheadPos = count;
+        playheadIndex = count;
+        selectionActive = false;
+        postInvalidateOnAnimation();
+        return true;
+    }
+
+    /** Restores the most recent in-memory waveform peak snapshot on Redo and saves current peaks for Undo. */
+    public synchronized boolean popRedoPeaks() {
+        if (redoPeakStack.isEmpty()) return false;
+        float[] snap = redoPeakStack.pollFirst();
+        Float snapFrames = redoFramesPerBar.pollFirst();
+        if (snap == null) return false;
+        dropFxBaseLocked();
+        if (count > 0) {
+            while (undoPeakStack.size() >= EditEngine.MAX_UNDO_STEPS) {
+                undoPeakStack.removeLast();
+            }
+            while (undoFramesPerBar.size() >= EditEngine.MAX_UNDO_STEPS) {
+                undoFramesPerBar.removeLast();
+            }
+            undoPeakStack.addFirst(Arrays.copyOf(history, count));
+            undoFramesPerBar.addFirst(framesPerBar);
+        }
         if (snapFrames != null) framesPerBar = snapFrames;
         if (history.length < snap.length) {
             history = new float[Math.max(COLS, snap.length)];
@@ -60222,6 +62208,8 @@ public class WaveformView extends View {
         stashedParentFramesPerBar = framesPerBar;
         undoPeakStack.clear();
         undoFramesPerBar.clear();
+        redoPeakStack.clear();
+        redoFramesPerBar.clear();
         Arrays.fill(history, 0f);
         count = 0;
         playheadPos = 0f;
@@ -60242,6 +62230,8 @@ public class WaveformView extends View {
         stashedParentPeaks = null;
         undoPeakStack.clear();
         undoFramesPerBar.clear();
+        redoPeakStack.clear();
+        redoFramesPerBar.clear();
 
         if (!commitReplacement) {
             if (history.length < parent.length) {
@@ -61791,7 +63781,7 @@ FILE: app/src/main/res/drawable/bg_modal.xml
 <?xml version="1.0" encoding="utf-8"?>
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
     <solid android:color="@color/surface" />
-    <corners android:radius="22dp" />
+    <corners android:radius="28dp" />
     <stroke android:width="1dp" android:color="@color/divider" />
 </shape>
 
@@ -61985,6 +63975,31 @@ FILE: app/src/main/res/drawable/ic_edit_fx.xml
     <path
         android:fillColor="#00000000"
         android:pathData="M4,21v-7M4,10V3M12,21v-9M12,8V3M20,21v-5M20,12V3M1,14h6M9,8h6M17,16h6"
+        android:strokeWidth="2.2"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>
+
+=================================================================================
+FILE: app/src/main/res/drawable/ic_edit_redo.xml
+=================================================================================
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="13dp"
+    android:height="13dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M21,7v6h-6"
+        android:strokeWidth="2.2"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M3,17a9,9 0,0 1,9 -9,9 9,0 0,1 6,2.3L21,13"
         android:strokeWidth="2.2"
         android:strokeColor="#FFFFFFFF"
         android:strokeLineCap="round"
@@ -62984,16 +64999,16 @@ FILE: app/src/main/res/layout/dialog_result.xml
 =================================================================================
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="match_parent"
+    android:layout_width="wrap_content"
     android:layout_height="wrap_content"
     android:background="@drawable/bg_modal"
     android:elevation="16dp"
     android:gravity="center_vertical"
     android:orientation="horizontal"
-    android:paddingStart="14dp"
-    android:paddingTop="12dp"
-    android:paddingEnd="14dp"
-    android:paddingBottom="12dp">
+    android:paddingStart="18dp"
+    android:paddingTop="14dp"
+    android:paddingEnd="22dp"
+    android:paddingBottom="14dp">
 
     <FrameLayout
         android:id="@+id/resultIconBg"
@@ -63010,17 +65025,17 @@ FILE: app/src/main/res/layout/dialog_result.xml
     </FrameLayout>
 
     <LinearLayout
-        android:layout_width="0dp"
+        android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_marginStart="12dp"
-        android:layout_marginEnd="10dp"
-        android:layout_weight="1"
+        android:layout_marginEnd="6dp"
         android:orientation="vertical">
 
         <TextView
             android:id="@+id/resultTitle"
-            android:layout_width="match_parent"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:maxWidth="240dp"
             android:ellipsize="end"
             android:maxLines="1"
             android:textColor="@color/text_primary"
@@ -63029,8 +65044,9 @@ FILE: app/src/main/res/layout/dialog_result.xml
 
         <TextView
             android:id="@+id/resultMessage"
-            android:layout_width="match_parent"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:maxWidth="240dp"
             android:layout_marginTop="2dp"
             android:ellipsize="end"
             android:maxLines="2"
@@ -64117,6 +66133,21 @@ FILE: app/src/main/res/layout/fragment_studio.xml
                         android:text="Undo"
                         android:textColor="@color/text_hint"
                         android:textSize="11sp" />
+
+                    <TextView
+                        android:id="@+id/btnEditRedo"
+                        android:layout_width="wrap_content"
+                        android:layout_height="28dp"
+                        android:layout_marginStart="6dp"
+                        android:background="@drawable/bg_chip"
+                        android:drawableStart="@drawable/ic_edit_redo"
+                        android:drawablePadding="5dp"
+                        android:gravity="center"
+                        android:paddingLeft="10dp"
+                        android:paddingRight="11dp"
+                        android:text="Redo"
+                        android:textColor="@color/text_hint"
+                        android:textSize="11sp" />
                 </LinearLayout>
             </HorizontalScrollView>
 
@@ -64916,38 +66947,14 @@ FILE: app/src/main/res/layout-land/fragment_studio.xml
                     android:orientation="vertical" />
             </ScrollView>
 
-            <LinearLayout
+            <TextView
+                android:id="@+id/fxHint"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:gravity="center_vertical"
-                android:orientation="horizontal">
-
-                <TextView
-                    android:id="@+id/fxPreviewBtn"
-                    android:layout_width="0dp"
-                    android:layout_height="34dp"
-                    android:layout_marginEnd="5dp"
-                    android:layout_weight="1"
-                    android:background="@drawable/bg_btn_ghost"
-                    android:fontFamily="sans-serif-medium"
-                    android:gravity="center"
-                    android:text="▶ Preview FX"
-                    android:textColor="@color/text_primary"
-                    android:textSize="12sp" />
-
-                <TextView
-                    android:id="@+id/fxApplyBtn"
-                    android:layout_width="0dp"
-                    android:layout_height="34dp"
-                    android:layout_marginStart="5dp"
-                    android:layout_weight="1"
-                    android:background="@drawable/bg_btn_primary"
-                    android:fontFamily="sans-serif-medium"
-                    android:gravity="center"
-                    android:text="Apply to Selection"
-                    android:textColor="@color/white"
-                    android:textSize="12sp" />
-            </LinearLayout>
+                android:layout_marginTop="6dp"
+                android:text="Toggles preview live during ▶ Play and bake into selection or take on Save"
+                android:textColor="@color/text_hint"
+                android:textSize="10.5sp" />
         </LinearLayout>
 
         <!-- Right Pane: DAW Console (dB Meter | Waveform + Editor Strip + Timer) -->
@@ -65111,6 +67118,21 @@ FILE: app/src/main/res/layout-land/fragment_studio.xml
                             android:text="Undo"
                             android:textColor="@color/text_hint"
                             android:textSize="11sp" />
+
+                        <TextView
+                            android:id="@+id/btnEditRedo"
+                            android:layout_width="wrap_content"
+                            android:layout_height="28dp"
+                            android:layout_marginStart="6dp"
+                            android:background="@drawable/bg_chip"
+                            android:drawableStart="@drawable/ic_edit_redo"
+                            android:drawablePadding="5dp"
+                            android:gravity="center"
+                            android:paddingLeft="10dp"
+                            android:paddingRight="11dp"
+                            android:text="Redo"
+                            android:textColor="@color/text_hint"
+                            android:textSize="11sp" />
                     </LinearLayout>
                 </HorizontalScrollView>
 
@@ -65191,16 +67213,6 @@ FILE: app/src/main/res/mipmap/ic_launcher_round.xml
     <item android:drawable="@drawable/ic_launcher_background" />
     <item android:drawable="@drawable/ic_launcher_foreground" />
 </layer-list>
-
-
-================================================================================
-ISSUE 4: CI WORKFLOW — ADD RELEASE APP BUNDLE (.AAB) GENERATION
-================================================================================
-PROBLEM DETAILS:
-  - `.github/workflows/build-apk.yml` only builds and uploads `app-debug.apk`.
-  - Google Play requires an Android App Bundle (`.aab`) generated via
-    `./gradlew bundleRelease`.
-
 
 =================================================================================
 FILE: app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
@@ -68590,13 +70602,24 @@ public class EditEngineTest {
     }
 
     @Test
-    public void undoJournalIsBoundedToThreeSteps() throws Exception {
+    public void undoJournalIsBoundedToTenStepsAndSupportsRedo() throws Exception {
         File raw = dcRaw("bounded.wav", 48000);
         EditEngine.UndoJournal undo =
                 new EditEngine.UndoJournal(tmp.getRoot());
-        for (int i = 0; i < 4; i++) undo.recordSnapshot(raw);
-        for (int i = 0; i < 3; i++) assertTrue(undo.undo(raw));
+        for (int i = 0; i < 12; i++) undo.recordSnapshot(raw);
+        assertEquals(10, undo.undoDepth());
+        assertFalse(undo.canRedo());
+        for (int i = 0; i < 10; i++) assertTrue(undo.undo(raw));
         assertFalse(undo.canUndo());
+        assertEquals(10, undo.redoDepth());
+        for (int i = 0; i < 10; i++) assertTrue(undo.redo(raw));
+        assertFalse(undo.canRedo());
+        assertEquals(10, undo.undoDepth());
+        // Recording a new snapshot clears the redo stack
+        assertTrue(undo.undo(raw));
+        assertTrue(undo.canRedo());
+        assertTrue(undo.recordSnapshot(raw));
+        assertFalse(undo.canRedo());
     }
 
     @Test
@@ -69946,6 +71969,19 @@ public class FxEffectsModeTest {
         assertTrue("The rack must be open", frag.isFxPanelOpen());
         assertEquals("An open rack must highlight the FX chip",
                 SELECTED_CHIP_TEXT, btnDspFx.getCurrentTextColor());
+    }
+
+    @Test
+    public void defaultPresetIsEnabledOnFirstOpeningFxPanel() {
+        ctx.getSharedPreferences("takeone", Context.MODE_PRIVATE)
+                .edit().clear().commit();
+        DspChain.Config cfg = DspChain.Config.load(ctx);
+        assertEquals(DspChain.Preset.VOICE_POLISH.id, cfg.activePresetId);
+        assertTrue("Default FX preset must be active on first open", cfg.isActive());
+        assertEquals(4, cfg.enabledSlotCount());
+        for (DspChain.EffectSlot slot : cfg.slots) {
+            assertTrue("Default slot " + slot.type.id + " must be enabled", slot.enabled);
+        }
     }
 
     /** Text colour the studio uses for a selected (highlighted) chip. */
@@ -77534,7 +79570,7 @@ public class StudioEditorLayoutTest {
     private static final int[] EDITOR_IDS = {
             R.id.editorStrip, R.id.btnPreviewPlay, R.id.btnSelectRange,
             R.id.btnReplaceSeg, R.id.btnTrimCrop, R.id.btnCutDelete,
-            R.id.btnDspFx, R.id.btnEditUndo,
+            R.id.btnDspFx, R.id.btnEditUndo, R.id.btnEditRedo,
     };
 
     private static final int[] STUDIO_IDS = {
@@ -77621,7 +79657,7 @@ public class StudioEditorLayoutTest {
         int[] iconButtons = {
                 R.id.teleEditBtn, R.id.telePauseBtn, R.id.teleMirrorBtn,
                 R.id.btnPreviewPlay, R.id.btnSelectRange, R.id.btnReplaceSeg,
-                R.id.btnTrimCrop, R.id.btnDspFx, R.id.btnEditUndo
+                R.id.btnTrimCrop, R.id.btnDspFx, R.id.btnEditUndo, R.id.btnEditRedo
         };
         for (int id : iconButtons) {
             TextView tv = root.findViewById(id);
