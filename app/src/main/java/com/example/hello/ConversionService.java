@@ -481,6 +481,7 @@ public class ConversionService extends Service {
         try {
             if (!raw.exists()) throw new IllegalStateException("raw gone");
             if (job.cancelled) throw new CancellationException();
+            final int[] lastReportedPct = {-1};
             TakeSaver.Progress cb = pct -> {
                 if (serviceTimedOut) throw new PausedForTimeoutException();
                 if (job.cancelled) throw new CancellationException();
@@ -488,9 +489,12 @@ public class ConversionService extends Service {
                 // and reading never stop the job.
                 paceForCapture(job);
                 if (job.cancelled) throw new CancellationException();
-                ConversionJobs.updateProgress(job, pct,
-                        pct * Math.max(1, job.framesTotal) / 100);
-                handler.post(this::refreshNotif);
+                if (pct != lastReportedPct[0]) {
+                    lastReportedPct[0] = pct;
+                    ConversionJobs.updateProgress(job, pct,
+                            pct * Math.max(1, job.framesTotal) / 100);
+                    handler.post(this::refreshNotif);
+                }
             };
             TakeSaver.Result r;
             File part = new File(job.partPath);
@@ -728,9 +732,9 @@ public class ConversionService extends Service {
                 }
                 doneSamples += want;
                 int pct = (int) (doneSamples * 100 / Math.max(1, totalSamples));
+                if (cb != null) cb.onProgress(pct);
                 if (pct != lastPct) {
                     lastPct = pct;
-                    if (cb != null) cb.onProgress(pct);
                     job.framesDone = doneSamples / Math.max(1, info.channels);
                 }
             }

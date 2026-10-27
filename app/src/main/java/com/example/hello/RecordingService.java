@@ -376,16 +376,11 @@ public class RecordingService extends Service {
                         replaceId, replaceTitle);
                 EditLink.clear(appCtx);
                 if (r.adopted) {
-                    if (replaceId != -1) {
-                        String rt = replaceTitle != null
-                                && !replaceTitle.isEmpty()
-                                ? replaceTitle : r.title;
-                        TakesRepository.replaceRecording(replaceId, r.file,
-                                r.durationMs, rt, r.label);
-                    } else {
-                        TakesRepository.addRecording(r.file, r.durationMs,
-                                r.title, r.label);
-                    }
+                    String rt = replaceTitle != null
+                            && !replaceTitle.isEmpty()
+                            ? replaceTitle : r.title;
+                    TakesRepository.addRecording(r.file, r.durationMs,
+                            rt, r.label);
                     e.clearSession();
                     ok = true;
                     msg = getString(R.string.convert_done_msg, r.title,

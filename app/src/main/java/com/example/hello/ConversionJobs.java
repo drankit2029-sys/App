@@ -379,9 +379,12 @@ public final class ConversionJobs {
             bytes = info.dataBytes;
         } catch (Exception ignored) {}
         long framesTotal = Math.max(1, bytes / 4 / ch);
+        String jobTitle = (replaceTitle != null && !replaceTitle.trim().isEmpty())
+                ? replaceTitle.trim()
+                : (title != null ? title : "");
         ConversionJob job = new ConversionJob(
                 UUID.randomUUID().toString(),
-                title != null ? title : "",
+                jobTitle,
                 raw.getAbsolutePath(),
                 ConversionJob.partFor(raw).getAbsolutePath(),
                 preset != null ? preset.id : RecordPreset.MEMO.id,
@@ -392,6 +395,7 @@ public final class ConversionJobs {
                 framesTotal);
         job.replaceTakeId = replaceTakeId;
         job.replaceTitle = replaceTitle;
+        NEG_TO_RAW.put(job.takeId(), raw.getAbsolutePath());
         ACTIVE.put(job.jobId, job);
         job.write();
         fireChanged();
@@ -634,6 +638,7 @@ public final class ConversionJobs {
             job.state = ConversionJob.QUEUED;
             job.cancelled = false;
             job.write();
+            NEG_TO_RAW.put(job.takeId(), job.rawPath);
             ACTIVE.put(job.jobId, job);
             resume.add(job);
         }
@@ -681,7 +686,17 @@ public final class ConversionJobs {
         if (replaceTakeId < 0) {
             replaceTakeId = cancelForReplace(ctx, replaceTakeId);
         }
-        String title = e.takeName != null ? e.takeName : "";
+        // If the original take already exists in the library (either because
+        // the user edited a finished take, or because the converting take
+        // finished while the user was editing in Studio), delete the previous
+        // take and its file immediately before starting the new conversion!
+        if (replaceTakeId > 0) {
+            TakesRepository.deleteImmediateForReplace(replaceTakeId);
+            replaceTakeId = -1L;
+        }
+        String title = (replaceTitle != null && !replaceTitle.trim().isEmpty())
+                ? replaceTitle.trim()
+                : (e.takeName != null ? e.takeName : "");
         long dur = Math.max(e.durationMs(), 1000);
         StreamingEncoder sess = e.endStreamingDetach();
         SaveFormat eff = format.effective(preset);
@@ -713,7 +728,7 @@ public final class ConversionJobs {
                         if (totalFrames > 0) {
                             DspChain chain = new DspChain(info.channels, cfg);
                             EditEngine.applyDspToRange(raw, 0, totalFrames,
-                                    chain, null);
+                                     chain, null);
                             e.dataBytes = RecordingEngine.payloadBytesOf(raw);
                         }
                     }

@@ -197,7 +197,7 @@ public class EncodeFormatsTest {
         }
     }
 
-    /** Music + Auto must stay lossless and must never land on a lossy codec. */
+    /** Music + Auto must stay lossless (WAV32) and must never land on a lossy codec. */
     @Test
     public void musicAutoStaysLossless() throws Exception {
         Context ctx = InstrumentationRegistry.getInstrumentation()
@@ -222,9 +222,10 @@ public class EncodeFormatsTest {
                 RecordPreset.MUSIC, SaveFormat.AUTO, null);
         Log.i(TAG, "LOSSLESS label=" + r.label + " bytes=" + r.file.length());
         try {
-            assertTrue("music auto must not be lossy: " + r.label,
-                    r.label.equals("FLAC") || r.label.equals("WAV24"));
+            assertEquals("music auto must be WAV32: " + r.label,
+                    "WAV32", r.label);
             assertTrue(r.file.exists());
+            FormatConverter.validateFinal(r.file, SaveFormat.WAV32);
             assertFalse("raw must be cleaned up", raw.exists());
         } finally {
             engine.clearSession();

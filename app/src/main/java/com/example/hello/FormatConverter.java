@@ -139,10 +139,8 @@ public final class FormatConverter {
                 done += want;
                 if (cb != null) {
                     int pct = (int) (done * 100 / Math.max(1, totalSamples));
-                    if (pct != lastPct) {
-                        lastPct = pct;
-                        cb.onProgress(pct);
-                    }
+                    lastPct = pct;
+                    cb.onProgress(pct);
                 }
             }
         } finally {
@@ -185,10 +183,8 @@ public final class FormatConverter {
                 done += want;
                 if (cb != null) {
                     int pct = (int) (done * 100 / Math.max(1, totalSamples));
-                    if (pct != lastPct) {
-                        lastPct = pct;
-                        cb.onProgress(pct);
-                    }
+                    lastPct = pct;
+                    cb.onProgress(pct);
                 }
             }
             long pcmBytes = totalSamples * 2;
@@ -263,10 +259,8 @@ public final class FormatConverter {
                 done += want;
                 if (cb != null) {
                     int pct = (int) (done * 100 / Math.max(1, totalSamples));
-                    if (pct != lastPct) {
-                        lastPct = pct;
-                        cb.onProgress(pct);
-                    }
+                    lastPct = pct;
+                    cb.onProgress(pct);
                 }
             }
             long pcmBytes = totalSamples * 3;
@@ -383,13 +377,8 @@ public final class FormatConverter {
                             if (cb != null) {
                                 int pct = (int) (framesDone * 100
                                         / Math.max(1, totalFrames));
-                                long now = SystemClock.elapsedRealtime();
-                                if (pct != lastPct && (pct >= 100
-                                        || now - lastCbAt >= 250)) {
-                                    lastPct = pct;
-                                    lastCbAt = now;
-                                    cb.onProgress(pct);
-                                }
+                                lastPct = pct;
+                                cb.onProgress(pct);
                             }
                         }
                     }
@@ -1123,12 +1112,8 @@ public final class FormatConverter {
                     }
                     if (cb != null) {
                         int pct = (int) (framesDone * 100 / Math.max(1, totalFrames));
-                        long now = SystemClock.elapsedRealtime();
-                        if (pct != lastPct && (pct >= 100 || now - lastCbAt >= 250)) {
-                            lastPct = pct;
-                            lastCbAt = now;
-                            cb.onProgress(pct);
-                        }
+                        lastPct = pct;
+                        cb.onProgress(pct);
                     }
                 }
             } finally {

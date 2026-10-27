@@ -31,13 +31,11 @@ public class SaveFormatTest {
                 SaveFormat.AUTO.effective(RecordPreset.MEMO));
         assertEquals(SaveFormat.M4A,
                 SaveFormat.AUTO.effective(RecordPreset.PODCAST));
-        // Music: an unprocessed stereo master, so Auto stays lossless — but
-        // compressed, because the next step is loading this into an editor.
-        // Either lossless outcome is correct: FLAC when the device has an
-        // encoder, pure-Java WAV24 when it does not.
+        // Music: an unprocessed stereo master, so Auto defaults to 32-bit
+        // float WAV (WAV32).
         SaveFormat musicEff = SaveFormat.AUTO.effective(RecordPreset.MUSIC);
-        assertTrue("expected lossless, got " + musicEff,
-                musicEff == SaveFormat.FLAC || musicEff == SaveFormat.WAV24);
+        assertEquals("expected WAV32 for Music preset, got " + musicEff,
+                SaveFormat.WAV32, musicEff);
         // An explicit choice always wins.
         assertEquals(SaveFormat.M4A,
                 SaveFormat.M4A.effective(RecordPreset.MUSIC));
@@ -98,7 +96,7 @@ public class SaveFormatTest {
     public void takeSaverLabels() {
         assertEquals("M4A", TakeSaver.labelFor(RecordPreset.MEMO, SaveFormat.AUTO));
         assertEquals("M4A", TakeSaver.labelFor(RecordPreset.PODCAST, SaveFormat.AUTO));
-        assertEquals("FLAC", TakeSaver.labelFor(RecordPreset.MUSIC, SaveFormat.AUTO));
+        assertEquals("WAV32", TakeSaver.labelFor(RecordPreset.MUSIC, SaveFormat.AUTO));
         assertEquals("WAV", TakeSaver.labelFor(RecordPreset.MUSIC, SaveFormat.WAV16));
         assertEquals("WAV24", TakeSaver.labelFor(RecordPreset.MUSIC, SaveFormat.WAV24));
         assertEquals("WAV32", TakeSaver.labelFor(RecordPreset.MUSIC, SaveFormat.WAV32));
@@ -175,7 +173,7 @@ public class SaveFormatTest {
         // Auto reports whatever it resolves to.
         assertEquals(SaveFormat.M4A.bytesPerMinute(RecordPreset.MEMO),
                 SaveFormat.AUTO.bytesPerMinute(RecordPreset.MEMO));
-        assertEquals(SaveFormat.FLAC.bytesPerMinute(RecordPreset.MUSIC),
+        assertEquals(SaveFormat.WAV32.bytesPerMinute(RecordPreset.MUSIC),
                 SaveFormat.AUTO.bytesPerMinute(RecordPreset.MUSIC));
         // FLAC must actually be smaller than the PCM it replaces.
         assertTrue(SaveFormat.FLAC.bytesPerMinute(RecordPreset.MUSIC)

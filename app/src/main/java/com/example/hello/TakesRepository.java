@@ -228,6 +228,27 @@ public final class TakesRepository {
      * began — its job is cancelled and a take that finished mid-edit is
      * resolved the same way the studio dialog does.
      */
+    /**
+     * Immediately deletes a take (and its backing file) when the user chooses
+     * Replace in the editor, so the obsolete file is removed right away before
+     * the new conversion starts.
+     */
+    public static synchronized boolean deleteImmediateForReplace(long targetId) {
+        if (targetId < 0) {
+            targetId = ConversionJobs.cancelForReplace(app, targetId);
+        }
+        if (targetId <= 0) return false;
+        for (int i = 0; i < TAKES.size(); i++) {
+            if (TAKES.get(i).id == targetId) {
+                Take t = TAKES.remove(i);
+                deleteBackingFile(t);
+                deleteAsync(targetId);
+                return true;
+            }
+        }
+        return false;
+    }
+
     public static synchronized Take replaceRecording(long originalId,
                                                      File saved,
                                                      long durationMs,
@@ -238,18 +259,7 @@ public final class TakesRepository {
             targetId = ConversionJobs.cancelForReplace(app, targetId);
         }
         if (targetId > 0) {
-            if (find(targetId) == null) {
-                // The user deleted the target take while the replacement was
-                // converting. Do not resurrect it; discard the converted file.
-                if (saved != null) {
-                    // noinspection ResultOfMethodCallIgnored
-                    saved.delete();
-                }
-                return null;
-            }
-            Set<Long> ids = new HashSet<>();
-            ids.add(targetId);
-            deleteManyInternal(ids, false);
+            deleteImmediateForReplace(targetId);
         }
         return addRecording(saved, durationMs, title, format);
     }

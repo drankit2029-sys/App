@@ -334,4 +334,78 @@ public class ConversionJobsTest {
             ConversionJobs.forgetCompletion(rawPath);
         }
     }
+
+    @Test
+    public void dispatchSaveReplaceCancelsActiveConversionAndDeletesPreviousFileImmediately()
+            throws Exception {
+        RecordingEngine engine = RecordingEngine.get();
+        engine.abortAndDelete();
+        File dir = RecordingEngine.takesDir(ctx());
+
+        // Case 1: Original take is still converting when user edits and chooses Replace
+        File origRaw = new File(dir, "orig_conv_" + System.nanoTime() + ".raw.wav");
+        try (java.io.RandomAccessFile w = new java.io.RandomAccessFile(origRaw, "rw")) {
+            w.write(Dsp.wavFloatHeader(2, 48000, 48000L * 2 * 4));
+            w.write(new byte[48000 * 2 * 4]);
+        }
+        ConversionJob origJob = ConversionJobs.enqueue(ctx(), origRaw,
+                "Original Take", RecordPreset.MEMO, SaveFormat.M4A, 1000);
+        long origSyntheticId = origJob.takeId();
+        assertTrue("original job must be active",
+                ConversionJobs.get(origJob.jobId) != null);
+
+        // User edits in Studio and chooses a different format (OPUS) + Replace
+        engine.startNewSession(ctx(), "Edited Session", 2);
+        ConversionJobs.SaveResult r1 = ConversionJobs.dispatchSave(
+                ctx(), RecordPreset.MEMO, SaveFormat.OPUS, null,
+                origSyntheticId, "Original Take");
+        try {
+            assertNull("original conversion must be cancelled immediately",
+                    ConversionJobs.get(origJob.jobId));
+            assertFalse("original raw must be deleted immediately",
+                    origRaw.exists());
+            assertFalse("original sidecar must be deleted immediately",
+                    origJob.sidecar().exists());
+            assertNotNull("new conversion job must start immediately", r1.job);
+            assertEquals("Original Take", r1.job.title);
+            assertEquals("opus", r1.job.formatId);
+            assertEquals(-1L, r1.job.replaceTakeId);
+        } finally {
+            if (r1.job != null) ConversionJobs.cancel(r1.job.jobId, true);
+            engine.abortAndDelete();
+        }
+
+        // Case 2: Original conversion finished (or was already a finished file)
+        // before user clicked Replace -> must delete old file & Take immediately
+        // before the new conversion runs!
+        File finishedFile = new File(dir, "orig_done_" + System.nanoTime() + ".m4a");
+        try (java.io.RandomAccessFile w = new java.io.RandomAccessFile(finishedFile, "rw")) {
+            w.write(new byte[2048]);
+        }
+        Take oldTake = TakesRepository.addRecording(
+                finishedFile, 1000, "Finished Take", "M4A");
+        String finishedRawPath = new File(dir, "orig_done_raw.wav").getAbsolutePath();
+        long finishedSyntheticId = -777777L;
+        ConversionJobs.noteTakeRaw(finishedSyntheticId, finishedRawPath);
+        ConversionJobs.noteCompletion(finishedRawPath, oldTake.id);
+
+        engine.startNewSession(ctx(), "Edited Session 2", 2);
+        ConversionJobs.SaveResult r2 = ConversionJobs.dispatchSave(
+                ctx(), RecordPreset.MEMO, SaveFormat.FLAC, null,
+                finishedSyntheticId, "Finished Take");
+        try {
+            assertNull("old Take row must be deleted immediately when Replace is chosen",
+                    TakesRepository.find(oldTake.id));
+            assertFalse("old file on disk must be deleted immediately when Replace is chosen",
+                    finishedFile.exists());
+            assertNotNull("new conversion job must be enqueued immediately", r2.job);
+            assertEquals("Finished Take", r2.job.title);
+            assertEquals("flac", r2.job.formatId);
+            assertEquals(-1L, r2.job.replaceTakeId);
+        } finally {
+            if (r2.job != null) ConversionJobs.cancel(r2.job.jobId, true);
+            ConversionJobs.forgetCompletion(finishedRawPath);
+            engine.abortAndDelete();
+        }
+    }
 }

@@ -34,8 +34,8 @@ public enum RecordPreset {
     /**
      * True when the capture should be kept lossless by default. Only the
      * unprocessed stereo master qualifies: AAC is transparent for speech but
-     * discards real detail in a music take, so AUTO saves Music as FLAC
-     * rather than squeezing it through a lossy codec.
+     * discards real detail in a music take, so AUTO saves Music as 32-bit
+     * float WAV (WAV32) rather than squeezing it through a lossy codec.
      */
     public final boolean autoSavesLossless;
 

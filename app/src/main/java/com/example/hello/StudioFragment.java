@@ -2324,7 +2324,7 @@ public class StudioFragment extends Fragment {
                         } catch (Exception ignored) {}
                     }
                     if (res != null && res.adopted) {
-                        onSaveAdopted(res, replacing ? editId : -1,
+                        onSaveAdopted(res, -1,
                                 replacing ? replaceTitle : null);
                         return;
                     }
@@ -2370,7 +2370,9 @@ public class StudioFragment extends Fragment {
         String target = null;
         boolean replaceFailed = false;
         if (editId == -1) {
-            TakesRepository.addRecording(res.file, res.durationMs, res.title,
+            String t = editTitle != null && !editTitle.isEmpty()
+                    ? editTitle : res.title;
+            TakesRepository.addRecording(res.file, res.durationMs, t,
                     res.label);
         } else {
             // Replace was chosen up front: apply it directly, no second
