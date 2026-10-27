@@ -1,6 +1,7 @@
 package com.example.hello;
 
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assume.assumeNotNull;
 import static org.junit.Assert.assertTrue;
 
 import android.app.Activity;
@@ -79,7 +80,7 @@ public class FxPanelDialDeviceTest {
     @Test
     public void changeOneDialInThePillAndProveItWasApplied() throws Exception {
         String effectId = InstrumentationRegistry.getArguments().getString("fxEffect");
-        assertNotNull("Pass -e fxEffect <id>", effectId);
+        assumeNotNull("Pass -e fxEffect <id>", effectId);
 
         DspChain.EffectType type = null;
         for (DspChain.EffectType t : DspChain.EffectType.values()) {
