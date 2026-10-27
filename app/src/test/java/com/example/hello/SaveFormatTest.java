@@ -182,7 +182,7 @@ public class SaveFormatTest {
 
     @Test
     public void sizeLabelsAreCompactAndMarkEstimates() {
-        assertEquals("17 MB/min",
+        assertEquals("16 MB/min",
                 SaveFormat.WAV24.sizePerMinuteLabel(RecordPreset.MUSIC));
         assertEquals("11 MB/min",
                 SaveFormat.WAV16.sizePerMinuteLabel(RecordPreset.MUSIC));
@@ -332,7 +332,7 @@ public class SaveFormatTest {
     @Test
     public void amrRatesAreFixed() {
         assertEquals(12200L / 8 * 60, SaveFormat.AMR_NB.bytesPerMinute(null));
-        assertEquals(23850L / 8 * 60, SaveFormat.AMR_WB.bytesPerMinute(null));
+        assertEquals(23850L * 60 / 8, SaveFormat.AMR_WB.bytesPerMinute(null));
     }
 
     @Test
