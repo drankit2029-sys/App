@@ -115,11 +115,12 @@ final class ChorusFlangerProcessor extends AudioProcessor {
         float wet = mix.getCurrentRaw() / 100f;
         float dry = 1f - wet;
         double fb = (modeIdx == 2) ? 0.0 : (feedback.getCurrentRaw() / 100.0);
-        // The ring path feeds back half of the recursive term on top of the
-        // recursive feedback itself, so a coefficient near 1 compounds past
-        // unity and the processor diverges (non-finite samples). Cap the
-        // coefficient where the loop stays stable and keep the state finite.
-        fb = Math.max(-0.7, Math.min(0.7, fb));
+        // Two feedback paths meet here: the recursive state (one pole at fb)
+        // and the ring regeneration, which writes half of the wet signal back.
+        // Their combined loop gain is 0.5*fb*(1 + fb/(1-fb)), so it exceeds
+        // unity for fb above 2/3 and the chorus diverges (historically into
+        // non-finite samples at +90 %). Cap the coefficient with margin.
+        fb = Math.max(-0.6, Math.min(0.6, fb));
 
         for (int f = 0; f < frames; f++) {
             for (int c = 0; c < ch; c++) {
@@ -133,14 +134,15 @@ final class ChorusFlangerProcessor extends AudioProcessor {
                 while (readPos >= size) readPos -= size;
                 float delayed = Dsp.hermiteInterp(ring[c], mask, (float) readPos);
                 float wetSample = delayed + feedbackState[c] * (float) fb;
-                if (!Float.isFinite(wetSample) || Math.abs(wetSample) > 1e4f) {
+                if (!Float.isFinite(wetSample) || Math.abs(wetSample) > 1e3f) {
                     // Never let a bad state poison the rest of the render.
                     feedbackState[c] = 0f;
-                    wetSample = delayed;
+                    wetSample = Float.isFinite(delayed) ? delayed : 0f;
                 }
                 feedbackState[c] = wetSample;
+                float writeBack = in + wetSample * (float) fb * 0.5f;
                 buf[idx] = in * dry + wetSample * wet;
-                ring[c][writePos & mask] = in + wetSample * (float) fb * 0.5f;
+                ring[c][writePos & mask] = Float.isFinite(writeBack) ? writeBack : in;
             }
             lfoPhase += lfoInc;
             if (lfoPhase > 1.0) lfoPhase -= 1.0;

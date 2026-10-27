@@ -1,0 +1,182 @@
+================================================================================
+TAKEONE — VERIFICATION BUG REPORT
+Source: exhaustive FX verification harness (see tools/fxverify/README.md)
+Run at HEAD 5f6c767 on branch verify/fx-matrix; fixes for the product bugs are
+in the working tree/next commit (marked FIXED below with before/after numbers).
+================================================================================
+
+
+SECTION 1 — PRODUCT BUGS (audio engine)
+================================================================================
+
+BUG 1 — Chorus diverges into non-finite samples at high feedback        [FIXED]
+--------------------------------------------------------------------------------
+Component : ChorusFlangerProcessor.processInPlace
+Symptom   : At ch_fb = +90 % and -90 % the render becomes NaN/Inf. The DSP
+            matrix counted 491,941 and 529,967 non-finite samples (of 576,000).
+Root cause: Two feedback paths compound. The recursive state is one pole at
+            fb (s[n] = delayed + fb*s[n-1]) and the ring writes back half the
+            wet signal (ring = in + 0.5*fb*s[n]). Combined loop gain is
+            0.5*fb*(1 + fb/(1-fb)), which exceeds 1 for fb > 2/3.
+Fix       : Clamp the feedback coefficient to +-0.6 (loop gain 0.75 with
+            margin) and recover a poisoned state instead of propagating it.
+            Ring writes are also sanitized.
+Before    : peak = non-finite (NaN), nonFinite = 491,941 / 529,967
+After     : fb=+90 -> peak 1.93, nonFinite 0; fb=-90 -> peak 0.26, nonFinite 0
+Bench     : 1 kHz tone 0.3, 12 s, 48 kHz, mono.
+
+BUG 2 — Multi-Echo Delay feedback diverges (peak 5.76e11)                [FIXED]
+--------------------------------------------------------------------------------
+Component : MultiDelayProcessor.processInPlace
+Symptom   : md_level = +1 dB (its own max) with md_echoes = 30 produced a peak
+            of 5.762e+11 on an impulse train — the repeats compound without
+            bound.
+Root cause: The delay line is the feedback path and the loop gain equals the
+            sum of tap amplitudes (pow(levelLin, k)). Above 0 dB that sum
+            exceeds unity and grows with the number of echoes.
+Fix       : Keep the audible taps as requested, but attenuate the signal
+            written back into the delay line so the loop gain stays at 0.9
+            (ampSum > 0.9 -> scale 0.9/ampSum), and sanitize the stored samples.
+Before    : peak = 5.762e+11
+After     : peak = 0.935, nonFinite = 0
+Bench     : impulses at 0.5 s / 3.5 s / ... , 12 s, 30 echoes, +1 dB.
+
+BUG 3 — Multi-Echo Delay wet sum exceeds full scale at +1 dB             [FIXED]
+--------------------------------------------------------------------------------
+Component : MultiDelayProcessor (tap summation)
+Symptom   : Even with the loop stabilised, 30 taps at +1 dB sum to roughly
+            +50 dB, so the wet signal alone exceeds full scale by >25 dB.
+Root cause: The tap amplitudes are used as an unnormalised sum.
+Fix       : Normalise the wet sum to unity when ampSum > 1 (decay shape kept).
+            Defaults (level -6 dB, 5 echoes, ampSum ~0.97) are unchanged.
+Before    : peak 26.7 (bounded but far above 0 dBFS)
+After     : peak 0.93 with dry; taps keep their requested relative levels.
+
+BUG 4 — Upward expansion boosts quiet material by the full ratio         [FIXED]
+--------------------------------------------------------------------------------
+Component : CompressorProcessor (dyncomp_upward = true)
+Symptom   : "Upward (Expand)" produced a peak of 2856 on a gaps probe: quiet
+            material below the threshold was amplified by up to +40 dB.
+Root cause: The gain sign was inverted for the expand path
+            (targetGain = -slope * over, with over negative -> positive gain).
+Fix       : targetGain = max(-60 dB, slope * over) so below-threshold material
+            is attenuated, as expansion means.
+
+BUG 5 — Auto make-up gain cancels upward expansion                      [FIXED]
+--------------------------------------------------------------------------------
+Component : CompressorProcessor auto make-up
+Symptom   : With dyncomp_makeup at its default (on), upward mode's attenuation
+            was treated as "gain reduction" and compensated by up to +24 dB,
+            boosting quiet passages back (residual peak 2.14 while the input
+            peak was 0.30).
+Root cause: Make-up gain is meaningful only for downward compression.
+Fix       : Make-up is forced to 0 dB while upward mode is active.
+After     : upward tone (-6 dB threshold, 20:1) -> out RMS 0.096 vs in 0.212,
+            peak 0.136; gaps probe peak 0.136 (was 2.14/2856).
+
+BUG 6 — Any diverging processor could poison the file with NaNs         [FIXED]
+--------------------------------------------------------------------------------
+Component : FxRackChain.processInPlace (defence in depth)
+Symptom   : A single NaN from any stage survives every later effect and reaches
+            the preview, the bake and the encoder; the safety ceiling only runs
+            when the legacy limiter is armed.
+Fix       : After each processor's pass, non-finite samples in the buffer are
+            replaced with silence. Finite audio is untouched bit-for-bit.
+
+Regression test for bugs 1-5: app/src/test/java/com/example/hello/
+FxDivergenceGuardTest.java (3 tests, renders each case to completion, asserts
+finite and bounded output). Verified locally against the compiled classes and in
+CI unit shards.
+
+Measurements (before -> after), all with nonFinite = 0 afterwards:
+  chorus +90 %           ~492k NaN/Inf -> peak 1.93
+  chorus -90 %           ~530k NaN/Inf -> peak 0.26
+  multidelay +1 dB/30x   peak 5.762e11 -> peak 0.935
+  dyncomp upward         peak 2856     -> peak 0.136
+
+
+SECTION 2 — OPEN PRODUCT QUESTIONS (not changed; needs a decision)
+================================================================================
+
+OPEN 1 — Multi-Echo Delay is loud at its defaults
+     With default settings (level -6 dB, 5 echoes, feedback loop gain ~0.97)
+     the wet signal rings up to ~2.24 peak from a 0.3 input, i.e. above 0 dBFS.
+     This predates the fixes above and was left alone because changing it
+     redesigns the effect's level structure. Options: cap the loop gain at 0.8
+     for all levels, or scale output to the dry level.
+
+OPEN 2 — De-Esser Pro (legacy stage) parameters did not reach the DSP when the
+     rack was built programmatically. The app's own UI path is unaffected: the
+     card's onSlotMutated calls cfg.syncLegacyFieldsFromSlots() before saving.
+     The verification harness now does the same, but the fix has not yet been
+     re-run through the device tier.
+
+OPEN 3 — Filter Curve EQ (fcurve) exposes 61 of its 67 parameters only by
+     dragging the curve canvas; only out/npts/taps are shown as pill controls.
+     Parameters pf0..pf31, pg0..pg31 and npts are therefore unreachable from
+     the advanced grid. This is a UI design gap, not a DSP fault.
+
+OPEN 4 — AMR-NB container quality: decoded band error 14.9 dB (bands <= 3.5 kHz)
+     against the 48 kHz source. Expected for a 12.2 kbps narrow-band codec, but
+     worth stating in the app's own docs/limits.
+
+
+SECTION 3 — HARNESS / OBSERVABILITY ISSUES (fixed in the harness, not product)
+================================================================================
+
+H1 — Three device shards hang their instrumentation (stereoimg, plosive,
+     slidestretch): attempt output is empty and each attempt burns its full
+     20 minute host timeout; the job is then cancelled at the 60 minute ceiling.
+     Mitigation: the per-parameter test now has a 38 minute internal budget and
+     writes partial results instead of hanging. Root cause still unknown.
+H2 — Apply was declared failed while an offline render (WSOLA pitch/tempo) was
+     still running: a 0.5 s wait was used for a multi-second render. Fixed with
+     a latch that waits for the work (up to 120 s) and records the failure text.
+H3 — WAV readers read bitsPerSample at the wrong buffer offset (byteRate's
+     position) and rejected every fixture as "not a 32-bit float WAV". Fixed
+     with absolute offsets; also accepts WAVE_FORMAT_EXTENSIBLE float output
+     from the runner's ffmpeg.
+H4 — Emulator script lines run in separate shells, so shell variables did not
+     survive between lines. Fixed by resolving paths per line.
+H5 — The Add-Effect dialog could not be driven reliably (soft keyboard covered
+     the filtered row); the rack is now cleared and populated through the same
+     production config path, and every parameter's control is still driven in
+     the expanded pill. Marked `addedThroughUi=false` in each result.
+H6 — The screen recording froze behind a "Pixel Launcher isn't responding"
+     dialog, so every screenshot was the same frame. Fixed by hiding system
+     error dialogs and stopping the launcher in the device jobs.
+H7 — Analyzer: an unchanged render was judged as "expectation not met"; anchor
+     metric names missed the cmp. prefix; probe-derived series metrics were
+     unreadable; anchors were matched across effects. All fixed; a self-test
+     (tools/fxverify/selftest.py) now proves the analyzer can fail.
+H8 — Renderers wrote >200 GB of intermediate WAVs per full matrix; compact mode
+     keeps metrics plus failing renders only.
+
+
+SECTION 4 — WHERE THE EVIDENCE LIVES
+================================================================================
+  fx-verify-runs/final/REPORT-full.md      merged per-parameter + DSP + format report
+  fx-verify-runs/final/fx-video-<effect>/  one mp4 per parameter, screenshots,
+                                           wet-<param>.wav, peaks-<param>.json
+  fx-verify-runs/dsp/fx-metrics-<effect>/  verdicts.json + anomalies for every
+                                           DSP case of every parameter
+  fx-verify-runs/formats2/, fmt4/          the converted containers and the
+                                           ffprobe/ffmpeg verification output
+  tools/fxverify/                          the whole harness (probes, matrix,
+                                           panel driver, analyzers, report, dump)
+
+
+SECTION 5 — HOW TO REPRODUCE ONE BUG
+================================================================================
+Local, no emulator (pure-Java DSP):
+
+  cd /mnt/sdcard/Download/App
+  ANDROID_HOME=/opt/android-sdk sh gradlew :app:compileDebugJavaWithJavac \
+      -x :app:processDebugResources --offline
+  # then run the guard test (compiled app classes + junit 4.13.2):
+  java -cp "app/build/intermediates/javac/debug/compileDebugJavaWithJavac/classes:\
+<gradle-cache>/junit-4.13.2.jar:<gradle-cache>/hamcrest-core-1.3.jar" \
+      org.junit.runner.JUnitCore com.example.hello.FxDivergenceGuardTest
+
+Full matrix (52 JVM shards, no emulator) — see .github/workflows/fx-verify.yml.
+Device/UI tier — dispatch the same workflow with skip_dsp=true.

@@ -134,11 +134,13 @@ final class CompressorProcessor extends AudioProcessor {
 
             // Auto make-up compensates part of the gain reduction the
             // compressor is actually applying, so a quiet passage is never
-            // lifted and the overall level cannot rise.
+            // lifted and the overall level cannot rise. In upward (expand) mode
+            // the attenuation IS the effect, so compensating it would cancel
+            // the expansion entirely (and could boost quiet material).
             float slope = 1f - 1f / Math.max(1.0001f, r);
             float reduction = Math.max(0f, -targetGain);
             avgReductionDb += (reduction - avgReductionDb) * 0.002f;
-            makeupDb = autoMakeup.getBoolean()
+            makeupDb = (autoMakeup.getBoolean() && !upward.getBoolean())
                     ? Math.min(24f, avgReductionDb * 0.5f) : 0f;
 
             float target = targetGain + makeupDb;

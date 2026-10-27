@@ -379,6 +379,15 @@ public final class FxRackChain {
                     safetyLimRef.enforceSafetyCeiling(buf, frames, channels);
                 }
             }
+
+            // A processor that diverges must never hand non-finite samples to
+            // the next stage, the preview or the encoder: one NaN poisons every
+            // later effect and the saved file. Replace them with silence.
+            for (int i = 0; i < n; i++) {
+                if (!Float.isFinite(buf[i])) {
+                    buf[i] = 0f;
+                }
+            }
         }
         if (toneProcRef != null && !splitSecondDone) {
             runSplitToneSecondStage(toneProcRef, firstTone,

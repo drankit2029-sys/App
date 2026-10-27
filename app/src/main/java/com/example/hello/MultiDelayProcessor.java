@@ -136,6 +136,15 @@ final class MultiDelayProcessor extends AudioProcessor {
             wetL = dampBuf[0];
             wetR = ch > 1 ? dampBuf[1] : wetL;
 
+            // Tap levels above 0 dB with many echoes sum to far more than full
+            // scale (30 taps at +1 dB reach ~+50 dB). Keep the decay shape but
+            // keep the wet sum bounded, so the repeats cannot swamp the mix.
+            if (ampSum > 1f) {
+                float scale = 1f / ampSum;
+                wetL *= scale;
+                wetR *= scale;
+            }
+
             float outL = inL + wetL;
             float outR = inR + wetR;
             if (!Float.isFinite(outL) || Math.abs(outL) > 1e4f) {
