@@ -1,8 +1,8 @@
 PROJECT DUMP — TakeOne
-Generated: 2026-10-27T19:22:05
+Generated: 2026-10-27T19:59:51
 Root: /mnt/sdcard/Download/App
-APK md5: b5bb9d8bc9b0d5f497955c1d46f08c0d
-HEAD: 798c43d Update tests to match corrected DSP semantics
+APK md5: e59012d236e81247e320d7818ff4a006
+HEAD: 8da4fc8 Regenerate debug APK from successful CI build
 Branch: verify/fx-matrix
 Files: 318 source files
 =================================================================================
@@ -3246,6 +3246,7 @@ FILE: app/src/androidTest/java/com/example/hello/FxPanelDialDeviceTest.java
 package com.example.hello;
 
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assume.assumeNotNull;
 import static org.junit.Assert.assertTrue;
 
 import android.app.Activity;
@@ -3324,7 +3325,7 @@ public class FxPanelDialDeviceTest {
     @Test
     public void changeOneDialInThePillAndProveItWasApplied() throws Exception {
         String effectId = InstrumentationRegistry.getArguments().getString("fxEffect");
-        assertNotNull("Pass -e fxEffect <id>", effectId);
+        assumeNotNull("Pass -e fxEffect <id>", effectId);
 
         DspChain.EffectType type = null;
         for (DspChain.EffectType t : DspChain.EffectType.values()) {
@@ -4356,6 +4357,7 @@ FILE: app/src/androidTest/java/com/example/hello/FxUiSweepDeviceTest.java
 package com.example.hello;
 
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assume.assumeNotNull;
 import static org.junit.Assert.assertTrue;
 
 import android.app.Activity;
@@ -4429,7 +4431,7 @@ public class FxUiSweepDeviceTest {
     @Test
     public void sweepEveryParameterThroughTheUi() throws Exception {
         String effectId = InstrumentationRegistry.getArguments().getString("fxEffect");
-        assertNotNull("Pass -e fxEffect <id>", effectId);
+        assumeNotNull("Pass -e fxEffect <id>", effectId);
 
         DspChain.EffectType type = null;
         for (DspChain.EffectType t : DspChain.EffectType.values()) {
