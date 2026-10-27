@@ -1,10 +1,10 @@
 PROJECT DUMP — TakeOne
-Generated: 2026-10-27T18:22:00
+Generated: 2026-10-27T19:22:05
 Root: /mnt/sdcard/Download/App
 APK md5: b5bb9d8bc9b0d5f497955c1d46f08c0d
-HEAD: 8b39474 Finish the divergence fixes, add the bug report and a dump generator
+HEAD: 798c43d Update tests to match corrected DSP semantics
 Branch: verify/fx-matrix
-Files: 315 source files
+Files: 318 source files
 =================================================================================
 =================================================================================
 FILE: .github/workflows/build-apk.yml
@@ -829,6 +829,53 @@ captures
 local.properties
 # Downloaded FX verification artifacts and frame extractions
 /fx-verify-runs/
+
+=================================================================================
+FILE: AGENTS.md
+=================================================================================
+# AGENTS.md — TakeOne (Android audio editor)
+
+This file gives coding agents the context needed to work on this repository.
+
+## Project overview
+- Android app (TakeOne studio): audio recording/editing, DSP/FX pipeline, teleprompter, conversion/export.
+- Single Gradle module `:app`. Package `com.example.hello`. applicationId `com.takeone.studio`.
+- Min SDK 24, target/compile SDK 35. Java 17. Gradle 8.7, AGP 8.6.1.
+
+## Layout
+- `app/src/main/java/com/example/hello/` — 100+ Java sources (DSP processors, EditEngine, DspChain, Recording/Conversion services, UI).
+- `app/src/test/java/com/example/hello/` — 66+ Robolectric/JUnit unit tests.
+- `app/src/androidTest/java/com/example/hello/` — 28 instrumentation tests.
+- `app/schemas/` — exported Room schema.
+- Workflows: `.github/workflows/{verify,build-apk,fx-verify}.yml`.
+
+## Build & test (run on GitHub runners — host here is aarch64, cannot run x86_64 tools)
+- Always invoke Gradle via `sh gradlew` (noexec filesystem).
+- Unit (Robolectric): `sh gradlew testDebugUnitTest`
+- Instrumentation (emulator): `sh gradlew connectedDebugAndroidTest` (needs device/emulator + KVM).
+- Compile all: `sh gradlew :app:compileDebugJavaWithJavac :app:compileDebugUnitTestJavaWithJavac :app:compileDebugAndroidTestJavaWithJavac`
+- Debug APK: `sh gradlew assembleDebug` -> `app/build/outputs/apk/debug/app-debug.apk`
+- Lint: `sh gradlew lintDebug`
+- Release bundle: `sh gradlew bundleRelease` (needs keystore secrets).
+
+## CI
+- `verify.yml`: compiles all source sets; runs unit tests sharded across 6 GitHub runners (Robolectric tests included); optional emulator job via workflow_dispatch.
+- `build-apk.yml`: unit tests + compile androidTest + lint + assembleDebug + device tests on emulator + bundleRelease.
+- `fx-verify.yml`: FX param inventory/matrix + device sweep.
+- Robolectric tests run on ubuntu-latest GitHub runners (no emulator needed). Emulator tests run on GitHub runners with KVM via reactivecircus/android-emulator-runner.
+
+## Conventions
+- Java 17; follow existing processor patterns (AudioProcessor, FxParameter, DspChain).
+- No comments unless requested. Match existing code style.
+- Tests: JUnit 4 + Robolectric (sdk 34) for UI; plain JUnit for DSP.
+- Never commit unless user asks; co-author trailer required.
+
+## Taste
+- See `.commandcode/taste/taste.md` for learned preferences (verification must be evidence-based end-to-end).
+
+## Notes
+- Environment is aarch64; local gradle execution fails on x86_64 aapt2. Use CI.
+- Large test matrices parallelise on GitHub Actions (~40 concurrent jobs available).
 
 =================================================================================
 FILE: app/build.gradle
@@ -54289,6 +54336,302 @@ public class DspAudioFixTest {
 }
 
 =================================================================================
+FILE: app/src/test/java/com/example/hello/DspBugFixesTest.java
+=================================================================================
+package com.example.hello;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
+
+import org.junit.Test;
+
+import java.io.File;
+import java.io.RandomAccessFile;
+
+public class DspBugFixesTest {
+
+    private static final int SR = 48000;
+
+    private static float[] sine(int frames, int ch, double hz, float amp) {
+        float[] out = new float[frames * ch];
+        for (int f = 0; f < frames; f++) {
+            float s = (float) (Math.sin(2.0 * Math.PI * hz * f / SR) * amp);
+            for (int c = 0; c < ch; c++) out[f * ch + c] = s;
+        }
+        return out;
+    }
+
+    private static boolean changed(float[] a, float[] b) {
+        if (a == null || b == null || a.length != b.length) return true;
+        for (int i = 0; i < a.length; i++) {
+            if (Math.abs(a[i] - b[i]) > 1e-4f) return true;
+        }
+        return false;
+    }
+
+    private static File writeWav(File dir, String name, float[] data, int ch) throws Exception {
+        dir.mkdirs();
+        File f = new File(dir, name);
+        try (RandomAccessFile raf = new RandomAccessFile(f, "rw")) {
+            raf.setLength(0);
+            raf.write(Dsp.wavFloatHeader(ch, SR, data.length * 4L));
+            Dsp.writeFloatsLE(raf, data, 0, data.length);
+        }
+        return f;
+    }
+
+    // Amplify: amp_peak ("New Peak") must have an effect even with amp_gain 0.
+    @Test
+    public void amplifyNewPeakAttenuatesSignal() throws Exception {
+        File dir = new File(System.getProperty("java.io.tmpdir"), "dspfixamp");
+        float[] buf = sine(2400, 1, 440, 0.8f);
+        File wav = writeWav(dir, "amp.wav", buf, 1);
+        AmplifyProcessor p = new AmplifyProcessor();
+        p.getParam("amp_gain").setFloat(0f);
+        p.getParam("amp_peak").setFloat(-6f); // target peak ~0.5
+        p.getParam("amp_clip").setBoolean(false);
+        p.prepare(SR, 1);
+        p.prepareOffline(wav, 0, 2400, SR, 1);
+        assertTrue("Amplify must be audible when newPeak is set",
+                p.isAudible());
+        float[] copy = buf.clone();
+        p.processInPlace(copy, 2400, 1);
+        assertTrue("Amplify with newPeak did not change the signal",
+                changed(buf, copy));
+        // Peak must not exceed the -6 dBFS target (with small tolerance).
+        float pk = 0f;
+        for (float v : copy) pk = Math.max(pk, Math.abs(v));
+        assertTrue("Amplify exceeded newPeak target: " + pk,
+                pk <= Dsp.dbToLin(-6f) * 1.05f);
+    }
+
+    // Brickwall limiter: release must not zero gainDb on the first post-hold sample.
+    @Test
+    public void brickwallLimiterRespectsRelease() {
+        BrickwallLimiterProcessor p = new BrickwallLimiterProcessor();
+        p.getParam("lim_gain").setFloat(12f);
+        p.getParam("lim_ceiling").setFloat(-1f);
+        p.getParam("lim_release").setFloat(200f);
+        p.prepare(SR, 1);
+        float[] buf = sine(SR / 2, 1, 200, 0.95f);
+        float[] orig = buf.clone();
+        p.processInPlace(buf, SR / 2, 1);
+        assertTrue("Brickwall limiter produced no change", changed(orig, buf));
+    }
+
+    // ChangeTempo: +25% tempo must shorten the output (stretch < 1).
+    @Test
+    public void changeTempoPositivePercentShortens() {
+        ChangeTempoProcessor t = new ChangeTempoProcessor();
+        t.getParam("tempo_percent").setFloat(25f);
+        t.prepare(SR, 2);
+        float[] src = sine(9600, 2, 440, 0.5f);
+        float[] out = t.processOfflineRegion(src, 9600, 2);
+        assertTrue("Tempo +25% did not shorten output: " + out.length,
+                out.length < src.length);
+    }
+
+    // SlidingStretch: inverted sign fix -> positive initial tempo shortens.
+    @Test
+    public void slidingStretchPositiveTempoShortens() {
+        SlidingStretchProcessor s = new SlidingStretchProcessor();
+        s.getParam("slide_init").setFloat(40f);
+        s.getParam("slide_final").setFloat(40f);
+        s.prepare(SR, 2);
+        float[] src = sine(9600, 2, 440, 0.5f);
+        float[] out = s.processOfflineRegion(src, 9600, 2);
+        assertTrue("Sliding stretch did not change length", out.length != src.length);
+    }
+
+    // Paulstretch: output length matches stretch and is not mostly zeros.
+    @Test
+    public void paulstretchProducesNonZeroOutput() {
+        PaulstretchProcessor p = new PaulstretchProcessor();
+        p.getParam("paul_factor").setFloat(4f);
+        p.prepare(SR, 2);
+        float[] src = sine(9600, 2, 440, 0.5f);
+        float[] out = p.processOfflineRegion(src, 9600, 2);
+        assertEquals("Paulstretch output length mismatch",
+                (int) Math.round(9600 * 4f), out.length / 2);
+        // RMS must not be tiny (no 83-96% dead zeros).
+        double sum = 0;
+        for (float v : out) sum += (double) v * v;
+        double rms = Math.sqrt(sum / out.length);
+        assertTrue("Paulstretch output is mostly zeros, rms=" + rms, rms > 0.05);
+    }
+
+    // Repair: output must stay bounded (no +41 dBFS blow-up).
+    @Test
+    public void repairDoesNotBlowUp() {
+        RepairProcessor r = new RepairProcessor();
+        r.prepare(SR, 1);
+        float[] buf = sine(4800, 1, 300, 0.5f);
+        for (int i = 1200; i < 1240; i++) buf[i] = 0f;
+        float inPeak = 0f;
+        for (float v : buf) inPeak = Math.max(inPeak, Math.abs(v));
+        r.processInPlace(buf, 4800, 1);
+        float outPeak = 0f;
+        for (float v : buf) outPeak = Math.max(outPeak, Math.abs(v));
+        assertTrue("Repair blew up: peak " + outPeak, outPeak <= inPeak * 2f + 0.1f);
+    }
+
+    // StereoImaging on mono must not be a no-op.
+    @Test
+    public void stereoImagingWorksOnMono() {
+        StereoImagingProcessor s = new StereoImagingProcessor();
+        s.getParam("st_width").setCurrentRaw(150);
+        s.prepare(SR, 1);
+        float[] buf = sine(4800, 1, 440, 0.5f);
+        float[] orig = buf.clone();
+        s.processInPlace(buf, 4800, 1);
+        assertTrue("Stereo imaging on mono produced no change",
+                changed(orig, buf));
+    }
+
+    // ClickRemoval: click_width controls removal (spike removed).
+    @Test
+    public void clickRemovalRemovesSpike() {
+        ClickRemovalProcessor c = new ClickRemovalProcessor();
+        c.getParam("click_thresh").setCurrentRaw(200);
+        c.getParam("click_width").setCurrentRaw(10);
+        c.prepare(SR, 1);
+        float[] buf = sine(4800, 1, 500, 0.3f);
+        buf[2400] = 0.95f;
+        buf[2401] = -0.9f;
+        float[] orig = buf.clone();
+        c.processInPlace(buf, 4800, 1);
+        assertTrue("Click removal produced no change", changed(orig, buf));
+        assertTrue("Spike not reduced", Math.abs(buf[2400]) < 0.9f);
+    }
+
+    // ProDeEsser: threshold calibration triggers on sibilance.
+    @Test
+    public void proDeEsserModifiesSibilance() {
+        ProDeEsserProcessor d = new ProDeEsserProcessor();
+        d.getParam("amt").setCurrentRaw(45);
+        d.prepare(SR, 1);
+        float[] buf = new float[4800];
+        for (int f = 0; f < 4800; f++) {
+            buf[f] = (float) (Math.sin(2.0 * Math.PI * 6800 * f / SR) * 0.5);
+        }
+        float[] orig = buf.clone();
+        d.processInPlace(buf, 4800, 1);
+        assertTrue("Pro de-esser produced no change", changed(orig, buf));
+    }
+
+    // ParametricEq6Band: labels renamed (Low/High Cut Slope).
+    @Test
+    public void parametricEqCutSlopeLabels() {
+        ParametricEq6BandProcessor p = new ParametricEq6BandProcessor();
+        assertEquals("Low Cut Slope", p.getParam("b1s").name);
+        assertEquals("High Cut Slope", p.getParam("b6s").name);
+    }
+
+    // AudioGenerator: noise wave indices map to distinct types (no crash, output differs).
+    @Test
+    public void audioGeneratorNoiseTypesDiffer() {
+        AudioGeneratorTool g1 = new AudioGeneratorTool();
+        g1.getParam("gen_type").setEnumIndex(1); // Noise
+        g1.getParam("gen_wave").setEnumIndex(0); // White
+        g1.prepare(SR, 1);
+        float[] o1 = g1.processOfflineRegion(new float[1024], 1024, 1);
+
+        AudioGeneratorTool g2 = new AudioGeneratorTool();
+        g2.getParam("gen_type").setEnumIndex(1);
+        g2.getParam("gen_wave").setEnumIndex(4); // Velvet
+        g2.prepare(SR, 1);
+        float[] o2 = g2.processOfflineRegion(new float[1024], 1024, 1);
+        assertTrue("Different noise types produced identical output",
+                changed(o1, o2));
+    }
+
+    // Phaser/Tremolo/Wahwah: LFO phase maxRaw is 355 (not 360).
+    @Test
+    public void lfoPhaseMaxRawIs355() {
+        assertEquals(355, new PhaserProcessor().getParam("ph_phase").maxRaw);
+        assertEquals(355, new TremoloProcessor().getParam("tr_phase").maxRaw);
+        assertEquals(355, new WahwahProcessor().getParam("wah_phase").maxRaw);
+    }
+
+    // Compressor: noise floor freezes make-up below floor.
+    @Test
+    public void compressorNoiseFloorFreezesMakeup() {
+        CompressorProcessor c = new CompressorProcessor();
+        c.getParam("dyncomp_thresh").setFloat(-18f);
+        c.getParam("dyncomp_ratio").setFloat(4f);
+        c.getParam("dyncomp_floor").setFloat(-40f);
+        c.prepare(SR, 1);
+        // Very quiet signal below floor: must not be boosted.
+        float[] buf = sine(4800, 1, 500, 0.0005f);
+        float[] orig = buf.clone();
+        c.processInPlace(buf, 4800, 1);
+        // Should not increase peak.
+        float pkOrig = 0f, pkAfter = 0f;
+        for (float v : orig) pkOrig = Math.max(pkOrig, Math.abs(v));
+        for (float v : buf) pkAfter = Math.max(pkAfter, Math.abs(v));
+        assertTrue("Compressor boosted below-floor noise: " + pkOrig + " -> " + pkAfter,
+                pkAfter <= pkOrig * 1.5f + 1e-4f);
+    }
+
+    // LoudnessNormalization: loud_mode selects RMS vs LUFS.
+    @Test
+    public void loudnessModeSelectsMeasurement() throws Exception {
+        File dir = new File(System.getProperty("java.io.tmpdir"), "dspfixloud");
+        float[] buf = sine(96000, 1, 1000, 0.1f);
+        File wav = writeWav(dir, "loud.wav", buf, 1);
+
+        LoudnessNormalizationProcessor lufs = new LoudnessNormalizationProcessor();
+        lufs.getParam("loud_mode").setEnumIndex(0); // LUFS
+        lufs.getParam("loud_target").setFloat(-16f);
+        lufs.prepare(SR, 1);
+        lufs.prepareOffline(wav, 0, 96000, SR, 1);
+        float[] c1 = buf.clone();
+        lufs.processInPlace(c1, 96000, 1);
+        assertTrue("LUFS mode produced no change", changed(buf, c1));
+
+        LoudnessNormalizationProcessor rms = new LoudnessNormalizationProcessor();
+        rms.getParam("loud_mode").setEnumIndex(1); // RMS dBFS
+        rms.getParam("loud_target").setFloat(-16f);
+        rms.prepare(SR, 1);
+        rms.prepareOffline(wav, 0, 96000, SR, 1);
+        float[] c2 = buf.clone();
+        rms.processInPlace(c2, 96000, 1);
+        assertTrue("RMS mode produced no change", changed(buf, c2));
+    }
+
+    // Normalize: norm_rms and norm_indep honored in non-scanned path.
+    @Test
+    public void normalizeHonorsRmsAndIndependent() {
+        float[] buf = sine(4800, 2, 440, 0.1f);
+        // add DC offset
+        for (int i = 0; i < buf.length; i++) buf[i] += 0.2f;
+        NormalizeProcessor p = new NormalizeProcessor();
+        p.getParam("norm_target").setFloat(-6f);
+        p.getParam("norm_rms").setBoolean(true);
+        p.getParam("norm_peak").setBoolean(false);
+        p.getParam("norm_indep").setBoolean(true);
+        p.getParam("norm_dc").setBoolean(true);
+        p.prepare(SR, 2);
+        // not scanned -> uses new exact path
+        float[] copy = buf.clone();
+        p.processInPlace(copy, 4800, 2);
+        double mean = 0;
+        for (float v : copy) mean += v;
+        mean /= copy.length;
+        assertTrue("DC not removed", Math.abs(mean) < 0.02);
+    }
+
+    // Amplify isAudible: true when amp_peak non-zero even amp_gain zero.
+    @Test
+    public void amplifyIsAudibleOnPeakOnly() {
+        AmplifyProcessor p = new AmplifyProcessor();
+        p.getParam("amp_gain").setFloat(0f);
+        p.getParam("amp_peak").setFloat(-3f);
+        assertTrue("Amplify not audible with peak-only setting", p.isAudible());
+    }
+}
+
+=================================================================================
 FILE: app/src/test/java/com/example/hello/DspChainTest.java
 =================================================================================
 package com.example.hello;
@@ -62919,7 +63262,7 @@ public class Stage4to7AudioChangeTest {
         // Loudness: a -16 LUFS target on a quiet signal must lift it.
         LoudnessNormalizationProcessor loud = new LoudnessNormalizationProcessor();
         loud.getParam("loud_target").setFloat(-16f);
-        assertModifies("Loudness", loud, sine(9600, 2, 1000, 0.02f), 9600, 2);
+        assertModifies("Loudness", loud, sine(48000, 2, 1000, 0.1f), 48000, 2);
     }
 
     @Test
@@ -63837,12 +64180,12 @@ public class Stage7TimeToolsTest {
         int frames = SR / 4;
         float[] buf = sine(frames, 1, 440, 0.5f);
         ChangeTempoProcessor p = new ChangeTempoProcessor();
-        p.getParam("tempo_percent").setFloat(100f); // twice as long
+        p.getParam("tempo_percent").setFloat(100f); // twice as fast -> half as long
         p.prepare(SR, 1);
         float[] out = p.processOfflineRegion(buf, frames, 1);
         int outFrames = out.length;
-        assertTrue("Duration did not double: " + outFrames,
-                Math.abs(outFrames - frames * 2) < frames / 10);
+        assertTrue("Duration did not halve: " + outFrames,
+                Math.abs(outFrames - frames / 2) < frames / 10);
     }
 
     @Test
