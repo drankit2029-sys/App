@@ -705,18 +705,19 @@ public final class ConversionJobs {
         // the pump encoded raw microphone frames, so its .part would ship
         // without a single effect. Drop it and let the worker convert the
         // FX-baked raw instead of silently losing the whole chain.
-        if (e.isFxBakeRequired()) {
+        boolean needsFxBake = e.isFxBakeRequired();
+        if (needsFxBake) {
             if (sess != null) {
                 try {
                     sess.abort();
                 } catch (Exception ignored) {}
                 sess = null;
             }
-            // Bake the active FX chain into `raw` here so saves triggered from
-            // the notification shade (RecordingService calls dispatchSave
-            // directly) or any other path that skipped StudioFragment's
-            // doSaveSequence() bake still include the user's unbaked chain
-            // instead of converting dry audio.
+            // Enqueue the background job FIRST so the Library shows the
+            // converting card at 0% immediately instead of staying blank
+            // while the full-file DSP bake runs.
+            ConversionJob prequeued = enqueue(ctx, raw, title, preset, format,
+                    dur, replaceTakeId, replaceTitle);
             try {
                 if (ctx != null) {
                     DspChain.Config cfg = DspChain.Config.load(ctx);
@@ -737,6 +738,10 @@ public final class ConversionJobs {
                 CrashLog.breadcrumb(ctx, "dispatchSave fx bake failed: " + ex);
             }
             e.setFxBakeRequired(false);
+            // noinspection ResultOfMethodCallIgnored
+            new File(raw.getAbsolutePath() + ".pending").delete();
+            if (cb != null) cb.onProgress(0);
+            return SaveResult.background(prequeued);
         }
         // framesEncoded() > 0 is NOT evidence that the pump kept up: a
         // format switch restarts the encoder from the top of the raw file, so

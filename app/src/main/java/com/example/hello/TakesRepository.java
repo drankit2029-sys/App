@@ -55,8 +55,30 @@ public final class TakesRepository {
      */
     private static final String KEY_PROBE_TRIED = "probe_tried_paths";
 
+    public interface Listener {
+        void onTakesChanged();
+    }
+
+    private static final Set<Listener> LISTENERS =
+            new java.util.concurrent.CopyOnWriteArraySet<>();
     private static volatile boolean ready;
     private static final List<Runnable> READY_QUEUE = new ArrayList<>();
+
+    public static void addListener(Listener l) {
+        if (l != null) LISTENERS.add(l);
+    }
+
+    public static void removeListener(Listener l) {
+        LISTENERS.remove(l);
+    }
+
+    private static void fireChanged() {
+        for (Listener l : LISTENERS) {
+            try {
+                l.onTakesChanged();
+            } catch (Exception ignored) {}
+        }
+    }
     private static TakeDatabase db;
     private static Context app;
     private static final ExecutorService IO = Executors.newSingleThreadExecutor();
@@ -201,6 +223,7 @@ public final class TakesRepository {
         Take t = buildTake(file, durationMs, null, null);
         TAKES.add(0, t);
         persistAsync(t);
+        fireChanged();
         return t;
     }
 
@@ -209,6 +232,7 @@ public final class TakesRepository {
         Take t = buildTake(file, durationMs, title, format);
         TAKES.add(0, t);
         persistAsync(t);
+        fireChanged();
         return t;
     }
 
@@ -217,6 +241,7 @@ public final class TakesRepository {
         TAKES.add(t);
         sortByTimestampDesc();
         persistAsync(t);
+        fireChanged();
         return t;
     }
 
@@ -243,6 +268,7 @@ public final class TakesRepository {
                 Take t = TAKES.remove(i);
                 deleteBackingFile(t);
                 deleteAsync(targetId);
+                fireChanged();
                 return true;
             }
         }

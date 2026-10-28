@@ -218,10 +218,10 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
-    private void refreshLibraryIfShown() {
+    void refreshLibraryIfShown() {
         try {
             Fragment f = getSupportFragmentManager().findFragmentByTag("LIB");
-            if (f instanceof LibraryFragment && f.isVisible()) {
+            if (f instanceof LibraryFragment && f.isAdded()) {
                 ((LibraryFragment) f).refreshExternal();
             }
         } catch (Exception ignored) {}

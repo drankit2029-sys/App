@@ -345,9 +345,20 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         });
     }
 
+    private final TakesRepository.Listener repoListener = () -> {
+        try {
+            if (!isAdded() || getView() == null) return;
+            handler.post(() -> {
+                if (!isAdded() || getView() == null || adapter == null) return;
+                refreshImmediate();
+            });
+        } catch (Exception ignored) {}
+    };
+
     @Override
     public void onResume() {
         super.onResume();
+        TakesRepository.addListener(repoListener);
         ConversionJobs.addListener(jobsListener);
         registerConvReceiver();
         refresh();
@@ -357,6 +368,7 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
     public void onPause() {
         super.onPause();
         pauseForBackground();
+        TakesRepository.removeListener(repoListener);
         ConversionJobs.removeListener(jobsListener);
         unregisterConvReceiver();
     }

@@ -26,8 +26,9 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Manages TakeOne's 14-day no-card Reverse Trial and Google Play Billing v7
- * entitlements (Monthly subscription, Annual subscription, and Lifetime unlock).
+ * Manages TakeOne's 7-day free trial and Google Play Billing v7 subscription
+ * entitlements for the Effects tab (Weekly, Monthly, and Yearly plans, each
+ * with a 7-day free trial).
  *
  * <p>Offline-first guarantee: entitlement state is cached locally in
  * SharedPreferences and refreshed whenever Play Store is reachable, so a creator
@@ -35,11 +36,15 @@ import java.util.Map;
  */
 public final class TrialAndBillingManager implements PurchasesUpdatedListener {
 
-    public static final long TRIAL_DURATION_MS = 14L * 24L * 60L * 60L * 1000L;
+    public static final int TRIAL_DAYS = 7;
+    public static final long TRIAL_DURATION_MS =
+            TRIAL_DAYS * 24L * 60L * 60L * 1000L;
 
-    // Google Play Console Product IDs
+    // Google Play Console Subscription Product IDs
+    public static final String SKU_WEEKLY   = "takeone_pro_weekly";
     public static final String SKU_MONTHLY  = "takeone_pro_monthly";
     public static final String SKU_YEARLY   = "takeone_pro_yearly";
+    /** Retained for backward-compatibility with legacy purchases. */
     public static final String SKU_LIFETIME = "takeone_pro_lifetime";
 
     private static final String PREFS = "takeone";
@@ -84,9 +89,9 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
     }
 
     /**
-     * Anchors the 14-day trial to the earliest of SharedPreferences or
+     * Anchors the 7-day free trial to the earliest of SharedPreferences or
      * PackageInfo.firstInstallTime so clearing app storage does not reset
-     * the 14-day clock.
+     * the 7-day clock.
      */
     private static long ensureTrialInitialized(Context ctx) {
         SharedPreferences p = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
@@ -106,31 +111,32 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
         return effective;
     }
 
-    /** True when the user has an active Pro subscription or Lifetime unlock. */
+    /** True when the user has an active Pro subscription. */
     public boolean isPaidPro() {
         if (testOverridePro != null) return testOverridePro;
         SharedPreferences p = appCtx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         return p.getBoolean(KEY_ENTITLED_PRO, false);
     }
 
-    /** True while inside the 14-day Reverse Trial window. */
+    /** True while inside the 7-day free trial window. */
     public boolean isTrialActive() {
         long start = ensureTrialInitialized(appCtx);
         long elapsed = System.currentTimeMillis() - start;
         return elapsed < TRIAL_DURATION_MS;
     }
 
-    /** Whole days remaining in the 14-day trial (1..14 while active, 0 when expired). */
+    /** Whole days remaining in the 7-day trial (1..7 while active, 0 when expired). */
     public int trialDaysRemaining() {
         long start = ensureTrialInitialized(appCtx);
         long remMs = (start + TRIAL_DURATION_MS) - System.currentTimeMillis();
         if (remMs <= 0L) return 0;
-        return (int) Math.min(14L, (remMs + 86_399_999L) / 86_400_000L);
+        return (int) Math.min((long) TRIAL_DAYS,
+                (remMs + 86_399_999L) / 86_400_000L);
     }
 
     /**
      * Master entitlement check: returns true if the user is either a paid Pro
-     * member OR still within their 14-day Reverse Trial (or running under
+     * subscriber OR still within their 7-day free trial (or running under
      * Robolectric unit tests so existing test suites pass out of the box).
      */
     public boolean hasProAccess() {
@@ -143,7 +149,7 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
     public String statusBadgeText() {
         if (isPaidPro()) return "PRO STUDIO";
         int days = trialDaysRemaining();
-        if (days > 0) return "PRO TRIAL • " + days + "D LEFT";
+        if (days > 0) return "FREE TRIAL • " + days + "D LEFT";
         return "FREE TIER • UPGRADE";
     }
 
@@ -157,10 +163,9 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
     }
 
     /**
-     * Gate helper for Pro Studio features (Teleprompter, 53-Effect DSP Rack,
-     * Waveform Trim / Replace / Select & Replace, and FLAC/WAV24/WAV32/Opus).
-     * Runs {@code onAllowed} immediately if entitled, or opens the upgrade
-     * sheet if the 14-day trial has expired.
+     * Gate helper for the Effects tab. Runs {@code onAllowed} immediately if
+     * entitled, or opens the 3-plan upgrade paywall sheet (Weekly, Monthly,
+     * Yearly with a 7-day free trial) when locked.
      */
     public static boolean requireProOrShowPaywall(@NonNull Activity activity,
                                                   @NonNull String featureName,
@@ -175,38 +180,45 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
     }
 
     /**
-     * Displays the Pro Studio upgrade options using TakeOne's native
-     * {@link OptionsSheet} modal styling.
+     * Displays the Effects tab paywall using TakeOne's native
+     * {@link OptionsSheet} modal styling with three payment structures
+     * (Weekly, Monthly, and Yearly) and a 7-day free trial.
      */
     public void showPaywallSheet(@NonNull Activity activity,
                                  @Nullable String lockedFeature) {
+        ProductDetails weekly  = productCache.get(SKU_WEEKLY);
         ProductDetails monthly = productCache.get(SKU_MONTHLY);
         ProductDetails yearly  = productCache.get(SKU_YEARLY);
-        ProductDetails life    = productCache.get(SKU_LIFETIME);
 
+        String wkPrice = formatPrice(weekly, "$1.99/week");
         String moPrice = formatPrice(monthly, "$3.99/month");
-        String yrPrice = formatPrice(yearly, "$24.99/year (Save 48%)");
-        String lfPrice = formatPrice(life, "$39.99 one-time");
+        String yrPrice = formatPrice(yearly, "$24.99/year");
 
         String subtitle = (lockedFeature != null && !lockedFeature.isEmpty())
-                ? lockedFeature + " requires TakeOne Pro Studio. Your 14-day free trial has ended — choose a plan to unlock the full studio:"
-                : "Unlock the 53-effect DSP rack, teleprompter, non-linear punch-in editor, and lossless FLAC/24-bit WAV exports:";
+                ? "Unlock " + lockedFeature + " with a 7-day free trial. Choose a Weekly, Monthly, or Yearly plan (cancel anytime):"
+                : "Start your 7-day free trial to unlock the full 53-effect DSP rack. Choose a plan:";
 
         List<OptionsSheet.Item> items = new ArrayList<>();
-        items.add(OptionsSheet.Item.of(R.drawable.ic_check,
-                "Annual Pro — " + yrPrice,
+        items.add(OptionsSheet.Item.detail(R.drawable.ic_check,
+                "Yearly — " + yrPrice,
+                "7-day free trial • Best value (Save 48%)",
+                true,
                 () -> launchPurchase(activity, SKU_YEARLY)));
-        items.add(OptionsSheet.Item.of(R.drawable.ic_sliders,
-                "Monthly Pro — " + moPrice,
+        items.add(OptionsSheet.Item.detail(R.drawable.ic_sliders,
+                "Monthly — " + moPrice,
+                "7-day free trial • Billed monthly",
+                false,
                 () -> launchPurchase(activity, SKU_MONTHLY)));
-        items.add(OptionsSheet.Item.of(R.drawable.ic_wave,
-                "Lifetime Studio Unlock — " + lfPrice,
-                () -> launchPurchase(activity, SKU_LIFETIME)));
+        items.add(OptionsSheet.Item.detail(R.drawable.ic_wave,
+                "Weekly — " + wkPrice,
+                "7-day free trial • Flexible weekly billing",
+                false,
+                () -> launchPurchase(activity, SKU_WEEKLY)));
         items.add(OptionsSheet.Item.of(R.drawable.ic_undo,
                 "Restore existing purchase",
                 this::refreshPurchasesAsync));
 
-        OptionsSheet.showOptions(activity, "TakeOne Pro Studio", subtitle, items);
+        OptionsSheet.showOptions(activity, "Unlock Pro Effects", subtitle, items);
     }
 
     private static String formatPrice(@Nullable ProductDetails pd, String fallback) {
@@ -226,6 +238,27 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
             }
         } catch (Exception ignored) {}
         return fallback;
+    }
+
+    /**
+     * Selects the subscription offer that includes a free trial phase when
+     * available, falling back to the base offer.
+     */
+    @Nullable
+    private static String selectTrialOrBaseOfferToken(@NonNull ProductDetails pd) {
+        List<ProductDetails.SubscriptionOfferDetails> offers =
+                pd.getSubscriptionOfferDetails();
+        if (offers == null || offers.isEmpty()) return null;
+        for (ProductDetails.SubscriptionOfferDetails offer : offers) {
+            if (offer == null || offer.getPricingPhases() == null) continue;
+            for (ProductDetails.PricingPhase phase :
+                    offer.getPricingPhases().getPricingPhaseList()) {
+                if (phase != null && phase.getPriceAmountMicros() == 0L) {
+                    return offer.getOfferToken();
+                }
+            }
+        }
+        return offers.get(0).getOfferToken();
     }
 
     // ---- Google Play Billing Client lifecycle ----
@@ -263,6 +296,10 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
         if (billingClient == null || !billingClient.isReady()) return;
         List<QueryProductDetailsParams.Product> subs = new ArrayList<>();
         subs.add(QueryProductDetailsParams.Product.newBuilder()
+                .setProductId(SKU_WEEKLY)
+                .setProductType(BillingClient.ProductType.SUBS)
+                .build());
+        subs.add(QueryProductDetailsParams.Product.newBuilder()
                 .setProductId(SKU_MONTHLY)
                 .setProductType(BillingClient.ProductType.SUBS)
                 .build());
@@ -272,24 +309,6 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
                 .build());
         billingClient.queryProductDetailsAsync(
                 QueryProductDetailsParams.newBuilder().setProductList(subs).build(),
-                (res, list) -> {
-                    if (res.getResponseCode() == BillingClient.BillingResponseCode.OK
-                            && list != null) {
-                        synchronized (productCache) {
-                            for (ProductDetails pd : list) {
-                                productCache.put(pd.getProductId(), pd);
-                            }
-                        }
-                    }
-                });
-
-        List<QueryProductDetailsParams.Product> inapp = Collections.singletonList(
-                QueryProductDetailsParams.Product.newBuilder()
-                        .setProductId(SKU_LIFETIME)
-                        .setProductType(BillingClient.ProductType.INAPP)
-                        .build());
-        billingClient.queryProductDetailsAsync(
-                QueryProductDetailsParams.newBuilder().setProductList(inapp).build(),
                 (res, list) -> {
                     if (res.getResponseCode() == BillingClient.BillingResponseCode.OK
                             && list != null) {
@@ -310,17 +329,20 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
                         .build(),
                 (res, subsList) -> {
                     boolean active = hasActivePurchase(subsList);
-                    billingClient.queryPurchasesAsync(
-                            QueryPurchasesParams.newBuilder()
-                                    .setProductType(BillingClient.ProductType.INAPP)
-                                    .build(),
-                            (res2, inappList) -> {
-                                boolean lifetime = hasActivePurchase(inappList);
-                                persistEntitlement(active || lifetime,
-                                        lifetime ? SKU_LIFETIME
-                                                : (active ? SKU_YEARLY : ""));
-                            });
+                    String plan = active ? resolvePurchasedPlan(subsList) : "";
+                    persistEntitlement(active, plan);
                 });
+    }
+
+    private static String resolvePurchasedPlan(@Nullable List<Purchase> purchases) {
+        if (purchases == null) return "";
+        for (Purchase p : purchases) {
+            if (p.getPurchaseState() == Purchase.PurchaseState.PURCHASED
+                    && !p.getProducts().isEmpty()) {
+                return p.getProducts().get(0);
+            }
+        }
+        return "subscribed";
     }
 
     private boolean hasActivePurchase(@Nullable List<Purchase> purchases) {
@@ -361,11 +383,11 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
         BillingFlowParams.ProductDetailsParams.Builder builder =
                 BillingFlowParams.ProductDetailsParams.newBuilder()
                         .setProductDetails(pd);
-        if (BillingClient.ProductType.SUBS.equals(pd.getProductType())
-                && pd.getSubscriptionOfferDetails() != null
-                && !pd.getSubscriptionOfferDetails().isEmpty()) {
-            builder.setOfferToken(
-                    pd.getSubscriptionOfferDetails().get(0).getOfferToken());
+        if (BillingClient.ProductType.SUBS.equals(pd.getProductType())) {
+            String offerToken = selectTrialOrBaseOfferToken(pd);
+            if (offerToken != null) {
+                builder.setOfferToken(offerToken);
+            }
         }
         BillingFlowParams flowParams = BillingFlowParams.newBuilder()
                 .setProductDetailsParamsList(
@@ -380,7 +402,7 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
         if (result.getResponseCode() == BillingClient.BillingResponseCode.OK
                 && purchases != null) {
             if (hasActivePurchase(purchases)) {
-                persistEntitlement(true, "purchased");
+                persistEntitlement(true, resolvePurchasedPlan(purchases));
             }
         }
     }
@@ -398,4 +420,3 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
         }
     }
 }
-

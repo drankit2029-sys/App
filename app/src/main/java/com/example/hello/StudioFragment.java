@@ -378,13 +378,7 @@ public class StudioFragment extends Fragment {
         if (formatBadge != null) {
             formatBadge.setOnClickListener(view -> showRecordingSettings());
         }
-        teleEditBtn.setOnClickListener(view -> {
-            if (!TrialAndBillingManager.requireProOrShowPaywall(
-                    requireActivity(), "Teleprompter", null)) {
-                return;
-            }
-            openTeleEditor();
-        });
+        teleEditBtn.setOnClickListener(view -> openTeleEditor());
         PressAnim.applySoft(teleEditBtn, 0.95f);
         telePauseBtn.setOnClickListener(view -> toggleTelePaused());
         PressAnim.applySoft(telePauseBtn, 0.95f);
@@ -441,10 +435,6 @@ public class StudioFragment extends Fragment {
             btnPreviewPlay.setOnClickListener(view -> {
                 if (fxPanelOpen) return;
                 if (!ensurePausedForEditing()) return;
-                if (!TrialAndBillingManager.requireProOrShowPaywall(
-                        requireActivity(), "Replace", null)) {
-                    return;
-                }
                 stopStudioPreview();
                 replaceModeArmed = !replaceModeArmed;
                 if (replaceModeArmed) {
@@ -502,10 +492,6 @@ public class StudioFragment extends Fragment {
             btnReplaceSeg.setOnClickListener(view -> {
                 if (replaceModeArmed || fxPanelOpen) return;
                 if (!ensurePausedForEditing()) return;
-                if (!TrialAndBillingManager.requireProOrShowPaywall(
-                        requireActivity(), "Select & Replace", null)) {
-                    return;
-                }
                 openSelectAndReplaceSubEditor();
             });
         }
@@ -516,10 +502,6 @@ public class StudioFragment extends Fragment {
             btnTrimCrop.setOnClickListener(view -> {
                 if (replaceModeArmed || fxPanelOpen) return;
                 if (!ensurePausedForEditing()) return;
-                if (!TrialAndBillingManager.requireProOrShowPaywall(
-                        requireActivity(), "Trim", null)) {
-                    return;
-                }
                 showTrimOptionsPopup();
             });
         }
@@ -530,7 +512,7 @@ public class StudioFragment extends Fragment {
             btnDspFx.setOnClickListener(view -> {
                 if (replaceModeArmed) return;
                 if (!TrialAndBillingManager.requireProOrShowPaywall(
-                        requireActivity(), "The 53-Effect Pro DSP Rack", null)) {
+                        requireActivity(), "Effects", null)) {
                     return;
                 }
                 toggleFxPanel();
@@ -1035,6 +1017,9 @@ public class StudioFragment extends Fragment {
                                 }
                                 saveFormat = pick;
                                 saveFormat.save(requireContext());
+                                if (engine.hasSession() && !engine.isInPlaceEdited()) {
+                                    engine.restartStreaming(requireContext(), preset, saveFormat);
+                                }
                                 paint();
                             }));
                 }
@@ -2113,6 +2098,7 @@ public class StudioFragment extends Fragment {
             } else {
                 return;
             }
+            engine.beginStreaming(requireContext(), preset, saveFormat);
             if (engine.fellBackToMono) {
                 Toast.makeText(requireContext(), R.string.mono_fallback_toast,
                         Toast.LENGTH_LONG).show();
@@ -2220,7 +2206,7 @@ public class StudioFragment extends Fragment {
         // and flagged on the engine so ConversionJobs.dispatchSave() bakes it on
         // the background worker thread (after the user answers any Edit
         // Replace-vs-New prompt) without freezing the UI thread!
-        if (dspConfig != null) {
+        if ((fxPanelOpen || fxEverOpened) && dspConfig != null) {
             dspConfig.syncLegacyFieldsFromSlots();
             dspConfig.save(requireContext());
         }
@@ -2296,6 +2282,7 @@ public class StudioFragment extends Fragment {
         // mid-save) to finish the save. Snapshot the title and raw too: the
         // failure path below must not read them off a cleared engine.
         final Context appCtx = requireContext().getApplicationContext();
+        final MainActivity hostAct = isAdded() ? activity() : null;
         final String takeTitle =
                 engine.takeName != null ? engine.takeName : "";
         final File saveRaw = engine.rawFile;
@@ -2339,7 +2326,15 @@ public class StudioFragment extends Fragment {
                     if (res != null && res.adopted) {
                         onSaveAdopted(res, -1,
                                 replacing ? replaceTitle : null);
+                        if (hostAct != null) {
+                            hostAct.refreshLibraryIfShown();
+                            hostAct.syncFabWithEngine();
+                        }
                         return;
+                    }
+                    if (hostAct != null) {
+                        hostAct.refreshLibraryIfShown();
+                        hostAct.syncFabWithEngine();
                     }
                     if (!isAdded()) return;
                     activity().syncFabWithEngine();
@@ -3702,18 +3697,6 @@ public class StudioFragment extends Fragment {
     private void syncFxBakeRequired() {
         if (engine == null) return;
         boolean userConfiguredOrOpenedFx = fxPanelOpen || fxEverOpened;
-        if (!userConfiguredOrOpenedFx && isAdded()) {
-            try {
-                android.content.SharedPreferences sp = requireContext()
-                        .getSharedPreferences("takeone", Context.MODE_PRIVATE);
-                userConfiguredOrOpenedFx = sp.contains("dsp_slots_json")
-                        || sp.contains("dsp_mode")
-                        || sp.contains("dsp_noise")
-                        || sp.contains("dsp_deess")
-                        || sp.contains("dsp_comp")
-                        || sp.contains("dsp_hpf");
-            } catch (Exception ignored) {}
-        }
         engine.setFxBakeRequired(!dspBakedToRaw
                 && userConfiguredOrOpenedFx
                 && dspConfig != null && dspConfig.isActive());
