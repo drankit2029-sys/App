@@ -70,7 +70,7 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
     private static volatile TrialAndBillingManager instance;
     private static volatile Boolean testOverridePro = null;
 
-    private final Context appCtx;
+    private volatile Context appCtx;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private BillingClient billingClient;
     private final Map<String, ProductDetails> productCache = new HashMap<>();
@@ -92,6 +92,12 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
                     instance = mgr;
                 }
             }
+        }
+        if (ctx != null && ctx.getApplicationContext() != mgr.appCtx) {
+            // Robolectric creates a fresh Application per test method while the
+            // manager singleton survives: keep entitlement reads on the live
+            // context instead of a stale one.
+            mgr.appCtx = ctx.getApplicationContext();
         }
         return mgr;
     }

@@ -801,6 +801,7 @@ public final class TakesRepository {
             }
             String cleanBase = RecordingEngine.sanitize(cleanTitle)
                     .replaceAll("[\\\\/:*?\"<>|]", "_")
+                    .replace(' ', '_')
                     .trim();
             if (cleanBase.isEmpty()) {
                 cleanBase = "Take_" + takeId;
