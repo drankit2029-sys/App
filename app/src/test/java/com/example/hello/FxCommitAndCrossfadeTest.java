@@ -35,8 +35,9 @@ public class FxCommitAndCrossfadeTest {
     /** Session rate the engine writes WAV headers at (48 kHz). */
     private static final int SR = 48000;
 
-    /** Deterministic wet gain of the brickwall limiter at drive 100. */
-    private static final float LIMITER_GAIN = DspChain.fastDbToLin(10.5f);
+    /** Full drive maps to 6.5 dB and the soft knee settles at 0.93. */
+    private static final float LIMITER_GAIN =
+            DspChain.fastDbToLin(6.5f) * 0.93f;
 
     private static File writeSineWav(File dir, String name, int frames,
                                      int channels, float amp) throws Exception {

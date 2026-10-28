@@ -26,11 +26,11 @@ public class FxParameterStepTest {
     }
 
     @Test
-    public void aDecibelControlStepsByATenthPerTick() {
+    public void aWideDecibelControlStepsByHalfADBPerTick() {
         FxParameter thr = FxParameter.dbParam("t", "Threshold",
                 -60f, -1f, -18f);
-        assertEquals("A dB control moves in 0.1 dB steps",
-                10, thr.interactionStepRaw());
+        assertEquals("A wide dB control moves in 0.5 dB steps",
+                50, thr.interactionStepRaw());
     }
 
     @Test
