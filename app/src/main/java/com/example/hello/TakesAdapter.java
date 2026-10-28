@@ -601,17 +601,26 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
     /** Direct conversion-progress paint without rebind. */
     public void paintConvProgress(RecyclerView list, long id, int pct,
                                   String status) {
+        int clamped = Math.max(0, Math.min(100, pct));
+        Take t = findTake(id);
+        if (t != null) {
+            t.convProgress = clamped;
+            if (status != null) t.dateLabel = status;
+        }
         if (list == null) return;
         RecyclerView.ViewHolder vh = list.findViewHolderForItemId(id);
         if (vh instanceof Vh) {
             Vh h = (Vh) vh;
             if (h.convProgress != null) {
-                h.convProgress.setProgress(Math.max(0, Math.min(100, pct)));
+                h.convProgress.setVisibility(View.VISIBLE);
+                h.convProgress.setProgress(clamped);
             }
             if (status != null) {
                 if (h.convStatus != null) h.convStatus.setText(status);
                 if (h.meta != null) h.meta.setText(status);
             }
+        } else {
+            notifyForId(id);
         }
     }
 

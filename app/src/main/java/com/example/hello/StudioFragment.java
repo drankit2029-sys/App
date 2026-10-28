@@ -434,7 +434,7 @@ public class StudioFragment extends Fragment {
             PressAnim.applySoft(btnPreviewPlay, 0.95f);
             btnPreviewPlay.setOnClickListener(view -> {
                 if (!TrialAndBillingManager.requireProOrShowPaywall(
-                        requireActivity(), "Replace", null)) {
+                        requireActivity(), editSourceId, "Replace", null)) {
                     return;
                 }
                 if (fxPanelOpen) return;
@@ -468,7 +468,7 @@ public class StudioFragment extends Fragment {
             PressAnim.applySoft(btnSelectRange, 0.95f);
             btnSelectRange.setOnClickListener(view -> {
                 if (!TrialAndBillingManager.requireProOrShowPaywall(
-                        requireActivity(), "Select", null)) {
+                        requireActivity(), editSourceId, "Select", null)) {
                     return;
                 }
                 if (replaceModeArmed) return;
@@ -499,7 +499,7 @@ public class StudioFragment extends Fragment {
             PressAnim.applySoft(btnReplaceSeg, 0.95f);
             btnReplaceSeg.setOnClickListener(view -> {
                 if (!TrialAndBillingManager.requireProOrShowPaywall(
-                        requireActivity(), "Select & Replace", null)) {
+                        requireActivity(), editSourceId, "Select & Replace", null)) {
                     return;
                 }
                 if (replaceModeArmed || fxPanelOpen) return;
@@ -513,7 +513,7 @@ public class StudioFragment extends Fragment {
             PressAnim.applySoft(btnTrimCrop, 0.95f);
             btnTrimCrop.setOnClickListener(view -> {
                 if (!TrialAndBillingManager.requireProOrShowPaywall(
-                        requireActivity(), "Trim", null)) {
+                        requireActivity(), editSourceId, "Trim", null)) {
                     return;
                 }
                 if (replaceModeArmed || fxPanelOpen) return;
@@ -527,7 +527,7 @@ public class StudioFragment extends Fragment {
             PressAnim.applySoft(btnDspFx, 0.95f);
             btnDspFx.setOnClickListener(view -> {
                 if (!TrialAndBillingManager.requireProOrShowPaywall(
-                        requireActivity(), "Effects", null)) {
+                        requireActivity(), editSourceId, "Effects", null)) {
                     return;
                 }
                 if (replaceModeArmed) return;
@@ -540,7 +540,7 @@ public class StudioFragment extends Fragment {
             PressAnim.applySoft(btnEditUndo, 0.95f);
             btnEditUndo.setOnClickListener(view -> {
                 if (!TrialAndBillingManager.requireProOrShowPaywall(
-                        requireActivity(), "Undo", null)) {
+                        requireActivity(), editSourceId, "Undo", null)) {
                     return;
                 }
                 if (replaceModeArmed || fxPanelOpen) return;
@@ -552,7 +552,7 @@ public class StudioFragment extends Fragment {
             PressAnim.applySoft(btnEditRedo, 0.95f);
             btnEditRedo.setOnClickListener(view -> {
                 if (!TrialAndBillingManager.requireProOrShowPaywall(
-                        requireActivity(), "Redo", null)) {
+                        requireActivity(), editSourceId, "Redo", null)) {
                     return;
                 }
                 if (replaceModeArmed || fxPanelOpen) return;
@@ -694,6 +694,20 @@ public class StudioFragment extends Fragment {
             nameAsked = true;
             attached = true;
         }
+        if (savedInstanceState != null && editSourceId == -1 && engine.hasSession()) {
+            editSourceId = savedInstanceState.getLong("editSourceId", -1);
+            editSourceTitle = savedInstanceState.getString("editSourceTitle");
+        }
+        TrialAndBillingManager.get(requireContext())
+                .setActiveStudioSourceId(editSourceId);
+        if (!TrialAndBillingManager.get(requireContext())
+                .hasProAccessForRecording(editSourceId)) {
+            replaceModeArmed = false;
+            if (dspConfig != null && dspConfig.isActive()) {
+                dspConfig.resetAll();
+                dspConfig.save(requireContext());
+            }
+        }
         restoreWaveformForAttachedSession();
         restoreEditingMode(savedInstanceState);
 
@@ -756,6 +770,8 @@ public class StudioFragment extends Fragment {
     @Override
     public void onSaveInstanceState(@NonNull Bundle outState) {
         super.onSaveInstanceState(outState);
+        outState.putLong("editSourceId", editSourceId);
+        outState.putString("editSourceTitle", editSourceTitle);
         outState.putBoolean("fxPanelOpen", fxPanelOpen);
         outState.putBoolean("fxEverOpened", fxEverOpened);
         outState.putBoolean("replaceModeArmed", replaceModeArmed);
@@ -978,10 +994,6 @@ public class StudioFragment extends Fragment {
 
     private void showRecordingSettings() {
         if (!isAdded()) return;
-        if (!TrialAndBillingManager.requireProOrShowPaywall(
-                requireActivity(), "Recording Settings", null)) {
-            return;
-        }
         OptionsSheet.SettingsState state = new OptionsSheet.SettingsState() {
             @Override
             public List<OptionsSheet.Item> presets() {
@@ -1045,8 +1057,8 @@ public class StudioFragment extends Fragment {
                                 }
                                 saveFormat = pick;
                                 saveFormat.save(requireContext());
-                                if (engine.hasSession() && !engine.isInPlaceEdited()) {
-                                    engine.restartStreaming(requireContext(), preset, saveFormat);
+                                if (engine.hasSession()) {
+                                    engine.abortStreaming();
                                 }
                                 paint();
                             }));
@@ -1472,7 +1484,7 @@ public class StudioFragment extends Fragment {
     private void applyZoomValue(int bp) {
         if (waveform == null) return;
         if (isAdded() && !TrialAndBillingManager.requireProOrShowPaywall(
-                requireActivity(), "Waveform Zoom", null)) {
+                requireActivity(), editSourceId, "Waveform Zoom", null)) {
             refreshZoomValue();
             return;
         }
@@ -1524,7 +1536,7 @@ public class StudioFragment extends Fragment {
     private void stepZoom(int dir) {
         if (waveform == null || zoomValue == null) return;
         if (isAdded() && !TrialAndBillingManager.requireProOrShowPaywall(
-                requireActivity(), "Waveform Zoom", null)) {
+                requireActivity(), editSourceId, "Waveform Zoom", null)) {
             return;
         }
         int minBp = currentMinZoomBp();
@@ -1796,6 +1808,7 @@ public class StudioFragment extends Fragment {
             final Context appCtx = requireContext().getApplicationContext();
             editSourceId = -1;
             editSourceTitle = null;
+            TrialAndBillingManager.get(appCtx).setActiveStudioSourceId(-1);
             engine.abortAndDelete();
             EditLink.clear(appCtx);
             activity().exitStudio();
@@ -1865,6 +1878,8 @@ public class StudioFragment extends Fragment {
             // a later save cannot inherit a previous take's replace choice.
             editSourceId = -1;
             editSourceTitle = null;
+            TrialAndBillingManager.get(requireContext())
+                    .setActiveStudioSourceId(-1);
             dspBakedToRaw = false;
             dspSubRangeBaked = false;
             lastEditWasSubRangeBake = false;
@@ -2141,7 +2156,7 @@ public class StudioFragment extends Fragment {
             } else {
                 return;
             }
-            engine.beginStreaming(requireContext(), preset, saveFormat);
+            engine.abortStreaming();
             if (engine.fellBackToMono) {
                 Toast.makeText(requireContext(), R.string.mono_fallback_toast,
                         Toast.LENGTH_LONG).show();
@@ -2284,6 +2299,8 @@ public class StudioFragment extends Fragment {
                             // below is an ordinary one.
                             editSourceId = -1;
                             editSourceTitle = null;
+                            TrialAndBillingManager.get(requireContext())
+                                    .setActiveStudioSourceId(-1);
                             try {
                                 EditLink.clear(requireContext());
                             } catch (Exception ignored) {}
@@ -2330,7 +2347,10 @@ public class StudioFragment extends Fragment {
                 engine.takeName != null ? engine.takeName : "";
         final File saveRaw = engine.rawFile;
         final int saveChannels = engine.channels;
-        TrialAndBillingManager.get(appCtx).markFreeRecordingUsed();
+        editSourceId = -1;
+        editSourceTitle = null;
+        TrialAndBillingManager.get(appCtx).setActiveStudioSourceId(-1);
+        EditLink.clear(appCtx);
         new Thread(() -> {
             ConversionJobs.SaveResult r = null;
             String fail = null;
@@ -2339,6 +2359,9 @@ public class StudioFragment extends Fragment {
                         appCtx, p, s, null,
                         replacing ? editId : -1,
                         replacing ? replaceTitle : null);
+                if (r != null && !r.adopted && r.job != null) {
+                    ConversionService.startJob(appCtx, r.job.jobId);
+                }
             } catch (Exception e) {
                 fail = e.getMessage();
             }
@@ -2358,17 +2381,17 @@ public class StudioFragment extends Fragment {
                     } else {
                         try {
                             RecordingService.stopService(appCtx);
-                            engine.clearSession();
-                            editSourceId = -1;
-                            editSourceTitle = null;
-                            EditLink.clear(appCtx);
-                            if (!res.adopted) {
+                            if (engine.rawFile == null || engine.rawFile.equals(saveRaw)) {
+                                engine.clearSession();
+                            }
+                            if (!res.adopted && res.job != null) {
                                 ConversionService.startJob(appCtx, res.job.jobId);
                             }
                         } catch (Exception ignored) {}
                     }
                     if (res != null && res.adopted) {
-                        onSaveAdopted(res, -1,
+                        onSaveAdopted(res,
+                                replacing ? res.recordingId : -1,
                                 replacing ? replaceTitle : null);
                         if (hostAct != null) {
                             hostAct.refreshLibraryIfShown();
@@ -2424,12 +2447,11 @@ public class StudioFragment extends Fragment {
         if (editId == -1) {
             String t = editTitle != null && !editTitle.isEmpty()
                     ? editTitle : res.title;
-            TakesRepository.addRecording(res.file, res.durationMs, t,
-                    res.label);
+            TakesRepository.addRecordingWithId(res.recordingId, res.file,
+                    res.durationMs, t, res.label);
         } else {
-            // Replace was chosen up front: apply it directly, no second
-            // prompt. The background path applies the same mutation in the
-            // worker via the job's replace lineage.
+            // Replace was chosen up front: apply it directly while preserving
+            // the original recording's immutable ID.
             target = editTitle != null && !editTitle.isEmpty()
                     ? editTitle : res.title;
             try {
@@ -2473,6 +2495,7 @@ public class StudioFragment extends Fragment {
         final boolean wasEdit = (editSourceId != -1);
         editSourceId = -1;
         editSourceTitle = null;
+        TrialAndBillingManager.get(appCtx).setActiveStudioSourceId(-1);
 
         // Leave Studio immediately; never wait for file cleanup or a popup.
         act.exitStudio();
@@ -2506,6 +2529,7 @@ public class StudioFragment extends Fragment {
             replaceSavedTailFile = null;
         }
         final Context appCtx = requireContext().getApplicationContext();
+        TrialAndBillingManager.get(appCtx).setActiveStudioSourceId(-1);
         new Thread(() -> {
             engine.abortAndDelete();
             editSourceId = -1;
@@ -2536,6 +2560,8 @@ public class StudioFragment extends Fragment {
         }
         if (!engine.hasSession()) {
             editSourceId = -1;
+            TrialAndBillingManager.get(requireContext())
+                    .setActiveStudioSourceId(-1);
             try {
                 EditLink.clear(requireContext());
             } catch (Exception ignored) {}
@@ -3107,13 +3133,18 @@ public class StudioFragment extends Fragment {
         // NOTE: Do NOT set btnPreviewPlay.setText("▶ Preview") or reset its
         // background here! btnPreviewPlay is the "Replace" toggle button and
         // is styled exclusively by paintEditorStrip() based on replaceModeArmed.
-        if (btnPreviewPlay != null) {
+        if (btnPreviewPlay != null && isAdded()) {
+            boolean proUnlocked = TrialAndBillingManager.get(requireContext())
+                    .hasProAccessForRecording(editSourceId);
+            boolean showActive = proUnlocked && replaceModeArmed
+                    && (isSessionEditable()
+                            || engine.state == RecordingEngine.State.RECORDING);
+            boolean replaceLive = proUnlocked && isSessionEditable() && !fxPanelOpen;
             btnPreviewPlay.setText("Replace");
-            btnPreviewPlay.setBackgroundResource(replaceModeArmed
+            btnPreviewPlay.setBackgroundResource(showActive
                     ? R.drawable.bg_chip_selected : R.drawable.bg_chip);
-            boolean replaceLive = isSessionEditable() && !fxPanelOpen;
-            int col = replaceModeArmed ? 0xFFFFFFFF
-                    : (replaceLive ? 0xFF9AA3AF : 0xFF5D6672);
+            int col = showActive ? 0xFFFFFFFF
+                    : (replaceLive ? 0xFFF2F4F7 : 0xFF5D6672);
             btnPreviewPlay.setTextColor(col);
             setChipIconAndTint(btnPreviewPlay, R.drawable.ic_edit_replace, col);
         }
@@ -3133,21 +3164,45 @@ public class StudioFragment extends Fragment {
             stopStudioPreview();
         }
 
-        boolean hasSel = canEdit && !replaceModeArmed
+        TrialAndBillingManager billing =
+                TrialAndBillingManager.get(requireContext());
+        billing.setActiveStudioSourceId(editSourceId);
+        boolean proUnlocked = billing.hasProAccessForRecording(editSourceId);
+
+        if (zoomValue != null) {
+            zoomValue.setPaywallInterceptor(proUnlocked ? null : () -> {
+                if (isAdded()) {
+                    TrialAndBillingManager.requireProOrShowPaywall(
+                            requireActivity(), editSourceId, "Waveform Zoom", null);
+                }
+            });
+        }
+
+        boolean hasSel = proUnlocked && canEdit && !replaceModeArmed
                 && waveform != null && waveform.hasSelection();
         // Effects mode is a separate mode: the rack owns the selection and the
         // transport, so every other editing action is locked until it closes.
-        boolean proUnlocked = TrialAndBillingManager.get(requireContext()).hasProAccess();
-        boolean fxMode = canEdit && fxPanelOpen;
-        boolean othersEnabled = canEdit && !replaceModeArmed && !fxMode;
-        boolean selectEnabled = canEdit && !replaceModeArmed;
-        boolean replaceEnabled = canEdit && !fxMode;
+        //
+        // Button state rules:
+        // - When proUnlocked is true (first recording, including when saved
+        //   and re-edited, or Paid Pro):
+        //   * Active buttons are visually enabled (alpha = 1f, 0xFFF2F4F7)
+        //     and clickable (setEnabled(true), setClickable(true)).
+        //   * Disabled buttons (e.g. before/during recording when !canEdit,
+        //     Undo/Redo with no history, or buttons locked by Replace/FX mode)
+        //     are visually disabled (alpha = 0.35f, 0xFF5D6672) and
+        //     NON-clickable (setEnabled(false), setClickable(false)).
+        // - When proUnlocked is false (subsequent / 2nd+ recordings):
+        //   * All locked buttons are visually disabled (alpha = 0.35f,
+        //     0xFF5D6672) AND clickable (setEnabled(true), setClickable(true))
+        //     so pressing any of them immediately opens the paywall.
+        boolean fxMode = proUnlocked && canEdit && fxPanelOpen;
+        boolean othersEnabled = proUnlocked && canEdit && !replaceModeArmed && !fxMode;
+        boolean selectEnabled = proUnlocked && canEdit && !replaceModeArmed;
+        boolean replaceEnabled = proUnlocked && canEdit && !fxMode;
         long durMs = Math.max(1L, engine.durationMs());
 
         // 1) Replace Mode Toggle Button (btnPreviewPlay):
-        //    Enabled in PAUSED state; stays visually lit while actively
-        //    recording in Replace mode until it reaches the end of the take
-        //    (where it auto-deactivates) or the user pauses and disables it.
         if (btnPreviewPlay != null) {
             boolean showReplaceActive = proUnlocked && replaceModeArmed
                     && (canEdit || engine.state == RecordingEngine.State.RECORDING);
@@ -3160,13 +3215,12 @@ public class StudioFragment extends Fragment {
             btnPreviewPlay.setBackgroundResource(showReplaceActive
                     ? R.drawable.bg_chip_selected : R.drawable.bg_chip);
             int col = showReplaceActive ? 0xFFFFFFFF
-                    : (replaceEnabled ? 0xFF9AA3AF : 0xFF5D6672);
+                    : (replaceEnabled ? 0xFFF2F4F7 : 0xFF5D6672);
             btnPreviewPlay.setTextColor(col);
             setChipIconAndTint(btnPreviewPlay, R.drawable.ic_edit_replace, col);
         }
 
-        // 2) Select Button: stays "Select" and turns red ONLY when Select is active;
-        //    disabled while Replace mode is on.
+        // 2) Select Button:
         if (btnSelectRange != null) {
             boolean tapAllowed = !proUnlocked || selectEnabled;
             btnSelectRange.setText("Select");
@@ -3176,13 +3230,12 @@ public class StudioFragment extends Fragment {
             btnSelectRange.setBackgroundResource(hasSel
                     ? R.drawable.bg_chip_selected : R.drawable.bg_chip);
             int col = !selectEnabled ? 0xFF5D6672
-                    : (hasSel ? 0xFFFFFFFF : 0xFF9AA3AF);
+                    : (hasSel ? 0xFFFFFFFF : 0xFFF2F4F7);
             btnSelectRange.setTextColor(col);
             setChipIconAndTint(btnSelectRange, R.drawable.ic_edit_select, col);
         }
 
-        // 3) Select & Replace Button: never turns red just because Select is pressed;
-        //    disabled while Replace mode is on, hidden when inside sub-editor.
+        // 3) Select & Replace Button:
         if (btnReplaceSeg != null) {
             boolean tapAllowed = !proUnlocked || othersEnabled;
             btnReplaceSeg.setVisibility(inSelectAndReplaceEditor ? View.GONE : View.VISIBLE);
@@ -3191,52 +3244,43 @@ public class StudioFragment extends Fragment {
             btnReplaceSeg.setClickable(tapAllowed);
             btnReplaceSeg.setAlpha(othersEnabled ? 1f : 0.35f);
             btnReplaceSeg.setBackgroundResource(R.drawable.bg_chip);
-            int col = !othersEnabled ? 0xFF5D6672
-                    : (hasSel ? 0xFFF2F4F7 : 0xFF9AA3AF);
+            int col = othersEnabled ? 0xFFF2F4F7 : 0xFF5D6672;
             btnReplaceSeg.setTextColor(col);
             setChipIconAndTint(btnReplaceSeg, R.drawable.ic_edit_select_replace, col);
         }
 
-        // 4) Trim Button: disabled while Replace mode is on.
+        // 4) Trim Button:
         if (btnTrimCrop != null) {
             boolean tapAllowed = !proUnlocked || othersEnabled;
             btnTrimCrop.setText("Trim");
             btnTrimCrop.setEnabled(tapAllowed);
             btnTrimCrop.setClickable(tapAllowed);
-            btnTrimCrop.setAlpha(!othersEnabled ? 0.35f : (hasSel ? 1f : 0.75f));
+            btnTrimCrop.setAlpha(othersEnabled ? 1f : 0.35f);
             btnTrimCrop.setBackgroundResource(R.drawable.bg_chip);
-            int col = !othersEnabled ? 0xFF5D6672
-                    : (hasSel ? 0xFFF2F4F7 : 0xFF9AA3AF);
+            int col = othersEnabled ? 0xFFF2F4F7 : 0xFF5D6672;
             btnTrimCrop.setTextColor(col);
             setChipIconAndTint(btnTrimCrop, R.drawable.ic_edit_trim, col);
         }
 
-        // 5) FX Button: disabled while Replace mode is on, and the only
-        //    editing chip that stays live while effects mode is open (it is
-        //    how the mode is closed).
+        // 5) FX Button:
         if (btnDspFx != null) {
-            // The chip is only highlighted while the rack is actually open.
-            // A rack with effects in it but a closed panel is a pending
-            // edit, not an active mode, so it must not look selected.
-            boolean fxAvailable = canEdit && !replaceModeArmed;
+            boolean fxAvailable = proUnlocked && canEdit && !replaceModeArmed;
             boolean tapAllowed = !proUnlocked || fxAvailable;
             boolean fxActive = fxAvailable && fxPanelOpen;
-            boolean fxPending = dspConfig != null && dspConfig.isActive();
+            boolean fxPending = proUnlocked && dspConfig != null && dspConfig.isActive();
             btnDspFx.setText(fxPending ? dspConfig.badgeSummary() : "FX");
             btnDspFx.setEnabled(tapAllowed);
             btnDspFx.setClickable(tapAllowed);
-            // Dim like Trim when a region still has to be selected.
-            btnDspFx.setAlpha(!fxAvailable ? 0.35f
-                    : (fxPanelOpen || hasSel ? 1f : 0.75f));
+            btnDspFx.setAlpha(fxAvailable ? 1f : 0.35f);
             btnDspFx.setBackgroundResource(fxActive
                     ? R.drawable.bg_chip_selected : R.drawable.bg_chip);
             int col = !fxAvailable ? 0xFF5D6672
-                    : (fxActive ? 0xFFFFFFFF : 0xFF9AA3AF);
+                    : (fxActive ? 0xFFFFFFFF : 0xFFF2F4F7);
             btnDspFx.setTextColor(col);
             setChipIconAndTint(btnDspFx, R.drawable.ic_edit_fx, col);
         }
 
-        // 6) Undo & Redo Buttons: disabled while Replace mode is on.
+        // 6) Undo & Redo Buttons:
         EditEngine.UndoJournal uj = activeUndoJournal();
         if (btnEditUndo != null) {
             boolean canUndo = othersEnabled && uj != null && uj.canUndo();
@@ -5871,11 +5915,19 @@ public class StudioFragment extends Fragment {
         boolean unfin = hasSession && isUnfinalised();
         draftBadge.setVisibility(unfin ? View.VISIBLE : View.GONE);
 
+        TrialAndBillingManager billing =
+                TrialAndBillingManager.get(requireContext());
+        billing.setActiveStudioSourceId(editSourceId);
         formatBadge.setText(preset.shortLabel + " → "
                 + TakeSaver.labelFor(preset, saveFormat));
+        formatBadge.setEnabled(!saving);
+        formatBadge.setClickable(!saving);
+        formatBadge.setAlpha(saving ? 0.35f : 1f);
         settingsName.setText(preset.titleRes);
         settingsSub.setText(preset.shortLabel + " → "
                 + TakeSaver.labelFor(preset, saveFormat));
+        settingsRow.setEnabled(!saving);
+        settingsRow.setClickable(!saving);
         settingsRow.setAlpha(saving ? 0.45f : 1f);
         setTeleActive(telePanel.getVisibility() == View.VISIBLE);
 

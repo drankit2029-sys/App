@@ -73,12 +73,25 @@ public class TeleValue extends LinearLayout {
     private int valueScale = 1;
     private StepRule stepRule;
     private ValueFormatter valueFormatter;
+    private Runnable paywallInterceptor;
 
     public void setValueFormatter(ValueFormatter formatter) {
         this.valueFormatter = formatter;
         if (label != null) {
             label.setText(formatValueText(value));
         }
+    }
+
+    /**
+     * When non-null, marks this control as locked by the paywall on subsequent
+     * recordings: visually dimmed ({@code alpha = 0.35f}) while keeping its
+     * minus, plus, and value buttons clickable so any tap or scrub opens the
+     * paywall immediately.
+     */
+    public void setPaywallInterceptor(Runnable interceptor) {
+        this.paywallInterceptor = interceptor;
+        setAlpha(interceptor != null ? 0.35f : 1f);
+        updateStepperButtons();
     }
 
     /**
@@ -218,6 +231,10 @@ public class TeleValue extends LinearLayout {
                 dp(ctx, 26)));
 
         minus.setOnClickListener(v -> {
+            if (paywallInterceptor != null) {
+                paywallInterceptor.run();
+                return;
+            }
             int s = effectiveStep(value, -1);
             int next = value - s;
             // If stepping down lands within one step of min, snap to min.
@@ -225,15 +242,23 @@ public class TeleValue extends LinearLayout {
             setValue(next, true);
         });
         plus.setOnClickListener(v -> {
+            if (paywallInterceptor != null) {
+                paywallInterceptor.run();
+                return;
+            }
             int s = effectiveStep(value, 1);
             setValue(value + s, true);
         });
 
-        // A single tap is intentionally inert. Only a double-tap opens the
-        // exact-value keyboard; a hold does nothing, so resting a finger on a
-        // control can never cover the panel with a dialog.
+        // A single tap is intentionally inert when unlocked. Only a double-tap
+        // opens the exact-value keyboard; when paywall-locked, any tap opens
+        // the paywall.
         label.setOnClickListener(v -> {
             if (scrubbing || movedBeyondSlop) return;
+            if (paywallInterceptor != null) {
+                paywallInterceptor.run();
+                return;
+            }
             long now = android.os.SystemClock.uptimeMillis();
             if (now - lastTapAt < DOUBLE_TAP_MS) {
                 lastTapAt = 0;
@@ -242,7 +267,27 @@ public class TeleValue extends LinearLayout {
                 lastTapAt = now;
             }
         });
+    }
 
+    private void updateStepperButtons() {
+        if (minus == null || plus == null) return;
+        if (paywallInterceptor != null) {
+            minus.setEnabled(true);
+            minus.setClickable(true);
+            minus.setAlpha(1f);
+            plus.setEnabled(true);
+            plus.setClickable(true);
+            plus.setAlpha(1f);
+            return;
+        }
+        boolean canDec = value > min;
+        boolean canInc = value < max;
+        minus.setEnabled(canDec);
+        minus.setClickable(canDec);
+        minus.setAlpha(canDec ? 1f : 0.35f);
+        plus.setEnabled(canInc);
+        plus.setClickable(canInc);
+        plus.setAlpha(canInc ? 1f : 0.35f);
     }
 
     private void clearChildPress() {
@@ -422,6 +467,7 @@ public class TeleValue extends LinearLayout {
         this.step = Math.max(1, step);
         this.unit = unit == null ? "" : unit;
         setValue(value, false);
+        updateStepperButtons();
     }
 
     public void setOnValueChanged(OnValueChanged l) {
@@ -458,12 +504,14 @@ public class TeleValue extends LinearLayout {
         String formatted = formatValueText(nv);
         if (nv == value && label != null
                 && formatted.contentEquals(label.getText())) {
+            updateStepperButtons();
             return;
         }
         value = nv;
         if (label != null) {
             label.setText(formatted);
         }
+        updateStepperButtons();
         if (notify && listener != null) listener.onValueChanged(value);
     }
 
@@ -718,6 +766,9 @@ public class TeleValue extends LinearLayout {
                         return true;
                     }
                 }
+                if (paywallInterceptor != null) {
+                    return true;
+                }
                 if (verticalScrubbing) {
                     // Drag upward increases the value, drag downward decreases it,
                     // matching the direction the finger moves away from the
@@ -748,6 +799,10 @@ public class TeleValue extends LinearLayout {
                     if (getParent() != null) {
                         getParent().requestDisallowInterceptTouchEvent(false);
                     }
+                    if (paywallInterceptor != null) {
+                        paywallInterceptor.run();
+                        return true;
+                    }
                     // A scrub reports through the scrub listener only. The
                     // discrete listener remains reserved for +/- and keyboard
                     // commits.
@@ -772,6 +827,11 @@ public class TeleValue extends LinearLayout {
             verticalScrubbing = false;
             if (getParent() != null) {
                 getParent().requestDisallowInterceptTouchEvent(false);
+            }
+            if (paywallInterceptor != null) {
+                paywallInterceptor.run();
+                movedBeyondSlop = true;
+                return true;
             }
             if (scrubListener != null) scrubListener.onScrubFinished(value);
             performClick();

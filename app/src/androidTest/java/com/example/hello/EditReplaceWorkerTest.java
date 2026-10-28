@@ -81,6 +81,7 @@ public class EditReplaceWorkerTest {
         runToDone(j1);
         Take original = findByTitle("Edit Original");
         assertNotNull("original take missing", original);
+        String originalPath = original.filePath;
 
         // 2) An edit of it, saved to the background worker with replace.
         File raw2 = makeRaw(ctx, "EditNew");
@@ -90,10 +91,10 @@ public class EditReplaceWorkerTest {
         Take replaced = null;
         try {
             runToDone(j2);
-            Take stale = TakesRepository.find(original.id);
-            assertTrue("original take survived a replace save", stale == null);
             replaced = findByTitle("Edit Original");
             assertNotNull("replacement take missing", replaced);
+            assertTrue("replacement must preserve immutable recording ID",
+                    replaced.id == original.id);
             assertTrue("replacement has no file", replaced.hasFile());
         } finally {
             if (replaced != null) {

@@ -128,7 +128,10 @@ public final class FormatConverter {
             w.write(Dsp.wavFloatHeader(info.channels, info.sampleRate,
                     info.dataBytes));
             r.seek(info.dataStart);
-            int chunk = MemoryBudget.chunkFrames(CONV_CHUNK, info.channels);
+            int baseChunk = cb != null
+                    ? (int) Math.max(2048L, Math.min((long) CONV_CHUNK, totalSamples / 25L))
+                    : CONV_CHUNK;
+            int chunk = MemoryBudget.chunkFrames(baseChunk, info.channels);
             byte[] buf = new byte[chunk * 4];
             long done = 0;
             int lastPct = -1;
@@ -168,7 +171,10 @@ public final class FormatConverter {
             w.setLength(0);
             w.write(wav16Header(info.channels, info.sampleRate, 0));
             r.seek(info.dataStart);
-            int chunk = MemoryBudget.chunkFrames(CONV_CHUNK, info.channels);
+            int baseChunk = cb != null
+                    ? (int) Math.max(2048L, Math.min((long) CONV_CHUNK, totalSamples / 25L))
+                    : CONV_CHUNK;
+            int chunk = MemoryBudget.chunkFrames(baseChunk, info.channels);
             byte[] in = new byte[chunk * 4];
             byte[] out = new byte[chunk * 2];
             java.nio.FloatBuffer fb = ByteBuffer.wrap(in)
@@ -240,7 +246,10 @@ public final class FormatConverter {
             w.setLength(0);
             w.write(Dsp.wav24Header(info.channels, info.sampleRate, 0));
             r.seek(info.dataStart);
-            int chunk = MemoryBudget.chunkFrames(CONV_CHUNK, info.channels);
+            int baseChunk = cb != null
+                    ? (int) Math.max(2048L, Math.min((long) CONV_CHUNK, totalSamples / 25L))
+                    : CONV_CHUNK;
+            int chunk = MemoryBudget.chunkFrames(baseChunk, info.channels);
             byte[] in = new byte[chunk * 4];
             byte[] out = new byte[chunk * 3];
             java.nio.FloatBuffer fb = ByteBuffer.wrap(in)
@@ -329,7 +338,10 @@ public final class FormatConverter {
             muxer = new MediaMuxer(dst.getAbsolutePath(), muxerFormat);
             r = new RandomAccessFile(src, "r");
             r.seek(info.dataStart);
-            int chunk = MemoryBudget.chunkFrames(16384, ch);
+            int baseChunk = cb != null
+                    ? (int) Math.max(1024L, Math.min(16384L, totalFrames / 25L))
+                    : 16384;
+            int chunk = MemoryBudget.chunkFrames(baseChunk, ch);
             byte[] in = new byte[chunk * ch * 4];
             java.nio.FloatBuffer fb = ByteBuffer.wrap(in)
                     .order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer();
@@ -1028,7 +1040,10 @@ public final class FormatConverter {
             // STREAMINFO header is written so no audio is lost.
             java.io.ByteArrayOutputStream pending = new java.io.ByteArrayOutputStream();
             RandomAccessFile r = new RandomAccessFile(src, "r");
-            int chunk = MemoryBudget.chunkFrames(16384, ch);
+            int baseChunk = cb != null
+                    ? (int) Math.max(1024L, Math.min(16384L, totalFrames / 25L))
+                    : 16384;
+            int chunk = MemoryBudget.chunkFrames(baseChunk, ch);
             byte[] in = new byte[chunk * ch * 4];
             java.nio.FloatBuffer fb = ByteBuffer.wrap(in)
                     .order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer();

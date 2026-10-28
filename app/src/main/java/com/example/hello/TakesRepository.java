@@ -50,6 +50,7 @@ public final class TakesRepository {
     private static final AtomicLong IDS = new AtomicLong(100);
     private static final String PREFS = "takeone";
     private static final String KEY_SEEDED = "library_seeded_once";
+    private static final String KEY_NEXT_ID = "next_recording_id";
     /**
      * Probe attempts that never reported back. A native parser death
      * mid-probe leaves the mark behind (nothing after it runs), so the next
@@ -81,6 +82,7 @@ public final class TakesRepository {
             } catch (Exception ignored) {}
         }
     }
+
     private static TakeDatabase db;
     private static Context app;
     private static final ExecutorService IO = Executors.newSingleThreadExecutor();
@@ -88,7 +90,70 @@ public final class TakesRepository {
 
     private TakesRepository() {}
 
-    // ---- persistent 32-bit float master storage ----
+    /**
+     * Allocates a unique, monotonically increasing positive ID for a new
+     * recording. Persisted in SharedPreferences so allocations before Room
+     * finishes loading can never collide with an existing database row.
+     */
+    public static synchronized long allocateId() {
+        long next = IDS.getAndIncrement();
+        if (app != null) {
+            try {
+                SharedPreferences p = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+                long stored = p.getLong(KEY_NEXT_ID, 100L);
+                if (stored > next) {
+                    next = stored;
+                }
+                for (Take t : TAKES) {
+                    if (t.id >= next) {
+                        next = t.id + 1;
+                    }
+                }
+                IDS.set(next + 1);
+                p.edit().putLong(KEY_NEXT_ID, next + 1).apply();
+                return next;
+            } catch (Exception ignored) {}
+        }
+        for (Take t : TAKES) {
+            if (t.id >= next) {
+                next = t.id + 1;
+            }
+        }
+        IDS.set(next + 1);
+        return next;
+    }
+
+    private static synchronized void ensureNextIdAtLeast(long minNext) {
+        if (minNext > IDS.get()) {
+            IDS.set(minNext);
+        }
+        if (app != null) {
+            try {
+                SharedPreferences p = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+                long stored = p.getLong(KEY_NEXT_ID, 100L);
+                if (minNext > stored) {
+                    p.edit().putLong(KEY_NEXT_ID, minNext).apply();
+                }
+            } catch (Exception ignored) {}
+        }
+    }
+
+    /**
+     * Finds the immutable recording ID for a library-visible converted file on
+     * disk, or {@code -1} if no in-memory {@link Take} currently owns that path.
+     */
+    public static synchronized long findIdByFile(File takeFile) {
+        if (takeFile == null) return -1L;
+        String abs = takeFile.getAbsolutePath();
+        for (Take t : TAKES) {
+            if (abs.equals(t.filePath)) {
+                return t.id;
+            }
+        }
+        return -1L;
+    }
+
+    // ---- persistent 32-bit float master storage (linked by immutable ID) ----
 
     /**
      * Hidden directory inside {@code takes/} that holds persistent 32-bit
@@ -101,60 +166,120 @@ public final class TakesRepository {
     }
 
     /**
-     * Companion 32-bit float master path for {@code takeFile}, located at
-     * {@code takes/.float32/<takeFile.getName()>.f32.wav}.
+     * Returns the canonical ID-linked 32-bit float master file for a recording
+     * with immutable {@code recordingId}:
+     * {@code takes/.float32/rec_<recordingId>.f32.wav}.
      */
-    public static File floatMasterFor(File takeFile) {
+    public static File floatMasterForId(File takesDir, long recordingId) {
+        if (takesDir == null || recordingId <= 0) return null;
+        return new File(floatMastersDir(takesDir),
+                "rec_" + recordingId + ".f32.wav");
+    }
+
+    /**
+     * Companion 32-bit float master path for {@code recordingId} and/or
+     * {@code takeFile}. Prefers the immutable ID link
+     * {@code takes/.float32/rec_<recordingId>.f32.wav} whenever {@code recordingId > 0}
+     * or {@code takeFile} belongs to a known {@link Take}, falling back to
+     * {@code takes/.float32/<takeFile.getName()>.f32.wav} only for unlinked
+     * standalone files in unit tests.
+     */
+    public static File floatMasterFor(long recordingId, File takeFile) {
         if (takeFile == null) return null;
         File parent = takeFile.getParentFile();
         if (parent == null) return null;
+        long effId = recordingId > 0 ? recordingId : findIdByFile(takeFile);
+        if (effId > 0) {
+            return floatMasterForId(parent, effId);
+        }
         return new File(floatMastersDir(parent),
                 takeFile.getName() + ".f32.wav");
     }
 
     /**
-     * Returns the 32-bit float WAV file to use when opening {@code takeFile}
-     * for editing:
+     * Companion 32-bit float master path for {@code takeFile}, automatically
+     * resolving the owning {@link Take}'s immutable ID when registered in the
+     * repository.
+     */
+    public static File floatMasterFor(File takeFile) {
+        return floatMasterFor(-1L, takeFile);
+    }
+
+    /**
+     * Returns the 32-bit float WAV file to use when opening a recording with
+     * immutable {@code recordingId} and library file {@code takeFile} for
+     * editing:
      * <ul>
      *   <li>If {@code takeFile} is already a 48 kHz 32-bit float WAV (e.g. a
      *       WAV32 take or a converting take's raw), returns {@code takeFile}
      *       itself.</li>
-     *   <li>If a persisted 32-bit float master exists in {@code .float32/},
-     *       returns that master file.</li>
+     *   <li>If an ID-linked 32-bit float master exists at
+     *       {@code takes/.float32/rec_<recordingId>.f32.wav}, returns it.</li>
+     *   <li>If a legacy filename-keyed master exists in {@code .float32/},
+     *       migrates it to {@code rec_<recordingId>.f32.wav} and returns it.</li>
      *   <li>Otherwise returns {@code takeFile} (e.g. an imported recording
      *       being edited for the first time).</li>
      * </ul>
      */
-    public static File resolveFloatMaster(File takeFile) {
+    public static File resolveFloatMaster(long recordingId, File takeFile) {
         if (takeFile == null || !takeFile.exists()) return takeFile;
         if (AudioImporter.isNativeFloatWav(takeFile)) return takeFile;
-        File master = floatMasterFor(takeFile);
-        if (master != null && master.exists()
-                && AudioImporter.isNativeFloatWav(master)) {
-            return master;
+        File parent = takeFile.getParentFile();
+        long effId = recordingId > 0 ? recordingId : findIdByFile(takeFile);
+        if (parent != null && effId > 0) {
+            File byId = floatMasterForId(parent, effId);
+            if (byId != null && byId.exists()
+                    && AudioImporter.isNativeFloatWav(byId)) {
+                return byId;
+            }
+            File legacy = new File(floatMastersDir(parent),
+                    takeFile.getName() + ".f32.wav");
+            if (legacy.exists() && AudioImporter.isNativeFloatWav(legacy)) {
+                if (byId != null && legacy.renameTo(byId)) {
+                    return byId;
+                }
+                return legacy;
+            }
+        }
+        if (parent != null) {
+            File legacy = new File(floatMastersDir(parent),
+                    takeFile.getName() + ".f32.wav");
+            if (legacy.exists() && AudioImporter.isNativeFloatWav(legacy)) {
+                return legacy;
+            }
         }
         return takeFile;
     }
 
+    public static File resolveFloatMaster(File takeFile) {
+        return resolveFloatMaster(-1L, takeFile);
+    }
+
     /** True when {@code takeFile} is itself float32 or has a valid float32 master. */
-    public static boolean hasFloatMaster(File takeFile) {
+    public static boolean hasFloatMaster(long recordingId, File takeFile) {
         if (takeFile == null || !takeFile.exists()) return false;
         if (AudioImporter.isNativeFloatWav(takeFile)) return true;
-        File master = floatMasterFor(takeFile);
-        return master != null && master.exists()
-                && AudioImporter.isNativeFloatWav(master);
+        File resolved = resolveFloatMaster(recordingId, takeFile);
+        return resolved != null && !resolved.equals(takeFile)
+                && resolved.exists()
+                && AudioImporter.isNativeFloatWav(resolved);
+    }
+
+    public static boolean hasFloatMaster(File takeFile) {
+        return hasFloatMaster(-1L, takeFile);
     }
 
     /**
      * Adopts a finalized recording/edit {@code rawFloatWav} as the persistent
-     * 32-bit float master for {@code finalTakeFile}.
+     * 32-bit float master linked to {@code recordingId} (and {@code finalTakeFile}).
      *
      * <p>When {@code finalTakeFile} is already a 48 kHz 32-bit float WAV
      * (saved as {@link SaveFormat#WAV32}), {@code finalTakeFile} is itself the
      * 32-bit float file, so {@code rawFloatWav} (and any stale companion in
      * {@code .float32/}) is deleted to avoid storing redundant copies.
      */
-    public static void adoptFloatMaster(File rawFloatWav, File finalTakeFile) {
+    public static void adoptFloatMaster(long recordingId, File rawFloatWav,
+                                        File finalTakeFile) {
         if (rawFloatWav == null) return;
         try {
             // noinspection ResultOfMethodCallIgnored
@@ -169,7 +294,7 @@ public final class TakesRepository {
         }
         if (rawFloatWav.getAbsolutePath().equals(
                 finalTakeFile.getAbsolutePath())) {
-            deleteFloatMaster(finalTakeFile);
+            deleteFloatMaster(recordingId, finalTakeFile);
             return;
         }
         if (AudioImporter.isNativeFloatWav(finalTakeFile)) {
@@ -177,10 +302,10 @@ public final class TakesRepository {
             // redundant 32-bit float file on disk.
             // noinspection ResultOfMethodCallIgnored
             rawFloatWav.delete();
-            deleteFloatMaster(finalTakeFile);
+            deleteFloatMaster(recordingId, finalTakeFile);
             return;
         }
-        File master = floatMasterFor(finalTakeFile);
+        File master = floatMasterFor(recordingId, finalTakeFile);
         if (master == null) {
             // noinspection ResultOfMethodCallIgnored
             rawFloatWav.delete();
@@ -195,6 +320,17 @@ public final class TakesRepository {
             if (master.exists()) {
                 // noinspection ResultOfMethodCallIgnored
                 master.delete();
+            }
+            // Also clean up any legacy filename-based master if we are now
+            // storing by immutable ID.
+            File parent = finalTakeFile.getParentFile();
+            if (parent != null) {
+                File legacy = new File(floatMastersDir(parent),
+                        finalTakeFile.getName() + ".f32.wav");
+                if (!legacy.equals(master) && legacy.exists()) {
+                    // noinspection ResultOfMethodCallIgnored
+                    legacy.delete();
+                }
             }
             if (rawFloatWav.renameTo(master)) {
                 return;
@@ -215,13 +351,18 @@ public final class TakesRepository {
         }
     }
 
+    public static void adoptFloatMaster(File rawFloatWav, File finalTakeFile) {
+        adoptFloatMaster(-1L, rawFloatWav, finalTakeFile);
+    }
+
     /**
      * Persists a copy of {@code floatWavSession} as the 32-bit float master
-     * for {@code finalTakeFile}. Used the first time the user presses Edit on
-     * an imported take so subsequent edits reuse the persisted 32-bit float
-     * file without re-converting.
+     * linked to {@code recordingId} (and {@code finalTakeFile}). Used the first
+     * time the user presses Edit on an imported take so subsequent edits reuse
+     * the persisted 32-bit float file without re-converting.
      */
-    public static void saveFloatMasterCopy(File floatWavSession,
+    public static void saveFloatMasterCopy(long recordingId,
+                                           File floatWavSession,
                                            File finalTakeFile) {
         if (floatWavSession == null || !floatWavSession.exists()
                 || finalTakeFile == null || !finalTakeFile.exists()) {
@@ -231,7 +372,7 @@ public final class TakesRepository {
             // Already 32-bit float: do not create a redundant copy.
             return;
         }
-        File master = floatMasterFor(finalTakeFile);
+        File master = floatMasterFor(recordingId, finalTakeFile);
         if (master == null) return;
         File dir = master.getParentFile();
         if (dir != null && !dir.exists()) {
@@ -262,13 +403,45 @@ public final class TakesRepository {
         }
     }
 
-    /** Deletes the companion 32-bit float master for {@code takeFile}, if any. */
-    public static void deleteFloatMaster(File takeFile) {
-        File master = floatMasterFor(takeFile);
-        if (master != null && master.exists()) {
-            // noinspection ResultOfMethodCallIgnored
-            master.delete();
+    public static void saveFloatMasterCopy(File floatWavSession,
+                                           File finalTakeFile) {
+        saveFloatMasterCopy(-1L, floatWavSession, finalTakeFile);
+    }
+
+    /** Deletes the companion 32-bit float master for {@code recordingId} / {@code takeFile}. */
+    public static void deleteFloatMaster(long recordingId, File takeFile) {
+        if (takeFile != null) {
+            File parent = takeFile.getParentFile();
+            long effId = recordingId > 0 ? recordingId : findIdByFile(takeFile);
+            if (parent != null && effId > 0) {
+                File byId = floatMasterForId(parent, effId);
+                if (byId != null && byId.exists()) {
+                    // noinspection ResultOfMethodCallIgnored
+                    byId.delete();
+                }
+            }
+            if (parent != null) {
+                File legacy = new File(floatMastersDir(parent),
+                        takeFile.getName() + ".f32.wav");
+                if (legacy.exists()) {
+                    // noinspection ResultOfMethodCallIgnored
+                    legacy.delete();
+                }
+            }
+        } else if (recordingId > 0 && app != null) {
+            try {
+                File takesDir = RecordingEngine.takesDir(app);
+                File byId = floatMasterForId(takesDir, recordingId);
+                if (byId != null && byId.exists()) {
+                    // noinspection ResultOfMethodCallIgnored
+                    byId.delete();
+                }
+            } catch (Exception ignored) {}
         }
+    }
+
+    public static void deleteFloatMaster(File takeFile) {
+        deleteFloatMaster(-1L, takeFile);
     }
 
     private static void copyFileContents(File src, File dst) throws Exception {
@@ -290,6 +463,13 @@ public final class TakesRepository {
         if (app != null) return;
         app = ctx.getApplicationContext();
         db = TakeDatabase.get(app);
+        try {
+            SharedPreferences p = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+            long stored = p.getLong(KEY_NEXT_ID, 100L);
+            if (stored > IDS.get()) {
+                IDS.set(stored);
+            }
+        } catch (Exception ignored) {}
         IO.execute(TakesRepository::loadReconcileSeed);
     }
 
@@ -320,43 +500,34 @@ public final class TakesRepository {
         synchronized (TakesRepository.class) {
             // A4-06: the DB load runs on the IO executor while a save or an
             // import can already have called addRecording()/addTake() on
-            // another thread. Blanket-clearing would wipe those entries
-            // (and could hand out a colliding id), so keep anything already
-            // in memory and only ever move the id counter forward.
+            // another thread. Keep anything already in memory with its
+            // immutable ID intact and only ever move the ID counter forward.
             List<Take> pending = new ArrayList<>(TAKES);
+            Map<Long, Take> pendingById = new HashMap<>();
+            for (Take pt : pending) {
+                pendingById.put(pt.id, pt);
+            }
             TAKES.clear();
             long max = 99;
             Set<Long> seenIds = new HashSet<>();
             for (TakeEntity e : rows) {
                 try {
-                    Take t = e.toTake();
+                    Take t = pendingById.containsKey(e.id)
+                            ? pendingById.get(e.id) : e.toTake();
                     TAKES.add(t);
                     seenIds.add(t.id);
                     if (t.id > max) max = t.id;
                 } catch (Exception ignored) {}
             }
             for (Take t : pending) {
-                if (seenIds.contains(t.id)) {
-                    // A save raced the load and reused an id the database
-                    // already owns. Re-id the in-memory copy so the adapter's
-                    // stable ids stay unique and the write-through inserts a
-                    // distinct row instead of replacing the existing one.
-                    Take copy = new Take(++max, t.title, t.durationMs,
-                            t.timestamp, t.sizeLabel, t.format, t.favorite,
-                            t.filePath);
-                    copy.origin = t.origin;
-                    copy.lastPositionMs = t.lastPositionMs;
-                    copy.markersJson = t.markersJson;
-                    TAKES.add(copy);
-                    seenIds.add(copy.id);
-                    persistAsync(copy);
-                } else {
+                if (!seenIds.contains(t.id)) {
                     TAKES.add(t);
                     seenIds.add(t.id);
                     if (t.id > max) max = t.id;
+                    persistAsync(t);
                 }
             }
-            IDS.set(Math.max(IDS.get(), max + 1));
+            ensureNextIdAtLeast(Math.max(IDS.get(), max + 1));
             sortByTimestampDesc();
         }
         CrashLog.breadcrumb(app, "repo rows=" + TAKES.size());
@@ -417,17 +588,57 @@ public final class TakesRepository {
     // ---- mutations (synchronous cache + ordered async write-through) ----
 
     public static synchronized Take addRecording(File file, long durationMs) {
-        Take t = buildTake(file, durationMs, null, null);
-        TAKES.add(0, t);
-        persistAsync(t);
-        fireChanged();
-        return t;
+        return addRecording(file, durationMs, null, null);
     }
 
     public static synchronized Take addRecording(File file, long durationMs,
                                                  String title, String format) {
-        Take t = buildTake(file, durationMs, title, format);
+        long existingId = findIdByFile(file);
+        long id = existingId > 0 ? existingId : allocateId();
+        return addRecordingWithId(id, file, durationMs, title, format);
+    }
+
+    /**
+     * Inserts or updates a recording using its pre-allocated immutable
+     * {@code recordingId}, ensuring both the converted library-visible file
+     * and the separate 32-bit float master stay linked to the same ID across
+     * Save, Rename, and Edit -> Replace.
+     */
+    public static synchronized Take addRecordingWithId(long recordingId,
+                                                       File file,
+                                                       long durationMs,
+                                                       String title,
+                                                       String format) {
+        long effId = recordingId > 0 ? recordingId : allocateId();
+        ensureNextIdAtLeast(effId + 1);
+        for (int i = TAKES.size() - 1; i >= 0; i--) {
+            if (TAKES.get(i).id == effId) {
+                TAKES.remove(i);
+            }
+        }
+        Take t = buildTakeWithId(effId, file, durationMs, title, format);
         TAKES.add(0, t);
+        if (app != null) {
+            try {
+                TrialAndBillingManager.get(app).onRecordingSaved(t.id);
+            } catch (Exception ignored) {}
+        }
+        // If a filename-based float master was created before the Take was
+        // registered, migrate it to the canonical ID-based path now.
+        if (file != null && file.getParentFile() != null) {
+            File legacy = new File(floatMastersDir(file.getParentFile()),
+                    file.getName() + ".f32.wav");
+            File canonical = floatMasterForId(file.getParentFile(), t.id);
+            if (legacy.exists() && canonical != null && !legacy.equals(canonical)) {
+                if (canonical.exists()) {
+                    // noinspection ResultOfMethodCallIgnored
+                    legacy.delete();
+                } else {
+                    // noinspection ResultOfMethodCallIgnored
+                    legacy.renameTo(canonical);
+                }
+            }
+        }
         persistAsync(t);
         fireChanged();
         return t;
@@ -436,9 +647,15 @@ public final class TakesRepository {
     /** Inserts an imported audio file without pre-converting to 32-bit float. */
     public static synchronized Take addImported(File file, long durationMs,
                                                 String title, String format) {
-        Take t = buildTake(file, durationMs, title, format);
+        long id = allocateId();
+        Take t = buildTakeWithId(id, file, durationMs, title, format);
         t.origin = "imported";
         TAKES.add(0, t);
+        if (app != null) {
+            try {
+                TrialAndBillingManager.get(app).onRecordingSaved(t.id);
+            } catch (Exception ignored) {}
+        }
         persistAsync(t);
         fireChanged();
         return t;
@@ -446,6 +663,7 @@ public final class TakesRepository {
 
     /** Used by reconcile + tests to insert a fully-formed take. */
     public static synchronized Take addTake(Take t) {
+        ensureNextIdAtLeast(t.id + 1);
         TAKES.add(t);
         sortByTimestampDesc();
         persistAsync(t);
@@ -475,6 +693,11 @@ public final class TakesRepository {
         return false;
     }
 
+    /**
+     * Replaces an existing recording in-place while preserving its unique
+     * immutable ID ({@code originalId}) so all ID-linked state (32-bit float
+     * master, first-recording entitlement, etc.) remains unbroken.
+     */
     public static synchronized Take replaceRecording(long originalId,
                                                      File saved,
                                                      long durationMs,
@@ -487,11 +710,12 @@ public final class TakesRepository {
         if (targetId > 0) {
             deleteImmediateForReplace(targetId);
         }
-        return addRecording(saved, durationMs, title, format);
+        long finalId = targetId > 0 ? targetId : allocateId();
+        return addRecordingWithId(finalId, saved, durationMs, title, format);
     }
 
-    private static Take buildTake(File file, long durationMs,
-                                  String title, String format) {
+    private static Take buildTakeWithId(long id, File file, long durationMs,
+                                        String title, String format) {
         String size = Dsp.sizeLabel(file.length());
         String name = file.getName();
         String ext = "M4A";
@@ -504,7 +728,7 @@ public final class TakesRepository {
         if (t.isEmpty()) t = base;
         String f = format != null ? format.trim().toUpperCase(Locale.US) : "";
         if (f.isEmpty()) f = ext;
-        Take take = new Take(IDS.getAndIncrement(), t, durationMs,
+        Take take = new Take(id, t, durationMs,
                 System.currentTimeMillis(), size, f, false, file.getAbsolutePath());
         take.origin = "recorded";
         return take;
@@ -518,12 +742,87 @@ public final class TakesRepository {
         }
     }
 
+    /**
+     * Renames a recording in the Library: updates its display title, renames
+     * the converted library-visible file on disk ({@code t.filePath}) to match
+     * the new title, and persists the updated row to Room. Because the
+     * recording's 32-bit float master is linked to its immutable {@code t.id}
+     * ({@code takes/.float32/rec_<id>.f32.wav}), renaming the converted file on
+     * disk never breaks the 32-bit float link.
+     */
     public static synchronized void rename(long id, String newTitle) {
         Take t = find(id);
-        if (t != null && newTitle != null && !newTitle.trim().isEmpty()) {
-            t.title = newTitle.trim();
-            persistAsync(t);
+        if (t == null || newTitle == null || newTitle.trim().isEmpty()) return;
+        String cleanTitle = newTitle.trim();
+        t.title = cleanTitle;
+        if (t.filePath != null && !t.filePath.isEmpty()) {
+            File oldFile = new File(t.filePath);
+            if (oldFile.exists()) {
+                // Migrate any legacy filename-keyed float32 master to the
+                // canonical ID-linked path before renaming oldFile on disk.
+                File parent = oldFile.getParentFile();
+                if (parent != null && t.id > 0) {
+                    File legacyMaster = new File(floatMastersDir(parent),
+                            oldFile.getName() + ".f32.wav");
+                    File idMaster = floatMasterForId(parent, t.id);
+                    if (legacyMaster.exists() && idMaster != null
+                            && !legacyMaster.equals(idMaster)) {
+                        if (idMaster.exists()) {
+                            // noinspection ResultOfMethodCallIgnored
+                            legacyMaster.delete();
+                        } else {
+                            // noinspection ResultOfMethodCallIgnored
+                            legacyMaster.renameTo(idMaster);
+                        }
+                    }
+                }
+                File renamedFile = renameConvertedFileOnDisk(
+                        oldFile, cleanTitle, t.id);
+                if (renamedFile != null) {
+                    t.filePath = renamedFile.getAbsolutePath();
+                }
+            }
         }
+        persistAsync(t);
+        fireChanged();
+    }
+
+    private static File renameConvertedFileOnDisk(File oldFile,
+                                                  String cleanTitle,
+                                                  long takeId) {
+        try {
+            File dir = oldFile.getParentFile();
+            if (dir == null) return oldFile;
+            String oldName = oldFile.getName();
+            String ext = "";
+            int dot = oldName.lastIndexOf('.');
+            if (dot > 0 && dot < oldName.length() - 1) {
+                ext = oldName.substring(dot);
+            }
+            String cleanBase = RecordingEngine.sanitize(cleanTitle)
+                    .replaceAll("[\\\\/:*?\"<>|]", "_")
+                    .trim();
+            if (cleanBase.isEmpty()) {
+                cleanBase = "Take_" + takeId;
+            }
+            File target = new File(dir, cleanBase + ext);
+            if (target.getAbsolutePath().equals(oldFile.getAbsolutePath())) {
+                return oldFile;
+            }
+            int suffix = 2;
+            while (target.exists()
+                    && !target.getAbsolutePath().equals(oldFile.getAbsolutePath())) {
+                target = new File(dir, cleanBase + " (" + suffix + ")" + ext);
+                suffix++;
+            }
+            if (target.getAbsolutePath().equals(oldFile.getAbsolutePath())) {
+                return oldFile;
+            }
+            if (oldFile.renameTo(target)) {
+                return target;
+            }
+        } catch (Exception ignored) {}
+        return oldFile;
     }
 
     public static synchronized void updatePosition(long id, long posMs) {
@@ -604,12 +903,15 @@ public final class TakesRepository {
                         trashedFile, new File(t.filePath));
                 if (back != null) {
                     t.filePath = back.getAbsolutePath();
-                    // Restore companion 32-bit float master if one was trashed
-                    // alongside this take.
+                    // Restore companion 32-bit float master linked to t.id.
                     File trashedMaster = new File(trashedFile.getParentFile(),
-                            trashedFile.getName() + ".f32.wav");
+                            "rec_" + t.id + ".f32.wav");
+                    if (!trashedMaster.exists()) {
+                        trashedMaster = new File(trashedFile.getParentFile(),
+                                trashedFile.getName() + ".f32.wav");
+                    }
                     if (trashedMaster.exists()) {
-                        File restoredMaster = floatMasterFor(back);
+                        File restoredMaster = floatMasterFor(t.id, back);
                         if (restoredMaster != null) {
                             File mDir = restoredMaster.getParentFile();
                             if (mDir != null && !mDir.exists()) {
@@ -628,6 +930,7 @@ public final class TakesRepository {
                     }
                 }
             }
+            ensureNextIdAtLeast(t.id + 1);
             TAKES.add(pos, t);
             rows.add(TakeEntity.fromTake(t));
         }
@@ -670,18 +973,20 @@ public final class TakesRepository {
         if (t.filePath == null) return null;
         File src = new File(t.filePath);
         if (!src.exists()) {
-            deleteFloatMaster(src);
+            deleteFloatMaster(t.id, src);
             return null;
         }
         try {
             File takesDir = app != null
                     ? RecordingEngine.takesDir(app) : src.getParentFile();
-            File master = floatMasterFor(src);
+            File master = resolveFloatMaster(t.id, src);
+            boolean hasSeparateMaster = master != null
+                    && !master.equals(src) && master.exists();
             File trashed = Dsp.moveToTrash(takesDir, src);
             if (trashed != null) {
-                if (master != null && master.exists()) {
+                if (hasSeparateMaster) {
                     File trashedMaster = new File(trashed.getParentFile(),
-                            trashed.getName() + ".f32.wav");
+                            "rec_" + t.id + ".f32.wav");
                     if (trashedMaster.exists()) {
                         // noinspection ResultOfMethodCallIgnored
                         trashedMaster.delete();
@@ -703,7 +1008,7 @@ public final class TakesRepository {
             File f = new File(t.filePath);
             // noinspection ResultOfMethodCallIgnored
             f.delete();
-            deleteFloatMaster(f);
+            deleteFloatMaster(t.id, f);
         }
     }
 
@@ -723,40 +1028,6 @@ public final class TakesRepository {
             ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                     .edit().putBoolean(KEY_SEEDED, true).apply();
         } catch (Exception ignored) {}
-    }
-
-    private static void seedDemos(Context ctx) {
-        long now = System.currentTimeMillis();
-        long h = 3600_000L;
-        long d = 24 * h;
-        List<TakeEntity> rows = new ArrayList<>();
-        Take[] demos = {
-                demo(1, "Midnight Vocals — Take 7", 252000, now - 2 * h, "4.1 MB", "WAV", true),
-                demo(2, "Quick Humming Idea", 44000, now - 40 * 60_000L, "0.8 MB", "M4A", false),
-                demo(3, "Podcast Intro Draft", 107000, now - 20 * h, "1.8 MB", "M4A", false),
-                demo(4, "Guitar Riff Idea", 38000, now - 3 * d, "0.7 MB", "WAV", true),
-                demo(5, "Voice Memo — Meeting", 725000, now - 9 * d, "11.9 MB", "M4A", false),
-                demo(6, "Drum Loop Test", 56000, now - 15 * d, "1.0 MB", "WAV", false),
-        };
-        synchronized (TakesRepository.class) {
-            for (Take t : demos) {
-                TAKES.add(t);
-                rows.add(TakeEntity.fromTake(t));
-            }
-            IDS.set(100);
-            sortByTimestampDesc();
-        }
-        try {
-            db.takes().upsertAll(rows);
-        } catch (Exception ignored) {}
-        markSeeded(ctx);
-    }
-
-    private static Take demo(long id, String title, long dur, long ts,
-                             String size, String fmt, boolean fav) {
-        Take t = new Take(id, title, dur, ts, size, fmt, fav, null);
-        t.origin = "demo";
-        return t;
     }
 
     // ---- startup reconcile ----
@@ -815,13 +1086,6 @@ public final class TakesRepository {
             rr.trashFreedBytes = Dsp.pruneTrash(Dsp.trashDir(dir), TRASH_MAX_AGE_MS);
         } catch (Exception ignored) {}
 
-        Map<String, File> byPath = new HashMap<>();
-        synchronized (TakesRepository.class) {
-            for (Take t : TAKES) {
-                if (t.filePath != null) byPath.put(t.filePath, new File(t.filePath));
-            }
-        }
-
         Set<String> pendingStems = new HashSet<>();
         for (File f : files) {
             // NEW-03 fix: a stem with an interrupted conversion sidecar must
@@ -842,7 +1106,7 @@ public final class TakesRepository {
             for (Take t : TAKES) {
                 if (t.filePath != null && !(new File(t.filePath).exists())) {
                     prune.add(t.id);
-                    deleteFloatMaster(new File(t.filePath));
+                    deleteFloatMaster(t.id, new File(t.filePath));
                 }
             }
             for (long id : prune) {
@@ -897,9 +1161,10 @@ public final class TakesRepository {
             }
             if (finalFile != null && floatWav != null && !referenced.contains(
                     floatWav.getAbsolutePath())) {
+                long ownerId = findIdByFile(finalFile);
                 if (!AudioImporter.isNativeFloatWav(finalFile)
-                        && !hasFloatMaster(finalFile)) {
-                    adoptFloatMaster(floatWav, finalFile);
+                        && !hasFloatMaster(ownerId, finalFile)) {
+                    adoptFloatMaster(ownerId, floatWav, finalFile);
                     if (!floatWav.exists()) rr.rawsCleaned++;
                 } else {
                     // noinspection ResultOfMethodCallIgnored
@@ -942,8 +1207,9 @@ public final class TakesRepository {
             }
         }
 
-        // 4) Sweep .float32/ and remove any orphaned, corrupt, or redundant
-        // (e.g. parent take is already WAV32 or no longer exists) float32 files.
+        // 4) Sweep .float32/: migrate any legacy filename-keyed masters to
+        // their owner's immutable ID (rec_<id>.f32.wav) and remove any
+        // orphaned, corrupt, or redundant (WAV32) float32 files.
         try {
             File mastersDir = floatMastersDir(dir);
             File[] masterFiles = mastersDir.listFiles();
@@ -954,16 +1220,37 @@ public final class TakesRepository {
                         if (t.filePath == null) continue;
                         File tf = new File(t.filePath);
                         if (tf.exists() && !AudioImporter.isNativeFloatWav(tf)) {
-                            validMasterNames.add(tf.getName() + ".f32.wav");
+                            String canonicalName = "rec_" + t.id + ".f32.wav";
+                            validMasterNames.add(canonicalName);
+                            File legacy = new File(mastersDir,
+                                    tf.getName() + ".f32.wav");
+                            File canonical = new File(mastersDir, canonicalName);
+                            if (legacy.exists() && !legacy.equals(canonical)) {
+                                if (!canonical.exists()) {
+                                    // noinspection ResultOfMethodCallIgnored
+                                    legacy.renameTo(canonical);
+                                } else {
+                                    // noinspection ResultOfMethodCallIgnored
+                                    legacy.delete();
+                                }
+                            }
                         }
                     }
                 }
-                for (File mf : masterFiles) {
-                    if (!mf.isFile()
-                            || !validMasterNames.contains(mf.getName())
-                            || !AudioImporter.isNativeFloatWav(mf)) {
-                        // noinspection ResultOfMethodCallIgnored
-                        if (mf.delete()) rr.rawsCleaned++;
+                for (ConversionJob j : ConversionJobs.active()) {
+                    if (j.recordingId > 0) {
+                        validMasterNames.add("rec_" + j.recordingId + ".f32.wav");
+                    }
+                }
+                File[] remaining = mastersDir.listFiles();
+                if (remaining != null) {
+                    for (File mf : remaining) {
+                        if (!mf.isFile()
+                                || !validMasterNames.contains(mf.getName())
+                                || !AudioImporter.isNativeFloatWav(mf)) {
+                            // noinspection ResultOfMethodCallIgnored
+                            if (mf.delete()) rr.rawsCleaned++;
+                        }
                     }
                 }
             }
@@ -972,13 +1259,6 @@ public final class TakesRepository {
         // 5) New installs start with an empty library: no synthetic demos.
         markSeeded(ctx);
         return rr;
-    }
-
-    private static boolean hasAnyAudio(File[] files) {
-        for (File f : files) {
-            if (f.isFile() && isAudioFile(f.getName())) return true;
-        }
-        return false;
     }
 
     /** NEW-07 fix: use {@link Dsp#parseWavHeader(java.io.RandomAccessFile)}. */
@@ -1073,7 +1353,8 @@ public final class TakesRepository {
             }
             Take t;
             synchronized (TakesRepository.class) {
-                t = new Take(IDS.getAndIncrement(), Dsp.prettyFileTitle(n), dur,
+                long id = allocateId();
+                t = new Take(id, Dsp.prettyFileTitle(n), dur,
                         Math.max(1, f.lastModified()), Dsp.sizeLabel(f.length()),
                         badge, false, f.getAbsolutePath());
                 t.origin = "recovered";

@@ -474,6 +474,7 @@ public class ConversionService extends Service {
     private void runJob(ConversionJob job) {
         Context app = getApplicationContext();
         ConversionJobs.markRunning(job);
+        ConversionJobs.updateProgress(job, 0, 0);
         handler.post(this::refreshNotif);
         File raw = new File(job.rawPath);
         RecordPreset preset = RecordPreset.of(job.presetId);
@@ -481,7 +482,15 @@ public class ConversionService extends Service {
         try {
             if (!raw.exists()) throw new IllegalStateException("raw gone");
             if (job.cancelled) throw new CancellationException();
-            final int[] lastReportedPct = {-1};
+            if (!recordingInProgress()) {
+                try {
+                    Thread.sleep(60L);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            final int[] lastReportedPct = {0};
+            final long jobStartMs = SystemClock.elapsedRealtime();
             TakeSaver.Progress cb = pct -> {
                 if (serviceTimedOut) throw new PausedForTimeoutException();
                 if (job.cancelled) throw new CancellationException();
@@ -494,6 +503,15 @@ public class ConversionService extends Service {
                     ConversionJobs.updateProgress(job, pct,
                             pct * Math.max(1, job.framesTotal) / 100);
                     handler.post(this::refreshNotif);
+                    long elapsed = SystemClock.elapsedRealtime() - jobStartMs;
+                    if (pct > 0 && pct < 100 && elapsed < 650L
+                            && !recordingInProgress()) {
+                        try {
+                            Thread.sleep(16L);
+                        } catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                        }
+                    }
                 }
             };
             TakeSaver.Result r;
@@ -501,6 +519,8 @@ public class ConversionService extends Service {
             // A4-08: judge the partial by its bytes, not by job.framesDone,
             // which is only flushed every 5% of progress. A kill at 2% left a
             // perfectly resumable part that this gate threw away.
+            String initialTitle = ConversionJobs.latestTitle(job, job.title);
+            job.title = initialTitle;
             if (part.exists() && part.length() > 44
                     && isWavFormat(format.effective(preset))) {
                 r = resumeWav(app, job, raw, part, preset, format, cb);
@@ -509,7 +529,7 @@ public class ConversionService extends Service {
                     // noinspection ResultOfMethodCallIgnored
                     part.delete();
                 }
-                r = TakeSaver.convertRaw(app, raw, job.title, preset,
+                r = TakeSaver.convertRaw(app, raw, initialTitle, preset,
                         format, cb);
             }
             if (job.cancelled) throw new CancellationException();
@@ -533,39 +553,44 @@ public class ConversionService extends Service {
             Take take;
             if (job.replaceTakeId != -1) {
                 // Edit punch-in saved to the background worker: honour the
-                // replace-vs-new choice made up front instead of duplicating.
-                take = TakesRepository.replaceRecording(job.replaceTakeId,
-                        r.file, r.durationMs, liveTitle, r.label);
-                if (take == null) {
-                    // The target take was deleted while this replacement was
-                    // converting. Clean up output + raw + sidecar silently.
-                    if (r.file != null) {
-                        // noinspection ResultOfMethodCallIgnored
-                        r.file.delete();
-                        TakesRepository.deleteFloatMaster(r.file);
-                    }
-                    ConversionJobs.deleteOrDeferRaw(job.rawPath);
-                    // noinspection ResultOfMethodCallIgnored
-                    new File(job.rawPath + ".pending").delete();
-                    ConversionJobs.markDone(job);
-                    return;
+                // replace-vs-new choice made up front and preserve the
+                // recording's immutable ID instead of duplicating.
+                long targetId = job.replaceTakeId;
+                if (targetId < 0) {
+                    targetId = ConversionJobs.cancelForReplace(app, targetId);
                 }
+                if (targetId > 0) {
+                    TakesRepository.deleteImmediateForReplace(targetId);
+                }
+                long finalId = job.recordingId > 0 ? job.recordingId
+                        : (targetId > 0 ? targetId : TakesRepository.allocateId());
+                take = TakesRepository.addRecordingWithId(finalId,
+                        r.file, r.durationMs, liveTitle, r.label);
             } else {
-                take = TakesRepository.addRecording(r.file, r.durationMs,
-                        liveTitle, r.label);
+                long finalId = job.recordingId > 0
+                        ? job.recordingId : TakesRepository.allocateId();
+                take = TakesRepository.addRecordingWithId(finalId,
+                        r.file, r.durationMs, liveTitle, r.label);
             }
             ConversionJobs.noteCompletion(job.rawPath, take.id);
             String lateRename = ConversionJobs.consumeRenamedTitle(job.rawPath);
             if (lateRename != null && !lateRename.equals(take.title)) {
                 TakesRepository.rename(take.id, lateRename);
+            } else if (renamed != null) {
+                // Rename arrived while encoding: ensure the converted file on
+                // disk also matches the user's renamed title.
+                TakesRepository.rename(take.id, liveTitle);
             }
-            // Maintain the 32-bit float file in storage for all recordings
-            // (moving job.rawPath into .float32/<r.file.getName()>.f32.wav,
-            // or deleting it if r.file is already WAV32), deferring until
+            File finalTakeFile = take.filePath != null
+                    ? new File(take.filePath) : r.file;
+            // Maintain the 32-bit float file in storage linked to take.id
+            // (moving job.rawPath into .float32/rec_<take.id>.f32.wav, or
+            // deleting it if finalTakeFile is already WAV32), deferring until
             // the last reader finishes if an Edit or preview holds it open.
-            if (r.file == null || !r.file.getAbsolutePath()
+            if (finalTakeFile == null || !finalTakeFile.getAbsolutePath()
                     .equals(job.rawPath)) {
-                ConversionJobs.completeOrDeferRawMaster(job.rawPath, r.file);
+                ConversionJobs.completeOrDeferRawMaster(
+                        job.rawPath, finalTakeFile, take.id);
             }
             // noinspection ResultOfMethodCallIgnored
             new File(job.rawPath + ".pending").delete();

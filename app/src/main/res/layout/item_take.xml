@@ -105,6 +105,19 @@
             android:src="@drawable/ic_chevron" />
     </LinearLayout>
 
+    <!-- Background-conversion progress bar: visible on converting cards even when collapsed -->
+    <ProgressBar
+        android:id="@+id/convProgress"
+        style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:max="100"
+        android:progress="0"
+        android:progressTint="@color/record"
+        android:progressBackgroundTint="@color/wave_idle"
+        android:visibility="gone" />
+
     <!-- Expanded section: scrubber + actions -->
     <LinearLayout
         android:id="@+id/expanded"
@@ -119,7 +132,7 @@
             android:layout_marginTop="10dp"
             android:background="@color/divider" />
 
-        <!-- Background-conversion status: only visible on converting cards -->
+        <!-- Background-conversion status: visible inside expanded section on converting cards -->
         <TextView
             android:id="@+id/convStatus"
             android:layout_width="match_parent"
@@ -130,18 +143,6 @@
             android:maxLines="1"
             android:textColor="@color/text_secondary"
             android:textSize="12sp"
-            android:visibility="gone" />
-
-        <ProgressBar
-            android:id="@+id/convProgress"
-            style="?android:attr/progressBarStyleHorizontal"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
-            android:max="100"
-            android:progress="0"
-            android:progressTint="@color/record"
-            android:progressBackgroundTint="@color/wave_idle"
             android:visibility="gone" />
 
         <LinearLayout

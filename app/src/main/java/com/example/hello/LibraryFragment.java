@@ -347,7 +347,6 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
 
     private final TakesRepository.Listener repoListener = () -> {
         try {
-            if (!isAdded() || getView() == null) return;
             handler.post(() -> {
                 if (!isAdded() || getView() == null || adapter == null) return;
                 refreshImmediate();
@@ -381,7 +380,6 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
 
     private final ConversionJobs.Listener jobsListener = () -> {
         try {
-            if (!isAdded() || getView() == null) return;
             handler.post(() -> {
                 if (!isAdded() || getView() == null || adapter == null) return;
                 // Structural change (job added/finished/cancelled) needs a
@@ -1690,7 +1688,11 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         // for all recordings and for any imported take already edited once).
         // When present, preparing the edit session is a fast byte copy with no
         // "Converting to 32-bit float" modal.
-        final File floatSrc = TakesRepository.resolveFloatMaster(src);
+        final long immutableRecordingId =
+                ConversionJobs.resolveRecordingId(sourceId);
+        TrialAndBillingManager.get(appCtx).setActiveStudioSourceId(sourceId);
+        final File floatSrc = TakesRepository.resolveFloatMaster(
+                immutableRecordingId, src);
         final boolean alreadyFloat = AudioImporter.isNativeFloatWav(floatSrc);
         // Decode a copy to 32-bit float (or fast-copy from the stored 32-bit
         // float master) and punch in from its end. The original stays in the
@@ -1742,8 +1744,9 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                 // For imported recordings (or any legacy take without a float32
                 // master), persist the newly created 32-bit float file on the
                 // first Edit so subsequent edits reuse it without converting.
-                if (!alreadyFloat && sourceId > 0 && src.exists()) {
-                    TakesRepository.saveFloatMasterCopy(session, src);
+                if (!alreadyFloat && immutableRecordingId > 0 && src.exists()) {
+                    TakesRepository.saveFloatMasterCopy(
+                            immutableRecordingId, session, src);
                 }
                 RecordingEngine.get().attachExisting(
                         appCtx, session,

@@ -382,7 +382,8 @@ public class RecordingService extends Service {
                     String rt = replaceTitle != null
                             && !replaceTitle.isEmpty()
                             ? replaceTitle : r.title;
-                    TakesRepository.addRecording(r.file, r.durationMs,
+                    TakesRepository.addRecordingWithId(
+                            r.recordingId, r.file, r.durationMs,
                             rt, r.label);
                     e.clearSession();
                     ok = true;

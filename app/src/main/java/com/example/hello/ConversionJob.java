@@ -48,6 +48,13 @@ public final class ConversionJob {
     public volatile boolean paused;
     public volatile String error;
     /**
+     * Unique immutable recording ID assigned when the recording is saved (or
+     * inherited from the original recording when replacing). Links both the
+     * converted library-visible take and its persistent 32-bit float master
+     * {@code takes/.float32/rec_<recordingId>.f32.wav}.
+     */
+    public volatile long recordingId = -1;
+    /**
      * Edit-replace lineage (BUG-02): when an edit punch-in is saved to the
      * background worker, the user's replace-vs-new choice travels with the
      * job so completion replaces the original take instead of duplicating.
@@ -124,6 +131,7 @@ public final class ConversionJob {
             o.put("framesDone", framesDone);
             o.put("updatedAt", updatedAt);
             o.put("error", error != null ? error : "");
+            o.put("recordingId", recordingId);
             o.put("replaceTakeId", replaceTakeId);
             o.put("replaceTitle", replaceTitle != null ? replaceTitle : "");
 
@@ -205,6 +213,7 @@ public final class ConversionJob {
             j.updatedAt = o.optLong("updatedAt", 0);
             String err = o.optString("error", "");
             j.error = err.isEmpty() ? null : err;
+            j.recordingId = o.optLong("recordingId", -1);
             j.replaceTakeId = o.optLong("replaceTakeId", -1);
             String rt = o.optString("replaceTitle", "");
             j.replaceTitle = rt.isEmpty() ? null : rt;
@@ -232,4 +241,3 @@ public final class ConversionJob {
         return id == 0 ? Long.MIN_VALUE : id;
     }
 }
-

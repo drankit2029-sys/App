@@ -37,6 +37,8 @@ public final class ConversionJobs {
     public static final class SaveResult {
         /** True when the file is ready now (incremental output adopted). */
         public final boolean adopted;
+        /** Unique immutable ID assigned to (or preserved for) this recording. */
+        public final long recordingId;
         public final File file;
         public final String label;
         public final long durationMs;
@@ -44,9 +46,11 @@ public final class ConversionJobs {
         /** Non-null when the save went to the background worker. */
         public final ConversionJob job;
 
-        private SaveResult(boolean adopted, File file, String label,
-                           long durationMs, String title, ConversionJob job) {
+        private SaveResult(boolean adopted, long recordingId, File file,
+                           String label, long durationMs, String title,
+                           ConversionJob job) {
             this.adopted = adopted;
+            this.recordingId = recordingId;
             this.file = file;
             this.label = label;
             this.durationMs = durationMs;
@@ -54,14 +58,15 @@ public final class ConversionJobs {
             this.job = job;
         }
 
-        static SaveResult adopted(File file, String label, long durationMs,
-                                  String title) {
-            return new SaveResult(true, file, label, durationMs, title, null);
+        static SaveResult adopted(long recordingId, File file, String label,
+                                  long durationMs, String title) {
+            return new SaveResult(true, recordingId, file, label, durationMs,
+                    title, null);
         }
 
         static SaveResult background(ConversionJob job) {
-            return new SaveResult(false, null, null, job.durationMs,
-                    job.title, job);
+            return new SaveResult(false, job.recordingId, null, null,
+                    job.durationMs, job.title, job);
         }
     }
 
@@ -87,6 +92,8 @@ public final class ConversionJobs {
     private static final Set<Listener> LISTENERS = new CopyOnWriteArraySet<>();
     /** rawPath -> finished library take id, for replace-after-completion. */
     private static final Map<String, Long> COMPLETED = new HashMap<>();
+    /** rawPath -> immutable recordingId assigned when enqueued or saved. */
+    private static final Map<String, Long> RAW_TO_RECORDING_ID = new HashMap<>();
     /**
      * raws with an in-flight reader. The worker defers its raw adoption/delete
      * while one is open, so an Edit on a converting card cannot have the file
@@ -142,8 +149,33 @@ public final class ConversionJobs {
         return null;
     }
 
+    /**
+     * Resolves any positive {@link Take#id} or negative synthetic
+     * {@link ConversionJob#takeId()} to its canonical positive immutable
+     * recording ID.
+     */
+    public static synchronized long resolveRecordingId(long takeOrJobId) {
+        if (takeOrJobId > 0) return takeOrJobId;
+        if (takeOrJobId == -1) return -1L;
+        ConversionJob job = forTakeId(takeOrJobId);
+        if (job != null && job.recordingId > 0) {
+            return job.recordingId;
+        }
+        String raw = job != null ? job.rawPath : NEG_TO_RAW.get(takeOrJobId);
+        if (raw != null) {
+            Long done = COMPLETED.get(raw);
+            if (done != null && done > 0) return done;
+            Long mapped = RAW_TO_RECORDING_ID.get(raw);
+            if (mapped != null && mapped > 0) return mapped;
+        }
+        return -1L;
+    }
+
     public static synchronized void noteCompletion(String rawPath, long takeId) {
         COMPLETED.put(rawPath, takeId);
+        if (takeId > 0) {
+            RAW_TO_RECORDING_ID.put(rawPath, takeId);
+        }
     }
 
     public static synchronized Long completedTakeIdForRaw(String rawPath) {
@@ -273,6 +305,7 @@ public final class ConversionJobs {
 
     public static synchronized void forgetCompletion(String rawPath) {
         COMPLETED.remove(rawPath);
+        RAW_TO_RECORDING_ID.remove(rawPath);
         RENAMED_TITLES.remove(rawPath);
     }
 
@@ -285,10 +318,20 @@ public final class ConversionJobs {
         }
     }
 
+    private static final class DeferredMaster {
+        final File finalFile;
+        final long recordingId;
+
+        DeferredMaster(File finalFile, long recordingId) {
+            this.finalFile = finalFile;
+            this.recordingId = recordingId;
+        }
+    }
+
     public static void endRawRead(String rawPath) {
         if (rawPath == null) return;
         boolean doDelete = false;
-        File masterTarget = null;
+        DeferredMaster masterTarget = null;
         synchronized (ConversionJobs.class) {
             Integer n = RAW_READERS.get(rawPath);
             if (n == null) return;
@@ -315,7 +358,10 @@ public final class ConversionJobs {
                 new File(rawPath).delete();
             } catch (Exception ignored) {}
         } else if (masterTarget != null) {
-            TakesRepository.adoptFloatMaster(new File(rawPath), masterTarget);
+            TakesRepository.adoptFloatMaster(
+                    masterTarget.recordingId,
+                    new File(rawPath),
+                    masterTarget.finalFile);
         }
     }
 
@@ -323,7 +369,7 @@ public final class ConversionJobs {
     private static final java.util.Set<String> DEFERRED_RAW_DELETES =
             new java.util.HashSet<>();
     /** Raws whose move to .float32/ was deferred until their last reader finishes. */
-    private static final java.util.Map<String, File> DEFERRED_RAW_MASTERS =
+    private static final java.util.Map<String, DeferredMaster> DEFERRED_RAW_MASTERS =
             new java.util.HashMap<>();
 
     /** True while some thread is decoding this raw. */
@@ -354,24 +400,34 @@ public final class ConversionJobs {
 
     /**
      * Preserves a finished conversion's 32-bit float raw as the persistent
-     * float master for {@code finalFile} (or deletes it if {@code finalFile}
-     * is already WAV32 / missing), deferring until {@link #endRawRead} if a
-     * reader currently holds {@code rawPath} open.
+     * float master linked to {@code recordingId} (and {@code finalFile}), or
+     * deletes it if {@code finalFile} is already WAV32 / missing, deferring
+     * until {@link #endRawRead} if a reader currently holds {@code rawPath}
+     * open.
      */
-    public static void completeOrDeferRawMaster(String rawPath, File finalFile) {
+    public static void completeOrDeferRawMaster(String rawPath, File finalFile,
+                                                long recordingId) {
         if (rawPath == null) return;
         if (finalFile == null || !finalFile.exists()
                 || AudioImporter.isNativeFloatWav(finalFile)) {
             deleteOrDeferRaw(rawPath);
+            TakesRepository.deleteFloatMaster(recordingId, finalFile);
             return;
         }
+        long effId = recordingId > 0 ? recordingId
+                : TakesRepository.findIdByFile(finalFile);
         synchronized (ConversionJobs.class) {
             if (RAW_READERS.containsKey(rawPath)) {
-                DEFERRED_RAW_MASTERS.put(rawPath, finalFile);
+                DEFERRED_RAW_MASTERS.put(rawPath,
+                        new DeferredMaster(finalFile, effId));
                 return;
             }
         }
-        TakesRepository.adoptFloatMaster(new File(rawPath), finalFile);
+        TakesRepository.adoptFloatMaster(effId, new File(rawPath), finalFile);
+    }
+
+    public static void completeOrDeferRawMaster(String rawPath, File finalFile) {
+        completeOrDeferRawMaster(rawPath, finalFile, -1L);
     }
 
     /**
@@ -398,6 +454,18 @@ public final class ConversionJobs {
                                                      long durationMs,
                                                      long replaceTakeId,
                                                      String replaceTitle) {
+        return enqueue(ctx, raw, title, preset, format, durationMs,
+                replaceTakeId, replaceTitle, -1L);
+    }
+
+    public static synchronized ConversionJob enqueue(Context ctx, File raw,
+                                                     String title,
+                                                     RecordPreset preset,
+                                                     SaveFormat format,
+                                                     long durationMs,
+                                                     long replaceTakeId,
+                                                     String replaceTitle,
+                                                     long explicitRecordingId) {
         ConversionJob existing = forRaw(raw.getAbsolutePath());
         if (existing != null) return existing;
         RecordingEngine e = RecordingEngine.get();
@@ -427,11 +495,25 @@ public final class ConversionJobs {
                 preset != null ? preset.aacBitrate : 128000,
                 Math.max(durationMs, 1000),
                 framesTotal);
+        long resolvedRecId = explicitRecordingId;
+        if (resolvedRecId <= 0 && replaceTakeId != -1) {
+            resolvedRecId = resolveRecordingId(replaceTakeId);
+        }
+        if (resolvedRecId <= 0) {
+            resolvedRecId = TakesRepository.allocateId();
+        }
+        job.recordingId = resolvedRecId;
         job.replaceTakeId = replaceTakeId;
         job.replaceTitle = replaceTitle;
+        RAW_TO_RECORDING_ID.put(raw.getAbsolutePath(), job.recordingId);
         NEG_TO_RAW.put(job.takeId(), raw.getAbsolutePath());
         ACTIVE.put(job.jobId, job);
         job.write();
+        if (ctx != null) {
+            try {
+                TrialAndBillingManager.get(ctx).onRecordingSaved(job.recordingId);
+            } catch (Exception ignored) {}
+        }
         fireChanged();
         return job;
     }
@@ -496,11 +578,12 @@ public final class ConversionJobs {
      *       {@code superseded} and deleting its raw + part + sidecar) so the
      *       worker never wastes time finishing the obsolete original file,
      *       and returns {@code -1} because no finished library row exists to
-     *       replace.</li>
+     *       delete (while preserving its immutable recordingId in
+     *       {@link #resolveRecordingId(long)}).</li>
      *   <li>If {@code replaceTakeId < 0} and the original conversion job
      *       already finished while the user was editing, returns the positive
      *       {@code Take.id} of that finished take so the replacement deletes
-     *       it.</li>
+     *       it and reuses that same immutable ID.</li>
      * </ul>
      */
     public static long cancelForReplace(Context ctx, long replaceTakeId) {
@@ -511,11 +594,16 @@ public final class ConversionJobs {
             ConversionJob srcJob = forTakeId(replaceTakeId);
             String srcRaw = srcJob != null ? srcJob.rawPath
                     : NEG_TO_RAW.get(replaceTakeId);
+            long preservedRecId = (srcJob != null && srcJob.recordingId > 0)
+                    ? srcJob.recordingId : -1L;
             if (srcJob != null) {
                 srcJob.superseded = true;
                 srcJob.cancelled = true;
                 jobIdToCancel = srcJob.jobId;
                 cancel(srcJob.jobId, true);
+            }
+            if (srcRaw != null && preservedRecId > 0) {
+                RAW_TO_RECORDING_ID.put(srcRaw, preservedRecId);
             }
             finishedId = (srcRaw != null) ? COMPLETED.get(srcRaw) : null;
         }
@@ -537,7 +625,8 @@ public final class ConversionJobs {
         List<String> jobsToCancel = new ArrayList<>();
         synchronized (ConversionJobs.class) {
             for (ConversionJob j : new ArrayList<>(ACTIVE.values())) {
-                if (j.replaceTakeId == deletedTakeId) {
+                if (j.replaceTakeId == deletedTakeId
+                        || j.recordingId == deletedTakeId) {
                     j.superseded = true;
                     j.cancelled = true;
                     jobsToCancel.add(j.jobId);
@@ -671,9 +760,13 @@ public final class ConversionJobs {
                 f.delete();
                 continue;
             }
+            if (job.recordingId <= 0) {
+                job.recordingId = TakesRepository.allocateId();
+            }
             job.state = ConversionJob.QUEUED;
             job.cancelled = false;
             job.write();
+            RAW_TO_RECORDING_ID.put(job.rawPath, job.recordingId);
             NEG_TO_RAW.put(job.takeId(), job.rawPath);
             ACTIVE.put(job.jobId, job);
             resume.add(job);
@@ -716,20 +809,41 @@ public final class ConversionJobs {
         if (raw == null || !raw.exists()) {
             throw new IllegalStateException("empty");
         }
+        // Resolve the immutable recording ID before cancelling or deleting the
+        // previous job/take so an Edit -> Replace always preserves the
+        // original recording's immutable ID!
+        long preservedRecordingId = (replaceTakeId != -1)
+                ? resolveRecordingId(replaceTakeId) : -1L;
         // If replacing a take that is still converting (replaceTakeId < 0),
         // cancel the original conversion job immediately so we never convert
         // the original file first and then convert the edited file second.
         if (replaceTakeId < 0) {
-            replaceTakeId = cancelForReplace(ctx, replaceTakeId);
+            long finishedId = cancelForReplace(ctx, replaceTakeId);
+            if (preservedRecordingId <= 0 && finishedId > 0) {
+                preservedRecordingId = finishedId;
+            }
+            replaceTakeId = finishedId;
         }
         // If the original take already exists in the library (either because
         // the user edited a finished take, or because the converting take
         // finished while the user was editing in Studio), delete the previous
         // take and its file immediately before starting the new conversion!
         if (replaceTakeId > 0) {
+            if (preservedRecordingId <= 0) {
+                preservedRecordingId = replaceTakeId;
+            }
             TakesRepository.deleteImmediateForReplace(replaceTakeId);
             replaceTakeId = -1L;
         }
+        final long recordingId = preservedRecordingId > 0
+                ? preservedRecordingId : TakesRepository.allocateId();
+        synchronized (ConversionJobs.class) {
+            RAW_TO_RECORDING_ID.put(raw.getAbsolutePath(), recordingId);
+        }
+        if (ctx != null) {
+            TrialAndBillingManager.get(ctx).onRecordingSaved(recordingId);
+        }
+
         String title = (replaceTitle != null && !replaceTitle.trim().isEmpty())
                 ? replaceTitle.trim()
                 : (e.takeName != null ? e.takeName : "");
@@ -753,7 +867,7 @@ public final class ConversionJobs {
             // converting card at 0% immediately instead of staying blank
             // while the full-file DSP bake runs.
             ConversionJob prequeued = enqueue(ctx, raw, title, preset, format,
-                    dur, replaceTakeId, replaceTitle);
+                    dur, replaceTakeId, replaceTitle, recordingId);
             try {
                 if (ctx != null) {
                     DspChain.Config cfg = DspChain.Config.load(ctx);
@@ -765,7 +879,7 @@ public final class ConversionJobs {
                         if (totalFrames > 0) {
                             DspChain chain = new DspChain(info.channels, cfg);
                             EditEngine.applyDspToRange(raw, 0, totalFrames,
-                                     chain, null);
+                                    chain, null);
                             e.dataBytes = RecordingEngine.payloadBytesOf(raw);
                         }
                     }
@@ -776,9 +890,6 @@ public final class ConversionJobs {
             e.setFxBakeRequired(false);
             // noinspection ResultOfMethodCallIgnored
             new File(raw.getAbsolutePath() + ".pending").delete();
-            if (ctx != null) {
-                TrialAndBillingManager.get(ctx).markFreeRecordingUsed();
-            }
             if (cb != null) cb.onProgress(0);
             return SaveResult.background(prequeued);
         }
@@ -814,15 +925,12 @@ public final class ConversionJobs {
                     if (!part.renameTo(fin)) {
                         throw new IllegalStateException("adopt failed");
                     }
-                    // Maintain the 32-bit float file in storage for all
-                    // recordings (or delete raw if fin is already WAV32).
-                    TakesRepository.adoptFloatMaster(raw, fin);
+                    // Maintain the 32-bit float file in storage linked to
+                    // recordingId (or delete raw if fin is already WAV32).
+                    TakesRepository.adoptFloatMaster(recordingId, raw, fin);
                     // noinspection ResultOfMethodCallIgnored
                     new File(raw.getAbsolutePath() + ".pending").delete();
-                    if (ctx != null) {
-                        TrialAndBillingManager.get(ctx).markFreeRecordingUsed();
-                    }
-                    return SaveResult.adopted(fin,
+                    return SaveResult.adopted(recordingId, fin,
                             TakeSaver.labelFor(preset, format), dur, title);
                 }
             } catch (Exception ex) {
@@ -836,39 +944,13 @@ public final class ConversionJobs {
         } else if (sess != null) {
             sess.abort();
         }
-        // When the target format is WAV32 (32-bit float WAV), the finalized
-        // raw file IS already the exact 48 kHz 32-bit float WAV container.
-        // Adopt it directly in O(1) via rename instead of spawning a
-        // background job to copy bytes into a second 32-bit float file.
-        if (eff == SaveFormat.WAV32 && !rawIsBeingRead(raw.getAbsolutePath())) {
-            try {
-                FormatConverter.validateFinal(raw, SaveFormat.WAV32);
-                File fin = TakeSaver.uniqueFinal(raw, eff.extension());
-                if (raw.renameTo(fin)) {
-                    // noinspection ResultOfMethodCallIgnored
-                    new File(raw.getAbsolutePath() + ".pending").delete();
-                    EditEngine.clearSessionUndo(raw);
-                    TakesRepository.deleteFloatMaster(fin);
-                    if (ctx != null) {
-                        TrialAndBillingManager.get(ctx).markFreeRecordingUsed();
-                    }
-                    return SaveResult.adopted(fin,
-                            TakeSaver.labelFor(preset, format), dur, title);
-                }
-            } catch (Exception ex) {
-                CrashLog.breadcrumb(ctx, "direct wav32 adopt failed: " + ex);
-            }
-        }
         ConversionJob job = enqueue(ctx, raw, title, preset, format, dur,
-                replaceTakeId, replaceTitle);
+                replaceTakeId, replaceTitle, recordingId);
         // The sidecar now exists, so recovery no longer needs the pending
         // marker. Keep it until this instant to close the finalize/enqueue
         // crash window.
         // noinspection ResultOfMethodCallIgnored
         new File(raw.getAbsolutePath() + ".pending").delete();
-        if (ctx != null) {
-            TrialAndBillingManager.get(ctx).markFreeRecordingUsed();
-        }
         if (cb != null) cb.onProgress(0);
         return SaveResult.background(job);
     }

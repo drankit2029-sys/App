@@ -30,9 +30,9 @@ public final class PressAnim {
         v.setOnTouchListener((view, ev) -> {
             switch (ev.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
-                    // A locked chip must not give press feedback: that is what
-                    // made disabled actions look tappable.
-                    if (!view.isEnabled()) return false;
+                    // A disabled or non-clickable chip must not give press
+                    // feedback: that is what made disabled actions look tappable.
+                    if (!view.isEnabled() || !view.isClickable()) return false;
                     view.animate().cancel();
                     view.animate()
                             .scaleX(0.97f).scaleY(0.97f)
@@ -43,6 +43,7 @@ public final class PressAnim {
                     break;
                 case MotionEvent.ACTION_UP:
                 case MotionEvent.ACTION_CANCEL:
+                    if (!view.isEnabled() || !view.isClickable()) return false;
                     view.animate().cancel();
                     view.animate()
                             .scaleX(1f).scaleY(1f)
@@ -74,7 +75,7 @@ public final class PressAnim {
         v.setOnTouchListener((view, ev) -> {
             switch (ev.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
-                    if (!view.isEnabled()) return false;
+                    if (!view.isEnabled() || !view.isClickable()) return false;
                     view.animate().cancel();
                     view.animate()
                             .scaleX(pressedScale).scaleY(pressedScale)

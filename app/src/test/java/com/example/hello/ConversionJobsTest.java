@@ -488,15 +488,116 @@ public class ConversionJobsTest {
                 AudioImporter.isNativeFloatWav(
                         TakesRepository.resolveFloatMaster(impFile)));
 
+        // 3b) Renaming a converted library-visible recording renames the disk
+        // file while keeping its immutable ID and .float32/rec_<id>.f32.wav link intact!
+        long recImmutableId = recTake.id;
+        assertEquals("rec_" + recImmutableId + ".f32.wav", recMaster.getName());
+        TakesRepository.rename(recImmutableId, "Renamed Chorus Vocal");
+        Take afterRename = TakesRepository.find(recImmutableId);
+        assertNotNull(afterRename);
+        assertEquals("Renamed Chorus Vocal", afterRename.title);
+        File renamedDiskFile = new File(afterRename.filePath);
+        assertTrue("renamed converted file must exist on disk",
+                renamedDiskFile.exists());
+        assertTrue("renamed file name must reflect new title",
+                renamedDiskFile.getName().startsWith("Renamed_Chorus_Vocal"));
+        assertEquals("ID-linked float32 master must still resolve after rename",
+                recMaster.getAbsolutePath(),
+                TakesRepository.resolveFloatMaster(
+                        recImmutableId, renamedDiskFile).getAbsolutePath());
+
         // 4) Replace & Delete clean up both the main file and the .float32 master
         assertTrue(TakesRepository.deleteImmediateForReplace(recTake.id));
-        assertFalse("replaced take file must be deleted", recFinal.exists());
+        assertFalse("replaced take file must be deleted", renamedDiskFile.exists());
         assertFalse("replaced take float32 master must be deleted",
                 recMaster.exists());
 
         TakesRepository.deleteImmediateForReplace(impTake.id);
         assertFalse("deleted imported file must be removed", impFile.exists());
         assertFalse("deleted imported float32 master must be removed",
-                TakesRepository.floatMasterFor(impFile).exists());
+                TakesRepository.floatMasterFor(impTake.id, impFile).exists());
+    }
+
+    @Test
+    public void firstRecordingAllowsAllEditsAfterSavingAndReplacingWhileSecondBlocks()
+            throws Exception {
+        for (Take t : new java.util.ArrayList<>(TakesRepository.all())) {
+            TakesRepository.deleteImmediateForReplace(t.id);
+        }
+        for (ConversionJob j : new java.util.ArrayList<>(ConversionJobs.active())) {
+            ConversionJobs.cancel(j.jobId, true);
+        }
+        ctx().getSharedPreferences("takeone", Context.MODE_PRIVATE)
+                .edit().clear().commit();
+
+        TrialAndBillingManager mgr = TrialAndBillingManager.get(ctx());
+        mgr.setActiveStudioSourceId(-1L);
+        assertTrue("Fresh first recording must allow all features",
+                mgr.evaluateFreeTierAccessForRecording(-1L));
+
+        File dir = RecordingEngine.takesDir(ctx());
+        File f1 = new File(dir, "first_take_" + System.nanoTime() + ".m4a");
+        try (java.io.RandomAccessFile w = new java.io.RandomAccessFile(f1, "rw")) {
+            w.write(new byte[2048]);
+        }
+        Take firstTake = TakesRepository.addRecording(f1, 2000L, "First Take", "M4A");
+        assertEquals(firstTake.id, mgr.getFreeRecordingId());
+
+        // Editing the first recording after saving it once MUST still be allowed
+        mgr.setActiveStudioSourceId(firstTake.id);
+        assertTrue("Editing first recording after saving once must be allowed",
+                mgr.evaluateFreeTierAccessForRecording(firstTake.id));
+
+        // Replacing the first recording preserves its immutable ID and keeps edits allowed
+        File f1Replaced = new File(dir, "first_take_rep_" + System.nanoTime() + ".m4a");
+        try (java.io.RandomAccessFile w = new java.io.RandomAccessFile(f1Replaced, "rw")) {
+            w.write(new byte[2048]);
+        }
+        Take replacedFirst = TakesRepository.replaceRecording(
+                firstTake.id, f1Replaced, 2500L, "First Take Edited", "M4A");
+        assertEquals("Immutable ID must be preserved on Replace",
+                firstTake.id, replacedFirst.id);
+        assertTrue("Editing first recording after Replace must still be allowed",
+                mgr.evaluateFreeTierAccessForRecording(replacedFirst.id));
+
+        // Starting a 2nd recording (-1) or editing a 2nd recording must be blocked
+        mgr.setActiveStudioSourceId(-1L);
+        assertFalse("Starting a 2nd recording must be gated by paywall",
+                mgr.evaluateFreeTierAccessForRecording(-1L));
+
+        File f2 = new File(dir, "second_take_" + System.nanoTime() + ".m4a");
+        try (java.io.RandomAccessFile w = new java.io.RandomAccessFile(f2, "rw")) {
+            w.write(new byte[2048]);
+        }
+        Take secondTake = TakesRepository.addRecording(f2, 2000L, "Second Take", "M4A");
+        assertFalse("Editing 2nd recording must be gated by paywall",
+                mgr.evaluateFreeTierAccessForRecording(secondTake.id));
+        assertTrue("Editing 1st recording must still be allowed even after 2nd recording exists",
+                mgr.evaluateFreeTierAccessForRecording(replacedFirst.id));
+
+        TakesRepository.deleteImmediateForReplace(replacedFirst.id);
+        TakesRepository.deleteImmediateForReplace(secondTake.id);
+    }
+
+    @Test
+    public void formatConversionReportsGranularProgressCallbacks() throws Exception {
+        File dir = RecordingEngine.takesDir(ctx());
+        File raw = new File(dir, "prog_test_" + System.nanoTime() + ".raw.wav");
+        int samples = 48000; // 1 second mono
+        try (java.io.RandomAccessFile w = new java.io.RandomAccessFile(raw, "rw")) {
+            w.write(Dsp.wavFloatHeader(1, 48000, samples * 4L));
+            w.write(new byte[samples * 4]);
+        }
+        File out = new File(dir, "prog_test_" + System.nanoTime() + ".wav");
+        java.util.List<Integer> ticks = new java.util.ArrayList<>();
+        try {
+            FormatConverter.toWav16(raw, out, ticks::add);
+            assertTrue("Expected multiple granular progress updates for 1s audio, got " + ticks.size(),
+                    ticks.size() >= 10);
+            assertEquals(Integer.valueOf(100), ticks.get(ticks.size() - 1));
+        } finally {
+            raw.delete();
+            out.delete();
+        }
     }
 }
