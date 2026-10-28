@@ -532,6 +532,9 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
             h.convStatus.setText(h.itemView.getContext().getString(
                     R.string.conv_card_status, t.convFormat, t.convProgress));
             h.convProgress.setProgress(t.convProgress);
+        } else {
+            h.convProgress.setProgress(0);
+            h.convStatus.setText("");
         }
 
         h.cardRoot.setOnClickListener(v -> listener.onCardClick(t));
@@ -603,10 +606,9 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
                                   String status) {
         int clamped = Math.max(0, Math.min(100, pct));
         Take t = findTake(id);
-        if (t != null) {
-            t.convProgress = clamped;
-            if (status != null) t.dateLabel = status;
-        }
+        if (t == null || !t.converting) return;
+        t.convProgress = clamped;
+        if (status != null) t.dateLabel = status;
         if (list == null) return;
         RecyclerView.ViewHolder vh = list.findViewHolderForItemId(id);
         if (vh instanceof Vh) {

@@ -108,6 +108,20 @@ final class NoiseGateExpanderProcessor extends AudioProcessor {
         int holdFrames = Math.max(0,
                 (int) (holdMs * 0.001f * sampleRate));
 
+        float maxSigDb = -120f;
+        float minSigDb = 0f;
+        for (int off = 0; off < frames; off += 256) {
+            int cnt = Math.min(256, frames - off);
+            float pk = peakOf(buf, off, cnt, ch);
+            float db = Dsp.linToDb(pk);
+            if (off == 0 || db < minSigDb) minSigDb = db;
+            if (db > maxSigDb) maxSigDb = db;
+        }
+        float normT = (thresh - (-96f)) / 90f;
+        float effThresh = (minSigDb > thresh + 6f)
+                ? (minSigDb + normT * Math.max(6f, maxSigDb - minSigDb))
+                : thresh;
+
         final int block = 32;
         int offset = 0;
         while (offset < frames) {
@@ -115,17 +129,17 @@ final class NoiseGateExpanderProcessor extends AudioProcessor {
             float[] side = new float[n * ch];
             System.arraycopy(buf, offset * ch, side, 0, side.length);
             scFilter.process(side, n, ch);
-            float levelDb = Dsp.linToDb(peakOf(side, n, ch));
+            float levelDb = Dsp.linToDb(peakOf(side, 0, n, ch));
             float detectDb = peakHold.update(levelDb, n,
                     holdMs, sampleRate);
 
             if (!open) {
-                if (detectDb > thresh + hyst) {
+                if (detectDb > effThresh + hyst * 0.5f) {
                     open = true;
                     holdCounter = holdFrames;
                 }
             } else {
-                if (detectDb < thresh - hyst) {
+                if (detectDb < effThresh - hyst * 0.5f) {
                     if (holdCounter > 0) {
                         holdCounter -= n;
                     } else {
@@ -139,9 +153,17 @@ final class NoiseGateExpanderProcessor extends AudioProcessor {
             float target;
             if (expander) {
                 target = open ? 0f : DynamicsDetector.expanderGainDb(
-                        detectDb, thresh, rangeDb, expRatio);
+                        detectDb, effThresh + hyst * 0.25f, rangeDb, expRatio);
             } else {
-                target = open ? 0f : rangeDb;
+                float kneeSpan = Math.max(1f, 6f / Math.max(1f, expRatio * 0.5f));
+                if (open) {
+                    float margin = Math.max(0f, (effThresh + kneeSpan) - detectDb);
+                    target = margin > 0f ? (rangeDb * Math.min(0.35f, margin / (kneeSpan * 3f))) : 0f;
+                } else {
+                    float under = Math.max(0f, (effThresh - hyst * 0.25f) - detectDb);
+                    float ratioFactor = Math.min(1f, (under + 1f) * (expRatio / 10f));
+                    target = rangeDb * (0.55f + 0.45f * ratioFactor);
+                }
             }
             for (int f = 0; f < n; f++) {
                 float coef = (target > gainDb) ? attCoef : relCoef;
@@ -154,9 +176,11 @@ final class NoiseGateExpanderProcessor extends AudioProcessor {
         }
     }
 
-    private static float peakOf(float[] buf, int frames, int ch) {
+    private static float peakOf(float[] buf, int startFrame, int frames, int ch) {
         float peak = 0f;
-        for (int i = 0; i < frames * ch; i++) {
+        int start = startFrame * ch;
+        int end = Math.min(buf.length, start + frames * ch);
+        for (int i = start; i < end; i++) {
             float a = Math.abs(buf[i]);
             if (a > peak) peak = a;
         }

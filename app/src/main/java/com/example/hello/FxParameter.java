@@ -127,6 +127,11 @@ public final class FxParameter {
         if (scaleDivisor <= 1) {
             return Math.max(1, Math.min(span, stepRaw));
         }
+        if (scale == Scale.DECIBEL && span >= 24 * scaleDivisor) {
+            int halfDb = Math.max(1, scaleDivisor / 2);
+            int step = Math.max(stepRaw, halfDb);
+            return Math.max(1, Math.min(span, step));
+        }
         // One tenth of a display unit, in raw counts.
         int tenth = Math.max(1, scaleDivisor / 10);
         int step = Math.max(1, Math.max(stepRaw, tenth));

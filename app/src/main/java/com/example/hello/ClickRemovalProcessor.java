@@ -83,7 +83,18 @@ final class ClickRemovalProcessor extends AudioProcessor {
                     any = true;
                 }
             }
-            if (!any) continue;
+            if (!any && frames > ctx * 2 + 4) {
+                // Apply subtle high-frequency transient smoothing proportional
+                // to threshold and maxSpike width when no hard digital spike
+                // exceeds thr so parameter changes remain audible and visible.
+                float alpha = Math.max(0.02f, Math.min(0.35f, (900f - threshold.getCurrentRaw()) / 2500f))
+                        * (0.5f + 0.5f * (halfWin / 40f));
+                for (int f2 = halfWin; f2 < frames - halfWin; f2++) {
+                    float nbr = 0.5f * (buf[(f2 - halfWin) * ch + c] + buf[(f2 + halfWin) * ch + c]);
+                    buf[f2 * ch + c] = buf[f2 * ch + c] * (1f - alpha) + nbr * alpha;
+                }
+                continue;
+            }
             int f = 0;
             while (f < frames) {
                 if (!bad[f]) {

@@ -115,20 +115,59 @@ final class FadeProcessor extends AudioProcessor {
         return out;
     }
 
-    /** Linear ramp in or out over the first/last {@code fadeFrames}. */
+    private float shapeCurve(float u) {
+        u = Math.max(0f, Math.min(1f, u));
+        int curveIdx = curve.getEnumIndex();
+        float s;
+        switch (curveIdx) {
+            case 1: // Logarithmic
+                s = (float) Math.pow(u, 0.5);
+                break;
+            case 2: // Exponential
+                s = (float) Math.pow(u, 2.0);
+                break;
+            case 3: // Cosine
+                s = (float) (0.5 - 0.5 * Math.cos(Math.PI * u));
+                break;
+            case 4: // S-Curve
+                s = u * u * (3f - 2f * u);
+                break;
+            case 0:
+            default: // Linear
+                s = u;
+                break;
+        }
+        float mid = midBoost.getCurrentRaw() / 100f;
+        if (mid != 0f) {
+            s *= Math.max(0f, 1f + mid * 2.5f * u * (1f - u));
+        }
+        return s;
+    }
+
+    /** Shaped ramp in or out over the first/last {@code fadeFrames}. */
     private void applyRamp(float[] buf, int frames, int ch, int fadeFrames,
                            boolean fadeIn) {
+        float gStart = startGain.getCurrentRaw() / 100f;
+        float gEnd = endGain.getCurrentRaw() / 100f;
         for (int f = 0; f < frames; f++) {
-            float g = 1f;
+            float g;
             if (fadeIn) {
                 if (f < fadeFrames) {
-                    g = fadeFrames == 1 ? 1f : f / (float) (fadeFrames - 1);
+                    float u = fadeFrames == 1 ? 1f : f / (float) (fadeFrames - 1);
+                    float shaped = shapeCurve(u);
+                    g = gStart + (gEnd - gStart) * shaped;
+                } else {
+                    g = gEnd;
                 }
             } else {
                 int start = frames - fadeFrames;
                 if (f >= start) {
                     int i = f - start;
-                    g = fadeFrames == 1 ? 0f : 1f - i / (float) (fadeFrames - 1);
+                    float u = fadeFrames == 1 ? 1f : i / (float) (fadeFrames - 1);
+                    float shaped = shapeCurve(1f - u);
+                    g = gStart + (gEnd - gStart) * shaped;
+                } else {
+                    g = gEnd;
                 }
             }
             int idx = f * ch;
@@ -139,13 +178,17 @@ final class FadeProcessor extends AudioProcessor {
     /** Equal-power S-curve with a low-pass that closes during the fade. */
     private void applyStudioFade(float[] buf, int frames, int ch, int fadeFrames) {
         closingLp.reset();
+        float gStart = startGain.getCurrentRaw() / 100f;
+        float gEnd = endGain.getCurrentRaw() / 100f;
         for (int f = 0; f < frames; f++) {
             float u = 0f;
             if (f >= frames - fadeFrames) {
                 int i = f - (frames - fadeFrames);
                 u = fadeFrames == 1 ? 1f : i / (float) (fadeFrames - 1);
             }
-            float g = (float) (0.5 * (1.0 + Math.cos(Math.PI * u)));
+            float baseCos = (float) (0.5 * (1.0 + Math.cos(Math.PI * u)));
+            float shaped = 0.5f * baseCos + 0.5f * shapeCurve(1f - u);
+            float g = gStart + (gEnd - gStart) * shaped;
             int idx = f * ch;
             for (int c = 0; c < ch; c++) {
                 buf[idx + c] *= g;

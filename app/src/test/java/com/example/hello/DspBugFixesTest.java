@@ -289,4 +289,69 @@ public class DspBugFixesTest {
         p.getParam("amp_peak").setFloat(-3f);
         assertTrue("Amplify not audible with peak-only setting", p.isAudible());
     }
+
+    @Test
+    public void amplifySmoothWaveformAtMinusOneZeroPlusOneDb() throws Exception {
+        File dir = new File(System.getProperty("java.io.tmpdir"), "dspfixamp_smooth");
+        float[] buf = sine(4800, 1, 440, 0.25f);
+        File wav = writeWav(dir, "amp_smooth.wav", buf, 1);
+
+        DspChain.Config cfgM1 = new DspChain.Config();
+        cfgM1.applyPreset(DspChain.Preset.CLEAR_ALL);
+        DspChain.EffectSlot sM1 = cfgM1.addOrFocusSlot(DspChain.EffectType.AMPLIFY);
+        sM1.value = -100; // -1.0 dB
+        float[] pM1 = FxPreviewPeaks.renderRegion(wav, new DspChain(1, cfgM1), 20, SR, 0f, 1f);
+
+        DspChain.Config cfgP1 = new DspChain.Config();
+        cfgP1.applyPreset(DspChain.Preset.CLEAR_ALL);
+        DspChain.EffectSlot sP1 = cfgP1.addOrFocusSlot(DspChain.EffectType.AMPLIFY);
+        sP1.value = 100; // +1.0 dB
+        float[] pP1 = FxPreviewPeaks.renderRegion(wav, new DspChain(1, cfgP1), 20, SR, 0f, 1f);
+
+        assertEquals(0.25f * Dsp.dbToLin(-1.0f), pM1[10], 0.015f);
+        assertEquals(0.25f * Dsp.dbToLin(1.0f), pP1[10], 0.015f);
+        assertTrue("Amplify +1 dB must be slightly larger than -1 dB without spikes",
+                pP1[10] > pM1[10] && pP1[10] < 0.32f);
+    }
+
+    @Test
+    public void audioGeneratorDtmfLimitIncreasedAndParamApplicability() {
+        AudioGeneratorTool gen = new AudioGeneratorTool();
+        FxParameter seq = gen.getParam("gen_seq");
+        assertTrue("DTMF sequence max limit must be increased above 15",
+                seq.maxRaw > 15);
+        assertTrue(AudioGeneratorTool.isParamApplicable(0, "gen_start"));
+        assertTrue(!AudioGeneratorTool.isParamApplicable(0, "gen_seq"));
+        assertTrue(!AudioGeneratorTool.isParamApplicable(2, "gen_amp"));
+        assertTrue(AudioGeneratorTool.isParamApplicable(3, "gen_bpm"));
+        assertTrue(AudioGeneratorTool.isParamApplicable(4, "gen_seq"));
+        assertTrue(!AudioGeneratorTool.isParamApplicable(4, "gen_wave"));
+    }
+
+    @Test
+    public void autoDuckAllParametersAffectOutput() {
+        String[] paramIds = {"duck_amount", "duck_thresh", "duck_pause", "duck_fadedown", "duck_fadeup"};
+        int[][] testVals = {{-2400, -600}, {-5000, -1200}, {100, 2500}, {20, 1200}, {20, 1200}};
+        float[] src = new float[SR];
+        for (int i = 0; i < SR; i++) {
+            float env = (i > SR / 4 && i < SR / 2) ? 0.05f : 0.6f;
+            src[i] = (float) (Math.sin(2.0 * Math.PI * 600.0 * i / SR) * env);
+        }
+        for (int k = 0; k < paramIds.length; k++) {
+            AutoDuckProcessor p1 = new AutoDuckProcessor();
+            p1.prepare(SR, 1);
+            p1.getParam(paramIds[k]).setCurrentRaw(testVals[k][0]);
+            float[] b1 = src.clone();
+            p1.processInPlace(b1, SR, 1);
+
+            AutoDuckProcessor p2 = new AutoDuckProcessor();
+            p2.prepare(SR, 1);
+            p2.getParam(paramIds[k]).setCurrentRaw(testVals[k][1]);
+            float[] b2 = src.clone();
+            p2.processInPlace(b2, SR, 1);
+
+            assertTrue("AutoDuck parameter " + paramIds[k] + " had no effect",
+                    changed(b1, b2));
+        }
+    }
 }

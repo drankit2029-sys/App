@@ -851,11 +851,77 @@ public final class ConversionJobs {
         StreamingEncoder sess = e.endStreamingDetach();
         SaveFormat eff = format.effective(preset);
         if (eff == SaveFormat.AUTO) eff = SaveFormat.M4A;
+        boolean needsFxBake = e.isFxBakeRequired();
+
+        // When saving as 32-bit Float WAV (SaveFormat.WAV32), `raw` is already
+        // the 48 kHz 32-bit IEEE float WAV. Adopt `raw` directly in-place
+        // without creating a duplicate .part file, a duplicate .float32 copy,
+        // or a redundant background conversion job.
+        if (eff == SaveFormat.WAV32 && AudioImporter.isNativeFloatWav(raw)) {
+            if (sess != null) {
+                try {
+                    sess.abort();
+                } catch (Exception ignored) {}
+                sess = null;
+            }
+            try {
+                // noinspection ResultOfMethodCallIgnored
+                ConversionJob.partFor(raw).delete();
+            } catch (Exception ignored) {}
+            if (needsFxBake) {
+                try {
+                    if (ctx != null) {
+                        DspChain.Config cfg = DspChain.Config.load(ctx);
+                        if (cfg != null && cfg.isActive()) {
+                            FormatConverter.WavInfo info =
+                                    FormatConverter.readFloatWav(raw);
+                            long totalFrames = info.dataBytes / 4
+                                    / Math.max(1, info.channels);
+                            if (totalFrames > 0) {
+                                DspChain chain = new DspChain(info.channels, cfg);
+                                EditEngine.applyDspToRangeWithProgress(
+                                        raw, 0, totalFrames, chain, pct -> {
+                                            if (cb != null) cb.onProgress(pct);
+                                        });
+                                e.dataBytes = RecordingEngine.payloadBytesOf(raw);
+                            }
+                        }
+                    }
+                } catch (Exception ex) {
+                    CrashLog.breadcrumb(ctx, "dispatchSave wav32 fx bake failed: " + ex);
+                }
+                e.setFxBakeRequired(false);
+            }
+            String rawOrigPath = raw.getAbsolutePath();
+            try {
+                FormatConverter.validateFinal(raw, SaveFormat.WAV32);
+                File fin = TakeSaver.uniqueFinal(raw, eff.extension());
+                if (!fin.getAbsolutePath().equals(rawOrigPath)) {
+                    if (!raw.renameTo(fin)) {
+                        fin = raw;
+                    }
+                } else {
+                    fin = raw;
+                }
+                // No duplicate .float32 companion file is needed when the saved
+                // take itself is a 32-bit float WAV.
+                TakesRepository.deleteFloatMaster(recordingId, fin);
+                // noinspection ResultOfMethodCallIgnored
+                new File(rawOrigPath + ".pending").delete();
+                noteCompletion(rawOrigPath, recordingId);
+                if (cb != null) cb.onProgress(100);
+                return SaveResult.adopted(recordingId, fin,
+                        TakeSaver.labelFor(preset, format), dur, title);
+            } catch (Exception ex) {
+                CrashLog.breadcrumb(ctx,
+                        "dispatchSave wav32 adopt failed: " + ex);
+            }
+        }
+
         // An enabled-but-unbaked FX chain invalidates the incremental output:
         // the pump encoded raw microphone frames, so its .part would ship
         // without a single effect. Drop it and let the worker convert the
         // FX-baked raw instead of silently losing the whole chain.
-        boolean needsFxBake = e.isFxBakeRequired();
         if (needsFxBake) {
             if (sess != null) {
                 try {

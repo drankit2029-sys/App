@@ -521,8 +521,29 @@ public class ConversionService extends Service {
             // perfectly resumable part that this gate threw away.
             String initialTitle = ConversionJobs.latestTitle(job, job.title);
             job.title = initialTitle;
-            if (part.exists() && part.length() > 44
-                    && isWavFormat(format.effective(preset))) {
+            SaveFormat effFormat = format.effective(preset);
+            if (effFormat == SaveFormat.WAV32
+                    && !ConversionJobs.rawIsBeingRead(job.rawPath)
+                    && AudioImporter.isNativeFloatWav(raw)) {
+                if (part.exists()) {
+                    // noinspection ResultOfMethodCallIgnored
+                    part.delete();
+                }
+                FormatConverter.validateFinal(raw, SaveFormat.WAV32);
+                cb.onProgress(100);
+                File fin = TakeSaver.uniqueFinal(raw, effFormat.extension());
+                if (!fin.getAbsolutePath().equals(raw.getAbsolutePath())) {
+                    if (!raw.renameTo(fin)) {
+                        fin = raw;
+                    }
+                } else {
+                    fin = raw;
+                }
+                long dur = Math.max(TakeSaver.durationOf(fin),
+                        Math.max(job.durationMs, 1000));
+                r = new TakeSaver.Result(fin, effFormat.badge, dur, initialTitle);
+            } else if (part.exists() && part.length() > 44
+                    && isWavFormat(effFormat)) {
                 r = resumeWav(app, job, raw, part, preset, format, cb);
             } else {
                 if (part.exists()) {
@@ -591,6 +612,8 @@ public class ConversionService extends Service {
                     .equals(job.rawPath)) {
                 ConversionJobs.completeOrDeferRawMaster(
                         job.rawPath, finalTakeFile, take.id);
+            } else if (AudioImporter.isNativeFloatWav(finalTakeFile)) {
+                TakesRepository.deleteFloatMaster(take.id, finalTakeFile);
             }
             // noinspection ResultOfMethodCallIgnored
             new File(job.rawPath + ".pending").delete();

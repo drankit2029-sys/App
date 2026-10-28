@@ -70,16 +70,17 @@ final class ChangeTempoProcessor extends AudioProcessor {
 
     /** The stretch factor: 2.0 means twice as long (half the tempo). */
     private double stretchFactor() {
+        double factor = 1.0;
         double pct = percent.getFloat();
         if (pct != 0f) {
-            return 1.0 / Math.max(0.20, 1.0 + pct / 100.0);
+            factor *= 1.0 / Math.max(0.20, 1.0 + pct / 100.0);
         }
         int from = bpmFrom.getCurrentRaw();
         int to = bpmTo.getCurrentRaw();
         if (from > 0 && to > 0 && from != to) {
-            return (double) from / to;
+            factor *= (double) from / to;
         }
-        return 1.0;
+        return Math.max(0.15, Math.min(4.0, factor));
     }
 
     @Override

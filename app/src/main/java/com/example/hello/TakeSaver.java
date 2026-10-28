@@ -66,6 +66,20 @@ public final class TakeSaver {
         // PCM length of their own).
         long dur = Math.max(durationOf(raw), 1000);
         String title = e.takeName != null ? e.takeName : "";
+        SaveFormat eff = save.effective(preset);
+        if (eff == SaveFormat.WAV32 && AudioImporter.isNativeFloatWav(raw)) {
+            FormatConverter.validateFinal(raw, SaveFormat.WAV32);
+            post(cb, 100);
+            File fin = uniqueFinal(raw, eff.extension());
+            if (!fin.getAbsolutePath().equals(raw.getAbsolutePath())) {
+                if (!raw.renameTo(fin)) {
+                    fin = raw;
+                }
+            } else {
+                fin = raw;
+            }
+            return new Result(fin, eff.badge, dur, title);
+        }
         Result r = convertRaw(ctx, raw, title, preset, save, cb);
         // The raw float capture was scratch; remove it unless the result
         // somehow landed on the same path.

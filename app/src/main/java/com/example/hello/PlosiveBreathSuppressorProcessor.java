@@ -100,12 +100,15 @@ final class PlosiveBreathSuppressorProcessor extends AudioProcessor {
             float midDb = Dsp.linToDb((float) Math.sqrt(midE / (n * ch)));
 
             float target = 0f;
-            float excess = lowDb - midDb - 4f;
+            float excess = (lowDb - midDb) + 6f * sens;
             if (excess > 0f) {
                 target = -Math.min(24f, excess) * sens;
             }
-            boolean isBreath = breathDb > 0.01f && midDb < -42f && lowDb < -36f;
-            float breathLin = isBreath ? Dsp.dbToLin(-breathDb) : 1f;
+            // Smooth breath attenuation weighted by high/mid energy ratio
+            float breathWeight = (midDb < -24f) ? 1f
+                    : Math.max(0.15f, Math.min(1f, (-12f - midDb) / 30f));
+            float breathLin = breathDb > 0.01f
+                    ? Dsp.dbToLin(-breathDb * breathWeight * 0.45f) : 1f;
             float step = (target - gainDb) / n;
             for (int f = 0; f < n; f++) {
                 gainDb += step;

@@ -269,6 +269,22 @@ public class TeleValue extends LinearLayout {
         });
     }
 
+    @Override
+    public void setEnabled(boolean enabled) {
+        super.setEnabled(enabled);
+        if (paywallInterceptor != null) {
+            setAlpha(0.35f);
+            updateStepperButtons();
+            return;
+        }
+        setAlpha(enabled ? 1f : 0.35f);
+        updateStepperButtons();
+        if (label != null) {
+            label.setEnabled(enabled);
+            label.setClickable(enabled);
+        }
+    }
+
     private void updateStepperButtons() {
         if (minus == null || plus == null) return;
         if (paywallInterceptor != null) {
@@ -280,8 +296,9 @@ public class TeleValue extends LinearLayout {
             plus.setAlpha(1f);
             return;
         }
-        boolean canDec = value > min;
-        boolean canInc = value < max;
+        boolean enabled = isEnabled();
+        boolean canDec = enabled && value > min;
+        boolean canInc = enabled && value < max;
         minus.setEnabled(canDec);
         minus.setClickable(canDec);
         minus.setAlpha(canDec ? 1f : 0.35f);
@@ -707,6 +724,9 @@ public class TeleValue extends LinearLayout {
      */
     @Override
     public boolean dispatchTouchEvent(MotionEvent ev) {
+        if (!isEnabled() && paywallInterceptor == null) {
+            return false;
+        }
         switch (ev.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
                 downX = ev.getX();

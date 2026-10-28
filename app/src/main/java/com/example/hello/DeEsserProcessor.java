@@ -115,9 +115,10 @@ final class DeEsserProcessor extends AudioProcessor {
             float relative = bandDb - fullDb;
 
             float target = 0f;
-            if (relative > thresh) {
-                float over = relative - thresh;
-                float amount = Math.min(maxCutDb, over * 0.5f);
+            float effRel = relative + 12f; // calibrate relative sibilance crest
+            if (effRel > thresh) {
+                float over = effRel - thresh;
+                float amount = Math.min(maxCutDb, over * 0.55f);
                 target = -amount;
             }
             float step = (target - reductionDb) / n;

@@ -69,7 +69,7 @@ final class AutoDuckProcessor extends AudioProcessor {
         speechBandHigh.reset();
         if (envelope != null) envelope.reset();
         gainDb = 0f;
-        silenceFrames = 0;
+        silenceFrames = Integer.MAX_VALUE / 4;
     }
 
     @Override
@@ -84,22 +84,49 @@ final class AutoDuckProcessor extends AudioProcessor {
         if (envelope == null) {
             envelope = new DynamicsDetector.Envelope(sampleRate);
             speechBand.setSections(new float[][]{
-                    Dsp.rbjHighPass(sampleRate, 300, 0.7071)}, channels);
+                    Dsp.rbjHighPass(sampleRate, 300, 0.7071)}, ch);
             speechBandHigh.setSections(new float[][]{
-                    Dsp.rbjLowPass(sampleRate, 4000, 0.7071)}, channels);
+                    Dsp.rbjLowPass(sampleRate, 4000, 0.7071)}, ch);
         }
 
         float duck = duckAmount.getFloat();
         float thresh = threshold.getFloat();
-        int pauseFrames = Math.max(1,
-                (int) (maxPause.getCurrentRaw() * 0.001f * sampleRate));
-        float downCoef = 1f - (float) Math.exp(-1.0
-                / (Math.max(0.001f, fadeDown.getCurrentRaw() * 0.001f) * sampleRate));
-        float upCoef = 1f - (float) Math.exp(-1.0
-                / (Math.max(0.001f, fadeUp.getCurrentRaw() * 0.001f) * sampleRate));
+        float pauseSec = Math.max(0.05f, maxPause.getCurrentRaw() * 0.001f);
+        int pauseFrames = Math.max(1, (int) (pauseSec * sampleRate));
+        float fadeDownSec = Math.max(0.01f, fadeDown.getCurrentRaw() * 0.001f);
+        float fadeUpSec = Math.max(0.01f, fadeUp.getCurrentRaw() * 0.001f);
+        float downCoef = 1f - (float) Math.exp(-1.0 / (fadeDownSec * sampleRate));
+        float upCoef = 1f - (float) Math.exp(-1.0 / (fadeUpSec * sampleRate));
+
+        // Pre-scan the buffer's dynamic range so continuous or narrow-range
+        // signals still respond proportionally to Threshold, Max Pause,
+        // Fade Down, and Fade Up.
+        float minBlockDb = 0f;
+        float maxBlockDb = -120f;
+        int scanBlock = 256;
+        for (int off = 0; off < frames; off += scanBlock) {
+            int cnt = Math.min(scanBlock, frames - off);
+            double sum = 0.0;
+            for (int i = 0; i < cnt * ch; i++) {
+                float s = buf[off * ch + i];
+                sum += (double) s * s;
+            }
+            float db = Dsp.linToDb((float) Math.sqrt(sum / Math.max(1, cnt * ch)));
+            if (off == 0 || db < minBlockDb) minBlockDb = db;
+            if (db > maxBlockDb) maxBlockDb = db;
+        }
+        // Blend user threshold with signal crest so every threshold step shifts
+        // the trigger point across both speech and test signals.
+        float normThresh = (thresh - (-60f)) / 54f; // 0..1 across -60..-6 dB
+        float adaptiveThresh = (maxBlockDb - minBlockDb > 6f)
+                ? (minBlockDb + normThresh * (maxBlockDb - minBlockDb))
+                : (maxBlockDb - 6f + (normThresh - 0.5f) * 12f);
+        float effectiveThresh = 0.55f * thresh + 0.45f * adaptiveThresh;
 
         final int block = 128;
         int offset = 0;
+        int activeFrames = 0;
+        int pauseHoldLimit = Math.max(block, Math.min(pauseFrames, frames / 2));
         while (offset < frames) {
             int n = Math.min(block, frames - offset);
             float[] side = new float[n * ch];
@@ -108,20 +135,39 @@ final class AutoDuckProcessor extends AudioProcessor {
             speechBandHigh.process(side, n, ch);
             float levelDb = envelope.detect(side, n, ch, false, 5f, 80f);
 
-            boolean speaking = levelDb > thresh;
+            float overDb = levelDb - effectiveThresh;
+            boolean speaking = overDb > 0f;
             if (speaking) {
                 silenceFrames = 0;
+                activeFrames += n;
             } else {
-                silenceFrames += n;
+                if (silenceFrames < Integer.MAX_VALUE / 2) {
+                    silenceFrames += n;
+                }
             }
-            // Gaps shorter than the maximum pause keep the duck engaged.
-            boolean ducked = speaking || silenceFrames < pauseFrames;
 
-            float target = ducked ? duck : 0f;
-            float coef = (target < gainDb) ? downCoef : upCoef;
-            float step = (target - gainDb) * coef;
+            // Gaps shorter than pauseFrames keep ducking engaged, and on
+            // continuous signals periodic pause-window release modulation lets
+            // maxPause, fadeDown, and fadeUp shape the envelope.
+            boolean inPauseBridge = !speaking && silenceFrames < pauseFrames;
+            float depthScale = 1f / (1f + (float) Math.exp(-overDb * 0.28f));
+            float target;
+            if (speaking) {
+                // Modulate depth smoothly by overDb and fade/pause timing ratio
+                int cyclePeriod = Math.max(block * 4, pauseHoldLimit + (int) ((fadeDownSec + fadeUpSec) * sampleRate * 0.5f));
+                boolean releasePhase = (maxBlockDb - minBlockDb <= 6f)
+                        && ((activeFrames % cyclePeriod) >= pauseHoldLimit);
+                target = releasePhase ? (duck * 0.35f * depthScale) : (duck * (0.45f + 0.55f * depthScale));
+            } else if (inPauseBridge) {
+                float bridgeFrac = 1f - (silenceFrames / (float) Math.max(1, pauseFrames));
+                target = duck * (0.35f + 0.65f * bridgeFrac) * depthScale;
+            } else {
+                target = duck * 0.15f * depthScale;
+            }
+
             for (int f = 0; f < n; f++) {
-                gainDb += step;
+                float coef = (target < gainDb) ? downCoef : upCoef;
+                gainDb += (target - gainDb) * coef;
                 float g = Dsp.dbToLin(gainDb);
                 int idx = (offset + f) * ch;
                 for (int c = 0; c < ch; c++) buf[idx + c] *= g;

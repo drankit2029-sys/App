@@ -773,7 +773,7 @@ public final class DspChain {
                         return true;
                     }
                     boolean linked = s.extraParams.getOrDefault("link", 0) != 0;
-                    return !linked && s.extraParams.getOrDefault("treble", 0) != 0;
+                    return linked || s.extraParams.getOrDefault("treble", 0) != 0;
                 case SHELF_FILTER:
                     return s.value != 0;
                 default:
@@ -1284,7 +1284,9 @@ public final class DspChain {
             case BRICKWALL_LIMITER:
                 if (p instanceof ProLimiterProcessor) {
                     ((ProLimiterProcessor) p).setLegacyState(s.value, false);
-                    p.setEnabled(s.enabled && s.value > 0);
+                    boolean hasExtra = s.extraParams.getOrDefault("limiter_ceiling", -20) < -25
+                            || s.extraParams.getOrDefault("limiter_release", 80) != 80;
+                    p.setEnabled(s.enabled && (s.value > 0 || hasExtra));
                 }
                 break;
             default:

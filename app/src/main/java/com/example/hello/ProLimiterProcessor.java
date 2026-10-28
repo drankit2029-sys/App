@@ -60,7 +60,10 @@ final class ProLimiterProcessor extends AudioProcessor {
 
     @Override
     public boolean isAudible() {
-        return isEnabled() && (drive01() > 0.001f || safetyOn);
+        return isEnabled() && (drive01() > 0.001f
+                || ceiling.getFloat() < -0.25f
+                || release.getCurrentRaw() != 80
+                || safetyOn);
     }
 
     void setLegacyState(int drivePct, boolean safety) {
@@ -100,14 +103,30 @@ final class ProLimiterProcessor extends AudioProcessor {
         if (buf == null || frames <= 0) return;
         final int ch = Math.max(1, Math.min(2, channels));
         final float lAmt = drive01();
-        if (lAmt <= 0.001f && !safetyOn) return;
+        if (lAmt <= 0.001f && !safetyOn
+                && ceiling.getFloat() >= -0.25f
+                && release.getCurrentRaw() == 80) {
+            return;
+        }
 
         final float c = ceilingLin();
+        // Smooth quadratic-linear drive curve (0..6.5 dB) so initial low drive
+        // settings (1%..20%) never produce an exaggerated jump on the waveform.
+        final float driveDb = (0.30f * lAmt + 0.70f * lAmt * lAmt) * 6.5f;
         final float driveLin = lAmt > 0.001f
-                ? DspChain.fastDbToLin(lAmt * 10.5f) : 1.0f;
+                ? DspChain.fastDbToLin(driveDb) : 1.0f;
         final float relSec = Math.max(1, release.getCurrentRaw()) * 0.001f;
         final float relCoef = (float) (1.0 - Math.exp(-1.0
                 / (relSec * sampleRate)));
+        final float attCoef = (float) (1.0 - Math.exp(-1.0
+                / (0.0015f * sampleRate)));
+
+        float bufPeak = 0f;
+        for (int i = 0; i < frames * ch; i++) {
+            float a = Math.abs(buf[i] * driveLin);
+            if (a > bufPeak) bufPeak = a;
+        }
+        final float effThresh = Math.min(c, Math.max(1e-4f, bufPeak * 0.72f));
 
         int offset = 0;
         while (offset < frames) {
@@ -124,9 +143,15 @@ final class ProLimiterProcessor extends AudioProcessor {
                     tp = Math.max(tp, Math.abs(0.75f * x + 0.25f * p));
                     peak = Math.max(peak, tp);
                 }
-                float desired = peak > c ? c / peak : 1f;
+                float desired = 1f;
+                if (peak > c) {
+                    desired = c / peak;
+                } else if (peak > effThresh && effThresh > 1e-5f) {
+                    float ratio = effThresh / peak;
+                    desired = 0.75f + 0.25f * ratio;
+                }
                 if (desired < gainCur) {
-                    gainCur = desired;
+                    gainCur += attCoef * (desired - gainCur);
                 } else {
                     gainCur += relCoef * (desired - gainCur);
                 }

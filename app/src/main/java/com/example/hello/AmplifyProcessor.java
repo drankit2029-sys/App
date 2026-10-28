@@ -66,7 +66,15 @@ final class AmplifyProcessor extends AudioProcessor {
         float ceiling = newPeak.getFloat();
         float maxAllowed = ceiling - peakDb;
         if (Math.abs(requested) <= 0.01f && Math.abs(ceiling) > 0.01f) {
-            requested = maxAllowed;
+            if (ceiling < peakDb) {
+                // Target peak is below the signal's current peak: attenuate to ceiling.
+                requested = maxAllowed;
+            } else {
+                // Smooth relative trim around 0 dB without jumping by -peakDb.
+                requested = ceiling;
+            }
+        } else if (Math.abs(ceiling) > 0.01f && ceiling < 0f) {
+            requested = Math.min(requested, maxAllowed);
         }
         if (!allowClip.getBoolean() && requested > maxAllowed) {
             requested = maxAllowed;

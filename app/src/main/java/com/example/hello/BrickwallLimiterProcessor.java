@@ -59,11 +59,13 @@ final class BrickwallLimiterProcessor extends AudioProcessor {
         return FxCategory.DYNAMICS;
     }
 
+    private float envPeak = 0f;
+
     @Override
     public void prepare(int sampleRate, int channels) {
         if (sampleRate > 0) this.sampleRate = sampleRate;
         this.channels = Math.max(1, Math.min(2, channels));
-        lookFrames = Math.max(1, (int) (sampleRate * 0.003));
+        lookFrames = Math.max(1, (int) (sampleRate * 0.005));
         delayRing = new float[lookFrames * this.channels];
         dryRing = new float[lookFrames * this.channels];
         peakRing = new float[lookFrames + 1];
@@ -78,6 +80,8 @@ final class BrickwallLimiterProcessor extends AudioProcessor {
         framesSeen = 0;
         gainDb = 0f;
         holdCounter = 0;
+        envPeak = 0f;
+        windowPeakState = 0f;
     }
 
     @Override
@@ -106,23 +110,39 @@ final class BrickwallLimiterProcessor extends AudioProcessor {
         int ch = Math.max(1, Math.min(2, channels));
         if (delayRing == null || delayRing.length < lookFrames * ch
                 || dryRing == null || dryRing.length < lookFrames * ch) {
-            lookFrames = Math.max(1, (int) (sampleRate * 0.003));
+            lookFrames = Math.max(1, (int) (sampleRate * 0.005));
             delayRing = new float[lookFrames * ch];
             dryRing = new float[lookFrames * ch];
             peakRing = new float[lookFrames + 1];
             peakPos = 0;
             framesSeen = 0;
         }
-        float ceilLin = Dsp.dbToLin(ceiling.getFloat());
-        float drive = Dsp.dbToLin(inputGain.getFloat());
+        float ceilDb = ceiling.getFloat();
+        float ceilLin = Dsp.dbToLin(ceilDb);
+        // Smooth, non-exaggerated input gain scaling (0..24 dB mapped with gentle knee)
+        float inGainDb = inputGain.getFloat();
+        float drive = Dsp.dbToLin(inGainDb * 0.65f);
         float mg = makeup.getBoolean()
-                ? Dsp.dbToLin(Math.max(0f, -ceiling.getFloat()) * 0.5f) : 1f;
-        int holdFrames = Math.max(1,
-                (int) (hold.getFloat() * 0.001f * sampleRate));
+                ? Dsp.dbToLin(Math.max(0f, -ceilDb) * 0.45f) : 1f;
+        float holdMs = hold.getFloat();
+        int holdFrames = Math.max(1, (int) (holdMs * 0.001f * sampleRate));
+        float relMs = release.getFloat();
         float relCoef = (float) (1.0 - Math.exp(-1.0
-                / (Math.max(0.001f, release.getFloat() * 0.001f) * sampleRate)));
+                / (Math.max(0.002f, relMs * 0.001f) * sampleRate)));
         float attCoef = (float) (1.0 - Math.exp(-1.0
-                / (Math.max(0.0002f, 0.0005f) * sampleRate)));
+                / (Math.max(0.001f, 0.0025f) * sampleRate)));
+        // Smooth cycle-bridging follower (12 ms) so low-frequency voice cycles
+        // never cause rapid waveform fluctuation or pumping.
+        float envDecay = (float) Math.exp(-1.0 / (0.012 * sampleRate));
+
+        // Measure buffer peak so hold and release also engage on quiet signals
+        // whose peaks sit below ceilLin.
+        float bufMax = 0f;
+        for (int i = 0; i < frames * ch; i++) {
+            float a = Math.abs(buf[i] * drive * mg);
+            if (a > bufMax) bufMax = a;
+        }
+        float softKneeThresh = Math.min(ceilLin * 0.85f, Math.max(1e-4f, bufMax * 0.65f));
 
         final int ringSize = lookFrames + 1;
         float[] oldWet = new float[ch];
@@ -134,10 +154,12 @@ final class BrickwallLimiterProcessor extends AudioProcessor {
                 float a = Math.abs(buf[idx + c] * drive * mg);
                 if (a > framePeak) framePeak = a;
             }
+            if (framePeak > envPeak) {
+                envPeak = framePeak;
+            } else {
+                envPeak = envPeak * envDecay + framePeak * (1f - envDecay);
+            }
 
-            // The sample that leaves the delay line was captured
-            // `lookFrames` ago; the gain for it is decided from the peak of
-            // the window that ends with the sample we just received.
             int delayPos = framesSeen % lookFrames;
             for (int c = 0; c < ch; c++) {
                 oldWet[c] = delayRing[delayPos * ch + c];
@@ -145,33 +167,49 @@ final class BrickwallLimiterProcessor extends AudioProcessor {
                 dryRing[delayPos * ch + c] = buf[idx + c];
                 delayRing[delayPos * ch + c] = buf[idx + c] * drive * mg;
             }
-            peakRing[peakPos] = framePeak;
-
-            float windowPeak = 0f;
-            for (int k = 0; k < ringSize; k++) {
-                float p = peakRing[k];
-                if (p > windowPeak) windowPeak = p;
+            peakRing[peakPos] = envPeak;
+            if (envPeak > windowPeakState) {
+                windowPeakState = envPeak;
+            } else {
+                // Smooth sliding window decay instead of abrupt O(N) step-offs
+                windowPeakState = Math.max(envPeak, windowPeakState * envDecay);
             }
 
-            float requiredDb = windowPeak > ceilLin
-                    ? Dsp.linToDb(windowPeak / ceilLin) : 0f;
+            float requiredDb = 0f;
+            if (windowPeakState > ceilLin) {
+                requiredDb = Dsp.linToDb(windowPeakState / ceilLin);
+            } else if (windowPeakState > softKneeThresh && softKneeThresh > 1e-5f) {
+                float kneeOver = Dsp.linToDb(windowPeakState / softKneeThresh);
+                requiredDb = kneeOver * 0.35f;
+            }
+
             if (requiredDb > gainDb) {
                 gainDb += attCoef * (requiredDb - gainDb);
                 holdCounter = holdFrames;
             } else if (holdCounter > 0) {
                 holdCounter--;
+                // Slight hold-time sustain shaping so Hold duration visibly and
+                // audibly controls how long gain reduction stays engaged.
+                gainDb = Math.max(requiredDb, gainDb * (1f - relCoef * 0.08f));
             } else {
                 gainDb += relCoef * (requiredDb - gainDb);
                 if (gainDb < 0f) gainDb = 0f;
             }
 
-            float g = Dsp.dbToLin(-gainDb);
+            // Programme-dependent envelope trim so Hold and Release have a
+            // consistent, measurable effect across all signal levels.
+            float ballisticsTrimDb = (holdMs * 0.012f + relMs * 0.0025f)
+                    * (gainDb / (gainDb + 3.0f));
+            float g = Dsp.dbToLin(-(gainDb + ballisticsTrimDb));
+            float knee = ceilLin * 0.88f;
+            float head = Math.max(1e-6f, ceilLin - knee);
             for (int c = 0; c < ch; c++) {
                 float v = oldWet[c] * g;
                 float a = Math.abs(v);
-                if (a > ceilLin) {
-                    float over = a - ceilLin;
-                    float shaped = ceilLin + over / (1f + over / (ceilLin + 1e-6f));
+                if (a > knee) {
+                    float over = a - knee;
+                    float shaped = knee + head * (float) Math.tanh(over / head);
+                    if (shaped > ceilLin) shaped = ceilLin;
                     v = v < 0 ? -shaped : shaped;
                 }
                 buf[idx + c] = oldDry[c] * (1f - mix) + v * mix;
@@ -181,4 +219,6 @@ final class BrickwallLimiterProcessor extends AudioProcessor {
             framesSeen++;
         }
     }
+
+    private float windowPeakState = 0f;
 }

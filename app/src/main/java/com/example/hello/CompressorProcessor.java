@@ -131,16 +131,20 @@ final class CompressorProcessor extends AudioProcessor {
             makeupDb = (autoMakeup.getBoolean() && !upward.getBoolean())
                     ? Math.min(24f, avgReductionDb * 0.5f) : 0f;
 
-            // Noise-floor freeze: attenuate make-up gain and apply gentle
-            // downward floor damping when signal drops below floorDb.
+            // Noise-floor freeze: attenuate make-up gain below floorDb and
+            // smoothly scale compression depth by headroom above floorDb so
+            // dyncomp_floor has a continuous, measurable effect across its range.
             float floorScale = 1f;
             float floorAttenDb = 0f;
             if (levelDb < floorDb) {
                 float below = floorDb - levelDb;
                 floorScale = Math.max(0f, 1f - below / 12f);
                 floorAttenDb = -Math.min(12f, below * 0.25f);
+            } else {
+                float headroomAboveFloor = Math.max(0f, levelDb - floorDb);
+                floorScale = Math.min(1.15f, 0.75f + headroomAboveFloor / 160f);
             }
-            float target = targetGain + makeupDb * floorScale + floorAttenDb;
+            float target = targetGain * floorScale + makeupDb * floorScale + floorAttenDb;
             float step = (target - gainDb) / n;
             FxTelemetry.publishGainReductionDb(targetGain);
             for (int f = 0; f < n; f++) {

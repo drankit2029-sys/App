@@ -3685,8 +3685,9 @@ public class StudioFragment extends Fragment {
                     fxRenderedPreviewStartFrame = res.startFrame;
                     fxRenderedPreviewEndFrame = res.newRegionEndFrame;
                     fxRenderedPreviewWaveLoaded = true;
-                    waveform.setFxRegionStretchedPeaks(res.peaks, startFrac,
-                            endFrac, res.newTotalFrames);
+                    waveform.setFxRegionStretchedPeaks(res.peaks,
+                            res.gainRatios, startFrac, endFrac,
+                            res.newTotalFrames);
                     fxPreviewPlayheadFrame = Math.max(
                             fxRenderedPreviewStartFrame,
                             Math.min(fxRenderedPreviewEndFrame,
@@ -3711,7 +3712,8 @@ public class StudioFragment extends Fragment {
                             || fxRenderedPreviewFile != null) {
                         discardRenderedFxPreview();
                     }
-                    waveform.setFxRegionPeaks(res.peaks, startFrac, endFrac);
+                    waveform.setFxRegionPeaks(res.peaks, res.gainRatios,
+                            startFrac, endFrac);
                     refreshZoomValue();
                 }
             });
@@ -4284,13 +4286,23 @@ public class StudioFragment extends Fragment {
         primary.setCompact(false);
         primary.configure(slot.type.minVal, slot.type.maxVal,
                 slot.type.stepVal, slot.value, slot.type.unit);
+        if (slot.type == DspChain.EffectType.AUDIO_GENERATOR) {
+            int gt = slot.extraParams.getOrDefault("gen_type", 0);
+            primary.setEnabled(AudioGeneratorTool.isParamApplicable(gt, "gen_amp"));
+        }
         android.widget.LinearLayout.LayoutParams primaryLp =
                 new android.widget.LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT);
         primaryLp.topMargin = Math.round(10 * density);
         body.addView(primary, primaryLp);
-        refreshers.add(() -> primary.setValue(slot.value, false));
+        refreshers.add(() -> {
+            primary.setValue(slot.value, false);
+            if (slot.type == DspChain.EffectType.AUDIO_GENERATOR) {
+                int gt = slot.extraParams.getOrDefault("gen_type", 0);
+                primary.setEnabled(AudioGeneratorTool.isParamApplicable(gt, "gen_amp"));
+            }
+        });
 
         java.util.function.IntConsumer syncPrimaryLinks = (int val) -> {
             if (slot.type == DspChain.EffectType.NOTCH_FILTER) {
@@ -4466,9 +4478,23 @@ public class StudioFragment extends Fragment {
                                 : param.defaultRaw;
                         boolean nextOn = raw == 0;
                         slot.extraParams.put(param.id, nextOn ? 1 : 0);
-                        if (nextOn && slot.type == DspChain.EffectType.BASS_TREBLE
+                        if (slot.type == DspChain.EffectType.BASS_TREBLE
                                 && "link".equals(param.id)) {
-                            slot.extraParams.put("treble", slot.value);
+                            if (nextOn) {
+                                int tVal = slot.extraParams.getOrDefault("treble", 0);
+                                if (slot.value == 0 && tVal != 0) {
+                                    slot.value = tVal;
+                                } else if (slot.value == 0 && tVal == 0) {
+                                    slot.value = 300;
+                                    slot.extraParams.put("treble", 300);
+                                } else {
+                                    slot.extraParams.put("treble", slot.value);
+                                }
+                            } else if (slot.value == 300
+                                    && slot.extraParams.getOrDefault("treble", 0) == 300) {
+                                slot.value = 0;
+                                slot.extraParams.put("treble", 0);
+                            }
                         }
                         if (!slot.enabled) slot.enabled = true;
                         onChanged.run();
@@ -4492,6 +4518,13 @@ public class StudioFragment extends Fragment {
                                         : param.defaultRaw);
                         chip.setText(param.name + ": "
                                 + param.getEnumLabel(cur));
+                        if (slot.type == DspChain.EffectType.AUDIO_GENERATOR) {
+                            int gt = slot.extraParams.getOrDefault("gen_type", 0);
+                            boolean app = AudioGeneratorTool.isParamApplicable(gt, param.id);
+                            chip.setEnabled(app);
+                            chip.setClickable(app);
+                            chip.setAlpha(app ? 1f : 0.35f);
+                        }
                     };
                     refresh.run();
                     refreshers.add(refresh);
@@ -4550,9 +4583,17 @@ public class StudioFragment extends Fragment {
                                 ViewGroup.LayoutParams.WRAP_CONTENT);
                 pcLp.topMargin = Math.round(6 * density);
                 body.addView(pc, pcLp);
+                if (slot.type == DspChain.EffectType.AUDIO_GENERATOR) {
+                    int gt = slot.extraParams.getOrDefault("gen_type", 0);
+                    pc.setEnabled(AudioGeneratorTool.isParamApplicable(gt, param.id));
+                }
                 refreshers.add(() -> {
                     Integer raw = slot.extraParams.get(param.id);
                     pc.setValue(raw != null ? raw : param.defaultRaw, false);
+                    if (slot.type == DspChain.EffectType.AUDIO_GENERATOR) {
+                        int gt = slot.extraParams.getOrDefault("gen_type", 0);
+                        pc.setEnabled(AudioGeneratorTool.isParamApplicable(gt, param.id));
+                    }
                 });
                 java.util.function.IntConsumer applyExtra = (int value) -> {
                     slot.extraParams.put(param.id, value);
@@ -4786,6 +4827,10 @@ public class StudioFragment extends Fragment {
             ctl.configure(slot.type.minVal, slot.type.maxVal,
                     slot.type.stepVal, slot.value, slot.type.unit);
             ctl.setCompact(true);
+            if (slot.type == DspChain.EffectType.AUDIO_GENERATOR) {
+                int gt = slot.extraParams.getOrDefault("gen_type", 0);
+                ctl.setEnabled(AudioGeneratorTool.isParamApplicable(gt, "gen_amp"));
+            }
             android.widget.LinearLayout.LayoutParams ctlLp =
                     new android.widget.LinearLayout.LayoutParams(
                             ViewGroup.LayoutParams.MATCH_PARENT,
@@ -5133,9 +5178,23 @@ public class StudioFragment extends Fragment {
                         b.setOnClickListener(v -> {
                             boolean nextOn = !on;
                             slot.extraParams.put(param.id, nextOn ? 1 : 0);
-                            if (nextOn && slot.type == DspChain.EffectType.BASS_TREBLE
+                            if (slot.type == DspChain.EffectType.BASS_TREBLE
                                     && "link".equals(param.id)) {
-                                slot.extraParams.put("treble", slot.value);
+                                if (nextOn) {
+                                    int tVal = slot.extraParams.getOrDefault("treble", 0);
+                                    if (slot.value == 0 && tVal != 0) {
+                                        slot.value = tVal;
+                                    } else if (slot.value == 0 && tVal == 0) {
+                                        slot.value = 300;
+                                        slot.extraParams.put("treble", 300);
+                                    } else {
+                                        slot.extraParams.put("treble", slot.value);
+                                    }
+                                } else if (slot.value == 300
+                                        && slot.extraParams.getOrDefault("treble", 0) == 300) {
+                                    slot.value = 0;
+                                    slot.extraParams.put("treble", 0);
+                                }
                             }
                             if (!slot.enabled) slot.enabled = true;
                             onSlotMutated.run();
@@ -5154,6 +5213,13 @@ public class StudioFragment extends Fragment {
                                         : param.defaultRaw);
                         eChip.setText(param.name + ": "
                                 + param.getEnumLabel(curIdx));
+                        if (slot.type == DspChain.EffectType.AUDIO_GENERATOR) {
+                            int gt = slot.extraParams.getOrDefault("gen_type", 0);
+                            boolean app = AudioGeneratorTool.isParamApplicable(gt, param.id);
+                            eChip.setEnabled(app);
+                            eChip.setClickable(app);
+                            eChip.setAlpha(app ? 1f : 0.35f);
+                        }
                         eChip.setOnClickListener(v -> {
                             int nextIdx = (curIdx + 1) % param.enumLabels.length;
                             slot.extraParams.put(param.id, nextIdx);
@@ -5197,6 +5263,10 @@ public class StudioFragment extends Fragment {
                                     : param.defaultRaw,
                             param.unit);
                     pc.setCompact(true);
+                    if (slot.type == DspChain.EffectType.AUDIO_GENERATOR) {
+                        int gt = slot.extraParams.getOrDefault("gen_type", 0);
+                        pc.setEnabled(AudioGeneratorTool.isParamApplicable(gt, param.id));
+                    }
                     extraControls.put(param.id, pc);
                     java.util.function.IntConsumer syncSecondaryLinks = (int value) -> {
                         slot.extraParams.put(param.id, value);

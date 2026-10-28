@@ -839,6 +839,51 @@ public final class OptionsSheet {
         return dialog;
     }
 
+    /**
+     * Shows a centered modal error popup (e.g. when Google Play price fetching
+     * or purchase launch fails after pressing Buy).
+     */
+    public static Dialog showErrorPopup(Context ctx, String title, String message) {
+        Dialog dialog = new Dialog(ctx, R.style.TakeOneCenterDialog);
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        View root = LayoutInflater.from(ctx).inflate(R.layout.dialog_result, null);
+        dialog.setContentView(root);
+
+        FrameLayout iconBg = root.findViewById(R.id.resultIconBg);
+        ImageView icon = root.findViewById(R.id.resultIcon);
+        if (iconBg != null) iconBg.setBackgroundResource(R.drawable.bg_icon_danger);
+        if (icon != null) {
+            icon.setImageResource(R.drawable.ic_close);
+            icon.setColorFilter(0xFFFF3B30);
+        }
+
+        TextView titleView = root.findViewById(R.id.resultTitle);
+        if (titleView != null) {
+            titleView.setText(title != null && !title.trim().isEmpty()
+                    ? title.trim() : "Error Fetching Price");
+        }
+        TextView msgView = root.findViewById(R.id.resultMessage);
+        if (msgView != null) {
+            msgView.setText(message != null && !message.trim().isEmpty()
+                    ? message.trim()
+                    : "Could not fetch price from Google Play. Please check your connection and try again.");
+            msgView.setVisibility(View.VISIBLE);
+        }
+        TextView okBtn = root.findViewById(R.id.resultOk);
+        if (okBtn != null) {
+            okBtn.setText("OK");
+            okBtn.setVisibility(View.VISIBLE);
+            PressAnim.apply(okBtn);
+            okBtn.setOnClickListener(v -> dialog.dismiss());
+        }
+
+        dialog.setCancelable(true);
+        styleAsCentered(dialog);
+        dialog.show();
+        if (iconBg != null) PressAnim.pop(iconBg);
+        return dialog;
+    }
+
     /** Lightweight, non-blocking 2-word confirmation banner at the top. */
     public static void showTopPopup(Context ctx, String title, String ignoredMessage) {
         showResult(ctx, true, compactTwoWords(title), null, null);

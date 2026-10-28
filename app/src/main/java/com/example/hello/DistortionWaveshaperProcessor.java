@@ -121,54 +121,56 @@ final class DistortionWaveshaperProcessor extends AudioProcessor {
 
     /** Evaluates the selected transfer curve for one sample. */
     static float shape(float x, int curveIdx, float thr) {
+        float t = Math.max(0.01f, thr);
+        float xn = x / t;
         switch (curveIdx) {
             case 0: { // Hard clipping
                 float a = Math.abs(x);
-                float y = a > thr ? thr : a;
+                float y = a > t ? t : a;
                 return x < 0 ? -y : y;
             }
             case 1: { // Soft clipping
-                float over = Math.abs(x) - thr;
+                float over = Math.abs(x) - t;
                 if (over <= 0) return x;
-                float y = thr + (1f - thr) * (float) Math.tanh(over * 2.0);
+                float y = t + (1f - t) * (float) Math.tanh(over / t);
                 return x < 0 ? -y : y;
             }
             case 2: { // Soft overdrive
-                return (float) Math.tanh(x * 2.0) * 0.9f;
+                return t * (float) Math.tanh(xn * 1.6) * 0.95f;
             }
             case 3: { // Medium overdrive
-                float y = x - (x * x * x) / 3f;
-                return y;
+                float c = Math.max(-1.5f, Math.min(1.5f, xn));
+                return t * (c - (c * c * c) / 6.75f);
             }
             case 4: { // Hard overdrive
-                float a = Math.abs(x);
-                float y = a >= 1f ? (float) Math.signum(x) : x;
-                return y;
+                float c = Math.max(-1f, Math.min(1f, xn));
+                return t * (float) Math.sin(c * Math.PI * 0.5);
             }
             case 5: { // Cubic curve
-                return x - (x * x * x) / 3f;
+                float c = Math.max(-1.2f, Math.min(1.2f, xn));
+                return t * (c - (c * c * c) / 4.32f);
             }
             case 6: { // Even harmonics
-                float a = Math.abs(x);
-                float y = a * a * (float) Math.signum(x);
-                return y * 0.9f;
+                float c = Math.max(-1f, Math.min(1f, xn));
+                float a = Math.abs(c);
+                return t * (0.65f * c + 0.35f * a * a) * 0.95f;
             }
             case 7: { // Expand and compress
-                float a = Math.abs(x);
+                float a = Math.min(1f, Math.abs(xn));
                 float y = a < 0.5f ? a * a * 2f : 1f - (1f - a) * (1f - a) * 2f;
-                return y * (float) Math.signum(x);
+                return t * y * (float) Math.signum(x);
             }
             case 8: { // Leveller
                 float a = Math.abs(x);
-                float y = a < thr ? a * a / Math.max(1e-6f, thr) : a;
+                float y = a < t ? a * a / t : t + (a - t) * 0.25f;
                 return y * (float) Math.signum(x);
             }
             case 9: { // Rectifier
-                return Math.abs(x);
+                return Math.min(t, Math.abs(x));
             }
             case 10: { // Hard limiter
                 float a = Math.abs(x);
-                float y = a > thr ? thr : a;
+                float y = a > t ? t : a;
                 return x < 0 ? -y : y;
             }
             default:

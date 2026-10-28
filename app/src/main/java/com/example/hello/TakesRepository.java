@@ -1272,11 +1272,12 @@ public final class TakesRepository {
         }
     }
 
-    /** Distinguish integer 24-bit WAV from the standard 16/float badge. */
+    /** Distinguish 32-bit float WAV and integer 24-bit WAV from 16-bit WAV. */
     static String wavBadge(File f) {
         try (java.io.RandomAccessFile r =
                      new java.io.RandomAccessFile(f, "r")) {
             Dsp.WavHeader h = Dsp.parseWavHeader(r);
+            if (h.audioFormat == 3 && h.bits == 32) return "WAV32";
             if (h.audioFormat == 1 && h.bits == 24) return "WAV24";
         } catch (Exception ignored) {}
         return "WAV";

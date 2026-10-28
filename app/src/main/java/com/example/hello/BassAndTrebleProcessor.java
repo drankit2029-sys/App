@@ -59,8 +59,10 @@ final class BassAndTrebleProcessor extends AudioProcessor {
     @Override
     public boolean isAudible() {
         if (!isEnabled()) return false;
-        if (bass.getCurrentRaw() != 0 || volume.getCurrentRaw() != 0) return true;
-        return !link.getBoolean() && treble.getCurrentRaw() != 0;
+        return bass.getCurrentRaw() != 0
+                || treble.getCurrentRaw() != 0
+                || volume.getCurrentRaw() != 0
+                || link.getBoolean();
     }
 
     @Override
@@ -74,7 +76,18 @@ final class BassAndTrebleProcessor extends AudioProcessor {
 
     float[][] buildSections() {
         double b = bass.getFloat();
-        double t = link.getBoolean() ? b : treble.getFloat();
+        double t = treble.getFloat();
+        if (link.getBoolean()) {
+            if (Math.abs(b) > 0.01) {
+                t = b;
+            } else if (Math.abs(t) > 0.01) {
+                b = t;
+            } else {
+                // Linked loudness contour when Link is enabled with knobs at 0 dB
+                b = 3.0;
+                t = 3.0;
+            }
+        }
         float[][] secs = new float[3][];
         secs[0] = Dsp.rbjLowShelf(sampleRate, BASS_HZ, SHELF_S, b);
         secs[1] = Dsp.rbjHighShelf(sampleRate, TREBLE_HZ, SHELF_S, t);

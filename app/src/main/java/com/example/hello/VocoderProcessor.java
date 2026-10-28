@@ -127,8 +127,10 @@ final class VocoderProcessor extends AudioProcessor {
             float white = nextNoise();
             if (carrierIdx == 1) {
                 baseCarrier = white;
-            } else if (carrierIdx == 2 && ch > 1) {
-                baseCarrier = buf[f * ch + 1] * (1f - noiseMixPct)
+            } else if (carrierIdx == 2) {
+                float rightOrMod = ch > 1 ? buf[f * ch + 1]
+                        : (float) (buf[f * ch] * Math.cos(2.0 * Math.PI * sawPhase));
+                baseCarrier = rightOrMod * (1f - noiseMixPct)
                         + white * noiseMixPct;
             } else {
                 float saw = (float) (2.0 * (sawPhase - Math.floor(sawPhase)) - 1.0);

@@ -29,7 +29,38 @@ final class AudioGeneratorTool extends AudioProcessor {
     private final FxParameter tempo = addParameter(FxParameter.intParam(
             "gen_bpm", "Tempo", " BPM", 30, 300, 1, 120));
     private final FxParameter sequence = addParameter(FxParameter.intParam(
-            "gen_seq", "DTMF Sequence", "", 0, 15, 1, 5));
+            "gen_seq", "DTMF Sequence", "", 0, 999999999, 1, 5));
+
+    /**
+     * Returns true when {@code paramId} affects the output of the selected
+     * generator {@code genType} (0 = Tone & Chirp, 1 = Noise, 2 = Silence,
+     * 3 = Rhythm Track, 4 = DTMF). Used by the Studio FX inspector to disable
+     * options that have no effect on the active generator.
+     */
+    public static boolean isParamApplicable(int genType, String paramId) {
+        if (paramId == null || "gen_type".equals(paramId) || "gen_dur".equals(paramId)) {
+            return true;
+        }
+        switch (genType) {
+            case 0: // Tone & Chirp
+                return "gen_wave".equals(paramId)
+                        || "gen_start".equals(paramId)
+                        || "gen_end".equals(paramId)
+                        || "gen_amp".equals(paramId);
+            case 1: // Noise
+                return "gen_wave".equals(paramId)
+                        || "gen_amp".equals(paramId);
+            case 2: // Silence
+                return false;
+            case 3: // Rhythm Track
+                return "gen_amp".equals(paramId)
+                        || "gen_bpm".equals(paramId);
+            case 4: // DTMF
+            default:
+                return "gen_amp".equals(paramId)
+                        || "gen_seq".equals(paramId);
+        }
+    }
 
     private int sampleRate = DspChain.SAMPLE_RATE;
     private long rng = 0xDEADBEEFCAFEBABEL;
@@ -179,24 +210,30 @@ final class AudioGeneratorTool extends AudioProcessor {
 
     private void renderDtmf(float[] out, int frames, int ch, float amp) {
         int seqVal = Math.max(0, sequence.getCurrentRaw());
+        String digitsStr = String.valueOf(seqVal);
         int[] rows = {697, 770, 852, 941};
         int[] cols = {1209, 1336, 1477, 1633};
-        int numDigits = Math.max(1, Math.min(8, (seqVal % 4) + 1));
+        int numDigits = Math.max(1, digitsStr.length());
         int slotFrames = Math.max(1, frames / numDigits);
         for (int f = 0; f < frames; f++) {
             int slotIdx = Math.min(numDigits - 1, f / slotFrames);
             int posInSlot = f - slotIdx * slotFrames;
-            if (numDigits > 1 && posInSlot >= slotFrames * 0.75) {
-                continue; // 25% inter-digit silence gap
+            if (numDigits > 1 && posInSlot >= slotFrames * 0.78) {
+                continue; // inter-digit silence gap
             }
-            int digit = (seqVal + slotIdx * 3) & 0x0F;
+            int dChar = digitsStr.charAt(slotIdx) - '0';
+            int digit = ((dChar >= 0 && dChar <= 9 ? dChar : 0) + slotIdx + (seqVal & 3)) & 0x0F;
             int row = (digit / 4) & 3;
             int col = digit & 3;
             double f1 = rows[row];
             double f2 = cols[col];
-            double t = f / (double) sampleRate;
-            double s = Math.sin(2 * Math.PI * f1 * t) + Math.sin(2 * Math.PI * f2 * t);
-            s *= 0.5;
+            double t = posInSlot / (double) sampleRate;
+            double env = 1.0;
+            int ramp = Math.max(1, Math.min(64, slotFrames / 12));
+            if (posInSlot < ramp) {
+                env = posInSlot / (double) ramp;
+            }
+            double s = (Math.sin(2 * Math.PI * f1 * t) + Math.sin(2 * Math.PI * f2 * t)) * 0.5 * env;
             for (int c = 0; c < ch; c++) out[f * ch + c] = (float) (s * amp);
         }
     }

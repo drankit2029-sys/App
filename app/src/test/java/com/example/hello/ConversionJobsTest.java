@@ -600,4 +600,74 @@ public class ConversionJobsTest {
             out.delete();
         }
     }
+
+    @Test
+    public void dispatchSaveWav32AdoptsRawDirectlyWithoutDuplicateWavOrJob() throws Exception {
+        RecordingEngine engine = RecordingEngine.get();
+        engine.abortAndDelete();
+        engine.startNewSession(ctx(), "Wav32 Dedup Test", 2);
+        File raw = engine.rawFile;
+        try (java.io.RandomAccessFile w = new java.io.RandomAccessFile(raw, "rw")) {
+            int samples = 4800 * 2;
+            w.write(Dsp.wavFloatHeader(2, 48000, samples * 4L));
+            w.write(new byte[samples * 4]);
+        }
+        engine.dataBytes = 4800L * 2 * 4;
+        final int[] lastProgress = {-1};
+        ConversionJobs.SaveResult r = ConversionJobs.dispatchSave(
+                ctx(), RecordPreset.MUSIC, SaveFormat.WAV32,
+                pct -> lastProgress[0] = pct);
+        try {
+            assertTrue("WAV32 save must adopt raw directly without background job",
+                    r.adopted);
+            assertNull("WAV32 save must not enqueue a background ConversionJob",
+                    r.job);
+            assertNotNull("Adopted WAV32 file must exist", r.file);
+            assertTrue("Adopted WAV32 file must exist on disk", r.file.exists());
+            assertEquals("WAV32 save must report 100% completion immediately",
+                    100, lastProgress[0]);
+            assertFalse("Original .raw.wav must be renamed, not duplicated",
+                    raw.exists() && !raw.getAbsolutePath().equals(r.file.getAbsolutePath()));
+            assertFalse("No .part duplicate must exist for WAV32",
+                    ConversionJob.partFor(raw).exists());
+            assertFalse("No .float32 duplicate master must exist for WAV32",
+                    TakesRepository.floatMasterFor(r.recordingId, r.file).exists());
+        } finally {
+            if (r.file != null) r.file.delete();
+            engine.abortAndDelete();
+        }
+    }
+
+    @Test
+    public void pressingDisabledButtonShowsBillingPopupAndPressingBuyOnFetchErrorShowsErrorPopup() {
+        android.app.Activity activity = org.robolectric.Robolectric
+                .buildActivity(android.app.Activity.class).setup().get();
+        TrialAndBillingManager mgr = TrialAndBillingManager.get(activity);
+        TrialAndBillingManager.setTestOverridePro(false);
+        try {
+            boolean allowed = TrialAndBillingManager.requireProOrShowPaywall(
+                    activity, "Trim", null);
+            assertFalse("Locked feature must not run onAllowed", allowed);
+            android.app.Dialog paywall = org.robolectric.shadows.ShadowDialog.getLatestDialog();
+            assertNotNull("Billing popup must show up on pressing disabled button", paywall);
+            assertTrue("Billing popup must be showing", paywall.isShowing());
+            android.widget.TextView title = paywall.findViewById(R.id.dialogTitle);
+            assertNotNull(title);
+            assertEquals("Unlock TakeOne Pro", title.getText().toString());
+            paywall.dismiss();
+
+            // Pressing Buy when Google Play price fetching failed must show an error popup
+            mgr.onBuyPressed(activity, TrialAndBillingManager.SKU_LIFETIME);
+            org.robolectric.shadows.ShadowLooper.idleMainLooper();
+            android.app.Dialog errDialog = org.robolectric.shadows.ShadowDialog.getLatestDialog();
+            assertNotNull("Error popup must be shown when price fetch fails on Buy", errDialog);
+            assertTrue(errDialog.isShowing());
+            android.widget.TextView errTitle = errDialog.findViewById(R.id.resultTitle);
+            assertNotNull(errTitle);
+            assertEquals("Error Fetching Price", errTitle.getText().toString());
+            errDialog.dismiss();
+        } finally {
+            TrialAndBillingManager.setTestOverridePro(null);
+        }
+    }
 }

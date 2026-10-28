@@ -342,7 +342,11 @@ public class RecordingService extends Service {
         if (e.isSaving()) return;
         e.setSaving(true);
         busy = true;
-        convertingPct = 0;
+        RecordPreset curPreset = RecordPreset.load(this);
+        SaveFormat curSave = SaveFormat.load(this);
+        boolean immediateWav32 = curSave.effective(curPreset) == SaveFormat.WAV32
+                && !e.isFxBakeRequired();
+        convertingPct = immediateWav32 ? -1 : 0;
         lastPctPush = 0;
         refreshNotif();
         new Thread(() -> {

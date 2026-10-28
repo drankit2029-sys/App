@@ -52,7 +52,16 @@ final class ClipFixProcessor extends AudioProcessor {
     public void processInPlace(float[] buf, int frames, int channels) {
         if (buf == null || frames <= 0) return;
         int ch = Math.max(1, Math.min(2, channels));
-        float clipLevel = threshold.getCurrentRaw() / 100f;
+        float maxAbs = 0f;
+        int totalSamples = Math.min(buf.length, frames * ch);
+        for (int i = 0; i < totalSamples; i++) {
+            float a = Math.abs(buf[i]);
+            if (a > maxAbs) maxAbs = a;
+        }
+        // Scale threshold relative to the signal's peak crest when peak < 0.80
+        // so Clipping Threshold works across both normalized and unnormalized takes.
+        float refPeak = maxAbs >= 0.80f ? 1.0f : Math.max(1e-4f, maxAbs);
+        float clipLevel = (threshold.getCurrentRaw() / 100f) * refPeak;
 
         // Pass 1: find the clipped runs on the original signal.
         for (int c = 0; c < ch; c++) {

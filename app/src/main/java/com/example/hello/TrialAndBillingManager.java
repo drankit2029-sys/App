@@ -157,13 +157,10 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
     public long getFreeRecordingId() {
         SharedPreferences p = appCtx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         long storedId = p.getLong(KEY_FREE_RECORDING_ID, -1L);
-        List<Take> all = TakesRepository.all();
-        List<ConversionJob> jobs = ConversionJobs.active();
         if (storedId > 0) {
-            if (!TakesRepository.isReady() || isRecordingIdAlive(storedId, all, jobs)) {
-                return storedId;
-            }
+            return storedId;
         }
+        List<Take> all = TakesRepository.all();
         if (!all.isEmpty()) {
             Take earliest = all.get(all.size() - 1);
             for (Take t : all) {
@@ -180,6 +177,7 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
                 return earliest.id;
             }
         }
+        List<ConversionJob> jobs = ConversionJobs.active();
         if (!jobs.isEmpty()) {
             for (ConversionJob j : jobs) {
                 if (j.recordingId > 0) {
@@ -191,7 +189,7 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
                 }
             }
         }
-        return storedId > 0 && !TakesRepository.isReady() ? storedId : -1L;
+        return -1L;
     }
 
     /**
@@ -204,14 +202,9 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
     public void onRecordingSaved(long recordingId) {
         SharedPreferences p = appCtx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         long currentFreeId = p.getLong(KEY_FREE_RECORDING_ID, -1L);
-        List<Take> all = TakesRepository.all();
-        List<ConversionJob> jobs = ConversionJobs.active();
-        boolean freeIdAlive = currentFreeId > 0
-                && (!TakesRepository.isReady()
-                || isRecordingIdAlive(currentFreeId, all, jobs));
         SharedPreferences.Editor ed = p.edit()
                 .putBoolean(KEY_FREE_RECORDING_USED, true);
-        if ((currentFreeId <= 0 || !freeIdAlive) && recordingId > 0) {
+        if (currentFreeId <= 0 && recordingId > 0) {
             ed.putLong(KEY_FREE_RECORDING_ID, recordingId);
         }
         ed.apply();
@@ -223,23 +216,13 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
      */
     public boolean isFreeRecordingUsed() {
         SharedPreferences p = appCtx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-        List<Take> all = TakesRepository.all();
-        List<ConversionJob> jobs = ConversionJobs.active();
         long storedId = p.getLong(KEY_FREE_RECORDING_ID, -1L);
-        if (TakesRepository.isReady() && all.isEmpty() && jobs.isEmpty()
-                && storedId > 0) {
-            // All previous recordings were deleted: reset so the next recording
-            // in the empty library is treated as the user's first recording.
-            p.edit()
-                    .putBoolean(KEY_FREE_RECORDING_USED, false)
-                    .putLong(KEY_FREE_RECORDING_ID, -1L)
-                    .apply();
-            return false;
-        }
         if (p.getBoolean(KEY_FREE_RECORDING_USED, false) || storedId > 0) {
             getFreeRecordingId();
             return true;
         }
+        List<Take> all = TakesRepository.all();
+        List<ConversionJob> jobs = ConversionJobs.active();
         if (!all.isEmpty() || !jobs.isEmpty()) {
             getFreeRecordingId();
             p.edit().putBoolean(KEY_FREE_RECORDING_USED, true).apply();
@@ -302,20 +285,12 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
         if (freeId > 0 && resolvedId == freeId) {
             return true;
         }
-        if (resolvedId > 0) {
-            List<Take> all = TakesRepository.all();
-            List<ConversionJob> jobs = ConversionJobs.active();
-            // If upgrading from a state without a bound freeId, or if there is
-            // only 1 recording in the library and the user is editing it, bind
-            // and allow all editing options on this first recording.
-            if (freeId <= 0 || (all.size() == 1 && jobs.isEmpty()
-                    && all.get(0).id == resolvedId)) {
-                appCtx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-                        .putLong(KEY_FREE_RECORDING_ID, resolvedId)
-                        .putBoolean(KEY_FREE_RECORDING_USED, true)
-                        .apply();
-                return true;
-            }
+        if (resolvedId > 0 && freeId <= 0) {
+            appCtx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                    .putLong(KEY_FREE_RECORDING_ID, resolvedId)
+                    .putBoolean(KEY_FREE_RECORDING_USED, true)
+                    .apply();
+            return true;
         }
         return false;
     }
@@ -494,6 +469,8 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
         return token;
     }
 
+    private volatile String lastPriceFetchError = null;
+
     /**
      * Renders the paywall sheet using strictly dynamic region-dependent prices
      * fetched from Google Play ({@link #SKU_MONTHLY} and {@link #SKU_LIFETIME}).
@@ -504,23 +481,36 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
                                           @Nullable String lockedFeature) {
         String monthlyPrice = getDynamicPriceOrThrow(SKU_MONTHLY);
         String lifetimePrice = getDynamicPriceOrThrow(SKU_LIFETIME);
+        renderPaywallDialog(activity, lockedFeature, lifetimePrice, monthlyPrice);
+    }
 
+    private void renderPaywallDialog(@NonNull Activity activity,
+                                     @Nullable String lockedFeature,
+                                     @Nullable String lifetimePrice,
+                                     @Nullable String monthlyPrice) {
         String subtitle = (lockedFeature != null && !lockedFeature.isEmpty())
                 ? "Your 1 free full-feature recording has been used. Unlock "
                         + lockedFeature + " and all Studio tools on every recording:"
                 : "Your 1 free full-feature recording has been used. Choose Monthly or One-Time Purchase to unlock everything:";
 
+        String lifetimeLabel = (lifetimePrice != null && !lifetimePrice.isEmpty())
+                ? "Buy One-Time Purchase — " + lifetimePrice
+                : "Buy One-Time Purchase";
+        String monthlyLabel = (monthlyPrice != null && !monthlyPrice.isEmpty())
+                ? "Buy Monthly — " + monthlyPrice + "/month"
+                : "Buy Monthly Subscription";
+
         List<OptionsSheet.Item> items = new ArrayList<>();
         items.add(OptionsSheet.Item.detail(R.drawable.ic_check,
-                "One-Time Purchase — " + lifetimePrice,
+                lifetimeLabel,
                 "Pay once • Unlocks all Studio features forever",
                 true,
-                () -> launchPurchase(activity, SKU_LIFETIME)));
+                () -> onBuyPressed(activity, SKU_LIFETIME)));
         items.add(OptionsSheet.Item.detail(R.drawable.ic_sliders,
-                "Monthly — " + monthlyPrice + "/month",
+                monthlyLabel,
                 "Billed monthly via Google Play • Unlocks all features",
                 false,
-                () -> launchPurchase(activity, SKU_MONTHLY)));
+                () -> onBuyPressed(activity, SKU_MONTHLY)));
         items.add(OptionsSheet.Item.of(R.drawable.ic_undo,
                 "Restore existing purchase",
                 this::refreshPurchasesAsync));
@@ -529,43 +519,76 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
     }
 
     /**
-     * Opens the paywall when the user presses any locked feature on subsequent
-     * recordings. Fetches dynamic region-dependent pricing from Google Play if
-     * not yet cached, and fails cleanly (without fallback prices) if Google Play
-     * pricing is unavailable.
+     * Always opens the billing popup ("Unlock TakeOne Pro") immediately when
+     * the user presses any disabled/locked button on subsequent recordings.
+     * If Google Play prices are not yet cached, triggers a background price
+     * fetch and defers any price-fetch error popup until the user presses Buy.
      */
     public void showPaywallSheet(@NonNull Activity activity,
                                  @Nullable String lockedFeature) {
-        boolean hasBothCached;
-        synchronized (productCache) {
-            hasBothCached = productCache.containsKey(SKU_MONTHLY)
-                    && productCache.containsKey(SKU_LIFETIME);
+        if (activity.isFinishing() || activity.isDestroyed()) return;
+        String monthlyPrice = null;
+        String lifetimePrice = null;
+        try {
+            monthlyPrice = getDynamicPriceOrThrow(SKU_MONTHLY);
+        } catch (RuntimeException ignored) {}
+        try {
+            lifetimePrice = getDynamicPriceOrThrow(SKU_LIFETIME);
+        } catch (RuntimeException ignored) {}
+
+        // Show the billing popup immediately on pressing any disabled button!
+        renderPaywallDialog(activity, lockedFeature, lifetimePrice, monthlyPrice);
+
+        // If dynamic pricing has not been loaded yet, fetch it in the background
+        // so that if it succeeds before the user taps Buy, the purchase can
+        // proceed, or if it fails, lastPriceFetchError is ready for the error popup.
+        if (monthlyPrice == null || lifetimePrice == null) {
+            connectAndFetchPricing(
+                    () -> lastPriceFetchError = null,
+                    err -> lastPriceFetchError = (err != null && err.getMessage() != null)
+                            ? err.getMessage()
+                            : "Could not fetch regional pricing from Google Play.");
         }
-        if (hasBothCached) {
-            try {
-                renderPaywallSheetOrThrow(activity, lockedFeature);
-            } catch (RuntimeException e) {
-                OptionsSheet.showResult(activity, false, "Billing unavailable",
-                        e.getMessage());
-            }
+    }
+
+    /**
+     * Invoked when the user presses either Buy button inside the billing popup.
+     * If there was an error fetching the price from Google Play, shows an error
+     * popup immediately (or after attempting a live price fetch).
+     */
+    public void onBuyPressed(@NonNull Activity activity, @NonNull String sku) {
+        if (activity.isFinishing() || activity.isDestroyed()) return;
+        boolean hasPriceCached = false;
+        try {
+            getDynamicPriceOrThrow(sku);
+            hasPriceCached = true;
+        } catch (RuntimeException ignored) {}
+
+        if (hasPriceCached) {
+            launchPurchase(activity, sku);
             return;
         }
         connectAndFetchPricing(
                 () -> {
                     if (activity.isFinishing() || activity.isDestroyed()) return;
                     try {
-                        renderPaywallSheetOrThrow(activity, lockedFeature);
+                        getDynamicPriceOrThrow(sku);
+                        launchPurchase(activity, sku);
                     } catch (RuntimeException e) {
-                        OptionsSheet.showResult(activity, false,
-                                "Billing unavailable", e.getMessage());
+                        OptionsSheet.showErrorPopup(activity,
+                                "Error Fetching Price",
+                                e.getMessage());
                     }
                 },
                 err -> {
                     if (activity.isFinishing() || activity.isDestroyed()) return;
-                    OptionsSheet.showResult(activity, false,
-                            "Billing unavailable",
-                            err != null ? err.getMessage()
-                                    : "Could not fetch regional pricing from Google Play");
+                    String msg = (err != null && err.getMessage() != null)
+                            ? err.getMessage()
+                            : (lastPriceFetchError != null
+                                    ? lastPriceFetchError
+                                    : "Could not fetch price from Google Play. Please check your internet connection and Google Play Store account.");
+                    OptionsSheet.showErrorPopup(activity,
+                            "Error Fetching Price", msg);
                 });
     }
 
@@ -792,7 +815,7 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
                                 + br.getResponseCode() + ")");
             }
         } catch (RuntimeException e) {
-            OptionsSheet.showResult(activity, false, "Billing unavailable",
+            OptionsSheet.showErrorPopup(activity, "Error Fetching Price",
                     e.getMessage());
         }
     }

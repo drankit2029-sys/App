@@ -376,6 +376,13 @@ public class WaveformView extends View {
     public void setFxRegionPeaks(final float[] peaks,
                                  final float startFrac,
                                  final float endFrac) {
+        setFxRegionPeaks(peaks, null, startFrac, endFrac);
+    }
+
+    public void setFxRegionPeaks(final float[] peaks,
+                                 final float[] gainRatios,
+                                 final float startFrac,
+                                 final float endFrac) {
         synchronized (this) {
             if (count <= 0) {
                 restoreWetBarsLocked();
@@ -419,7 +426,12 @@ public class WaveformView extends View {
                     Math.round(fxRegionEndFrac * count)));
             int lim = Math.min(e, peaks.length);
             for (int i = s; i < lim; i++) {
-                history[i] = Math.max(0f, peaks[i]);
+                if (gainRatios != null && i < gainRatios.length
+                        && gainRatios[i] >= 0f && fxBaseHistory[i] > 0.005f) {
+                    history[i] = Math.max(0f, fxBaseHistory[i] * gainRatios[i]);
+                } else {
+                    history[i] = Math.max(0f, peaks[i]);
+                }
             }
             playheadPos = clampPlayheadToFxLocked(playheadPos);
             playheadIndex = Math.round(playheadPos);
@@ -434,6 +446,15 @@ public class WaveformView extends View {
      * and the playhead's relative position inside the FX region intact.
      */
     public void setFxRegionStretchedPeaks(final float[] regionPeaks,
+                                          final float origStartFrac,
+                                          final float origEndFrac,
+                                          final long newTotalFrames) {
+        setFxRegionStretchedPeaks(regionPeaks, null, origStartFrac,
+                origEndFrac, newTotalFrames);
+    }
+
+    public void setFxRegionStretchedPeaks(final float[] regionPeaks,
+                                          final float[] gainRatios,
                                           final float origStartFrac,
                                           final float origEndFrac,
                                           final long newTotalFrames) {
@@ -483,8 +504,30 @@ public class WaveformView extends View {
             if (prefixLen > 0) {
                 System.arraycopy(fxBaseHistory, 0, combined, 0, prefixLen);
             }
+            float baseRegionMean = 0f;
+            int baseSpan = Math.max(1, e - s);
+            for (int k = s; k < e && k < fxBaseHistory.length; k++) {
+                baseRegionMean += fxBaseHistory[k];
+            }
+            baseRegionMean /= baseSpan;
             for (int i = 0; i < rLen; i++) {
-                combined[prefixLen + i] = Math.max(0f, regionPeaks[i]);
+                if (gainRatios != null && i < gainRatios.length
+                        && gainRatios[i] >= 0f) {
+                    int srcIdx = s + Math.min(baseSpan - 1,
+                            (int) ((long) i * baseSpan / Math.max(1, rLen)));
+                    if (rLen == baseSpan && srcIdx < fxBaseHistory.length
+                            && fxBaseHistory[srcIdx] > 0.005f) {
+                        combined[prefixLen + i] = Math.max(0f,
+                                fxBaseHistory[srcIdx] * gainRatios[i]);
+                    } else if (baseRegionMean > 0.005f) {
+                        combined[prefixLen + i] = Math.max(0f,
+                                baseRegionMean * gainRatios[i]);
+                    } else {
+                        combined[prefixLen + i] = Math.max(0f, regionPeaks[i]);
+                    }
+                } else {
+                    combined[prefixLen + i] = Math.max(0f, regionPeaks[i]);
+                }
             }
             if (suffixLen > 0) {
                 System.arraycopy(fxBaseHistory, e, combined,
@@ -1058,8 +1101,6 @@ public class WaveformView extends View {
             int last = count - 1;
             if (clampedV > history[last]) {
                 history[last] = clampedV;
-            } else {
-                history[last] = history[last] * 0.85f + clampedV * 0.15f;
             }
         }
         playheadPos = Math.min(count, Math.max(0f, targetBuckets));
@@ -1777,7 +1818,9 @@ public class WaveformView extends View {
                     }
                 }
 
-                float bh = Math.max(2f, v * maxH * 2f);
+                float dispV = v <= 0.85f ? v
+                        : 0.85f + 0.15f * (float) Math.tanh((v - 0.85f) / 0.35f);
+                float bh = Math.max(2f, dispV * maxH * 2f);
 
                 boolean fxInside = fxOn && barCenterBucket >= fxS * n
                         && barCenterBucket <= fxE * n;

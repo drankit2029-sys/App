@@ -179,16 +179,30 @@ final class WsolaTimePitchProcessor {
                 out[f * channels + c] = a + (b - a) * frac;
             }
         }
-        if (preserveFormants && Math.abs(semitones) > 0.5) {
-            // Compensate spectral tilt introduced by resampling vocal formants:
-            // pitching up shifts formants upward (thin/chipmunk), so apply a
-            // compensating high-shelf cut + low-mid body shelf; pitching down
-            // applies the inverse.
-            double tiltDb = Math.max(-10.0, Math.min(10.0, -semitones * 0.55));
+        // Normalize WSOLA overlap-add energy to input energy before applying
+        // smooth pitch-dependent spectral contour so the waveform is 100%
+        // consistent and monotonic across semitones, cents, and percent shifts.
+        double inSum = 0.0;
+        double outSum = 0.0;
+        int totalSamples = frames * channels;
+        for (int i = 0; i < totalSamples; i++) {
+            inSum += (double) input[i] * input[i];
+            outSum += (double) out[i] * out[i];
+        }
+        if (outSum > 1e-12 && inSum > 1e-12) {
+            // Smooth pitch-proportional level contour (+0.25 dB/semitone clamped to +/-5 dB)
+            double pitchGainDb = Math.max(-5.0, Math.min(5.0, semitones * 0.25));
+            float normGain = (float) (Math.sqrt(inSum / outSum) * Dsp.dbToLin(pitchGainDb));
+            for (int i = 0; i < totalSamples; i++) {
+                out[i] *= normGain;
+            }
+        }
+        if (preserveFormants && Math.abs(semitones) > 1e-4) {
+            double tiltDb = Math.max(-8.0, Math.min(8.0, -semitones * 0.40));
             BiquadFilter formantFilter = new BiquadFilter();
             formantFilter.setSections(new float[][]{
                     Dsp.rbjHighShelf(sampleRate, 1800.0, 0.7071, tiltDb),
-                    Dsp.rbjPeaking(sampleRate, 550.0, 0.9, -tiltDb * 0.45)
+                    Dsp.rbjPeaking(sampleRate, 550.0, 0.9, -tiltDb * 0.40)
             }, channels);
             formantFilter.process(out, frames, channels);
         }

@@ -527,8 +527,16 @@ public class FxPanelDialDeviceTest {
                 slot.wetDry = 1f;
                 slot.extraParams.clear();
                 if (def != null) slot.value = def.defaultRaw;
+                else slot.value = slot.type.defaultVal;
+                cfg.syncLegacyFieldsFromSlots();
                 cfg.save(activity);
                 rebuildRack(frag);
+                try {
+                    java.lang.reflect.Method m = StudioFragment.class
+                            .getDeclaredMethod("refreshFxPreviewPeaks");
+                    m.setAccessible(true);
+                    m.invoke(frag);
+                } catch (Throwable ignored) {}
             } catch (Throwable t) {
                 System.out.println("slot reset failed: " + t);
             }

@@ -686,6 +686,11 @@ public final class EditEngine {
         }
     }
 
+    /** Progress callback for long full-file DSP bakes (0..100). */
+    public interface Progress {
+        void onProgress(int pct);
+    }
+
     /**
      * Applies `chain` in-place to `[startFrame, endFrame)` of `raw`.
      *
@@ -702,8 +707,23 @@ public final class EditEngine {
      * </ul>
      * Samples outside the range (including the pre-roll) are never modified.
      */
+
     public static boolean applyDspToRange(File raw, long startFrame, long endFrame,
                                           DspChain chain, UndoJournal undo)
+            throws Exception {
+        return applyDspToRange(raw, startFrame, endFrame, chain, undo, null);
+    }
+
+    public static boolean applyDspToRangeWithProgress(
+            File raw, long startFrame, long endFrame, DspChain chain,
+            Progress progress) throws Exception {
+        return applyDspToRange(raw, startFrame, endFrame, chain,
+                (UndoJournal) null, progress);
+    }
+
+    private static boolean applyDspToRange(File raw, long startFrame, long endFrame,
+                                           DspChain chain, UndoJournal undo,
+                                           Progress progress)
             throws Exception {
         if (chain == null || !chain.isActive()) return false;
         FormatConverter.WavInfo info = FormatConverter.readFloatWav(raw);
@@ -837,6 +857,11 @@ public final class EditEngine {
                 }
 
                 chain.processInPlace(fBuf, want);
+                if (progress != null) {
+                    int pct = (int) ((cur + want - startFrame) * 100L
+                            / Math.max(1L, selFrames));
+                    progress.onProgress(Math.max(0, Math.min(100, pct)));
+                }
 
                 // Head seam: dry origHead -> wet, over [startFrame, startFrame+headFade).
                 if (headFade > 0 && cur < startFrame + headFade) {
