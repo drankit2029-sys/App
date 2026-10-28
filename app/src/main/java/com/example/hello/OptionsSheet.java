@@ -820,6 +820,15 @@ public final class OptionsSheet {
         styleAsTopPopup(dialog);
         activeTopPopup = dialog;
         dialog.show();
+        styleAsTopPopup(dialog);
+        root.setTranslationY(-dp(ctx, 24));
+        root.setAlpha(0f);
+        root.animate()
+                .translationY(0f)
+                .alpha(1f)
+                .setDuration(220)
+                .setInterpolator(new DecelerateInterpolator(1.4f))
+                .start();
         PressAnim.pop(iconBg);
 
         TOP_POPUP_HANDLER.postDelayed(() -> {
@@ -848,16 +857,19 @@ public final class OptionsSheet {
     public static void styleAsTopPopup(Dialog dialog) {
         Window w = dialog.getWindow();
         if (w == null) return;
+        Context ctx = dialog.getContext();
         w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
         w.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
         w.addFlags(WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL);
         w.setDimAmount(0f);
+        w.setGravity(Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+        w.setWindowAnimations(R.style.TopPopupAnim);
         WindowManager.LayoutParams lp = w.getAttributes();
         lp.width = WindowManager.LayoutParams.WRAP_CONTENT;
         lp.height = WindowManager.LayoutParams.WRAP_CONTENT;
-        lp.gravity = Gravity.CENTER;
+        lp.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
         lp.x = 0;
-        lp.y = 0;
+        lp.y = dp(ctx, 16);
         w.setAttributes(lp);
         View decor = w.getDecorView();
         if (decor != null) decor.setPadding(0, 0, 0, 0);

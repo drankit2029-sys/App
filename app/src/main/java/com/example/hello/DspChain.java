@@ -513,6 +513,11 @@ public final class DspChain {
             mode = MODE_OFF;
         }
 
+        /** Disables the whole rack and returns the config to a clean state. */
+        public void resetAll() {
+            clearRack();
+        }
+
         public void syncLegacyFieldsFromSlots() {
             hpfEnabled = false;
             hpfCutoffHz = 80;

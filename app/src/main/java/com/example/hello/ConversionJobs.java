@@ -740,6 +740,9 @@ public final class ConversionJobs {
             e.setFxBakeRequired(false);
             // noinspection ResultOfMethodCallIgnored
             new File(raw.getAbsolutePath() + ".pending").delete();
+            if (ctx != null) {
+                TrialAndBillingManager.get(ctx).markFreeRecordingUsed();
+            }
             if (cb != null) cb.onProgress(0);
             return SaveResult.background(prequeued);
         }
@@ -782,6 +785,9 @@ public final class ConversionJobs {
                     }
                     // noinspection ResultOfMethodCallIgnored
                     new File(raw.getAbsolutePath() + ".pending").delete();
+                    if (ctx != null) {
+                        TrialAndBillingManager.get(ctx).markFreeRecordingUsed();
+                    }
                     return SaveResult.adopted(fin,
                             TakeSaver.labelFor(preset, format), dur, title);
                 }
@@ -803,6 +809,9 @@ public final class ConversionJobs {
         // crash window.
         // noinspection ResultOfMethodCallIgnored
         new File(raw.getAbsolutePath() + ".pending").delete();
+        if (ctx != null) {
+            TrialAndBillingManager.get(ctx).markFreeRecordingUsed();
+        }
         if (cb != null) cb.onProgress(0);
         return SaveResult.background(job);
     }

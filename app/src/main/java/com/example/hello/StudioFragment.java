@@ -433,6 +433,10 @@ public class StudioFragment extends Fragment {
         if (btnPreviewPlay != null) {
             PressAnim.applySoft(btnPreviewPlay, 0.95f);
             btnPreviewPlay.setOnClickListener(view -> {
+                if (!TrialAndBillingManager.requireProOrShowPaywall(
+                        requireActivity(), "Replace", null)) {
+                    return;
+                }
                 if (fxPanelOpen) return;
                 if (!ensurePausedForEditing()) return;
                 stopStudioPreview();
@@ -463,6 +467,10 @@ public class StudioFragment extends Fragment {
         if (btnSelectRange != null) {
             PressAnim.applySoft(btnSelectRange, 0.95f);
             btnSelectRange.setOnClickListener(view -> {
+                if (!TrialAndBillingManager.requireProOrShowPaywall(
+                        requireActivity(), "Select", null)) {
+                    return;
+                }
                 if (replaceModeArmed) return;
                 if (!ensurePausedForEditing()) return;
                 stopStudioPreview();
@@ -490,6 +498,10 @@ public class StudioFragment extends Fragment {
         if (btnReplaceSeg != null) {
             PressAnim.applySoft(btnReplaceSeg, 0.95f);
             btnReplaceSeg.setOnClickListener(view -> {
+                if (!TrialAndBillingManager.requireProOrShowPaywall(
+                        requireActivity(), "Select & Replace", null)) {
+                    return;
+                }
                 if (replaceModeArmed || fxPanelOpen) return;
                 if (!ensurePausedForEditing()) return;
                 openSelectAndReplaceSubEditor();
@@ -500,6 +512,10 @@ public class StudioFragment extends Fragment {
         if (btnTrimCrop != null) {
             PressAnim.applySoft(btnTrimCrop, 0.95f);
             btnTrimCrop.setOnClickListener(view -> {
+                if (!TrialAndBillingManager.requireProOrShowPaywall(
+                        requireActivity(), "Trim", null)) {
+                    return;
+                }
                 if (replaceModeArmed || fxPanelOpen) return;
                 if (!ensurePausedForEditing()) return;
                 showTrimOptionsPopup();
@@ -510,11 +526,11 @@ public class StudioFragment extends Fragment {
         if (btnDspFx != null) {
             PressAnim.applySoft(btnDspFx, 0.95f);
             btnDspFx.setOnClickListener(view -> {
-                if (replaceModeArmed) return;
                 if (!TrialAndBillingManager.requireProOrShowPaywall(
                         requireActivity(), "Effects", null)) {
                     return;
                 }
+                if (replaceModeArmed) return;
                 toggleFxPanel();
             });
         }
@@ -523,6 +539,10 @@ public class StudioFragment extends Fragment {
         if (btnEditUndo != null) {
             PressAnim.applySoft(btnEditUndo, 0.95f);
             btnEditUndo.setOnClickListener(view -> {
+                if (!TrialAndBillingManager.requireProOrShowPaywall(
+                        requireActivity(), "Undo", null)) {
+                    return;
+                }
                 if (replaceModeArmed || fxPanelOpen) return;
                 if (!ensurePausedForEditing()) return;
                 performStudioUndo();
@@ -531,6 +551,10 @@ public class StudioFragment extends Fragment {
         if (btnEditRedo != null) {
             PressAnim.applySoft(btnEditRedo, 0.95f);
             btnEditRedo.setOnClickListener(view -> {
+                if (!TrialAndBillingManager.requireProOrShowPaywall(
+                        requireActivity(), "Redo", null)) {
+                    return;
+                }
                 if (replaceModeArmed || fxPanelOpen) return;
                 if (!ensurePausedForEditing()) return;
                 performStudioRedo();
@@ -954,6 +978,10 @@ public class StudioFragment extends Fragment {
 
     private void showRecordingSettings() {
         if (!isAdded()) return;
+        if (!TrialAndBillingManager.requireProOrShowPaywall(
+                requireActivity(), "Recording Settings", null)) {
+            return;
+        }
         OptionsSheet.SettingsState state = new OptionsSheet.SettingsState() {
             @Override
             public List<OptionsSheet.Item> presets() {
@@ -1443,6 +1471,11 @@ public class StudioFragment extends Fragment {
 
     private void applyZoomValue(int bp) {
         if (waveform == null) return;
+        if (isAdded() && !TrialAndBillingManager.requireProOrShowPaywall(
+                requireActivity(), "Waveform Zoom", null)) {
+            refreshZoomValue();
+            return;
+        }
         if (bp <= zoomValue.getMin()) {
             waveform.setZoom(waveform.minimumZoom());
         } else {
@@ -1490,6 +1523,10 @@ public class StudioFragment extends Fragment {
 
     private void stepZoom(int dir) {
         if (waveform == null || zoomValue == null) return;
+        if (isAdded() && !TrialAndBillingManager.requireProOrShowPaywall(
+                requireActivity(), "Waveform Zoom", null)) {
+            return;
+        }
         int minBp = currentMinZoomBp();
         int curBp = Math.max(minBp, Math.round(waveform.getZoom() * 10000f));
         int stepBp;
@@ -1833,6 +1870,14 @@ public class StudioFragment extends Fragment {
             dspBakedToRaw = false;
             dspSubRangeBaked = false;
             lastEditWasSubRangeBake = false;
+            if (!TrialAndBillingManager.get(requireContext()).hasProAccess()) {
+                replaceModeArmed = false;
+                if (fxPanelOpen) setFxPanelVisible(false);
+                if (dspConfig != null && dspConfig.isActive()) {
+                    dspConfig.resetAll();
+                    dspConfig.save(requireContext());
+                }
+            }
             EditLink.clear(requireContext());
             waveform.clear();
             dbMeter.reset();
@@ -2287,6 +2332,7 @@ public class StudioFragment extends Fragment {
                 engine.takeName != null ? engine.takeName : "";
         final File saveRaw = engine.rawFile;
         final int saveChannels = engine.channels;
+        TrialAndBillingManager.get(appCtx).markFreeRecordingUsed();
         new Thread(() -> {
             ConversionJobs.SaveResult r = null;
             String fail = null;
@@ -3093,6 +3139,7 @@ public class StudioFragment extends Fragment {
                 && waveform != null && waveform.hasSelection();
         // Effects mode is a separate mode: the rack owns the selection and the
         // transport, so every other editing action is locked until it closes.
+        boolean proUnlocked = TrialAndBillingManager.get(requireContext()).hasProAccess();
         boolean fxMode = canEdit && fxPanelOpen;
         boolean othersEnabled = canEdit && !replaceModeArmed && !fxMode;
         boolean selectEnabled = canEdit && !replaceModeArmed;
@@ -3104,11 +3151,12 @@ public class StudioFragment extends Fragment {
         //    recording in Replace mode until it reaches the end of the take
         //    (where it auto-deactivates) or the user pauses and disables it.
         if (btnPreviewPlay != null) {
-            boolean showReplaceActive = replaceModeArmed
+            boolean showReplaceActive = proUnlocked && replaceModeArmed
                     && (canEdit || engine.state == RecordingEngine.State.RECORDING);
+            boolean tapAllowed = !proUnlocked || replaceEnabled;
             btnPreviewPlay.setText("Replace");
-            btnPreviewPlay.setEnabled(replaceEnabled);
-            btnPreviewPlay.setClickable(replaceEnabled);
+            btnPreviewPlay.setEnabled(tapAllowed);
+            btnPreviewPlay.setClickable(tapAllowed);
             btnPreviewPlay.setAlpha(replaceEnabled ? 1f
                     : (showReplaceActive ? 0.75f : 0.35f));
             btnPreviewPlay.setBackgroundResource(showReplaceActive
@@ -3122,9 +3170,10 @@ public class StudioFragment extends Fragment {
         // 2) Select Button: stays "Select" and turns red ONLY when Select is active;
         //    disabled while Replace mode is on.
         if (btnSelectRange != null) {
+            boolean tapAllowed = !proUnlocked || selectEnabled;
             btnSelectRange.setText("Select");
-            btnSelectRange.setEnabled(selectEnabled);
-            btnSelectRange.setClickable(selectEnabled);
+            btnSelectRange.setEnabled(tapAllowed);
+            btnSelectRange.setClickable(tapAllowed);
             btnSelectRange.setAlpha(selectEnabled ? 1f : 0.35f);
             btnSelectRange.setBackgroundResource(hasSel
                     ? R.drawable.bg_chip_selected : R.drawable.bg_chip);
@@ -3137,10 +3186,11 @@ public class StudioFragment extends Fragment {
         // 3) Select & Replace Button: never turns red just because Select is pressed;
         //    disabled while Replace mode is on, hidden when inside sub-editor.
         if (btnReplaceSeg != null) {
+            boolean tapAllowed = !proUnlocked || othersEnabled;
             btnReplaceSeg.setVisibility(inSelectAndReplaceEditor ? View.GONE : View.VISIBLE);
             btnReplaceSeg.setText("Select & Replace");
-            btnReplaceSeg.setEnabled(othersEnabled);
-            btnReplaceSeg.setClickable(othersEnabled);
+            btnReplaceSeg.setEnabled(tapAllowed);
+            btnReplaceSeg.setClickable(tapAllowed);
             btnReplaceSeg.setAlpha(othersEnabled ? 1f : 0.35f);
             btnReplaceSeg.setBackgroundResource(R.drawable.bg_chip);
             int col = !othersEnabled ? 0xFF5D6672
@@ -3151,9 +3201,10 @@ public class StudioFragment extends Fragment {
 
         // 4) Trim Button: disabled while Replace mode is on.
         if (btnTrimCrop != null) {
+            boolean tapAllowed = !proUnlocked || othersEnabled;
             btnTrimCrop.setText("Trim");
-            btnTrimCrop.setEnabled(othersEnabled);
-            btnTrimCrop.setClickable(othersEnabled);
+            btnTrimCrop.setEnabled(tapAllowed);
+            btnTrimCrop.setClickable(tapAllowed);
             btnTrimCrop.setAlpha(!othersEnabled ? 0.35f : (hasSel ? 1f : 0.75f));
             btnTrimCrop.setBackgroundResource(R.drawable.bg_chip);
             int col = !othersEnabled ? 0xFF5D6672
@@ -3170,11 +3221,12 @@ public class StudioFragment extends Fragment {
             // A rack with effects in it but a closed panel is a pending
             // edit, not an active mode, so it must not look selected.
             boolean fxAvailable = canEdit && !replaceModeArmed;
+            boolean tapAllowed = !proUnlocked || fxAvailable;
             boolean fxActive = fxAvailable && fxPanelOpen;
             boolean fxPending = dspConfig != null && dspConfig.isActive();
             btnDspFx.setText(fxPending ? dspConfig.badgeSummary() : "FX");
-            btnDspFx.setEnabled(fxAvailable);
-            btnDspFx.setClickable(fxAvailable);
+            btnDspFx.setEnabled(tapAllowed);
+            btnDspFx.setClickable(tapAllowed);
             // Dim like Trim when a region still has to be selected.
             btnDspFx.setAlpha(!fxAvailable ? 0.35f
                     : (fxPanelOpen || hasSel ? 1f : 0.75f));
@@ -3190,8 +3242,9 @@ public class StudioFragment extends Fragment {
         EditEngine.UndoJournal uj = activeUndoJournal();
         if (btnEditUndo != null) {
             boolean canUndo = othersEnabled && uj != null && uj.canUndo();
-            btnEditUndo.setEnabled(canUndo);
-            btnEditUndo.setClickable(canUndo);
+            boolean tapAllowed = !proUnlocked || canUndo;
+            btnEditUndo.setEnabled(tapAllowed);
+            btnEditUndo.setClickable(tapAllowed);
             btnEditUndo.setAlpha(canUndo ? 1f : 0.35f);
             int col = canUndo ? 0xFFF2F4F7 : 0xFF5D6672;
             btnEditUndo.setTextColor(col);
@@ -3199,8 +3252,9 @@ public class StudioFragment extends Fragment {
         }
         if (btnEditRedo != null) {
             boolean canRedo = othersEnabled && uj != null && uj.canRedo();
-            btnEditRedo.setEnabled(canRedo);
-            btnEditRedo.setClickable(canRedo);
+            boolean tapAllowed = !proUnlocked || canRedo;
+            btnEditRedo.setEnabled(tapAllowed);
+            btnEditRedo.setClickable(tapAllowed);
             btnEditRedo.setAlpha(canRedo ? 1f : 0.35f);
             int col = canRedo ? 0xFFF2F4F7 : 0xFF5D6672;
             btnEditRedo.setTextColor(col);
@@ -5900,4 +5954,3 @@ public class StudioFragment extends Fragment {
         return (MainActivity) requireActivity();
     }
 }
-

@@ -27,5 +27,9 @@
         <item name="android:windowEnterAnimation">@anim/modal_in</item>
         <item name="android:windowExitAnimation">@anim/modal_out</item>
     </style>
-</resources>
 
+    <style name="TopPopupAnim">
+        <item name="android:windowEnterAnimation">@anim/search_in</item>
+        <item name="android:windowExitAnimation">@anim/search_out</item>
+    </style>
+</resources>
