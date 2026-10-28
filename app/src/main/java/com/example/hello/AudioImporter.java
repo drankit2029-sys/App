@@ -4,11 +4,13 @@ import android.content.Context;
 import android.media.MediaCodec;
 import android.media.MediaExtractor;
 import android.media.MediaFormat;
+import android.media.MediaMetadataRetriever;
 
 import java.io.File;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.Locale;
 
 /**
  * Decodes a library take (float/16-bit WAV, M4A/AAC, …) into a fresh 32-bit
@@ -19,6 +21,22 @@ public final class AudioImporter {
 
     public interface Progress {
         void onProgress(int percent);
+    }
+
+    /** Metadata and stored file returned by {@link #importOriginal}. */
+    public static final class ImportedAudio {
+        public final File file;
+        public final long durationMs;
+        public final String title;
+        public final String badge;
+
+        public ImportedAudio(File file, long durationMs, String title,
+                             String badge) {
+            this.file = file;
+            this.durationMs = durationMs;
+            this.title = title;
+            this.badge = badge;
+        }
     }
 
     /** Bound on draining a decoder that never signals end of stream. */
@@ -43,6 +61,190 @@ public final class AudioImporter {
         } catch (Exception e) {
             return false;
         }
+    }
+
+    /**
+     * Copies a user-selected SAF document directly into the takes directory
+     * in its original container/format without converting it to 32-bit float.
+     * Its 32-bit float master is created lazily the first time the user
+     * presses Edit on the imported take.
+     */
+    public static ImportedAudio importOriginal(Context ctx,
+                                               android.net.Uri uri,
+                                               File targetDir) throws Exception {
+        if (ctx == null || uri == null || targetDir == null) {
+            throw new IllegalArgumentException("missing import source");
+        }
+        String display = queryDisplayName(ctx, uri);
+        String ext = extensionOf(display);
+        if (ext.isEmpty()) {
+            ext = extensionFromMime(ctx, uri);
+        }
+        if (ext.isEmpty()) {
+            ext = "m4a";
+        }
+        String rawTitle = stripExtension(display != null ? display
+                : "Imported_" + System.currentTimeMillis());
+        String cleanBase = rawTitle.replaceAll("[\\\\/:*?\"<>|]", "_").trim();
+        if (cleanBase.isEmpty()) cleanBase = "Imported";
+        String prettyTitle = Dsp.prettyFileTitle(cleanBase + "." + ext);
+        if (prettyTitle.isEmpty()) prettyTitle = cleanBase;
+
+        File dst = uniqueImportedFile(targetDir, cleanBase, ext);
+        try {
+            try (java.io.InputStream in =
+                         ctx.getContentResolver().openInputStream(uri);
+                 java.io.FileOutputStream out =
+                         new java.io.FileOutputStream(dst)) {
+                if (in == null) throw new java.io.IOException("cannot open uri");
+                byte[] buf = new byte[65536];
+                int n;
+                while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                out.getFD().sync();
+            }
+            if (!dst.exists() || dst.length() <= 0) {
+                throw new IllegalStateException("empty import");
+            }
+            long durMs;
+            String badge;
+            if ("wav".equals(ext)) {
+                try (RandomAccessFile r = new RandomAccessFile(dst, "r")) {
+                    Dsp.WavHeader h = Dsp.parseWavHeader(r);
+                    if (h.channels < 1 || h.channels > 2 || h.sampleRate <= 0) {
+                        throw new IllegalStateException("unsupported wav");
+                    }
+                    long onDisk = Math.max(0L, r.length() - h.dataStart);
+                    if (onDisk <= 0) {
+                        throw new IllegalStateException("empty wav");
+                    }
+                }
+                durMs = Math.max(1000L, Dsp.wavDurationMs(dst));
+                badge = TakesRepository.wavBadge(dst);
+            } else {
+                durMs = probeCompressedDurationAndValidate(dst);
+                badge = badgeForExtension(dst, ext);
+            }
+            return new ImportedAudio(dst, durMs, prettyTitle, badge);
+        } catch (Exception | Error e) {
+            try {
+                if (dst.exists()) {
+                    // noinspection ResultOfMethodCallIgnored
+                    dst.delete();
+                }
+            } catch (Exception ignored) {}
+            throw e;
+        }
+    }
+
+    private static File uniqueImportedFile(File dir, String base, String ext) {
+        String stamp = new java.text.SimpleDateFormat("yyyyMMdd_HHmmss",
+                Locale.US).format(new java.util.Date());
+        File c = new File(dir, base + "_" + stamp + "." + ext);
+        if (!c.exists()) return c;
+        int i = 2;
+        while (true) {
+            File n = new File(dir, base + "_" + stamp + " (" + i + ")." + ext);
+            if (!n.exists()) return n;
+            i++;
+        }
+    }
+
+    private static String extensionFromMime(Context ctx, android.net.Uri uri) {
+        try {
+            String mime = ctx.getContentResolver().getType(uri);
+            if (mime == null) return "";
+            String lower = mime.toLowerCase(Locale.US);
+            if (lower.contains("wav")) return "wav";
+            if (lower.contains("flac")) return "flac";
+            if (lower.contains("opus")) return "opus";
+            if (lower.contains("ogg")) return "ogg";
+            if (lower.contains("mpeg") || lower.contains("mp3")) return "mp3";
+            if (lower.contains("3gpp") || lower.contains("amr")) return "3gp";
+            if (lower.contains("aac")) return "aac";
+            if (lower.contains("mp4") || lower.contains("m4a")) return "m4a";
+        } catch (Exception ignored) {}
+        return "";
+    }
+
+    private static String badgeForExtension(File f, String ext) {
+        switch (ext.toLowerCase(Locale.US)) {
+            case "wav":
+                return TakesRepository.wavBadge(f);
+            case "m4a":
+            case "aac":
+                return "M4A";
+            case "flac":
+                return "FLAC";
+            case "opus":
+            case "webm":
+            case "ogg":
+                return "OPUS";
+            case "3gp":
+            case "3ga":
+                return TakesRepository.containsToken(
+                        f, new byte[]{'s', 'a', 'w', 'b'}) ? "AMR-WB" : "AMR";
+            case "mp3":
+                return "MP3";
+            default:
+                return ext.toUpperCase(Locale.US);
+        }
+    }
+
+    private static long probeCompressedDurationAndValidate(File src)
+            throws Exception {
+        long durationMs = -1L;
+        boolean hasAudio = false;
+        MediaExtractor ex = new MediaExtractor();
+        try {
+            ex.setDataSource(src.getAbsolutePath());
+            for (int i = 0; i < ex.getTrackCount(); i++) {
+                MediaFormat f = ex.getTrackFormat(i);
+                String mime = f.getString(MediaFormat.KEY_MIME);
+                if (mime != null && mime.startsWith("audio/")) {
+                    hasAudio = true;
+                    try {
+                        if (f.containsKey(MediaFormat.KEY_DURATION)) {
+                            durationMs = f.getLong(MediaFormat.KEY_DURATION)
+                                    / 1000L;
+                        }
+                    } catch (Exception ignored) {}
+                    break;
+                }
+            }
+        } catch (Exception ignored) {
+        } finally {
+            try {
+                ex.release();
+            } catch (Exception ignored) {}
+        }
+        if (!hasAudio || durationMs <= 0) {
+            MediaMetadataRetriever mmr = new MediaMetadataRetriever();
+            try {
+                mmr.setDataSource(src.getAbsolutePath());
+                String has = mmr.extractMetadata(
+                        MediaMetadataRetriever.METADATA_KEY_HAS_AUDIO);
+                String dur = mmr.extractMetadata(
+                        MediaMetadataRetriever.METADATA_KEY_DURATION);
+                if (has != null && !has.isEmpty()) {
+                    hasAudio = true;
+                }
+                if (dur != null) {
+                    long parsed = (long) Double.parseDouble(dur);
+                    if (parsed > 0) {
+                        hasAudio = true;
+                        durationMs = parsed;
+                    }
+                }
+            } finally {
+                try {
+                    mmr.release();
+                } catch (Exception ignored) {}
+            }
+        }
+        if (!hasAudio) {
+            throw new IllegalStateException("no audio track");
+        }
+        return Math.max(1000L, durationMs);
     }
 
     /**

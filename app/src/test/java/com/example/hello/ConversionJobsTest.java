@@ -408,4 +408,95 @@ public class ConversionJobsTest {
             engine.abortAndDelete();
         }
     }
+
+    @Test
+    public void persistentFloatMasterLifecycleForRecordingsImportsAndCleanup()
+            throws Exception {
+        File dir = RecordingEngine.takesDir(ctx());
+
+        // 1) Recorded take saved as M4A: raw 32-bit float file is maintained in .float32/
+        File recRaw = new File(dir, "rec_float_" + System.nanoTime() + ".raw.wav");
+        try (java.io.RandomAccessFile w = new java.io.RandomAccessFile(recRaw, "rw")) {
+            w.write(Dsp.wavFloatHeader(1, 48000, 4800L * 4));
+            w.write(new byte[4800 * 4]);
+        }
+        File recFinal = new File(dir, "rec_float_" + System.nanoTime() + ".m4a");
+        try (java.io.RandomAccessFile w = new java.io.RandomAccessFile(recFinal, "rw")) {
+            w.write(new byte[2048]);
+        }
+        Take recTake = TakesRepository.addRecording(
+                recFinal, 1000, "Recorded Take", "M4A");
+        ConversionJobs.completeOrDeferRawMaster(
+                recRaw.getAbsolutePath(), recFinal);
+        assertFalse("original scratch raw path must be moved out of takes/",
+                recRaw.exists());
+        File recMaster = TakesRepository.floatMasterFor(recFinal);
+        assertNotNull(recMaster);
+        assertTrue("persistent 32-bit float master must exist in .float32/",
+                recMaster.exists());
+        assertEquals("resolveFloatMaster must return the persistent float32 file",
+                recMaster.getAbsolutePath(),
+                TakesRepository.resolveFloatMaster(recFinal).getAbsolutePath());
+        assertTrue("resolved master must be a native 32-bit float WAV",
+                AudioImporter.isNativeFloatWav(
+                        TakesRepository.resolveFloatMaster(recFinal)));
+
+        // 2) Recorded take saved as WAV32: already 32-bit float -> no redundant copy in .float32/
+        File wav32Raw = new File(dir, "rec_w32_" + System.nanoTime() + ".raw.wav");
+        try (java.io.RandomAccessFile w = new java.io.RandomAccessFile(wav32Raw, "rw")) {
+            w.write(Dsp.wavFloatHeader(1, 48000, 4800L * 4));
+            w.write(new byte[4800 * 4]);
+        }
+        File wav32Final = new File(dir, "rec_w32_" + System.nanoTime() + ".wav");
+        try (java.io.RandomAccessFile w = new java.io.RandomAccessFile(wav32Final, "rw")) {
+            w.write(Dsp.wavFloatHeader(1, 48000, 4800L * 4));
+            w.write(new byte[4800 * 4]);
+        }
+        ConversionJobs.completeOrDeferRawMaster(
+                wav32Raw.getAbsolutePath(), wav32Final);
+        assertFalse("wav32 raw must be deleted to avoid duplicate files",
+                wav32Raw.exists());
+        assertFalse("wav32 final must not create a redundant .float32 copy",
+                TakesRepository.floatMasterFor(wav32Final).exists());
+        assertEquals(wav32Final.getAbsolutePath(),
+                TakesRepository.resolveFloatMaster(wav32Final).getAbsolutePath());
+        wav32Final.delete();
+
+        // 3) Imported recording: no float32 file until first Edit, then persisted on first Edit
+        File impFile = new File(dir, "imp_" + System.nanoTime() + ".wav");
+        try (java.io.RandomAccessFile w = new java.io.RandomAccessFile(impFile, "rw")) {
+            w.write(Dsp.wav16Header(1, 48000, 4800L * 2));
+            w.write(new byte[4800 * 2]);
+        }
+        Take impTake = TakesRepository.addImported(
+                impFile, 1000, "Imported Take", "WAV");
+        assertEquals("imported", impTake.origin);
+        assertFalse("imported file must not have a float32 master before first edit",
+                TakesRepository.floatMasterFor(impFile).exists());
+        assertFalse("16-bit imported file is not native float32 yet",
+                AudioImporter.isNativeFloatWav(
+                        TakesRepository.resolveFloatMaster(impFile)));
+
+        // Simulate first Edit press on the imported take
+        File firstEditSession = AudioImporter.takeToFloatWav(
+                impFile, dir, "Imported_Take", null);
+        TakesRepository.saveFloatMasterCopy(firstEditSession, impFile);
+        firstEditSession.delete();
+        assertTrue("float32 master must be created and persisted on first edit",
+                TakesRepository.floatMasterFor(impFile).exists());
+        assertTrue("subsequent edits must resolve directly to native float32 master",
+                AudioImporter.isNativeFloatWav(
+                        TakesRepository.resolveFloatMaster(impFile)));
+
+        // 4) Replace & Delete clean up both the main file and the .float32 master
+        assertTrue(TakesRepository.deleteImmediateForReplace(recTake.id));
+        assertFalse("replaced take file must be deleted", recFinal.exists());
+        assertFalse("replaced take float32 master must be deleted",
+                recMaster.exists());
+
+        TakesRepository.deleteImmediateForReplace(impTake.id);
+        assertFalse("deleted imported file must be removed", impFile.exists());
+        assertFalse("deleted imported float32 master must be removed",
+                TakesRepository.floatMasterFor(impFile).exists());
+    }
 }

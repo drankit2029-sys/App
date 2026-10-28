@@ -1796,10 +1796,8 @@ public class StudioFragment extends Fragment {
             final Context appCtx = requireContext().getApplicationContext();
             editSourceId = -1;
             editSourceTitle = null;
-            new Thread(() -> {
-                engine.abortAndDelete();
-                EditLink.clear(appCtx);
-            }).start();
+            engine.abortAndDelete();
+            EditLink.clear(appCtx);
             activity().exitStudio();
             return true;
         }

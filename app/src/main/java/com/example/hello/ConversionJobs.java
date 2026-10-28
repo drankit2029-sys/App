@@ -88,8 +88,8 @@ public final class ConversionJobs {
     /** rawPath -> finished library take id, for replace-after-completion. */
     private static final Map<String, Long> COMPLETED = new HashMap<>();
     /**
-     * raws with an in-flight reader. The worker defers its raw.delete() while
-     * one is open, so an Edit on a converting card cannot have the file
+     * raws with an in-flight reader. The worker defers its raw adoption/delete
+     * while one is open, so an Edit on a converting card cannot have the file
      * pulled out from under AudioImporter mid-decode.
      */
     private static final Map<String, Integer> RAW_READERS =
@@ -287,10 +287,12 @@ public final class ConversionJobs {
 
     public static void endRawRead(String rawPath) {
         if (rawPath == null) return;
-        boolean lastReader;
+        boolean doDelete = false;
+        File masterTarget = null;
         synchronized (ConversionJobs.class) {
             Integer n = RAW_READERS.get(rawPath);
             if (n == null) return;
+            boolean lastReader;
             if (n <= 1) {
                 RAW_READERS.remove(rawPath);
                 lastReader = true;
@@ -298,22 +300,31 @@ public final class ConversionJobs {
                 RAW_READERS.put(rawPath, n - 1);
                 lastReader = false;
             }
-            if (lastReader && DEFERRED_RAW_DELETES.remove(rawPath)
-                    && forRaw(rawPath) == null) {
-                // The worker finished while this reader held the file and
-                // deferred its deletion: no job owns the raw anymore, so
-                // remove it now instead of leaking it into reconcile().
-                try {
-                    // noinspection ResultOfMethodCallIgnored
-                    new File(rawPath).delete();
-                } catch (Exception ignored) {}
+            if (lastReader && forRaw(rawPath) == null) {
+                if (DEFERRED_RAW_DELETES.remove(rawPath)) {
+                    DEFERRED_RAW_MASTERS.remove(rawPath);
+                    doDelete = true;
+                } else {
+                    masterTarget = DEFERRED_RAW_MASTERS.remove(rawPath);
+                }
             }
+        }
+        if (doDelete) {
+            try {
+                // noinspection ResultOfMethodCallIgnored
+                new File(rawPath).delete();
+            } catch (Exception ignored) {}
+        } else if (masterTarget != null) {
+            TakesRepository.adoptFloatMaster(new File(rawPath), masterTarget);
         }
     }
 
     /** Raws whose deletion was deferred until their last reader finishes. */
     private static final java.util.Set<String> DEFERRED_RAW_DELETES =
             new java.util.HashSet<>();
+    /** Raws whose move to .float32/ was deferred until their last reader finishes. */
+    private static final java.util.Map<String, File> DEFERRED_RAW_MASTERS =
+            new java.util.HashMap<>();
 
     /** True while some thread is decoding this raw. */
     public static synchronized boolean rawIsBeingRead(String rawPath) {
@@ -329,6 +340,7 @@ public final class ConversionJobs {
     public static void deleteOrDeferRaw(String rawPath) {
         if (rawPath == null) return;
         synchronized (ConversionJobs.class) {
+            DEFERRED_RAW_MASTERS.remove(rawPath);
             if (RAW_READERS.containsKey(rawPath)) {
                 DEFERRED_RAW_DELETES.add(rawPath);
                 return;
@@ -338,6 +350,28 @@ public final class ConversionJobs {
             // noinspection ResultOfMethodCallIgnored
             new File(rawPath).delete();
         } catch (Exception ignored) {}
+    }
+
+    /**
+     * Preserves a finished conversion's 32-bit float raw as the persistent
+     * float master for {@code finalFile} (or deletes it if {@code finalFile}
+     * is already WAV32 / missing), deferring until {@link #endRawRead} if a
+     * reader currently holds {@code rawPath} open.
+     */
+    public static void completeOrDeferRawMaster(String rawPath, File finalFile) {
+        if (rawPath == null) return;
+        if (finalFile == null || !finalFile.exists()
+                || AudioImporter.isNativeFloatWav(finalFile)) {
+            deleteOrDeferRaw(rawPath);
+            return;
+        }
+        synchronized (ConversionJobs.class) {
+            if (RAW_READERS.containsKey(rawPath)) {
+                DEFERRED_RAW_MASTERS.put(rawPath, finalFile);
+                return;
+            }
+        }
+        TakesRepository.adoptFloatMaster(new File(rawPath), finalFile);
     }
 
     /**
@@ -423,6 +457,8 @@ public final class ConversionJobs {
         } catch (Exception ignored) {}
         job.deleteSidecar();
         if (deleteRaw) {
+            DEFERRED_RAW_DELETES.remove(job.rawPath);
+            DEFERRED_RAW_MASTERS.remove(job.rawPath);
             try {
                 // noinspection ResultOfMethodCallIgnored
                 new File(job.rawPath).delete();
@@ -778,11 +814,9 @@ public final class ConversionJobs {
                     if (!part.renameTo(fin)) {
                         throw new IllegalStateException("adopt failed");
                     }
-                    if (!fin.equals(raw)) {
-                        // Keep the scratch only when it is the result.
-                        // noinspection ResultOfMethodCallIgnored
-                        raw.delete();
-                    }
+                    // Maintain the 32-bit float file in storage for all
+                    // recordings (or delete raw if fin is already WAV32).
+                    TakesRepository.adoptFloatMaster(raw, fin);
                     // noinspection ResultOfMethodCallIgnored
                     new File(raw.getAbsolutePath() + ".pending").delete();
                     if (ctx != null) {
@@ -801,6 +835,29 @@ public final class ConversionJobs {
             sess.abort();
         } else if (sess != null) {
             sess.abort();
+        }
+        // When the target format is WAV32 (32-bit float WAV), the finalized
+        // raw file IS already the exact 48 kHz 32-bit float WAV container.
+        // Adopt it directly in O(1) via rename instead of spawning a
+        // background job to copy bytes into a second 32-bit float file.
+        if (eff == SaveFormat.WAV32 && !rawIsBeingRead(raw.getAbsolutePath())) {
+            try {
+                FormatConverter.validateFinal(raw, SaveFormat.WAV32);
+                File fin = TakeSaver.uniqueFinal(raw, eff.extension());
+                if (raw.renameTo(fin)) {
+                    // noinspection ResultOfMethodCallIgnored
+                    new File(raw.getAbsolutePath() + ".pending").delete();
+                    EditEngine.clearSessionUndo(raw);
+                    TakesRepository.deleteFloatMaster(fin);
+                    if (ctx != null) {
+                        TrialAndBillingManager.get(ctx).markFreeRecordingUsed();
+                    }
+                    return SaveResult.adopted(fin,
+                            TakeSaver.labelFor(preset, format), dur, title);
+                }
+            } catch (Exception ex) {
+                CrashLog.breadcrumb(ctx, "direct wav32 adopt failed: " + ex);
+            }
         }
         ConversionJob job = enqueue(ctx, raw, title, preset, format, dur,
                 replaceTakeId, replaceTitle);

@@ -376,6 +376,9 @@ public class RecordingService extends Service {
                         replaceId, replaceTitle);
                 EditLink.clear(appCtx);
                 if (r.adopted) {
+                    if (replaceId > 0) {
+                        TakesRepository.deleteImmediateForReplace(replaceId);
+                    }
                     String rt = replaceTitle != null
                             && !replaceTitle.isEmpty()
                             ? replaceTitle : r.title;

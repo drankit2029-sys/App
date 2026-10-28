@@ -5,6 +5,8 @@ import android.content.SharedPreferences;
 import android.media.MediaMetadataRetriever;
 
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -85,6 +87,201 @@ public final class TakesRepository {
     private static volatile ReconcileResult lastReconcile;
 
     private TakesRepository() {}
+
+    // ---- persistent 32-bit float master storage ----
+
+    /**
+     * Hidden directory inside {@code takes/} that holds persistent 32-bit
+     * float masters for non-WAV32 takes. Being a subdirectory, it is ignored
+     * by {@link #reconcile(Context)}'s top-level orphan adoption and by
+     * {@link RecordingEngine#scanUnfinished(Context)}.
+     */
+    public static File floatMastersDir(File takesDir) {
+        return new File(takesDir, ".float32");
+    }
+
+    /**
+     * Companion 32-bit float master path for {@code takeFile}, located at
+     * {@code takes/.float32/<takeFile.getName()>.f32.wav}.
+     */
+    public static File floatMasterFor(File takeFile) {
+        if (takeFile == null) return null;
+        File parent = takeFile.getParentFile();
+        if (parent == null) return null;
+        return new File(floatMastersDir(parent),
+                takeFile.getName() + ".f32.wav");
+    }
+
+    /**
+     * Returns the 32-bit float WAV file to use when opening {@code takeFile}
+     * for editing:
+     * <ul>
+     *   <li>If {@code takeFile} is already a 48 kHz 32-bit float WAV (e.g. a
+     *       WAV32 take or a converting take's raw), returns {@code takeFile}
+     *       itself.</li>
+     *   <li>If a persisted 32-bit float master exists in {@code .float32/},
+     *       returns that master file.</li>
+     *   <li>Otherwise returns {@code takeFile} (e.g. an imported recording
+     *       being edited for the first time).</li>
+     * </ul>
+     */
+    public static File resolveFloatMaster(File takeFile) {
+        if (takeFile == null || !takeFile.exists()) return takeFile;
+        if (AudioImporter.isNativeFloatWav(takeFile)) return takeFile;
+        File master = floatMasterFor(takeFile);
+        if (master != null && master.exists()
+                && AudioImporter.isNativeFloatWav(master)) {
+            return master;
+        }
+        return takeFile;
+    }
+
+    /** True when {@code takeFile} is itself float32 or has a valid float32 master. */
+    public static boolean hasFloatMaster(File takeFile) {
+        if (takeFile == null || !takeFile.exists()) return false;
+        if (AudioImporter.isNativeFloatWav(takeFile)) return true;
+        File master = floatMasterFor(takeFile);
+        return master != null && master.exists()
+                && AudioImporter.isNativeFloatWav(master);
+    }
+
+    /**
+     * Adopts a finalized recording/edit {@code rawFloatWav} as the persistent
+     * 32-bit float master for {@code finalTakeFile}.
+     *
+     * <p>When {@code finalTakeFile} is already a 48 kHz 32-bit float WAV
+     * (saved as {@link SaveFormat#WAV32}), {@code finalTakeFile} is itself the
+     * 32-bit float file, so {@code rawFloatWav} (and any stale companion in
+     * {@code .float32/}) is deleted to avoid storing redundant copies.
+     */
+    public static void adoptFloatMaster(File rawFloatWav, File finalTakeFile) {
+        if (rawFloatWav == null) return;
+        try {
+            // noinspection ResultOfMethodCallIgnored
+            new File(rawFloatWav.getAbsolutePath() + ".pending").delete();
+            EditEngine.clearSessionUndo(rawFloatWav);
+        } catch (Exception ignored) {}
+        if (!rawFloatWav.exists()) return;
+        if (finalTakeFile == null || !finalTakeFile.exists()) {
+            // noinspection ResultOfMethodCallIgnored
+            rawFloatWav.delete();
+            return;
+        }
+        if (rawFloatWav.getAbsolutePath().equals(
+                finalTakeFile.getAbsolutePath())) {
+            deleteFloatMaster(finalTakeFile);
+            return;
+        }
+        if (AudioImporter.isNativeFloatWav(finalTakeFile)) {
+            // Final file is already 32-bit float (WAV32): never keep a second
+            // redundant 32-bit float file on disk.
+            // noinspection ResultOfMethodCallIgnored
+            rawFloatWav.delete();
+            deleteFloatMaster(finalTakeFile);
+            return;
+        }
+        File master = floatMasterFor(finalTakeFile);
+        if (master == null) {
+            // noinspection ResultOfMethodCallIgnored
+            rawFloatWav.delete();
+            return;
+        }
+        try {
+            File dir = master.getParentFile();
+            if (dir != null && !dir.exists()) {
+                // noinspection ResultOfMethodCallIgnored
+                dir.mkdirs();
+            }
+            if (master.exists()) {
+                // noinspection ResultOfMethodCallIgnored
+                master.delete();
+            }
+            if (rawFloatWav.renameTo(master)) {
+                return;
+            }
+            copyFileContents(rawFloatWav, master);
+        } catch (Exception ignored) {
+            try {
+                if (master.exists()) {
+                    // noinspection ResultOfMethodCallIgnored
+                    master.delete();
+                }
+            } catch (Exception ignored2) {}
+        } finally {
+            if (rawFloatWav.exists()) {
+                // noinspection ResultOfMethodCallIgnored
+                rawFloatWav.delete();
+            }
+        }
+    }
+
+    /**
+     * Persists a copy of {@code floatWavSession} as the 32-bit float master
+     * for {@code finalTakeFile}. Used the first time the user presses Edit on
+     * an imported take so subsequent edits reuse the persisted 32-bit float
+     * file without re-converting.
+     */
+    public static void saveFloatMasterCopy(File floatWavSession,
+                                           File finalTakeFile) {
+        if (floatWavSession == null || !floatWavSession.exists()
+                || finalTakeFile == null || !finalTakeFile.exists()) {
+            return;
+        }
+        if (AudioImporter.isNativeFloatWav(finalTakeFile)) {
+            // Already 32-bit float: do not create a redundant copy.
+            return;
+        }
+        File master = floatMasterFor(finalTakeFile);
+        if (master == null) return;
+        File dir = master.getParentFile();
+        if (dir != null && !dir.exists()) {
+            // noinspection ResultOfMethodCallIgnored
+            dir.mkdirs();
+        }
+        File tmp = new File(dir, master.getName() + ".tmp");
+        try {
+            copyFileContents(floatWavSession, tmp);
+            if (!finalTakeFile.exists()) {
+                // noinspection ResultOfMethodCallIgnored
+                tmp.delete();
+                return;
+            }
+            if (master.exists()) {
+                // noinspection ResultOfMethodCallIgnored
+                master.delete();
+            }
+            if (!tmp.renameTo(master)) {
+                // noinspection ResultOfMethodCallIgnored
+                tmp.delete();
+            }
+        } catch (Exception ignored) {
+            try {
+                // noinspection ResultOfMethodCallIgnored
+                tmp.delete();
+            } catch (Exception ignored2) {}
+        }
+    }
+
+    /** Deletes the companion 32-bit float master for {@code takeFile}, if any. */
+    public static void deleteFloatMaster(File takeFile) {
+        File master = floatMasterFor(takeFile);
+        if (master != null && master.exists()) {
+            // noinspection ResultOfMethodCallIgnored
+            master.delete();
+        }
+    }
+
+    private static void copyFileContents(File src, File dst) throws Exception {
+        try (FileInputStream in = new FileInputStream(src);
+             FileOutputStream out = new FileOutputStream(dst)) {
+            byte[] buf = new byte[65536];
+            int n;
+            while ((n = in.read(buf)) > 0) {
+                out.write(buf, 0, n);
+            }
+            out.getFD().sync();
+        }
+    }
 
     // ---- lifecycle ----
 
@@ -236,6 +433,17 @@ public final class TakesRepository {
         return t;
     }
 
+    /** Inserts an imported audio file without pre-converting to 32-bit float. */
+    public static synchronized Take addImported(File file, long durationMs,
+                                                String title, String format) {
+        Take t = buildTake(file, durationMs, title, format);
+        t.origin = "imported";
+        TAKES.add(0, t);
+        persistAsync(t);
+        fireChanged();
+        return t;
+    }
+
     /** Used by reconcile + tests to insert a fully-formed take. */
     public static synchronized Take addTake(Take t) {
         TAKES.add(t);
@@ -246,17 +454,9 @@ public final class TakesRepository {
     }
 
     /**
-     * Edit-replace mutation shared by the studio fast path and the
-     * background worker (BUG-02): deletes the original take and inserts the
-     * re-saved file under the original title. A negative
-     * {@code originalId} means the source was still converting when the edit
-     * began — its job is cancelled and a take that finished mid-edit is
-     * resolved the same way the studio dialog does.
-     */
-    /**
-     * Immediately deletes a take (and its backing file) when the user chooses
-     * Replace in the editor, so the obsolete file is removed right away before
-     * the new conversion starts.
+     * Immediately deletes a take (and its backing file + 32-bit float master)
+     * when the user chooses Replace in the editor, so the obsolete files are
+     * removed right away before the new conversion starts.
      */
     public static synchronized boolean deleteImmediateForReplace(long targetId) {
         if (targetId < 0) {
@@ -399,9 +599,34 @@ public final class TakesRepository {
                 // A4-09: the restored file may land on a uniquified name, so
                 // follow it and persist the real path, otherwise the row
                 // points at a file that is not there.
+                File trashedFile = new File(op.trashPaths.get(i));
                 File back = Dsp.restoreFromTrash(
-                        new File(op.trashPaths.get(i)), new File(t.filePath));
-                if (back != null) t.filePath = back.getAbsolutePath();
+                        trashedFile, new File(t.filePath));
+                if (back != null) {
+                    t.filePath = back.getAbsolutePath();
+                    // Restore companion 32-bit float master if one was trashed
+                    // alongside this take.
+                    File trashedMaster = new File(trashedFile.getParentFile(),
+                            trashedFile.getName() + ".f32.wav");
+                    if (trashedMaster.exists()) {
+                        File restoredMaster = floatMasterFor(back);
+                        if (restoredMaster != null) {
+                            File mDir = restoredMaster.getParentFile();
+                            if (mDir != null && !mDir.exists()) {
+                                // noinspection ResultOfMethodCallIgnored
+                                mDir.mkdirs();
+                            }
+                            if (restoredMaster.exists()) {
+                                // noinspection ResultOfMethodCallIgnored
+                                restoredMaster.delete();
+                            }
+                            if (!trashedMaster.renameTo(restoredMaster)) {
+                                // noinspection ResultOfMethodCallIgnored
+                                trashedMaster.delete();
+                            }
+                        }
+                    }
+                }
             }
             TAKES.add(pos, t);
             rows.add(TakeEntity.fromTake(t));
@@ -435,19 +660,39 @@ public final class TakesRepository {
 
     /**
      * Soft-delete: the file moves to .trash so undo restores audio, not
-     * just the entry. Falls back to a straight delete when the move fails.
+     * just the entry. Also moves any companion 32-bit float master into
+     * .trash so undo preserves instant editing and expiry reaps both.
+     * Falls back to a straight delete when the move fails.
      *
      * @return trash location, or null when hard-deleted / no file.
      */
     private static String trashBackingFile(Take t) {
         if (t.filePath == null) return null;
         File src = new File(t.filePath);
-        if (!src.exists()) return null;
+        if (!src.exists()) {
+            deleteFloatMaster(src);
+            return null;
+        }
         try {
             File takesDir = app != null
                     ? RecordingEngine.takesDir(app) : src.getParentFile();
+            File master = floatMasterFor(src);
             File trashed = Dsp.moveToTrash(takesDir, src);
-            if (trashed != null) return trashed.getAbsolutePath();
+            if (trashed != null) {
+                if (master != null && master.exists()) {
+                    File trashedMaster = new File(trashed.getParentFile(),
+                            trashed.getName() + ".f32.wav");
+                    if (trashedMaster.exists()) {
+                        // noinspection ResultOfMethodCallIgnored
+                        trashedMaster.delete();
+                    }
+                    if (!master.renameTo(trashedMaster)) {
+                        // noinspection ResultOfMethodCallIgnored
+                        master.delete();
+                    }
+                }
+                return trashed.getAbsolutePath();
+            }
         } catch (Exception ignored) {}
         deleteBackingFile(t);
         return null;
@@ -455,8 +700,10 @@ public final class TakesRepository {
 
     private static void deleteBackingFile(Take t) {
         if (t.filePath != null) {
+            File f = new File(t.filePath);
             // noinspection ResultOfMethodCallIgnored
-            new File(t.filePath).delete();
+            f.delete();
+            deleteFloatMaster(f);
         }
     }
 
@@ -545,10 +792,11 @@ public final class TakesRepository {
 
     /**
      * Makes disk and database agree: seeds demos once on a truly fresh
-     * install, drops rows whose files vanished, deletes finalized raw
-     * leftovers shadowed by a finished conversion, and adopts orphaned
-     * recordings back into the library. Files with a .pending marker are
-     * left alone — the unfinished-take flow owns them.
+     * install, drops rows whose files vanished, adopts or cleans finalized
+     * raw leftovers shadowed by a finished conversion, adopts orphaned
+     * recordings back into the library, and prunes any redundant or orphaned
+     * files in {@code .float32/}. Files with a .pending marker are left
+     * alone — the unfinished-take flow owns them.
      */
     static ReconcileResult reconcile(Context ctx) {
         ReconcileResult rr = new ReconcileResult();
@@ -594,6 +842,7 @@ public final class TakesRepository {
             for (Take t : TAKES) {
                 if (t.filePath != null && !(new File(t.filePath).exists())) {
                     prune.add(t.id);
+                    deleteFloatMaster(new File(t.filePath));
                 }
             }
             for (long id : prune) {
@@ -619,7 +868,8 @@ public final class TakesRepository {
 
         // 2) Finalized raw leftovers: a float32 .wav sharing a stem with a
         // finished conversion (and no .pending / .conv.json) is a
-        // crashed-save remnant.
+        // crashed-save remnant. Adopt it into .float32/ for the finished
+        // conversion if needed, or delete it if redundant.
         Map<String, List<File>> byStem = new HashMap<>();
         for (File f : files) {
             if (!f.isFile() || !isAudioFile(f.getName())) continue;
@@ -634,20 +884,27 @@ public final class TakesRepository {
         for (Map.Entry<String, List<File>> e : byStem.entrySet()) {
             List<File> g = e.getValue();
             if (g.size() < 2 || pendingStems.contains(e.getKey())) continue;
-            boolean hasFinal = false;
+            File finalFile = null;
             File floatWav = null;
             for (File f : g) {
                 String n = f.getName().toLowerCase(Locale.US);
-                if (n.endsWith(".wav") && isFloat32Wav(f)) {
+                if (n.endsWith(".wav") && isFloat32Wav(f)
+                        && !referenced.contains(f.getAbsolutePath())) {
                     floatWav = f;
                 } else {
-                    hasFinal = true;
+                    finalFile = f;
                 }
             }
-            if (hasFinal && floatWav != null && !referenced.contains(
+            if (finalFile != null && floatWav != null && !referenced.contains(
                     floatWav.getAbsolutePath())) {
-                // noinspection ResultOfMethodCallIgnored
-                if (floatWav.delete()) rr.rawsCleaned++;
+                if (!AudioImporter.isNativeFloatWav(finalFile)
+                        && !hasFloatMaster(finalFile)) {
+                    adoptFloatMaster(floatWav, finalFile);
+                    if (!floatWav.exists()) rr.rawsCleaned++;
+                } else {
+                    // noinspection ResultOfMethodCallIgnored
+                    if (floatWav.delete()) rr.rawsCleaned++;
+                }
             }
         }
 
@@ -685,7 +942,34 @@ public final class TakesRepository {
             }
         }
 
-        // 4) New installs start with an empty library: no synthetic demos.
+        // 4) Sweep .float32/ and remove any orphaned, corrupt, or redundant
+        // (e.g. parent take is already WAV32 or no longer exists) float32 files.
+        try {
+            File mastersDir = floatMastersDir(dir);
+            File[] masterFiles = mastersDir.listFiles();
+            if (masterFiles != null && masterFiles.length > 0) {
+                Set<String> validMasterNames = new HashSet<>();
+                synchronized (TakesRepository.class) {
+                    for (Take t : TAKES) {
+                        if (t.filePath == null) continue;
+                        File tf = new File(t.filePath);
+                        if (tf.exists() && !AudioImporter.isNativeFloatWav(tf)) {
+                            validMasterNames.add(tf.getName() + ".f32.wav");
+                        }
+                    }
+                }
+                for (File mf : masterFiles) {
+                    if (!mf.isFile()
+                            || !validMasterNames.contains(mf.getName())
+                            || !AudioImporter.isNativeFloatWav(mf)) {
+                        // noinspection ResultOfMethodCallIgnored
+                        if (mf.delete()) rr.rawsCleaned++;
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+
+        // 5) New installs start with an empty library: no synthetic demos.
         markSeeded(ctx);
         return rr;
     }
@@ -708,7 +992,7 @@ public final class TakesRepository {
     }
 
     /** Distinguish integer 24-bit WAV from the standard 16/float badge. */
-    private static String wavBadge(File f) {
+    static String wavBadge(File f) {
         try (java.io.RandomAccessFile r =
                      new java.io.RandomAccessFile(f, "r")) {
             Dsp.WavHeader h = Dsp.parseWavHeader(r);
@@ -718,7 +1002,7 @@ public final class TakesRepository {
     }
 
     /** True when an ASCII/byte token occurs anywhere in the file. */
-    private static boolean containsToken(File f, byte[] token) {
+    static boolean containsToken(File f, byte[] token) {
         if (f == null || token == null || token.length == 0) return false;
         try (java.io.RandomAccessFile r =
                      new java.io.RandomAccessFile(f, "r")) {

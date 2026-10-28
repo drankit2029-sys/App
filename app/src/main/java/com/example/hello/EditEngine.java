@@ -33,6 +33,23 @@ public final class EditEngine {
         }
     }
 
+    /**
+     * Drops any undo/redo snapshots recorded for {@code raw}, e.g. after the
+     * file was renamed into its persistent 32-bit float master.
+     */
+    public static void clearSessionUndo(File raw) {
+        if (raw == null || raw.getParentFile() == null) return;
+        File[] snaps = new File(raw.getParentFile(), ".undo").listFiles();
+        if (snaps == null) return;
+        String prefix = raw.getName() + ".";
+        for (File snap : snaps) {
+            if (snap != null && snap.getName().startsWith(prefix)) {
+                // noinspection ResultOfMethodCallIgnored
+                snap.delete();
+            }
+        }
+    }
+
     /** Bounded 10-step undo/redo journal storing snapshots in takes/.undo/. */
     public static final class UndoJournal {
         private final File undoDir;

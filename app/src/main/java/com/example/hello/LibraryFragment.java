@@ -677,31 +677,27 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
     }
 
     /**
-     * Decodes the picked document into a 32-bit float WAV in the takes
-     * directory, then registers it as an ordinary editable take.
+     * Copies the picked document directly into the takes directory in its
+     * original format and registers it as an imported take. Its 32-bit float
+     * file is created lazily the first time the user presses Edit.
      */
     private void importAudio(Uri uri) {
         final Context appCtx = requireContext().getApplicationContext();
         new Thread(() -> {
             File out = null;
-            String title = null;
-            long durMs = 0;
             try {
                 File dir = RecordingEngine.takesDir(appCtx);
-                out = AudioImporter.importToFloatWav(appCtx, uri, dir);
-                FormatConverter.WavInfo info =
-                        FormatConverter.readFloatWav(out);
-                int ch = Math.max(1, info.channels);
-                long frames = info.dataBytes / 4 / ch;
-                durMs = Math.max(1000L, frames * 1000L
-                        / Math.max(1, info.sampleRate));
-                title = Dsp.prettyFileTitle(out.getName());
-                TakesRepository.addRecording(out, durMs, title, "WAV");
+                AudioImporter.ImportedAudio imp =
+                        AudioImporter.importOriginal(appCtx, uri, dir);
+                out = imp.file;
+                TakesRepository.addImported(
+                        imp.file, imp.durationMs, imp.title, imp.badge);
             } catch (Exception | Error e) {
                 if (out != null) {
                     // noinspection ResultOfMethodCallIgnored
                     out.delete();
                 }
+                out = null;
             }
             final File imported = out;
             handler.post(() -> {
@@ -1690,12 +1686,15 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         // already written a session file.
         final android.content.Context appCtx =
                 requireContext().getApplicationContext();
-        // A converting take's raw is already a 48 kHz 32-bit float WAV, so
-        // preparing the edit session is a fast byte copy: no "Converting to
-        // 32-bit float" dialog is needed for those.
-        final boolean alreadyFloat = AudioImporter.isNativeFloatWav(src);
-        // Decode a copy to 32-bit float and punch in from its end. The
-        // original stays in the library until the user picks replace/new.
+        // Resolve the persistent 32-bit float master for this take (available
+        // for all recordings and for any imported take already edited once).
+        // When present, preparing the edit session is a fast byte copy with no
+        // "Converting to 32-bit float" modal.
+        final File floatSrc = TakesRepository.resolveFloatMaster(src);
+        final boolean alreadyFloat = AudioImporter.isNativeFloatWav(floatSrc);
+        // Decode a copy to 32-bit float (or fast-copy from the stored 32-bit
+        // float master) and punch in from its end. The original stays in the
+        // library until the user picks replace/new.
         final Dialog progress;
         final ProgressBar bar;
         final TextView msg;
@@ -1726,9 +1725,9 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             String fail = null;
             try {
                 // STU-03: hold the raw while we decode it so the conversion
-                // worker cannot delete it mid-import.
+                // worker cannot delete/move it mid-import.
                 ConversionJobs.beginRawRead(src.getAbsolutePath());
-                session = AudioImporter.takeToFloatWav(src,
+                session = AudioImporter.takeToFloatWav(floatSrc,
                         RecordingEngine.takesDir(appCtx),
                         RecordingEngine.sanitize(sourceTitle),
                         alreadyFloat ? null : pct -> handler.post(() -> {
@@ -1740,6 +1739,12 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                                 }
                             } catch (Exception ignored) {}
                         }));
+                // For imported recordings (or any legacy take without a float32
+                // master), persist the newly created 32-bit float file on the
+                // first Edit so subsequent edits reuse it without converting.
+                if (!alreadyFloat && sourceId > 0 && src.exists()) {
+                    TakesRepository.saveFloatMasterCopy(session, src);
+                }
                 RecordingEngine.get().attachExisting(
                         appCtx, session,
                         sourceTitle, sessionChannels(session),

@@ -538,7 +538,12 @@ public class ConversionService extends Service {
                         r.file, r.durationMs, liveTitle, r.label);
                 if (take == null) {
                     // The target take was deleted while this replacement was
-                    // converting. Clean up raw + sidecar silently.
+                    // converting. Clean up output + raw + sidecar silently.
+                    if (r.file != null) {
+                        // noinspection ResultOfMethodCallIgnored
+                        r.file.delete();
+                        TakesRepository.deleteFloatMaster(r.file);
+                    }
                     ConversionJobs.deleteOrDeferRaw(job.rawPath);
                     // noinspection ResultOfMethodCallIgnored
                     new File(job.rawPath + ".pending").delete();
@@ -554,15 +559,13 @@ public class ConversionService extends Service {
             if (lateRename != null && !lateRename.equals(take.title)) {
                 TakesRepository.rename(take.id, lateRename);
             }
-            // STU-03: an Edit on the converting card decodes this same raw.
-            // Delete now, or defer until its last reader finishes: dropping
-            // the file here would corrupt the reader, and skipping the
-            // delete would leak the raw into reconcile() as a duplicate.
-            // Never delete the result if a legacy raw name made the
-            // finished take reuse the raw path.
+            // Maintain the 32-bit float file in storage for all recordings
+            // (moving job.rawPath into .float32/<r.file.getName()>.f32.wav,
+            // or deleting it if r.file is already WAV32), deferring until
+            // the last reader finishes if an Edit or preview holds it open.
             if (r.file == null || !r.file.getAbsolutePath()
                     .equals(job.rawPath)) {
-                ConversionJobs.deleteOrDeferRaw(job.rawPath);
+                ConversionJobs.completeOrDeferRawMaster(job.rawPath, r.file);
             }
             // noinspection ResultOfMethodCallIgnored
             new File(job.rawPath + ".pending").delete();
