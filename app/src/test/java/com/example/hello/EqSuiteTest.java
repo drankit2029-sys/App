@@ -254,7 +254,7 @@ public class EqSuiteTest {
                     type == 3 ? 0.45 : 0.35);
         }
         p.getParam("type").setEnumIndex(0);
-        p.getParam("mode").setEnumIndex(1);
+        p.getParam("pass").setEnumIndex(1);
         assertEquals("HP mode", -3.01, mag(p.buildSections(), 1000), 0.3);
         assertTrue(mag(p.buildSections(), 250) < -20);
     }
