@@ -1,27 +1,42 @@
 package com.example.hello;
 
 /**
- * Downward expander / room gate ("Room Gate Pro") that attenuates breaths and
- * room tone below threshold (-52..-18 dBFS) with hysteresis, an accurate hold
- * timer (reset only while the instantaneous peak exceeds openLin), and a
- * configurable floor.
+ * Professional downward expander / room gate: a key-filtered peak detector
+ * with 3 dB hysteresis, an adjustable hold time and a smooth release. The
+ * threshold is driven by the familiar "Threshold" percentage, while Range,
+ * Hold and Release refine the behaviour without touching preset values.
+ *
+ * <p>The key path is high-passed at 80 Hz so desk rumble and plosives do not
+ * hold the gate open. Stereo channels share one detector and one gain.
  */
-public final class ProGateProcessor extends AudioProcessor {
+final class ProGateProcessor extends AudioProcessor {
 
-    private final FxParameter amt = addParameter(
-            FxParameter.intParam("amt", "Threshold", "%", 0, 100, 5, 0));
-    private final FxParameter floorDb = addParameter(
-            FxParameter.floatParam("gate_range", "Floor", " dB", -48f, -3f, -18f));
-    private final FxParameter holdMs = addParameter(
-            FxParameter.intParam("gate_hold", "Hold", " ms", 0, 500, 10, 20));
-    private final FxParameter releaseMs = addParameter(
-            FxParameter.intParam("gate_release", "Release", " ms", 20, 1000, 10, 160));
+    private static final int BLOCK = 16;
+
+    private final FxParameter amt = addParameter(FxParameter.intParam(
+            "amt", "Threshold", "%", 0, 100, 1, 40));
+    private final FxParameter range = addParameter(FxParameter.intParam(
+            "gate_range", "Range", " dB", 6, 40, 1, 20));
+    private final FxParameter release = addParameter(FxParameter.intParam(
+            "gate_release", "Release", " ms", 40, 400, 5, 160));
+    private final FxParameter hold = addParameter(FxParameter.intParam(
+            "gate_hold", "Hold", " ms", 0, 200, 5, 40));
 
     private int sampleRate = DspChain.SAMPLE_RATE;
-    private float env;
-    private float gateGain = 1.0f;
+    private float env = 0f;
+    private float gainCur = 1f;
+    private boolean open = false;
     private int holdLeft = 0;
-    private boolean gateOpen = false;
+    private float keyLp = 0f;
+
+    private float attackCoef = 0.01f;
+    private float releaseCoef = 0.0002f;
+    private float decayCoef = 0.999f;
+    private int holdSamples = 0;
+
+    ProGateProcessor() {
+        recalcCoefs();
+    }
 
     @Override
     public String getId() {
@@ -35,7 +50,7 @@ public final class ProGateProcessor extends AudioProcessor {
 
     @Override
     public String getDescription() {
-        return "Downward expander that attenuates room noise below threshold";
+        return "Expander with hysteresis, hold and musical release";
     }
 
     @Override
@@ -46,96 +61,87 @@ public final class ProGateProcessor extends AudioProcessor {
     @Override
     public void prepare(int sampleRate, int channels) {
         if (sampleRate > 0) this.sampleRate = sampleRate;
+        recalcCoefs();
     }
 
     @Override
     public void reset() {
         env = 0f;
-        gateGain = 1.0f;
+        gainCur = 1f;
+        open = false;
         holdLeft = 0;
-        gateOpen = false;
+        keyLp = 0f;
+    }
+
+    @Override
+    public boolean isAudible() {
+        return isEnabled() && amt.getCurrentRaw() > 0
+                && range.getCurrentRaw() > 0;
     }
 
     void setLegacyAmount(int pct) {
         amt.setCurrentRaw(pct);
     }
 
-    private boolean hasNonDefaultSecondary() {
-        return floorDb.getCurrentRaw() != floorDb.defaultRaw
-                || holdMs.getCurrentRaw() != holdMs.defaultRaw
-                || releaseMs.getCurrentRaw() != releaseMs.defaultRaw;
-    }
-
-    @Override
-    public boolean isAudible() {
-        return isEnabled() && (amt.getCurrentRaw() > 0 || hasNonDefaultSecondary());
+    private void recalcCoefs() {
+        attackCoef = (float) (1.0 - Math.exp(-1.0 / (0.002 * sampleRate)));
+        float relSec = Math.max(1, release.getCurrentRaw()) * 0.001f;
+        releaseCoef = (float) (1.0 - Math.exp(-1.0 / (relSec * sampleRate)));
+        decayCoef = (float) Math.exp(-BLOCK / (0.060 * sampleRate));
+        holdSamples = Math.round(hold.getCurrentRaw() * 0.001f * sampleRate);
     }
 
     @Override
     public void processInPlace(float[] buf, int frames, int channels) {
-        int rawAmt = amt.getCurrentRaw();
-        float gAmt = rawAmt > 0 ? (rawAmt / 100.0f)
-                : (hasNonDefaultSecondary() ? 0.35f : 0.0f);
-        if (gAmt <= 0.001f || frames <= 0) return;
+        if (buf == null || frames <= 0) return;
+        final int ch = Math.max(1, Math.min(2, channels));
+        final float amount = amt.getCurrentRaw() / 100f;
+        if (amount <= 0.001f || !isEnabled()) return;
+        recalcCoefs();
 
-        int sr = Math.max(8000, sampleRate);
-        // Measure block peak so when the input is a continuous high-level tone,
-        // the expander still engages relative to the crest envelope when secondary
-        // parameters are adjusted.
-        float blockPeak = 0f;
-        int total = Math.min(buf.length, frames * channels);
-        for (int i = 0; i < total; i++) {
-            float a = Math.abs(buf[i]);
-            if (a > blockPeak) blockPeak = a;
-        }
-        float gateThreshDb = -52.0f + 34.0f * gAmt;
-        float openLin = DspChain.fastDbToLin(gateThreshDb);
-        if (hasNonDefaultSecondary() && blockPeak > openLin * 1.1f) {
-            openLin = Math.max(openLin, blockPeak * (0.65f + 0.25f * gAmt));
-        }
-        float closeLin = openLin * 0.72f;
-        float floorLin = DspChain.fastDbToLin(floorDb.getFloat() * (0.4f + 0.6f * gAmt));
-        int holdSamples = (int) (sr * (holdMs.getCurrentRaw() / 1000.0f));
-        float relSec = Math.max(0.010f, releaseMs.getCurrentRaw() / 1000.0f);
-        float relAlpha = 1.0f - (float) Math.exp(-1.0 / (sr * relSec));
-        float attAlpha = 1.0f - (float) Math.exp(-1.0 / (sr * 0.002f));
-        float envDecayAlpha = 1.0f - (float) Math.exp(-1.0 / (sr * 0.015f));
+        final float openDb = -52f + 34f * amount + 1.5f;
+        final float closeDb = -52f + 34f * amount - 1.5f;
+        final float openLin = DspChain.fastDbToLin(openDb);
+        final float closeLin = DspChain.fastDbToLin(closeDb);
+        final float floorGain = DspChain.fastDbToLin(-range.getCurrentRaw());
+        final float keyCoef = (float) (1.0 - Math.exp(
+                -2.0 * Math.PI * 80.0 / sampleRate));
 
-        for (int f = 0; f < frames; f++) {
-            int idx = f * channels;
-            float sL = buf[idx];
-            float sR = channels == 2 ? buf[idx + 1] : sL;
-            float peak = Math.max(Math.abs(sL), Math.abs(sR));
-            env += (peak > env ? 0.025f : envDecayAlpha) * (peak - env);
+        int offset = 0;
+        while (offset < frames) {
+            int blk = Math.min(BLOCK, frames - offset);
+            float peak = 0f;
+            for (int f = 0; f < blk; f++) {
+                int idx = (offset + f) * ch;
+                float mono = ch == 1 ? buf[idx]
+                        : 0.5f * (buf[idx] + buf[idx + 1]);
+                keyLp += keyCoef * (mono - keyLp);
+                peak = Math.max(peak, Math.abs(mono - keyLp));
+            }
+            env = Math.max(peak, env * decayCoef);
 
-            if (peak >= openLin) {
-                gateOpen = true;
+            if (env >= openLin) {
+                open = true;
                 holdLeft = holdSamples;
-            } else if (gateOpen && env < closeLin) {
-                if (holdLeft > 0) {
-                    holdLeft--;
+            } else if (open) {
+                if (env < closeLin) {
+                    holdLeft -= blk;
+                    if (holdLeft <= 0) open = false;
                 } else {
-                    gateOpen = false;
+                    holdLeft = holdSamples;
                 }
             }
 
-            float target;
-            if (gateOpen) {
-                // While holding after peak drops below openLin, apply a subtle
-                // hold/floor contour so holdMs and floorDb are audibly distinct.
-                if (peak < openLin && holdSamples > 0) {
-                    float holdFrac = holdLeft / (float) Math.max(1, holdSamples);
-                    target = floorLin + (1.0f - floorLin) * (0.65f + 0.35f * holdFrac);
-                } else {
-                    target = 1.0f;
+            float target = open ? 1f : floorGain;
+            for (int f = 0; f < blk; f++) {
+                float a = target > gainCur ? attackCoef : releaseCoef;
+                gainCur += a * (target - gainCur);
+                int idx = (offset + f) * ch;
+                for (int c = 0; c < ch; c++) {
+                    buf[idx + c] *= gainCur;
                 }
-            } else {
-                float r = env / Math.max(1e-6f, closeLin);
-                target = floorLin + (1.0f - floorLin) * (r * r);
             }
-            gateGain += (target > gateGain ? attAlpha : relAlpha) * (target - gateGain);
-            buf[idx] = sL * gateGain;
-            if (channels == 2) buf[idx + 1] = sR * gateGain;
+            offset += blk;
         }
     }
 }
