@@ -213,12 +213,12 @@ public class Stage3PostAuditFixTest {
         switchedOn.prepare(48000, 1);
         switchedOn.getParam("freq").setCurrentRaw(1000);
         switchedOn.getParam("type").setEnumIndex(0);
-        switchedOn.getParam("mode").setEnumIndex(0);
+        switchedOn.getParam("pass").setEnumIndex(0);
         float[] warm = new float[4800];
         Arrays.fill(warm, 0.5f);
         switchedOn.processInPlace(warm, 4800, 1);
 
-        switchedOn.getParam("mode").setEnumIndex(1);
+        switchedOn.getParam("pass").setEnumIndex(1);
         float[] switched = new float[512];
         Arrays.fill(switched, 0.5f);
         switchedOn.processInPlace(switched, 512, 1);
@@ -227,7 +227,7 @@ public class Stage3PostAuditFixTest {
         reference.prepare(48000, 1);
         reference.getParam("freq").setCurrentRaw(1000);
         reference.getParam("type").setEnumIndex(0);
-        reference.getParam("mode").setEnumIndex(1);
+        reference.getParam("pass").setEnumIndex(1);
         reference.reset();
         float[] expected = new float[512];
         Arrays.fill(expected, 0.5f);
