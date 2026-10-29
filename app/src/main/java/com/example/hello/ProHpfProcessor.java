@@ -11,7 +11,7 @@ public final class ProHpfProcessor extends AudioProcessor {
     private final FxParameter cutoff = addParameter(
             FxParameter.intParam("cutoff", "Cutoff", " Hz", 40, 160, 10, 80));
     private final FxParameter slope = addParameter(
-            FxParameter.enumParam("hpf_slope", "Slope",
+            FxParameter.enumParam("slope", "Slope",
                     new String[]{"12 dB/oct", "24 dB/oct"}, 0));
 
     private int sampleRate = DspChain.SAMPLE_RATE;
