@@ -15,8 +15,8 @@ import java.util.Arrays;
 final class FilterCurveEqProcessor extends AudioProcessor {
 
     static final int MAX_NODES = 32;
-    private static final int[] DEFAULT_FREQS = {
-            20, 32, 50, 80, 125, 200, 315, 500,
+    private     static final int[] DEFAULT_FREQS = {
+            20, 30, 50, 80, 130, 200, 320, 500,
             630, 800, 1000, 1250, 1600, 2000, 2500, 3150,
             4000, 5000, 6300, 8000, 9000, 10000, 11200, 12500,
             14000, 15000, 16000, 17000, 18000, 19000, 19500, 20000

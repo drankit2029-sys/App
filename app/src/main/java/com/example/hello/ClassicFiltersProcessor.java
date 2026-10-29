@@ -30,6 +30,7 @@ final class ClassicFiltersProcessor extends AudioProcessor {
     private final BiquadFilter filter = new BiquadFilter();
     private int sampleRate = DspChain.SAMPLE_RATE;
     private int channels = 2;
+    private int lastTopologyKey = -1;
 
     ClassicFiltersProcessor() {
     }
@@ -106,6 +107,11 @@ final class ClassicFiltersProcessor extends AudioProcessor {
     public void processInPlace(float[] buf, int frames, int channels) {
         if (!isEnabled()) return;
         this.channels = Math.max(1, Math.min(2, channels));
+        int topoKey = (type.getEnumIndex() << 2) | pass.getEnumIndex();
+        if (lastTopologyKey != -1 && lastTopologyKey != topoKey) {
+            filter.reset();
+        }
+        lastTopologyKey = topoKey;
         filter.setSections(buildSections(), this.channels);
         filter.process(buf, frames, this.channels);
     }

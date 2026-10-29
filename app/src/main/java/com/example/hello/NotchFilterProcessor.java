@@ -61,20 +61,19 @@ final class NotchFilterProcessor extends AudioProcessor {
     }
 
     /**
-     * Applies the hum quick-picks when the frequency matches the preset, or
-     * honours the user's explicit frequency dial if scrubbed away from 50/60 Hz.
+     * Applies the hum quick-picks; the Studio UI syncs the Frequency dial with
+     * the Quick Pick while a pick is armed, so a stale dial value cannot steer
+     * a pick that has not been cleared.
      */
     float[][] buildSections() {
         int p = preset.getEnumIndex();
-        double dialHz = freq.getFloat();
         double f;
-        if (p == 1 && Math.abs(dialHz - 50.0) < 0.5) {
+        if (p == 1) {
             f = 50.0;
-        } else if (p == 2 && Math.abs(dialHz - 60.0) < 0.5) {
+        } else if (p == 2) {
             f = 60.0;
         } else {
-            // A user-adjusted Frequency must win over a stale Quick Pick.
-            f = dialHz;
+            f = freq.getFloat();
         }
         return new float[][]{Dsp.rbjNotch(sampleRate, f, q.getFloat())};
     }

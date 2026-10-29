@@ -183,7 +183,7 @@ public class FxRackChainTest {
         assertNotNull(noise);
         hpf.setWetDryMix(0.25f);
         noise.setEnabled(false);
-        noise.getParam("amt").setCurrentRaw(77);
+        noise.getParam("amt").setCurrentRaw(75);
         rack.addProcessor(FxRackChain.createProcessor("limiter"));
 
         JSONObject json = rack.toJson();
@@ -210,7 +210,7 @@ public class FxRackChainTest {
         assertEquals(0.25f,
                 back.getProcessor(back.indexOf("hpf")).getWetDryMix(), 0.0f);
         assertFalse(back.getProcessor(back.indexOf("noise")).isEnabled());
-        assertEquals(77, back.getProcessor(back.indexOf("noise"))
+        assertEquals(75, back.getProcessor(back.indexOf("noise"))
                 .getParam("amt").getCurrentRaw());
     }
 

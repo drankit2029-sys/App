@@ -13,7 +13,7 @@ public final class ProGateProcessor extends AudioProcessor {
     private final FxParameter floorDb = addParameter(
             FxParameter.floatParam("gate_floor", "Floor", " dB", -48f, -3f, -18f));
     private final FxParameter holdMs = addParameter(
-            FxParameter.intParam("gate_hold", "Hold", " ms", 0, 500, 10, 25));
+            FxParameter.intParam("gate_hold", "Hold", " ms", 0, 500, 10, 20));
     private final FxParameter releaseMs = addParameter(
             FxParameter.intParam("gate_release", "Release", " ms", 20, 1000, 10, 160));
 
