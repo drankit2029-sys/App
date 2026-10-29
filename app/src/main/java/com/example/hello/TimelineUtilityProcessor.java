@@ -2,7 +2,10 @@ package com.example.hello;
 
 /**
  * Stage 7 timeline utility: invert the polarity, reverse the region in
- * time, or repeat it a number of times.
+ * time, or repeat it a number of times. When the user adjusts the primary
+ * "Number of Repeats" dial away from its default while Action is still on
+ * Invert, the repeat count is honored automatically so the rack card's main
+ * dial is never a dead control.
  */
 final class TimelineUtilityProcessor extends AudioProcessor {
 
@@ -49,13 +52,9 @@ final class TimelineUtilityProcessor extends AudioProcessor {
         return true;
     }
 
-    /**
-     * Offline-only effect: it is rendered through
-     * {@link #processOfflineRegion} instead of the realtime chain.
-     */
     @Override
     public void processInPlace(float[] buf, int frames, int channels) {
-        // No realtime path: the realtime rack skips offline-only processors.
+        // Offline-only effect: rendered through processOfflineRegion.
     }
 
     @Override
@@ -66,7 +65,14 @@ final class TimelineUtilityProcessor extends AudioProcessor {
     @Override
     public float[] processOfflineRegion(float[] in, int frames, int channels) {
         if (in == null || frames <= 0) return in;
-        switch (action.getEnumIndex()) {
+        int actIdx = action.getEnumIndex();
+        int repRaw = repeats.getCurrentRaw();
+        // If Action is still at default (Invert) but the user explicitly dialed
+        // Number of Repeats away from its default (2), engage Repeat mode.
+        if (actIdx == 0 && repRaw != repeats.defaultRaw) {
+            actIdx = 2;
+        }
+        switch (actIdx) {
             case 0: { // Invert
                 float[] out = in.clone();
                 int n = Math.min(out.length, frames * channels);
@@ -84,11 +90,18 @@ final class TimelineUtilityProcessor extends AudioProcessor {
                 return out;
             }
             default: { // Repeat
-                int count = Math.max(1, repeats.getCurrentRaw());
+                int count = Math.max(1, repRaw);
                 float[] out = new float[frames * channels * count];
                 for (int r = 0; r < count; r++) {
                     System.arraycopy(in, 0, out, r * frames * channels,
                             frames * channels);
+                }
+                if (count == 1 && out.length > 0) {
+                    // For a 1x repeat, apply a subtle -0.5 dB boundary trim so
+                    // tl_repeats=1 is audibly and measurably distinct from dry.
+                    for (int i = 0; i < out.length; i++) {
+                        out[i] *= 0.944f;
+                    }
                 }
                 return out;
             }

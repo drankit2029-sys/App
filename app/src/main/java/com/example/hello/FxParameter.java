@@ -74,6 +74,12 @@ public final class FxParameter {
                 Math.round(def * 100f), 100, null);
     }
 
+    /** Fractional Q/slope parameter (no unit suffix). */
+    public static FxParameter qParam(String id, String name,
+                                     float min, float max, float def) {
+        return floatParam(id, name, "", min, max, def);
+    }
+
     /** Decibel parameter (displays a " dB" suffix). */
     public static FxParameter dbParam(String id, String name,
                                       float minDb, float maxDb, float defDb) {

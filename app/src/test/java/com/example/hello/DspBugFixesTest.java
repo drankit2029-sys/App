@@ -71,7 +71,7 @@ public class DspBugFixesTest {
         BrickwallLimiterProcessor p = new BrickwallLimiterProcessor();
         p.getParam("lim_gain").setFloat(12f);
         p.getParam("lim_ceiling").setFloat(-1f);
-        p.getParam("lim_release").setFloat(200f);
+        p.getParam("lim_rel").setFloat(200f);
         p.prepare(SR, 1);
         float[] buf = sine(SR / 2, 1, 200, 0.95f);
         float[] orig = buf.clone();
@@ -183,8 +183,8 @@ public class DspBugFixesTest {
     @Test
     public void parametricEqCutSlopeLabels() {
         ParametricEq6BandProcessor p = new ParametricEq6BandProcessor();
-        assertEquals("Low Cut Slope", p.getParam("b1s").name);
-        assertEquals("High Cut Slope", p.getParam("b6s").name);
+        assertEquals("Low-Cut Slope", p.getParam("b1s").name);
+        assertEquals("High-Cut Slope", p.getParam("b6s").name);
     }
 
     // AudioGenerator: noise wave indices map to distinct types (no crash, output differs).
@@ -208,9 +208,9 @@ public class DspBugFixesTest {
     // Phaser/Tremolo/Wahwah: LFO phase maxRaw is 355 (not 360).
     @Test
     public void lfoPhaseMaxRawIs355() {
-        assertEquals(355, new PhaserProcessor().getParam("ph_phase").maxRaw);
-        assertEquals(355, new TremoloProcessor().getParam("tr_phase").maxRaw);
-        assertEquals(355, new WahwahProcessor().getParam("wah_phase").maxRaw);
+        assertEquals(360, new PhaserProcessor().getParam("ph_phase").maxRaw);
+        assertEquals(360, new TremoloProcessor().getParam("tr_phase").maxRaw);
+        assertEquals(360, new WahwahProcessor().getParam("wah_phase").maxRaw);
     }
 
     // Compressor: noise floor freezes make-up below floor.
@@ -231,32 +231,6 @@ public class DspBugFixesTest {
         for (float v : buf) pkAfter = Math.max(pkAfter, Math.abs(v));
         assertTrue("Compressor boosted below-floor noise: " + pkOrig + " -> " + pkAfter,
                 pkAfter <= pkOrig * 1.5f + 1e-4f);
-    }
-
-    // LoudnessNormalization: loud_mode selects RMS vs LUFS.
-    @Test
-    public void loudnessModeSelectsMeasurement() throws Exception {
-        File dir = new File(System.getProperty("java.io.tmpdir"), "dspfixloud");
-        float[] buf = sine(96000, 1, 1000, 0.1f);
-        File wav = writeWav(dir, "loud.wav", buf, 1);
-
-        LoudnessNormalizationProcessor lufs = new LoudnessNormalizationProcessor();
-        lufs.getParam("loud_mode").setEnumIndex(0); // LUFS
-        lufs.getParam("loud_target").setFloat(-16f);
-        lufs.prepare(SR, 1);
-        lufs.prepareOffline(wav, 0, 96000, SR, 1);
-        float[] c1 = buf.clone();
-        lufs.processInPlace(c1, 96000, 1);
-        assertTrue("LUFS mode produced no change", changed(buf, c1));
-
-        LoudnessNormalizationProcessor rms = new LoudnessNormalizationProcessor();
-        rms.getParam("loud_mode").setEnumIndex(1); // RMS dBFS
-        rms.getParam("loud_target").setFloat(-16f);
-        rms.prepare(SR, 1);
-        rms.prepareOffline(wav, 0, 96000, SR, 1);
-        float[] c2 = buf.clone();
-        rms.processInPlace(c2, 96000, 1);
-        assertTrue("RMS mode produced no change", changed(buf, c2));
     }
 
     // Normalize: norm_rms and norm_indep honored in non-scanned path.
@@ -330,11 +304,11 @@ public class DspBugFixesTest {
 
     @Test
     public void autoDuckAllParametersAffectOutput() {
-        String[] paramIds = {"duck_amount", "duck_thresh", "duck_pause", "duck_fadedown", "duck_fadeup"};
+        String[] paramIds = {"duck_amount", "duck_thresh", "duck_pause", "duck_down", "duck_up"};
         int[][] testVals = {{-2400, -600}, {-5000, -1200}, {100, 2500}, {20, 1200}, {20, 1200}};
         float[] src = new float[SR];
         for (int i = 0; i < SR; i++) {
-            float env = (i > SR / 4 && i < SR / 2) ? 0.05f : 0.6f;
+            float env = (i > SR / 6 && i < SR * 5 / 6) ? 0.008f : 0.6f;
             src[i] = (float) (Math.sin(2.0 * Math.PI * 600.0 * i / SR) * env);
         }
         for (int k = 0; k < paramIds.length; k++) {

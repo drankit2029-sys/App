@@ -1,28 +1,29 @@
 package com.example.hello;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
- * Stage 3 · A4: tone-control style bass & treble shelves (250 Hz / 3.5 kHz)
- * plus a master volume trim. With "Link" on, the treble follows the bass
- * knob for one-hand tilting.
+ * Stage 3 Bass & Treble: 250 Hz low-shelf + 3.5 kHz high-shelf (+/-30 dB)
+ * with output Volume and a Link-Gain toggle.
  */
 final class BassAndTrebleProcessor extends AudioProcessor {
 
-    private static final double BASS_HZ = 250.0;
-    private static final double TREBLE_HZ = 3500.0;
-    private static final double SHELF_S = 0.9;
-
-    private final FxParameter bass = addParameter(
-            FxParameter.dbParam("bass", "Bass", -30f, 30f, 0f));
-    private final FxParameter treble = addParameter(
-            FxParameter.dbParam("treble", "Treble", -30f, 30f, 0f));
-    private final FxParameter volume = addParameter(
-            FxParameter.dbParam("vol", "Volume", -18f, 18f, 0f));
-    private final FxParameter link = addParameter(
-            FxParameter.boolParam("link", "Link Bass/Treble", false));
+    private final FxParameter bass = addParameter(FxParameter.dbParam(
+            "bass", "Bass (250 Hz)", -30f, 30f, 0f));
+    private final FxParameter treble = addParameter(FxParameter.dbParam(
+            "treble", "Treble (3.5 kHz)", -30f, 30f, 0f));
+    private final FxParameter volume = addParameter(FxParameter.dbParam(
+            "vol", "Volume", -18f, 18f, 0f));
+    private final FxParameter link = addParameter(FxParameter.boolParam(
+            "link", "Link Bass & Treble", false));
 
     private final BiquadFilter filter = new BiquadFilter();
     private int sampleRate = DspChain.SAMPLE_RATE;
-    private int channels = 1;
+    private int channels = 2;
+
+    BassAndTrebleProcessor() {
+    }
 
     @Override
     public String getId() {
@@ -36,7 +37,7 @@ final class BassAndTrebleProcessor extends AudioProcessor {
 
     @Override
     public String getDescription() {
-        return "Classic tone stack: 250 Hz bass shelf, 3.5 kHz treble shelf, volume";
+        return "Classic 250 Hz / 3.5 kHz shelving tone stack with volume";
     }
 
     @Override
@@ -45,10 +46,10 @@ final class BassAndTrebleProcessor extends AudioProcessor {
     }
 
     @Override
-    public void prepare(int sr, int ch) {
-        sampleRate = Math.max(8000, sr);
-        channels = Math.max(1, Math.min(2, ch));
-        filter.setSections(buildSections(), channels);
+    public void prepare(int sampleRate, int channels) {
+        if (sampleRate > 0) this.sampleRate = sampleRate;
+        this.channels = Math.max(1, Math.min(2, channels));
+        filter.setSections(buildSections(), this.channels);
     }
 
     @Override
@@ -58,40 +59,45 @@ final class BassAndTrebleProcessor extends AudioProcessor {
 
     @Override
     public boolean isAudible() {
-        if (!isEnabled()) return false;
-        return bass.getCurrentRaw() != 0
-                || treble.getCurrentRaw() != 0
-                || volume.getCurrentRaw() != 0
-                || link.getBoolean();
-    }
-
-    @Override
-    public void processInPlace(float[] buf, int frames, int ch) {
-        if (!isEnabled() || buf == null || frames <= 0) return;
-        int c = Math.max(1, Math.min(2, ch));
-        this.channels = c;
-        filter.setSections(buildSections(), c);
-        filter.process(buf, frames, c);
+        return isEnabled() && (Math.abs(bass.getFloat()) > 0.01f
+                || Math.abs(treble.getFloat()) > 0.01f
+                || Math.abs(volume.getFloat()) > 0.01f
+                || link.getBoolean());
     }
 
     float[][] buildSections() {
+        List<float[]> list = new ArrayList<>(3);
         double b = bass.getFloat();
         double t = treble.getFloat();
         if (link.getBoolean()) {
-            if (Math.abs(b) > 0.01) {
+            // Link mirrors one knob onto the other; both knobs at 0 dB stays a
+            // true 0 dB bypass instead of jumping to a hidden +3 dB boost.
+            if (Math.abs(t) < 0.01) {
                 t = b;
-            } else if (Math.abs(t) > 0.01) {
+            } else if (Math.abs(b) < 0.01) {
                 b = t;
             } else {
-                // Linked loudness contour when Link is enabled with knobs at 0 dB
-                b = 3.0;
-                t = 3.0;
+                t = 0.5 * (b + t);
             }
         }
-        float[][] secs = new float[3][];
-        secs[0] = Dsp.rbjLowShelf(sampleRate, BASS_HZ, SHELF_S, b);
-        secs[1] = Dsp.rbjHighShelf(sampleRate, TREBLE_HZ, SHELF_S, t);
-        secs[2] = Dsp.gainBiquad(Dsp.dbToLin(volume.getFloat()));
-        return secs;
+        if (Math.abs(b) > 0.01) {
+            list.add(Dsp.rbjLowShelf(sampleRate, 250.0, 0.7071, b));
+        }
+        if (Math.abs(t) > 0.01) {
+            list.add(Dsp.rbjHighShelf(sampleRate, 3500.0, 0.7071, t));
+        }
+        double v = volume.getFloat();
+        if (Math.abs(v) > 0.01) {
+            list.add(Dsp.gainBiquad(Dsp.dbToLin(v)));
+        }
+        return list.toArray(new float[0][]);
+    }
+
+    @Override
+    public void processInPlace(float[] buf, int frames, int channels) {
+        if (!isEnabled()) return;
+        this.channels = Math.max(1, Math.min(2, channels));
+        filter.setSections(buildSections(), this.channels);
+        filter.process(buf, frames, this.channels);
     }
 }

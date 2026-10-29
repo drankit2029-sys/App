@@ -40,6 +40,8 @@ public final class FxRackChain {
         register("noise", NoiseSuppressionProcessor::new);
         register("gate", ProGateProcessor::new);
         register("tone", ProToneProcessor::new);
+        register("warmth", () -> new ProToneProcessor("warmth"));
+        register("presence", () -> new ProToneProcessor("presence"));
         register("deess", ProDeEsserProcessor::new);
         register("comp", ProCompressorProcessor::new);
         register("limiter", ProLimiterProcessor::new);
@@ -109,11 +111,12 @@ public final class FxRackChain {
     }
 
     /**
-     * Maps an effect id onto the processor that implements it. The warmth
-     * and presence slots share one tone processor, so their ids resolve to
-     * it.
+     * Maps an effect id onto its registered factory. Role-scoped "warmth" and
+     * "presence" factories are registered directly so standalone inspection and
+     * prototype metadata expose only the parameters belonging to that effect.
      */
     static String resolveId(String id) {
+        if (id != null && REGISTRY.containsKey(id)) return id;
         if ("warmth".equals(id) || "presence".equals(id)) return "tone";
         return id;
     }
@@ -167,6 +170,10 @@ public final class FxRackChain {
 
     public int getChannels() {
         return channels;
+    }
+
+    public int getSampleRate() {
+        return sampleRate;
     }
 
     public boolean addProcessor(AudioProcessor p) {
@@ -256,6 +263,9 @@ public final class FxRackChain {
     public void prepareOffline(java.io.File raw, long startFrame,
                                long endFrame, int sampleRate, int channels)
             throws Exception {
+        if (sampleRate > 0 && sampleRate != this.sampleRate) {
+            setSampleRate(sampleRate);
+        }
         for (AudioProcessor p : processors) {
             if (!p.isEnabled() || !p.isAudible()) continue;
             p.prepareOffline(raw, startFrame, endFrame, sampleRate, channels);
@@ -380,9 +390,6 @@ public final class FxRackChain {
                 }
             }
 
-            // A processor that diverges must never hand non-finite samples to
-            // the next stage, the preview or the encoder: one NaN poisons every
-            // later effect and the saved file. Replace them with silence.
             for (int i = 0; i < n; i++) {
                 if (!Float.isFinite(buf[i])) {
                     buf[i] = 0f;
@@ -446,9 +453,10 @@ public final class FxRackChain {
             JSONObject po = a.optJSONObject(i);
             if (po == null) continue;
             AudioProcessor p = createProcessor(po.optString("id", ""));
-            if (p == null) continue;
-            p.loadState(po);
-            rack.addProcessor(p);
+            if (po != null && p != null) {
+                p.loadState(po);
+                rack.addProcessor(p);
+            }
         }
         return rack;
     }
@@ -456,8 +464,6 @@ public final class FxRackChain {
     /**
      * Builds the rack that reproduces the legacy {@code DspChain} stage order
      * (HPF, noise, gate, tone, de-esser, compressor, limiter) for a config.
-     * The combined warmth+presence stage stays a single processor because the
-     * original engine applied them in one per-sample loop.
      */
     public static FxRackChain fromLegacyConfig(int channels, DspChain.Config cfg) {
         FxRackChain rack = new FxRackChain(channels);
@@ -503,17 +509,6 @@ public final class FxRackChain {
         }
     }
 
-    /**
-     * Synchronizes the rack's processor execution order with the user's
-     * {@code cfg.slots} order while preserving existing {@link AudioProcessor}
-     * instances and their internal filter/envelope state. If only one of
-     * {@code WARMTH_BODY} or {@code VOCAL_PRESENCE} is enabled, the enabled
-     * slot determines where {@code "tone"} sits (so an unchecked sibling slot
-     * earlier in the list never traps the active tone stage). If both are
-     * enabled and separated by another active processor in {@code cfg.slots},
-     * records the split point so {@link #processInPlace} runs the second tone
-     * stage at its exact downstream slot position.
-     */
     private void syncOrderFromSlots(DspChain.Config cfg) {
         this.splitToneFirstType = null;
         this.splitToneAfterProcessorId = null;
@@ -531,7 +526,7 @@ public final class FxRackChain {
             if (s == null || s.type == null || !s.enabled) {
                 continue;
             }
-            if (s.type.isLegacyStage() && s.value <= 0) {
+            if (s.type.isLegacyStage() && s.value <= 0 && s.extraParams.isEmpty()) {
                 continue;
             }
             if (s.type == DspChain.EffectType.WARMTH_BODY
@@ -545,8 +540,6 @@ public final class FxRackChain {
             } else if (firstToneSlot != null && secondToneSlot == null) {
                 String pid = processorIdForSlotType(s.type);
                 if (pid != null && !"tone".equals(pid)) {
-                    // The anchor is tracked by instance key so two copies of
-                    // the same effect cannot be confused with each other.
                     lastEnabledBetween = pid;
                     lastEnabledBetweenKey = s.type.isLegacyStage()
                             ? null : DspChain.slotInstanceKey(s);
@@ -567,15 +560,11 @@ public final class FxRackChain {
             if (s == null || s.type == null) continue;
             if ((s.type == DspChain.EffectType.WARMTH_BODY
                     || s.type == DspChain.EffectType.VOCAL_PRESENCE)
-                    && anyToneEnabled && (!s.enabled || s.value <= 0)) {
-                // Do not let a disabled tone slot trap the enabled sibling's
-                // rack position.
+                    && anyToneEnabled && (!s.enabled || (s.value <= 0 && s.extraParams.isEmpty()))) {
                 continue;
             }
             String pid = processorIdForSlotType(s.type);
             if (pid == null) continue;
-            // Rack-local effects are ordered by their instance key so two
-            // copies of the same effect keep their own positions.
             String key = DspChain.slotInstanceKey(s);
             int idx = indexOfInstance(key, pid);
             if (idx >= 0) {
@@ -612,8 +601,7 @@ public final class FxRackChain {
 
     /**
      * Pushes a legacy {@code DspChain.Config} into the already-built legacy
-     * rack in place, preserving filter/envelope state across live edits (the
-     * original engine only changed amounts, never rebuilt the stages) and
+     * rack in place, preserving filter/envelope state across live edits and
      * synchronizing processor order with {@code cfg.slots}.
      */
     void applyLegacyConfig(DspChain.Config cfg) {
@@ -648,8 +636,6 @@ public final class FxRackChain {
                 ((ProCompressorProcessor) p).setLegacyAmount(cfg.compPct);
                 p.setEnabled(cfg.compPct > 0);
             } else if (p instanceof ProLimiterProcessor) {
-                // The limiter doubles as the safety ceiling for every
-                // gain-producing stage, exactly as the original engine did.
                 boolean safety = cfg.compPct > 0 || cfg.warmthPct > 0
                         || cfg.presencePct > 0;
                 ((ProLimiterProcessor) p).setLegacyState(

@@ -182,6 +182,8 @@ final class FxPreviewPeaks {
                     Math.round(endFrac * buckets)));
             int origRegionBuckets = Math.max(1, bEnd - bStart);
 
+            int effSampleRate = h.sampleRate > 0 ? h.sampleRate : sampleRate;
+            chain.setSampleRate(effSampleRate);
             if (!chain.offlineProcessors().isEmpty()) {
                 float[] drySel = EditEngine.readFloatSelection(raw, start, end);
                 int dryFrames = drySel != null ? drySel.length / ch : 0;
@@ -189,7 +191,7 @@ final class FxPreviewPeaks {
                         drySel, dryFrames, ch, origRegionBuckets);
 
                 float[] rendered = chain.renderRegionOfflineAndInPlace(
-                        raw, start, end, sampleRate);
+                        raw, start, end, effSampleRate);
                 if (rendered == null || rendered.length == 0) return null;
                 int rFrames = rendered.length / ch;
                 if (rFrames <= 0) return null;
@@ -288,12 +290,13 @@ final class FxPreviewPeaks {
                             rendered, rFrames, previewOutFile);
                     outWav = previewOutFile;
                 }
-                return new LiveRegionResult(regionPeaks, gainRatios, true,
+                return new LiveRegionResult(regionPeaks, gainRatios,
+                        rFrames != dryFrames,
                         newTotalFrames, start, start + rFrames, outWav);
             }
 
             chain.reset();
-            chain.prepareOffline(raw, start, end, sampleRate, ch);
+            chain.prepareOffline(raw, start, end, effSampleRate, ch);
 
             float[] dryPeaks = new float[buckets];
             float[] wetPeaks = new float[buckets];

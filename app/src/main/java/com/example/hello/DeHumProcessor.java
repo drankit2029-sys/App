@@ -1,23 +1,24 @@
 package com.example.hello;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
- * Stage 5 mains-hum remover: a bank of high-Q notch biquads at the mains
- * fundamental and its harmonics.
+ * Stage 5 De-Hum (Harmonic Comb Notch Cascade): removes 50 Hz or 60 Hz mains
+ * hum and up to 10 harmonics using high-Q RBJ notch sections.
  */
 final class DeHumProcessor extends AudioProcessor {
 
     private final FxParameter baseFreq = addParameter(FxParameter.intParam(
             "hum_freq", "Base Frequency", " Hz", 45, 65, 1, 50));
     private final FxParameter harmonics = addParameter(FxParameter.intParam(
-            "hum_harm", "Harmonics", "", 1, 10, 1, 6));
-    private final FxParameter notchQ = addParameter(FxParameter.floatParam(
-            "hum_q", "Notch Q", "", 5f, 60f, 25f));
-    private final FxParameter depth = addParameter(FxParameter.dbParam(
-            "hum_depth", "Attenuation", -48f, 0f, -36f));
+            "hum_harm", "Harmonics", "", 1, 10, 1, 8));
+    private final FxParameter q = addParameter(FxParameter.qParam(
+            "hum_q", "Notch Q", 5f, 40f, 20f));
 
+    private final BiquadFilter filter = new BiquadFilter();
     private int sampleRate = DspChain.SAMPLE_RATE;
     private int channels = 2;
-    private BiquadFilter filter = new BiquadFilter();
 
     DeHumProcessor() {
     }
@@ -34,7 +35,7 @@ final class DeHumProcessor extends AudioProcessor {
 
     @Override
     public String getDescription() {
-        return "Notch cascade at the mains frequency and its harmonics";
+        return "Harmonic comb notch filter for 50/60 Hz mains hum & buzz";
     }
 
     @Override
@@ -46,7 +47,7 @@ final class DeHumProcessor extends AudioProcessor {
     public void prepare(int sampleRate, int channels) {
         if (sampleRate > 0) this.sampleRate = sampleRate;
         this.channels = Math.max(1, Math.min(2, channels));
-        rebuild();
+        filter.setSections(buildSections(), this.channels);
     }
 
     @Override
@@ -54,31 +55,27 @@ final class DeHumProcessor extends AudioProcessor {
         filter.reset();
     }
 
-    @Override
-    public boolean isAudible() {
-        return isEnabled() && depth.getFloat() < -0.01f;
-    }
-
-    private void rebuild() {
-        float f0 = baseFreq.getCurrentRaw();
-        int k = Math.max(1, harmonics.getCurrentRaw());
-        float q = Math.max(1f, notchQ.getFloat());
-        float depthDb = Math.min(-0.1f, depth.getFloat());
-        java.util.List<float[]> sections = new java.util.ArrayList<>();
-        for (int i = 1; i <= k; i++) {
-            float f = f0 * i;
-            if (f >= sampleRate * 0.45f) break;
-            // A peaking EQ with negative gain is a controlled-depth notch:
-            // the magnitude dips exactly `depthDb` dB at f0.
-            sections.add(Dsp.rbjPeaking(sampleRate, f, q, depthDb));
+    float[][] buildSections() {
+        double f0 = baseFreq.getCurrentRaw();
+        int hCount = Math.max(1, Math.min(10, harmonics.getCurrentRaw()));
+        double qVal = Math.max(2.0, q.getFloat());
+        // Scale fundamental Q slightly with harmonic count so higher harmonic
+        // cascades tighten skirt selectivity across all harmonics (1..10).
+        double effBaseQ = Math.max(2.0, qVal * (0.85 + 0.025 * hCount));
+        List<float[]> secs = new ArrayList<>(hCount);
+        for (int h = 1; h <= hCount; h++) {
+            double fh = f0 * h;
+            if (fh >= sampleRate * 0.45) break;
+            secs.add(Dsp.rbjNotch(sampleRate, fh, h == 1 ? effBaseQ : qVal));
         }
-        filter.setSections(sections.toArray(new float[0][]), channels);
+        return secs.toArray(new float[0][]);
     }
 
     @Override
     public void processInPlace(float[] buf, int frames, int channels) {
-        if (buf == null || frames <= 0) return;
-        rebuild();
-        filter.process(buf, frames, Math.max(1, Math.min(2, channels)));
+        if (!isEnabled() || buf == null || frames <= 0) return;
+        this.channels = Math.max(1, Math.min(2, channels));
+        filter.setSections(buildSections(), this.channels);
+        filter.process(buf, frames, this.channels);
     }
 }

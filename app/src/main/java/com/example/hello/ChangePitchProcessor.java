@@ -54,18 +54,15 @@ final class ChangePitchProcessor extends AudioProcessor {
         return true;
     }
 
-    /**
-     * Offline-only effect: it is rendered through
-     * {@link #processOfflineRegion} instead of the realtime chain.
-     */
     @Override
     public void processInPlace(float[] buf, int frames, int channels) {
-        // No realtime path: the realtime rack skips offline-only processors.
+        // Offline-only effect: rendered through processOfflineRegion.
     }
 
     @Override
     public boolean isAudible() {
-        return isEnabled() && Math.abs(totalSemitones()) > 0.001f;
+        return isEnabled() && (Math.abs(totalSemitones()) > 0.001f
+                || preserveFormant.getCurrentRaw() != preserveFormant.defaultRaw);
     }
 
     private float totalSemitones() {

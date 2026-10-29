@@ -54,13 +54,9 @@ final class PaulstretchProcessor extends AudioProcessor {
         return true;
     }
 
-    /**
-     * Offline-only effect: it is rendered through
-     * {@link #processOfflineRegion} instead of the realtime chain.
-     */
     @Override
     public void processInPlace(float[] buf, int frames, int channels) {
-        // No realtime path: the realtime rack skips offline-only processors.
+        // Offline-only effect: rendered through processOfflineRegion.
     }
 
     @Override
@@ -74,17 +70,24 @@ final class PaulstretchProcessor extends AudioProcessor {
         double stretch = factor.getFloat();
         if (Math.abs(stretch - 1.0) < 1e-6) return in.clone();
 
+        reset();
         int targetWin = Math.max(512, (int) Math.round(resolution.getFloat() * sampleRate));
-        int fftSize = 1024;
-        while (fftSize < targetWin && fftSize < 8192) fftSize <<= 1;
-        int outHop = fftSize / 2;
+        int fftSize = 512;
+        while (fftSize < targetWin && fftSize < 65536) fftSize <<= 1;
+        // Shape the active window support by the exact continuous targetWin
+        // so every Time Resolution (0.05..1.00 s) produces a distinct window
+        // even when two settings share the same power-of-two FFT size.
+        int activeWin = Math.max(256, Math.min(fftSize, targetWin));
+        int outHop = Math.max(128, activeWin / 2);
         double inStep = outHop / Math.max(0.1, stretch);
-        int outFrames = Math.max(1, (int) Math.round(frames * stretch));
+        long maxSafeFrames = Math.max(frames * 16L, sampleRate * 120L);
+        int outFrames = (int) Math.max(1L, Math.min(maxSafeFrames, Math.round(frames * stretch)));
         float[] out = new float[outFrames * channels];
         float[] win = new float[fftSize];
-        for (int i = 0; i < fftSize; i++) {
-            float x = (2.0f * i / (fftSize - 1)) - 1.0f;
-            win[i] = (float) Math.pow(Math.max(0.0, 1.0 - x * x), 1.25);
+        int winPad = (fftSize - activeWin) / 2;
+        for (int i = 0; i < activeWin; i++) {
+            float x = (2.0f * i / Math.max(1, activeWin - 1)) - 1.0f;
+            win[winPad + i] = (float) Math.pow(Math.max(0.0, 1.0 - x * x), 1.25);
         }
 
         int bins = fftSize / 2 + 1;
@@ -96,7 +99,7 @@ final class PaulstretchProcessor extends AudioProcessor {
             double inPos = 0.0;
             int outPos = 0;
             while (outPos < outFrames) {
-                int baseIn = (int) Math.round(inPos);
+                int baseIn = (int) Math.round(inPos) - winPad;
                 for (int i = 0; i < fftSize; i++) {
                     int src = baseIn + i;
                     float s = (src >= 0 && src < frames) ? in[src * channels + c] : 0f;
@@ -118,8 +121,9 @@ final class PaulstretchProcessor extends AudioProcessor {
                     }
                 }
                 Dsp.fft(re, im, true);
-                for (int i = 0; i < fftSize && outPos + i < outFrames; i++) {
-                    out[(outPos + i) * channels + c] += re[i] * win[i] * 0.85f;
+                for (int i = 0; i < activeWin && outPos + i < outFrames; i++) {
+                    float w = win[winPad + i];
+                    out[(outPos + i) * channels + c] += re[winPad + i] * w * 0.85f;
                 }
                 inPos += inStep;
                 outPos += outHop;

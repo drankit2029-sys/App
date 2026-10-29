@@ -707,6 +707,8 @@ public class TeleValue extends LinearLayout {
             int v = valueScale > 1
                     ? (int) Math.round(Double.parseDouble(raw) * valueScale)
                     : Integer.parseInt(raw);
+            // Typed entry must honor the same step grid as scrubbing.
+            if (step > 1) v = Math.round(v / (float) step) * step;
             setValue(v, true);
         } catch (Exception ignored) {
         }

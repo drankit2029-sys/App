@@ -1,35 +1,28 @@
 package com.example.hello;
 
 /**
- * Stage 4 split-band de-esser: a band-pass sidechain extracts sibilance
- * energy, compares it (in dB) against the broadband energy and attenuates
- * the sibilant band when the relative ratio crosses the threshold.
- *
- * <p>Because the detection is relative, quiet whispers and loud shouts are
- * de-essed with the same strength.
+ * Stage 4 Dedicated De-Esser (Split-Band & Broadband) with Center Frequency,
+ * Q/Bandwidth, Threshold, Max Reduction dB, and Split-Band vs Broadband mode.
  */
 final class DeEsserProcessor extends AudioProcessor {
 
-    private static final String[] MODE_LABELS = {"Split-Band", "Wideband"};
+    private static final String[] MODE_LABELS = {"Split-Band", "Broadband"};
 
+    private final FxParameter freq = addParameter(FxParameter.intParam(
+            "deess_fc", "Frequency", " Hz", 3000, 12000, 100, 6800));
+    private final FxParameter q = addParameter(FxParameter.qParam(
+            "deess_q", "Bandwidth Q", 0.5f, 10f, 2.0f));
     private final FxParameter threshold = addParameter(FxParameter.dbParam(
             "deess_thresh", "Threshold", -48f, 0f, -18f));
-    private final FxParameter frequency = addParameter(FxParameter.intParam(
-            "deess_freq", "Center Frequency", " Hz", 3500, 12000, 100, 6800));
-    private final FxParameter q = addParameter(FxParameter.floatParam(
-            "deess_q", "Bandwidth / Q", "", 0.5f, 6f, 1.6f));
-    private final FxParameter maxCut = addParameter(FxParameter.dbParam(
-            "deess_max", "Max Reduction", 0f, 24f, 10f));
+    private final FxParameter maxReduction = addParameter(FxParameter.dbParam(
+            "deess_max", "Max Reduction", 0f, 24f, 12f));
     private final FxParameter mode = addParameter(FxParameter.enumParam(
-            "deess_mode", "Mode", MODE_LABELS, 0));
-    private final FxParameter listen = addParameter(FxParameter.boolParam(
-            "deess_listen", "Listen to Sidechain", false));
+            "deess_splitmode", "Mode", MODE_LABELS, 0));
 
     private int sampleRate = DspChain.SAMPLE_RATE;
-    private int channels = 2;
-    private BiquadFilter band = new BiquadFilter();
-    private BiquadFilter splitLow = new BiquadFilter();
-    private float reductionDb = 0f;
+    private final BiquadFilter bp = new BiquadFilter();
+    private float sibEnv = 0f;
+    private float fullEnv = 0f;
 
     DeEsserProcessor() {
     }
@@ -46,7 +39,7 @@ final class DeEsserProcessor extends AudioProcessor {
 
     @Override
     public String getDescription() {
-        return "Relative sibilance detection across the 3.5-12 kHz band";
+        return "Precision split-band or broadband sibilance compressor";
     }
 
     @Override
@@ -57,88 +50,73 @@ final class DeEsserProcessor extends AudioProcessor {
     @Override
     public void prepare(int sampleRate, int channels) {
         if (sampleRate > 0) this.sampleRate = sampleRate;
-        this.channels = Math.max(1, Math.min(2, channels));
-        rebuild();
+        rebuild(channels);
+    }
+
+    private void rebuild(int ch) {
+        double fc = Math.min(freq.getCurrentRaw(), sampleRate * 0.45);
+        bp.setSections(new float[][]{
+                Dsp.rbjBandPass(sampleRate, fc, q.getFloat())
+        }, Math.max(1, Math.min(2, ch)));
     }
 
     @Override
     public void reset() {
-        band.reset();
-        splitLow.reset();
-        reductionDb = 0f;
+        bp.reset();
+        sibEnv = 0f;
+        fullEnv = 0f;
     }
 
     @Override
     public boolean isAudible() {
-        return isEnabled();
-    }
-
-    private void rebuild() {
-        float f = frequency.getCurrentRaw();
-        float qq = Math.max(0.3f, q.getFloat());
-        band.setSections(new float[][]{Dsp.rbjBandPass(sampleRate, f, qq)},
-                channels);
-        splitLow.setSections(new float[][]{Dsp.rbjLowPass(sampleRate, f, 0.7071)},
-                channels);
+        return isEnabled() && maxReduction.getFloat() > 0.05f;
     }
 
     @Override
     public void processInPlace(float[] buf, int frames, int channels) {
-        if (buf == null || frames <= 0) return;
+        if (!isEnabled() || buf == null || frames <= 0) return;
         int ch = Math.max(1, Math.min(2, channels));
-        rebuild();
-        boolean wideband = mode.getEnumIndex() == 1;
-        float thresh = threshold.getFloat();
-        float maxCutDb = maxCut.getFloat();
+        rebuild(ch);
+        float[] sib = buf.clone();
+        bp.process(sib, frames, ch);
 
-        final int block = 64;
-        int offset = 0;
-        while (offset < frames) {
-            int n = Math.min(block, frames - offset);
-            float[] side = new float[n * ch];
-            System.arraycopy(buf, offset * ch, side, 0, side.length);
-            band.process(side, n, ch);
+        float threshLin = Dsp.dbToLin(threshold.getFloat());
+        float maxCut = Math.max(0f, maxReduction.getFloat());
+        boolean broadband = mode.getEnumIndex() == 1;
 
-            float[] lowBand = new float[n * ch];
-            System.arraycopy(buf, offset * ch, lowBand, 0, lowBand.length);
-            splitLow.process(lowBand, n, ch);
+        for (int f = 0; f < frames; f++) {
+            int idx = f * ch;
+            float sL = buf[idx];
+            float sR = ch == 2 ? buf[idx + 1] : sL;
+            float bL = sib[idx];
+            float bR = ch == 2 ? sib[idx + 1] : bL;
 
-            double fullEnergy = 0;
-            double bandEnergy = 0;
-            for (int i = 0; i < n * ch; i++) {
-                float orig = buf[offset * ch + i];
-                fullEnergy += (double) orig * orig;
-                bandEnergy += (double) side[i] * side[i];
+            float sibAbs = ch == 2 ? 0.5f * (Math.abs(bL) + Math.abs(bR)) : Math.abs(bL);
+            float fullAbs = ch == 2 ? 0.5f * (Math.abs(sL) + Math.abs(sR)) : Math.abs(sL);
+            sibEnv += (sibAbs > sibEnv ? 0.08f : 0.003f) * (sibAbs - sibEnv);
+            fullEnv += (fullAbs > fullEnv ? 0.04f : 0.0015f) * (fullAbs - fullEnv);
+
+            float rel = sibEnv / (fullEnv + 0.001f);
+            float cutDb = 0f;
+            if (sibEnv > threshLin * 0.25f && rel > 0.18f) {
+                float over = Math.min(1f,
+                        (sibEnv - threshLin * 0.25f) / Math.max(1e-5f, threshLin) + (rel - 0.18f));
+                cutDb = Math.min(maxCut, maxCut * over);
             }
-            float fullDb = Dsp.linToDb((float) Math.sqrt(fullEnergy / (n * ch)));
-            float bandDb = Dsp.linToDb((float) Math.sqrt(bandEnergy / (n * ch)));
-            float relative = bandDb - fullDb;
-
-            float target = 0f;
-            float effRel = relative + 12f; // calibrate relative sibilance crest
-            if (effRel > thresh) {
-                float over = effRel - thresh;
-                float amount = Math.min(maxCutDb, over * 0.55f);
-                target = -amount;
-            }
-            float step = (target - reductionDb) / n;
-            for (int f = 0; f < n; f++) {
-                reductionDb += step;
-                float g = Dsp.dbToLin(reductionDb);
-                int idx = (offset + f) * ch;
-                for (int c = 0; c < ch; c++) {
-                    if (listen.getBoolean()) {
-                        buf[idx + c] = side[f * ch + c];
-                    } else if (wideband) {
-                        buf[idx + c] *= g;
-                    } else {
-                        float low = lowBand[f * ch + c];
-                        float high = buf[idx + c] - low;
-                        buf[idx + c] = low + high * g;
-                    }
+            float gainLin = DspChain.fastDbToLin(-cutDb);
+            if (broadband) {
+                buf[idx] = sL * gainLin;
+                if (ch == 2) buf[idx + 1] = sR * gainLin;
+            } else {
+                // Phase-coherent bandpass sibilance subtraction so deess_q
+                // directly controls the width of the notched sibilant band
+                // and low frequencies pass untouched.
+                float cut = 1.0f - gainLin;
+                buf[idx] = sL - bL * cut;
+                if (ch == 2) {
+                    buf[idx + 1] = sR - bR * cut;
                 }
             }
-            offset += n;
         }
     }
 }

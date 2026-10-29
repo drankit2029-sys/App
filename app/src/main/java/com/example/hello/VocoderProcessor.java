@@ -1,39 +1,31 @@
 package com.example.hello;
 
 /**
- * Stage 6 channel vocoder: a logarithmically spaced band-pass filterbank
- * extracts the modulator's amplitude envelope per band and multiplies the
- * matching carrier band.
+ * Stage 6 Multi-Band Vocoder: splits the voice (modulator) into N logarithmically
+ * spaced band-pass channels (8..32 bands), tracks the amplitude envelope in
+ * each band, and imposes those envelopes onto an internal synth/noise carrier
+ * filtered through an identical band-pass bank.
  */
 final class VocoderProcessor extends AudioProcessor {
 
-    private static final String[] CARRIER_LABELS = {"Internal Synth Saw",
-            "Internal White Noise", "Right Channel"};
-    private static final int[] BAND_OPTIONS = {8, 16, 20, 24, 32, 40};
+    private static final String[] CARRIER_LABELS = {
+            "Sawtooth Synth", "White Noise", "Original + Synth"
+    };
 
-    private final FxParameter carrier = addParameter(FxParameter.enumParam(
-            "vc_carrier", "Carrier Source", CARRIER_LABELS, 0));
+    private final FxParameter bands = addParameter(FxParameter.intParam(
+            "vc_bands", "Vocoder Bands", "", 8, 32, 4, 16));
+    private final FxParameter carrierType = addParameter(FxParameter.enumParam(
+            "vc_carrier", "Carrier Type", CARRIER_LABELS, 0));
     private final FxParameter pitch = addParameter(FxParameter.intParam(
-            "vc_pitch", "Carrier Pitch", " Hz", 50, 400, 1, 110));
-    private final FxParameter bands = addParameter(FxParameter.enumParam(
-            "vc_bands", "Number of Bands",
-            new String[]{"8", "16", "20", "24", "32", "40"}, 2));
-    private final FxParameter release = addParameter(FxParameter.intParam(
-            "vc_release", "Envelope Release", "", 1, 120, 1, 20));
-    private final FxParameter originalMix = addParameter(FxParameter.intParam(
-            "vc_orig", "Original Audio Mix", "%", 0, 100, 1, 0));
+            "vc_pitch", "Carrier Pitch", " Hz", 50, 400, 5, 110));
     private final FxParameter noiseMix = addParameter(FxParameter.intParam(
-            "vc_noise", "Noise Mix", "%", 0, 100, 1, 15));
+            "vc_noise", "Noise Mix", "%", 0, 100, 5, 15));
+    private final FxParameter release = addParameter(FxParameter.floatParam(
+            "vc_release", "Envelope Speed", " ms", 1f, 120f, 10f));
 
     private int sampleRate = DspChain.SAMPLE_RATE;
-    private int lastBuiltSampleRate = 0;
-    private int channels = 2;
-    private BiquadFilter[] bandFilters = new BiquadFilter[0];
-    private BiquadFilter[] carrierFilters = new BiquadFilter[0];
-    private float[] bandCenters = new float[0];
-    private float[] envelopes = new float[0];
-    private double sawPhase = 0;
-    private long noiseState = 0x2545F4914F6CDD1DL;
+    private double carrierPhase = 0.0;
+    private long noiseState = 0x1234567L;
 
     VocoderProcessor() {
     }
@@ -50,7 +42,7 @@ final class VocoderProcessor extends AudioProcessor {
 
     @Override
     public String getDescription() {
-        return "Band-filterbank vocoder with an internal carrier";
+        return "8–32 band filterbank vocoder with internal synth & noise carrier";
     }
 
     @Override
@@ -61,109 +53,85 @@ final class VocoderProcessor extends AudioProcessor {
     @Override
     public void prepare(int sampleRate, int channels) {
         if (sampleRate > 0) this.sampleRate = sampleRate;
-        this.channels = Math.max(1, Math.min(2, channels));
-        rebuild();
     }
 
     @Override
     public void reset() {
-        java.util.Arrays.fill(envelopes, 0f);
-        for (BiquadFilter f : bandFilters) {
-            if (f != null) f.reset();
-        }
-        for (BiquadFilter f : carrierFilters) {
-            if (f != null) f.reset();
-        }
-        sawPhase = 0;
-    }
-
-    @Override
-    public boolean isAudible() {
-        return isEnabled() && originalMix.getCurrentRaw() < 100;
-    }
-
-    private void rebuild() {
-        int count = BAND_OPTIONS[Math.max(0, Math.min(BAND_OPTIONS.length - 1,
-                bands.getEnumIndex()))];
-        if (bandFilters.length == count && lastBuiltSampleRate == sampleRate) return;
-        lastBuiltSampleRate = sampleRate;
-        bandFilters = new BiquadFilter[count];
-        carrierFilters = new BiquadFilter[count];
-        bandCenters = new float[count];
-        envelopes = new float[count];
-        float lo = 80f;
-        float hi = Math.min(12000f, sampleRate * 0.45f);
-        for (int i = 0; i < count; i++) {
-            float f = (float) (lo * Math.pow(hi / lo, i / (double) (count - 1)));
-            bandCenters[i] = f;
-            bandFilters[i] = new BiquadFilter();
-            carrierFilters[i] = new BiquadFilter();
-            float[][] sec = new float[][]{
-                    Dsp.rbjBandPass(sampleRate, f, 4f)};
-            bandFilters[i].setSections(sec, 1);
-            carrierFilters[i].setSections(sec, 1);
-        }
-    }
-
-    @Override
-    public void processInPlace(float[] buf, int frames, int channels) {
-        if (buf == null || frames <= 0) return;
-        int ch = Math.max(1, Math.min(2, channels));
-        rebuild();
-        int count = bandFilters.length;
-        float origMix = originalMix.getCurrentRaw() / 100f;
-        float noiseMixPct = noiseMix.getCurrentRaw() / 100f;
-        float relCoef = 1f / Math.max(1, release.getCurrentRaw());
-        double sawInc = (double) pitch.getCurrentRaw() / sampleRate;
-        int carrierIdx = carrier.getEnumIndex();
-        float[] probe = new float[1];
-        float[] cProbe = new float[1];
-        for (int f = 0; f < frames; f++) {
-            float modulator = 0f;
-            for (int c = 0; c < ch; c++) modulator += buf[f * ch + c];
-            modulator /= ch;
-
-            float baseCarrier;
-            float white = nextNoise();
-            if (carrierIdx == 1) {
-                baseCarrier = white;
-            } else if (carrierIdx == 2) {
-                float rightOrMod = ch > 1 ? buf[f * ch + 1]
-                        : (float) (buf[f * ch] * Math.cos(2.0 * Math.PI * sawPhase));
-                baseCarrier = rightOrMod * (1f - noiseMixPct)
-                        + white * noiseMixPct;
-            } else {
-                float saw = (float) (2.0 * (sawPhase - Math.floor(sawPhase)) - 1.0);
-                baseCarrier = saw * (1f - noiseMixPct * 0.5f)
-                        + white * (noiseMixPct * 0.5f);
-            }
-
-            float wet = 0f;
-            for (int b = 0; b < count; b++) {
-                probe[0] = modulator;
-                bandFilters[b].process(probe, 1, 1);
-                float e = Math.abs(probe[0]);
-                envelopes[b] += (e - envelopes[b]) * relCoef;
-                cProbe[0] = baseCarrier;
-                carrierFilters[b].process(cProbe, 1, 1);
-                wet += cProbe[0] * envelopes[b] * 4.0f;
-            }
-            wet /= Math.max(1f, (float) Math.sqrt(count));
-            sawPhase += sawInc;
-            if (sawPhase > 1.0) sawPhase -= 1.0;
-
-            for (int c = 0; c < ch; c++) {
-                int idx = f * ch + c;
-                float original = buf[idx];
-                float mixed = wet * (1f - origMix) + original * origMix;
-                buf[idx] = mixed;
-            }
-        }
+        carrierPhase = 0.0;
+        noiseState = 0x1234567L;
     }
 
     private float nextNoise() {
         noiseState = noiseState * 6364136223846793005L + 1442695040888963407L;
-        int bits = (int) ((noiseState >>> 33) & 0x7FFFFFFF);
-        return (bits / (float) 0x7FFFFFFF) * 2f - 1f;
+        return ((int) (noiseState >>> 33)) / (float) (1 << 30);
+    }
+
+    @Override
+    public void processInPlace(float[] buf, int frames, int channels) {
+        if (!isEnabled() || buf == null || frames <= 0) return;
+        int ch = Math.max(1, Math.min(2, channels));
+        int sr = Math.max(8000, sampleRate);
+        int nBands = Math.max(8, Math.min(32, bands.getCurrentRaw()));
+        int cType = carrierType.getEnumIndex();
+        double f0 = pitch.getCurrentRaw();
+        float nMix = noiseMix.getCurrentRaw() / 100f;
+        // Convert Envelope Speed (1..120, where default 10 = 10 ms) to a real
+        // sample-rate-aware exponential release coefficient.
+        double relSec = Math.max(0.001, release.getFloat() * 0.001);
+        float relAlpha = 1.0f - (float) Math.exp(-1.0 / (sr * relSec));
+
+        float[] modMono = new float[frames];
+        float[] carMono = new float[frames];
+        double phaseInc = f0 / sr;
+        for (int f = 0; f < frames; f++) {
+            int idx = f * ch;
+            float m = ch == 2 ? 0.5f * (buf[idx] + buf[idx + 1]) : buf[idx];
+            modMono[f] = m;
+            float saw = (float) (2.0 * carrierPhase - 1.0);
+            carrierPhase += phaseInc;
+            if (carrierPhase >= 1.0) carrierPhase -= 1.0;
+            float noise = nextNoise() * 0.4f;
+            float c;
+            if (cType == 1) {
+                // White Noise mode retains a subtle pitched harmonic formant
+                // and noiseMix scaling so vc_pitch and vc_noise remain active.
+                c = noise * (0.65f + 0.35f * nMix) + 0.18f * saw;
+            } else if (cType == 2) {
+                // Original + Synth mode blends noiseMix into the synth carrier.
+                c = 0.45f * m + 0.45f * saw + nMix * noise * 0.5f;
+            } else {
+                c = (1f - nMix) * saw + nMix * noise;
+            }
+            carMono[f] = c;
+        }
+
+        float[] sumOut = new float[frames];
+        double fMin = 120.0, fMax = Math.min(8000.0, sr * 0.42);
+        double qBand = 3.5 + nBands * 0.12;
+        for (int b = 0; b < nBands; b++) {
+            double frac = b / (double) Math.max(1, nBands - 1);
+            double fc = fMin * Math.pow(fMax / fMin, frac);
+            float[] sec = Dsp.rbjBandPass(sr, fc, qBand);
+            BiquadFilter modBp = new BiquadFilter();
+            BiquadFilter carBp = new BiquadFilter();
+            modBp.setSections(new float[][]{sec}, 1);
+            carBp.setSections(new float[][]{sec}, 1);
+            float[] mBand = modMono.clone();
+            float[] cBand = carMono.clone();
+            modBp.process(mBand, frames, 1);
+            carBp.process(cBand, frames, 1);
+
+            float env = 0f;
+            for (int f = 0; f < frames; f++) {
+                float a = Math.abs(mBand[f]);
+                env += (a > env ? 0.08f : relAlpha) * (a - env);
+                sumOut[f] += cBand[f] * env * 4.5f;
+            }
+        }
+        float scale = (float) (1.2 / Math.sqrt(nBands / 8.0));
+        for (int f = 0; f < frames; f++) {
+            float y = Math.max(-0.98f, Math.min(0.98f, sumOut[f] * scale));
+            for (int c = 0; c < ch; c++) buf[f * ch + c] = y;
+        }
     }
 }

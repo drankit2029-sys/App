@@ -13,16 +13,17 @@ public final class BiquadFilter {
     private float[] z2 = new float[0];
     private int channels = 1;
 
-    /** Installs new coefficients, preserving state when the count matches. */
+    /**
+     * Installs new coefficients, preserving state for all surviving sections
+     * even when the cascade section count changes (e.g. live slope/order edits).
+     */
     public void setSections(float[][] newSections, int channels) {
         if (newSections == null) newSections = new float[0][];
         int ch = Math.max(1, Math.min(2, channels));
-        boolean realloc = this.sections.length != newSections.length
-                || this.channels != ch
-                || z1.length != newSections.length * ch;
-        if (!realloc) {
-            int n = Math.min(this.sections.length, newSections.length);
-            for (int s = 0; s < n; s++) {
+        boolean chChanged = this.channels != ch;
+        int common = chChanged ? 0 : Math.min(this.sections.length, newSections.length);
+        if (!chChanged) {
+            for (int s = 0; s < common; s++) {
                 if (isIdentity(newSections[s]) && !isIdentity(this.sections[s])) {
                     for (int c = 0; c < ch; c++) {
                         z1[s * ch + c] = 0f;
@@ -31,12 +32,20 @@ public final class BiquadFilter {
                 }
             }
         }
+        if (chChanged || this.sections.length != newSections.length
+                || z1.length != newSections.length * ch) {
+            float[] newZ1 = new float[newSections.length * ch];
+            float[] newZ2 = new float[newSections.length * ch];
+            if (common > 0) {
+                int copyLen = Math.min(z1.length, common * ch);
+                System.arraycopy(z1, 0, newZ1, 0, copyLen);
+                System.arraycopy(z2, 0, newZ2, 0, copyLen);
+            }
+            z1 = newZ1;
+            z2 = newZ2;
+        }
         this.sections = newSections;
         this.channels = ch;
-        if (realloc) {
-            z1 = new float[newSections.length * ch];
-            z2 = new float[newSections.length * ch];
-        }
     }
 
     private static boolean isIdentity(float[] c) {

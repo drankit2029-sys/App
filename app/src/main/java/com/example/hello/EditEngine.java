@@ -264,12 +264,25 @@ public final class EditEngine {
      */
     public static long saveTailFrom(File raw, long tailStartFrame, File tailOut)
             throws Exception {
+        return saveTailFrom(raw, tailStartFrame, tailOut, true);
+    }
+
+    /**
+     * Saves the tail starting at exactly {@code tailStartFrame} without
+     * snapping to a zero crossing. Length-changing edits read the selection
+     * with an exact end frame, so the tail must begin at that same frame or
+     * up to 240 frames are duplicated or dropped at the splice.
+     */
+    static long saveTailFrom(File raw, long tailStartFrame, File tailOut,
+                             boolean snap) throws Exception {
         FormatConverter.WavInfo info = FormatConverter.readFloatWav(raw);
         int ch = info.channels;
         long totalFrames = info.dataBytes / 4 / ch;
         try (RandomAccessFile raf = new RandomAccessFile(raw, "r")) {
-            tailStartFrame = Dsp.snapToZeroCrossing(raf, info.dataStart, ch,
-                    tailStartFrame, totalFrames, Dsp.CROSSFADE_FRAMES);
+            if (snap) {
+                tailStartFrame = Dsp.snapToZeroCrossing(raf, info.dataStart, ch,
+                        tailStartFrame, totalFrames, Dsp.CROSSFADE_FRAMES);
+            }
             long tailFrames = Math.max(0, totalFrames - tailStartFrame);
             long frameBytes = ch * 4L;
             long tailBytes = tailFrames * frameBytes;
@@ -664,7 +677,7 @@ public final class EditEngine {
         // region length.
         File tailTmp = new File(raw.getParentFile(), raw.getName() + ".lctail");
         try {
-            long tailFrames = saveTailFrom(raw, endFrame, tailTmp);
+            long tailFrames = saveTailFrom(raw, endFrame, tailTmp, false);
             try (RandomAccessFile raf = new RandomAccessFile(raw, "rw")) {
                 long writePos = info.dataStart + startFrame * ch * 4L;
                 raf.seek(writePos);
@@ -675,8 +688,13 @@ public final class EditEngine {
                 raf.write(Dsp.wavFloatHeader(ch, info.sampleRate,
                         newEndFrame * ch * 4L));
             }
-            long newTotal = startFrame + newFrames + tailFrames;
-            spliceTailAfterReplace(raw, startFrame + newFrames, tailTmp);
+            // spliceTailAfterReplace consumes the first `fade` frames of the
+            // tail in the crossfade, so the actual file length excludes them.
+            long newEnd = startFrame + newFrames;
+            int fade = (int) Math.min(Dsp.CROSSFADE_FRAMES,
+                    Math.min(newEnd, tailFrames));
+            long newTotal = newEnd + tailFrames - fade;
+            spliceTailAfterReplace(raw, newEnd, tailTmp);
             return newTotal;
         } finally {
             if (tailTmp.exists()) {
@@ -736,8 +754,9 @@ public final class EditEngine {
         boolean snapshotRecorded = true;
         if (undo != null) snapshotRecorded = undo.recordSnapshot(raw);
 
-        // Reset filter/envelope states first, then run two-pass measurement
-        // (Amplify, Normalize, Loudness) so scanned state is preserved.
+        // Configure the chain for the file's real sample rate, reset states,
+        // then run two-pass measurement so scanned state is preserved.
+        chain.setSampleRate(info.sampleRate);
         chain.reset();
         chain.prepareOffline(raw, startFrame, endFrame, info.sampleRate, ch);
         final int latencyFrames = Math.max(0, chain.getLatencyFrames());
@@ -945,12 +964,19 @@ public final class EditEngine {
         int chunk = 4096;
         float[] dry = new float[chunk * ch];
         float[] wet = new float[chunk * ch];
+        byte[] io = new byte[chunk * ch * 4];
+        java.nio.ByteBuffer ioBuf = java.nio.ByteBuffer.wrap(io)
+                .order(java.nio.ByteOrder.LITTLE_ENDIAN);
         long pos = tailStart;
         while (pos < tailEnd) {
             int want = (int) Math.min(chunk, tailEnd - pos);
+            int samples = want * ch;
             raf.seek(info.dataStart + pos * frameBytes);
-            raf.readFully(Dsp.toBytes(dry, 0, want * ch));
-            System.arraycopy(dry, 0, wet, 0, want * ch);
+            raf.readFully(io, 0, samples * 4);
+            ioBuf.clear();
+            ioBuf.limit(samples * 4);
+            ioBuf.asFloatBuffer().get(dry, 0, samples);
+            System.arraycopy(dry, 0, wet, 0, samples);
             chain.processInPlace(wet, want);
             for (int f = 0; f < want; f++) {
                 long absFrame = pos + f;

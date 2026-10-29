@@ -879,10 +879,22 @@ public final class ConversionJobs {
                                     / Math.max(1, info.channels);
                             if (totalFrames > 0) {
                                 DspChain chain = new DspChain(info.channels, cfg);
-                                EditEngine.applyDspToRangeWithProgress(
-                                        raw, 0, totalFrames, chain, pct -> {
-                                            if (cb != null) cb.onProgress(pct);
-                                        });
+                                chain.setSampleRate(info.sampleRate);
+                                long regionEnd = totalFrames;
+                                for (AudioProcessor proc : chain.offlineProcessors()) {
+                                    long next = EditEngine.applyLengthChangingEffectToRange(
+                                            raw, 0, regionEnd, proc, null);
+                                    if (next > 0) regionEnd = next;
+                                }
+                                if (chain.hasInPlaceProcessors()) {
+                                    DspChain inPlace = new DspChain(info.channels, cfg);
+                                    inPlace.setSampleRate(info.sampleRate);
+                                    inPlace.clearOfflineProcessors();
+                                    EditEngine.applyDspToRangeWithProgress(
+                                            raw, 0, regionEnd, inPlace, pct -> {
+                                                if (cb != null) cb.onProgress(pct);
+                                            });
+                                }
                                 e.dataBytes = RecordingEngine.payloadBytesOf(raw);
                             }
                         }
@@ -944,8 +956,20 @@ public final class ConversionJobs {
                                 / Math.max(1, info.channels);
                         if (totalFrames > 0) {
                             DspChain chain = new DspChain(info.channels, cfg);
-                            EditEngine.applyDspToRange(raw, 0, totalFrames,
-                                    chain, null);
+                            chain.setSampleRate(info.sampleRate);
+                            long regionEnd = totalFrames;
+                            for (AudioProcessor proc : chain.offlineProcessors()) {
+                                long next = EditEngine.applyLengthChangingEffectToRange(
+                                        raw, 0, regionEnd, proc, null);
+                                if (next > 0) regionEnd = next;
+                            }
+                            if (chain.hasInPlaceProcessors()) {
+                                DspChain inPlace = new DspChain(info.channels, cfg);
+                                inPlace.setSampleRate(info.sampleRate);
+                                inPlace.clearOfflineProcessors();
+                                EditEngine.applyDspToRange(raw, 0, regionEnd,
+                                        inPlace, null);
+                            }
                             e.dataBytes = RecordingEngine.payloadBytesOf(raw);
                         }
                     }

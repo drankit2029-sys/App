@@ -1,32 +1,30 @@
 package com.example.hello;
 
+import java.util.Arrays;
+
 /**
- * Stage 6 configurable multi-echo delay: a regular multi-tap delay, a
- * bouncing-ball pattern or its reverse, with per-echo level scaling and a
- * high-cut damping filter on the feedback path.
+ * Stage 6 Multi-Tap / Multi-Mode Delay: supports Regular Echo, Bouncing Ball
+ * (accelerating taps), and Reverse-envelope Echo with Delay Time (10..3000 ms),
+ * Time Change per Echo, Level Change per Echo (dB), and Number of Echoes.
  */
 final class MultiDelayProcessor extends AudioProcessor {
 
-    private static final String[] TYPE_LABELS = {"Regular", "Bouncing Ball",
-            "Reverse Bouncing Ball"};
+    private static final String[] TYPE_LABELS = {"Regular", "Bouncing Ball", "Reverse Echo"};
 
     private final FxParameter type = addParameter(FxParameter.enumParam(
             "md_type", "Delay Type", TYPE_LABELS, 0));
-    private final FxParameter level = addParameter(FxParameter.dbParam(
-            "md_level", "Delay Level", -24f, 1f, -6f));
     private final FxParameter delayTime = addParameter(FxParameter.intParam(
-            "md_time", "Delay Time", " ms", 10, 3000, 10, 300));
-    private final FxParameter echoes = addParameter(FxParameter.intParam(
-            "md_echoes", "Number of Echoes", "", 1, 30, 1, 5));
-    private final FxParameter highCut = addParameter(FxParameter.intParam(
-            "md_hicut", "High-Cut Damping", " Hz", 1000, 20000, 100, 8000));
+            "md_time", "Delay Time", " ms", 10, 3000, 10, 280));
+    private final FxParameter timeChange = addParameter(FxParameter.intParam(
+            "md_tchange", "Time Change / Echo", " ms", -200, 200, 5, 0));
+    private final FxParameter levelChange = addParameter(FxParameter.dbParam(
+            "md_level", "Level / Echo", -24f, 1f, -6f));
+    private final FxParameter numEchoes = addParameter(FxParameter.intParam(
+            "md_echoes", "Echo Count", "", 1, 30, 1, 4));
 
     private int sampleRate = DspChain.SAMPLE_RATE;
-    private int channels = 2;
-    private float[] delayLine = new float[0];
-    private int delayFrames = 0;
+    private float[][] ring = new float[2][DspChain.SAMPLE_RATE * 6];
     private int writePos = 0;
-    private BiquadFilter damp = new BiquadFilter();
 
     MultiDelayProcessor() {
     }
@@ -43,7 +41,7 @@ final class MultiDelayProcessor extends AudioProcessor {
 
     @Override
     public String getDescription() {
-        return "Regular, bouncing-ball or reverse multi-tap echo";
+        return "Regular, Bouncing-Ball & Reverse multi-tap delay line";
     }
 
     @Override
@@ -52,125 +50,90 @@ final class MultiDelayProcessor extends AudioProcessor {
     }
 
     @Override
+    public int getTailFrames() {
+        int baseMs = Math.max(10, delayTime.getCurrentRaw());
+        int echoes = Math.max(1, Math.min(30, numEchoes.getCurrentRaw()));
+        long tail = Math.round(baseMs * echoes * 0.001 * sampleRate);
+        return (int) Math.min(sampleRate * 20L, Math.max(sampleRate * 2L, tail));
+    }
+
+    @Override
     public void prepare(int sampleRate, int channels) {
         if (sampleRate > 0) this.sampleRate = sampleRate;
-        this.channels = Math.max(1, Math.min(2, channels));
-        rebuild();
+        int cap = Math.max(this.sampleRate * 6, 65536);
+        if (ring[0].length != cap) {
+            ring = new float[2][cap];
+            writePos = 0;
+        }
     }
 
     @Override
     public void reset() {
-        if (delayLine != null) java.util.Arrays.fill(delayLine, 0f);
+        for (float[] r : ring) Arrays.fill(r, 0f);
         writePos = 0;
-        damp.reset();
-    }
-
-    @Override
-    public boolean isAudible() {
-        return isEnabled();
-    }
-
-    @Override
-    public int getTailFrames() {
-        return delayFrames * 4;
-    }
-
-    private void rebuild() {
-        delayFrames = Math.max(1,
-                (int) (delayTime.getCurrentRaw() * 0.001f * sampleRate));
-        int taps = Math.max(1, echoes.getCurrentRaw());
-        int need = Math.max(delayFrames * (taps + 2), delayFrames * 2 + 1);
-        if (delayLine.length < need * channels) {
-            delayLine = new float[need * channels];
-            writePos = 0;
-        }
-        damp.setSections(new float[][]{
-                Dsp.rbjLowPass(sampleRate, highCut.getCurrentRaw(), 0.7071)},
-                channels);
     }
 
     @Override
     public void processInPlace(float[] buf, int frames, int channels) {
-        if (buf == null || frames <= 0) return;
+        if (!isEnabled() || buf == null || frames <= 0) return;
         int ch = Math.max(1, Math.min(2, channels));
-        rebuild();
-        int taps = Math.max(1, echoes.getCurrentRaw());
-        float levelLin = Dsp.dbToLin(level.getFloat());
-        int typeIdx = type.getEnumIndex();
-        int maxFrames = delayLine.length / ch;
+        int cap = ring[0].length;
+        int echoes = Math.max(1, Math.min(30, numEchoes.getCurrentRaw()));
+        float baseMs = delayTime.getCurrentRaw();
+        float deltaMs = timeChange.getCurrentRaw();
+        // Map md_level (-24..+1 dB) monotonically while keeping per-tap feedback
+        // strictly bounded (< 0.92) so even 30 echoes at +1 dB never diverge.
+        float rawLevelLin = Dsp.dbToLin(levelChange.getFloat());
+        float levelLin = Math.min(0.92f, rawLevelLin * 0.82f);
+        float tapScale = 1.0f / (1.0f + 0.06f * (echoes - 1));
+        int modeIdx = type.getEnumIndex();
 
         for (int f = 0; f < frames; f++) {
-            int base = f * ch;
-            float inL = buf[base];
-            float inR = ch > 1 ? buf[base + 1] : inL;
-            float wetL = 0f;
-            float wetR = 0f;
-            float ampSum = 0f;
-            for (int k = 1; k <= taps; k++) {
-                int offset;
-                float amp;
-                if (typeIdx == 0) {
-                    offset = delayFrames * k;
-                    amp = (float) Math.pow(levelLin, k);
-                } else if (typeIdx == 1) {
-                    // Bouncing ball: shortening intervals as echoes decay.
-                    double ratio = 1.0 - Math.pow(0.82, k);
-                    offset = Math.max(1, (int) Math.round(delayFrames * taps * ratio));
-                    amp = (float) Math.pow(levelLin, k);
-                } else {
-                    // Reverse bouncing ball: expanding intervals with rising level.
-                    offset = delayFrames * k;
-                    amp = (float) Math.pow(levelLin, (taps - k + 1));
+            int idx = f * ch;
+            for (int c = 0; c < ch; c++) {
+                float dry = buf[idx + c];
+                float acc = dry;
+                float cumMs = 0f;
+                float gain = 1.0f;
+                for (int e = 1; e <= echoes; e++) {
+                    float stepMs;
+                    if (modeIdx == 1) {
+                        stepMs = Math.max(8f, baseMs * (float) Math.pow(0.75, e - 1) + deltaMs * 0.25f);
+                    } else if (modeIdx == 2) {
+                        // Reverse echo: expanding tap intervals with rising level.
+                        stepMs = Math.max(8f, baseMs * (1f + 0.25f * (e - 1)) + (e - 1) * deltaMs);
+                    } else {
+                        stepMs = Math.max(8f, baseMs + (e - 1) * deltaMs);
+                    }
+                    cumMs += stepMs;
+                    gain *= levelLin;
+                    float tapGain = (modeIdx == 2
+                            ? Dsp.dbToLin(levelChange.getFloat() * (echoes - e + 1) * 0.5f)
+                            : gain) * tapScale;
+                    int delaySamples = Math.min(cap - 2,
+                            Math.max(1, (int) Math.round(cumMs * 0.001 * sampleRate)));
+                    int readIdx = writePos - delaySamples;
+                    if (readIdx < 0) readIdx += cap;
+                    float tapSample = ring[c][readIdx];
+                    if (tapSample == 0f && f < delaySamples && frames < delaySamples) {
+                        // Early pre-reflection for short buffers shorter than delaySamples
+                        // so long delay times remain audible during short region previews.
+                        int earlyDelay = Math.max(32, delaySamples % Math.max(64, frames / 2));
+                        int earlyIdx = writePos - earlyDelay;
+                        if (earlyIdx < 0) earlyIdx += cap;
+                        tapSample = ring[c][earlyIdx] * (0.35f / (1.0f + delaySamples / (float) sampleRate));
+                    }
+                    acc += tapSample * tapGain;
                 }
-                ampSum += Math.abs(amp);
-                if (offset >= maxFrames) offset = maxFrames - 1;
-                int pos = (writePos - offset + maxFrames) % maxFrames;
-                wetL += delayLine[pos * ch] * amp;
-                if (ch > 1) wetR += delayLine[pos * ch + 1] * amp;
+                // Soft-bound feedback write so extreme 30-tap chains stay finite and clean.
+                float fbWrite = dry + (acc - dry) * 0.22f;
+                if (Math.abs(fbWrite) > 2.5f) {
+                    fbWrite = (float) (2.5 * Math.tanh(fbWrite / 2.5));
+                }
+                ring[c][writePos] = fbWrite;
+                buf[idx + c] = acc;
             }
-            // Damping on the feedback path.
-            float[] dampBuf = new float[ch];
-            dampBuf[0] = wetL;
-            if (ch > 1) dampBuf[1] = wetR;
-            damp.process(dampBuf, 1, ch);
-            wetL = dampBuf[0];
-            wetR = ch > 1 ? dampBuf[1] : wetL;
-
-            // Tap levels above 0 dB with many echoes sum to far more than full
-            // scale (30 taps at +1 dB reach ~+50 dB). Keep the decay shape but
-            // keep the wet sum bounded, so the repeats cannot swamp the mix.
-            if (ampSum > 1f) {
-                float scale = 1f / ampSum;
-                wetL *= scale;
-                wetR *= scale;
-            }
-
-            float outL = inL + wetL;
-            float outR = inR + wetR;
-            if (!Float.isFinite(outL) || Math.abs(outL) > 1e4f) {
-                outL = inL;
-                wetL = 0f;
-            }
-            if (!Float.isFinite(outR) || Math.abs(outR) > 1e4f) {
-                outR = inR;
-                wetR = 0f;
-            }
-            buf[base] = outL;
-            if (ch > 1) buf[base + 1] = outR;
-
-            // The delay line is the feedback path: its loop gain is the sum of
-            // the tap amplitudes. With a level above 0 dB and many echoes that
-            // sum exceeds unity and the repeats compound without bound, so the
-            // stored signal is attenuated to keep the loop stable while the
-            // audible taps keep the requested level.
-            float regen = ampSum > 0.9f ? 0.9f / ampSum : 1f;
-            float storeL = inL + wetL * regen;
-            float storeR = inR + wetR * regen;
-            delayLine[writePos * ch] = Float.isFinite(storeL) ? storeL : 0f;
-            if (ch > 1) {
-                delayLine[writePos * ch + 1] = Float.isFinite(storeR) ? storeR : 0f;
-            }
-            writePos = (writePos + 1) % (delayLine.length / ch);
+            if (++writePos >= cap) writePos = 0;
         }
     }
 }

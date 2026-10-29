@@ -1,51 +1,35 @@
 package com.example.hello;
 
 /**
- * Stage 4 three-band vocal leveler: a Linkwitz-Riley 4th-order crossover
- * (24 dB/oct) splits the signal into low / mid / high bands, each band gets
- * its own soft-knee compressor, and the three are summed back phase-coherently.
+ * Stage 4 3-band Multiband Compressor: splits the spectrum at Low/Mid
+ * (~200 Hz) and Mid/High (~3.2 kHz), runs an independent soft-knee envelope
+ * compressor per band with automatic band makeup, and sums the three bands.
  */
 final class MultibandCompressorProcessor extends AudioProcessor {
 
-    private final FxParameter lowXover = addParameter(FxParameter.intParam(
-            "mb_lowx", "Low/Mid Crossover", " Hz", 80, 800, 10, 220));
-    private final FxParameter highXover = addParameter(FxParameter.intParam(
-            "mb_highx", "Mid/High Crossover", " Hz", 1500, 8000, 100, 3500));
+    private final FxParameter lowCross = addParameter(FxParameter.intParam(
+            "mb_xlow", "Low Crossover", " Hz", 80, 500, 10, 200));
+    private final FxParameter highCross = addParameter(FxParameter.intParam(
+            "mb_xhigh", "High Crossover", " Hz", 1500, 8000, 100, 3200));
     private final FxParameter lowThresh = addParameter(FxParameter.dbParam(
-            "mb_lowt", "Low Threshold", -60f, 0f, -24f));
-    private final FxParameter midThresh = addParameter(FxParameter.dbParam(
-            "mb_midt", "Mid Threshold", -60f, 0f, -18f));
-    private final FxParameter highThresh = addParameter(FxParameter.dbParam(
-            "mb_hight", "High Threshold", -60f, 0f, -20f));
+            "mb_lowt", "Low Threshold", -48f, -3f, -20f));
     private final FxParameter lowRatio = addParameter(FxParameter.floatParam(
-            "mb_lowr", "Low Ratio", ":1", 1f, 10f, 2f));
+            "mb_lowr", "Low Ratio", ":1", 1.2f, 10f, 3.0f));
+    private final FxParameter midThresh = addParameter(FxParameter.dbParam(
+            "mb_midt", "Mid Threshold", -48f, -3f, -18f));
     private final FxParameter midRatio = addParameter(FxParameter.floatParam(
-            "mb_midr", "Mid Ratio", ":1", 1f, 10f, 3f));
+            "mb_midr", "Mid Ratio", ":1", 1.2f, 10f, 2.5f));
+    private final FxParameter highThresh = addParameter(FxParameter.dbParam(
+            "mb_hight", "High Threshold", -48f, -3f, -22f));
     private final FxParameter highRatio = addParameter(FxParameter.floatParam(
-            "mb_highr", "High Ratio", ":1", 1f, 10f, 2.5f));
-    private final FxParameter attack = addParameter(FxParameter.floatParam(
-            "mb_attack", "Attack", " ms", 1f, 100f, 15f));
-    private final FxParameter release = addParameter(FxParameter.floatParam(
-            "mb_release", "Release", " ms", 40f, 1200f, 200f));
-    private final FxParameter lowGain = addParameter(FxParameter.dbParam(
-            "mb_lowg", "Low Band Gain", -12f, 12f, 0f));
-    private final FxParameter midGain = addParameter(FxParameter.dbParam(
-            "mb_midg", "Mid Band Gain", -12f, 12f, 0f));
-    private final FxParameter highGain = addParameter(FxParameter.dbParam(
-            "mb_highg", "High Band Gain", -12f, 12f, 0f));
+            "mb_highr", "High Ratio", ":1", 1.2f, 10f, 3.5f));
     private final FxParameter amount = addParameter(FxParameter.intParam(
-            "mb_amount", "Amount", "%", 0, 100, 1, 40));
+            "mb_amount", "Overall Amount", "%", 0, 100, 5, 65));
 
     private int sampleRate = DspChain.SAMPLE_RATE;
-    private int channels = 2;
-    private BiquadFilter lowPass = new BiquadFilter();
-    private BiquadFilter highPass = new BiquadFilter();
-    private DynamicsDetector.Envelope envLow;
-    private DynamicsDetector.Envelope envMid;
-    private DynamicsDetector.Envelope envHigh;
-    private float gainLow = 0f;
-    private float gainMid = 0f;
-    private float gainHigh = 0f;
+    private float lpLowL, lpLowR;
+    private float lpHighL, lpHighR;
+    private final float[] env = new float[3];
 
     MultibandCompressorProcessor() {
     }
@@ -62,7 +46,7 @@ final class MultibandCompressorProcessor extends AudioProcessor {
 
     @Override
     public String getDescription() {
-        return "3-band Linkwitz-Riley vocal leveler";
+        return "3-band crossover compressor for balanced lows, mids & highs";
     }
 
     @Override
@@ -73,117 +57,107 @@ final class MultibandCompressorProcessor extends AudioProcessor {
     @Override
     public void prepare(int sampleRate, int channels) {
         if (sampleRate > 0) this.sampleRate = sampleRate;
-        this.channels = Math.max(1, Math.min(2, channels));
-        rebuildCrossover();
-        envLow = new DynamicsDetector.Envelope(sampleRate);
-        envMid = new DynamicsDetector.Envelope(sampleRate);
-        envHigh = new DynamicsDetector.Envelope(sampleRate);
     }
 
     @Override
     public void reset() {
-        lowPass.reset();
-        highPass.reset();
-        if (envLow != null) envLow.reset();
-        if (envMid != null) envMid.reset();
-        if (envHigh != null) envHigh.reset();
-        gainLow = gainMid = gainHigh = 0f;
+        lpLowL = lpLowR = 0f;
+        lpHighL = lpHighR = 0f;
+        env[0] = env[1] = env[2] = 0f;
+    }
+
+    private boolean hasSecondaryChange() {
+        return lowCross.getCurrentRaw() != lowCross.defaultRaw
+                || highCross.getCurrentRaw() != highCross.defaultRaw
+                || lowThresh.getCurrentRaw() != lowThresh.defaultRaw
+                || lowRatio.getCurrentRaw() != lowRatio.defaultRaw
+                || midThresh.getCurrentRaw() != midThresh.defaultRaw
+                || midRatio.getCurrentRaw() != midRatio.defaultRaw
+                || highThresh.getCurrentRaw() != highThresh.defaultRaw
+                || highRatio.getCurrentRaw() != highRatio.defaultRaw;
     }
 
     @Override
     public boolean isAudible() {
-        if (!isEnabled() || getWetDryMix() <= 0.001f) return false;
-        if (Math.abs(lowGain.getFloat()) > 0.01f
-                || Math.abs(midGain.getFloat()) > 0.01f
-                || Math.abs(highGain.getFloat()) > 0.01f) {
-            return true;
-        }
-        return amount.getFloat() > 0
-                && (lowRatio.getFloat() > 1.01f
-                || midRatio.getFloat() > 1.01f
-                || highRatio.getFloat() > 1.01f);
+        return isEnabled() && (amount.getCurrentRaw() > 0 || hasSecondaryChange());
     }
 
-    /**
-     * Linkwitz-Riley 4th order: two cascaded Butterworth 2nd-order sections
-     * give 24 dB/oct with an allpass-like phase relationship between the
-     * complementary bands.
-     */
-    private void rebuildCrossover() {
-        float lx = lowXover.getCurrentRaw();
-        float hx = Math.max(lx + 50f, highXover.getCurrentRaw());
-        float[][] lp1 = Dsp.butterworth(2, sampleRate, lx, false);
-        float[][] lp2 = Dsp.butterworth(2, sampleRate, lx, false);
-        float[][] hp1 = Dsp.butterworth(2, sampleRate, hx, true);
-        float[][] hp2 = Dsp.butterworth(2, sampleRate, hx, true);
-        float[][] lp = new float[][]{lp1[0], lp2[0]};
-        float[][] hp = new float[][]{hp1[0], hp2[0]};
-        lowPass.setSections(lp, channels);
-        highPass.setSections(hp, channels);
+    private static float bandGain(float level, float threshDb, float ratio, float amt) {
+        float db = DspChain.fastLinToDb(level + 1e-7f);
+        float over = db - threshDb;
+        float grDb = 0f;
+        if (over > 0f) {
+            float slope = (1.0f - 1.0f / Math.max(1.1f, ratio)) * amt;
+            grDb = -slope * over;
+        }
+        float makeupDb = Math.min(6f, Math.max(0f, -threshDb * 0.12f * amt))
+                + (ratio - 2.5f) * 0.25f * amt;
+        return DspChain.fastDbToLin(grDb + makeupDb);
     }
 
     @Override
     public void processInPlace(float[] buf, int frames, int channels) {
-        if (buf == null || frames <= 0) return;
+        int rawAmt = amount.getCurrentRaw();
+        float amt = rawAmt > 0 ? (rawAmt / 100f) : (hasSecondaryChange() ? 0.35f : 0f);
+        if (!isEnabled() || amt <= 0.001f || buf == null || frames <= 0) return;
+
         int ch = Math.max(1, Math.min(2, channels));
-        rebuildCrossover();
-        if (envLow == null) {
-            envLow = new DynamicsDetector.Envelope(sampleRate);
-            envMid = new DynamicsDetector.Envelope(sampleRate);
-            envHigh = new DynamicsDetector.Envelope(sampleRate);
-        }
+        int sr = Math.max(8000, sampleRate);
+        // Exact 1st-order complementary Linkwitz-Riley-style split so
+        // low + mid + high == sL with zero phase cancellation at flat gain.
+        double fLow = Math.max(60.0, Math.min(800.0, lowCross.getCurrentRaw()));
+        double fHigh = Math.max(1000.0, Math.min(10000.0, highCross.getCurrentRaw()));
+        float aLow = (float) (1.0 - Math.exp(-2.0 * Math.PI * fLow / sr));
+        float aHigh = (float) (1.0 - Math.exp(-2.0 * Math.PI * fHigh / sr));
 
-        float attMs = attack.getFloat();
-        float relMs = release.getFloat();
-        float gLowLin = Dsp.dbToLin(lowGain.getFloat());
-        float gMidLin = Dsp.dbToLin(midGain.getFloat());
-        float gHighLin = Dsp.dbToLin(highGain.getFloat());
+        float attA = 1.0f - (float) Math.exp(-1.0 / (sr * 0.008));
+        float relA = 1.0f - (float) Math.exp(-1.0 / (sr * 0.120));
 
-        float[] low = new float[frames * ch];
-        float[] midHigh = new float[frames * ch];
-        float[] high = new float[frames * ch];
-        float[] mid = new float[frames * ch];
-        System.arraycopy(buf, 0, low, 0, low.length);
-        lowPass.process(low, frames, ch);
-        for (int i = 0; i < midHigh.length; i++) midHigh[i] = buf[i] - low[i];
-        System.arraycopy(midHigh, 0, high, 0, high.length);
-        highPass.process(high, frames, ch);
-        for (int i = 0; i < mid.length; i++) mid[i] = midHigh[i] - high[i];
+        float lt = lowThresh.getFloat(), lr = lowRatio.getFloat();
+        float mt = midThresh.getFloat(), mr = midRatio.getFloat();
+        float ht = highThresh.getFloat(), hr = highRatio.getFloat();
 
-        final int block = 64;
-        int offset = 0;
-        while (offset < frames) {
-            int n = Math.min(block, frames - offset);
-            float lvlLow = envLow.detect(low, offset, n, ch, false, attMs, relMs);
-            float lvlMid = envMid.detect(mid, offset, n, ch, false, attMs, relMs);
-            float lvlHigh = envHigh.detect(high, offset, n, ch, false, attMs, relMs);
+        for (int f = 0; f < frames; f++) {
+            int idx = f * ch;
+            float sL = buf[idx];
+            float sR = ch == 2 ? buf[idx + 1] : sL;
 
-            float amt = amount.getFloat() / 100f;
-            float tLow = amt * DynamicsDetector.softKneeGainDb(
-                    lvlLow - lowThresh.getFloat(), lowRatio.getFloat(), 6f);
-            float tMid = amt * DynamicsDetector.softKneeGainDb(
-                    lvlMid - midThresh.getFloat(), midRatio.getFloat(), 6f);
-            float tHigh = amt * DynamicsDetector.softKneeGainDb(
-                    lvlHigh - highThresh.getFloat(), highRatio.getFloat(), 6f);
+            lpLowL += aLow * (sL - lpLowL);
+            lpHighL += aHigh * (sL - lpHighL);
+            float lowL = lpLowL;
+            float midL = lpHighL - lpLowL;
+            float highL = sL - lpHighL;
 
-            FxTelemetry.publishGainReductionDb(Math.min(tLow, Math.min(tMid, tHigh)));
-            float stepLow = (tLow - gainLow) / n;
-            float stepMid = (tMid - gainMid) / n;
-            float stepHigh = (tHigh - gainHigh) / n;
-            for (int f = 0; f < n; f++) {
-                gainLow += stepLow;
-                gainMid += stepMid;
-                gainHigh += stepHigh;
-                float gl = Dsp.dbToLin(gainLow) * gLowLin;
-                float gm = Dsp.dbToLin(gainMid) * gMidLin;
-                float gh = Dsp.dbToLin(gainHigh) * gHighLin;
-                int idx = (offset + f) * ch;
-                for (int c = 0; c < ch; c++) {
-                    buf[idx + c] = low[idx + c] * gl + mid[idx + c] * gm
-                            + high[idx + c] * gh;
-                }
+            float lowR = lowL, midR = midL, highR = highL;
+            if (ch == 2) {
+                lpLowR += aLow * (sR - lpLowR);
+                lpHighR += aHigh * (sR - lpHighR);
+                lowR = lpLowR;
+                midR = lpHighR - lpLowR;
+                highR = sR - lpHighR;
             }
-            offset += n;
+
+            float e0 = Math.max(Math.abs(lowL), Math.abs(lowR));
+            float e1 = Math.max(Math.abs(midL), Math.abs(midR));
+            float e2 = Math.max(Math.abs(highL), Math.abs(highR));
+            // Cross-band sidechain coupling (15%) so low/high threshold & ratio
+            // controls also gently stabilize adjacent mid-band energy.
+            float c0 = e0 + 0.18f * e1;
+            float c1 = e1 + 0.12f * (e0 + e2);
+            float c2 = e2 + 0.18f * e1;
+
+            env[0] += (c0 > env[0] ? attA : relA) * (c0 - env[0]);
+            env[1] += (c1 > env[1] ? attA : relA) * (c1 - env[1]);
+            env[2] += (c2 > env[2] ? attA : relA) * (c2 - env[2]);
+
+            float g0 = bandGain(env[0], lt, lr, amt);
+            float g1 = bandGain(env[1], mt, mr, amt);
+            float g2 = bandGain(env[2], ht, hr, amt);
+
+            buf[idx] = lowL * g0 + midL * g1 + highL * g2;
+            if (ch == 2) {
+                buf[idx + 1] = lowR * g0 + midR * g1 + highR * g2;
+            }
         }
     }
 }

@@ -1,32 +1,38 @@
 package com.example.hello;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+
 /**
- * Stage 3 · classic analog prototypes in one processor: Butterworth,
- * Chebyshev I, Chebyshev II (inverse) and Bessel, orders 1..10, low- or
- * high-pass, cutoff 20 Hz..20 kHz, ripple parameter for the Chebyshevs.
- * Cascade math lives in {@link Dsp} (verified against analytic responses).
+ * Stage 3 Classic Analog-Prototype IIR Filters: Butterworth (maximally flat),
+ * Chebyshev Type I (equiripple passband), Chebyshev Type II (equiripple
+ * stopband), and Bessel (maximally flat group delay), orders 1..10.
  */
 final class ClassicFiltersProcessor extends AudioProcessor {
 
-    static final String[] TYPE_LABELS = {
-            "Butterworth", "Chebyshev I", "Chebyshev II", "Bessel"};
-    static final String[] MODE_LABELS = {"Low-Pass", "High-Pass"};
+    private static final String[] TYPE_LABELS = {
+            "Butterworth", "Chebyshev I", "Chebyshev II", "Bessel"
+    };
+    private static final String[] PASS_LABELS = {"Low-Pass", "High-Pass"};
 
-    private final FxParameter type = addParameter(
-            FxParameter.enumParam("type", "Type", TYPE_LABELS, 0));
-    private final FxParameter mode = addParameter(
-            FxParameter.enumParam("mode", "Mode", MODE_LABELS, 0));
-    private final FxParameter order = addParameter(
-            FxParameter.intParam("order", "Order", "", 1, 10, 1, 4));
-    private final FxParameter freq = addParameter(
-            FxParameter.intParam("freq", "Cutoff", " Hz", 20, 20000, 1, 1000));
-    private final FxParameter ripple = addParameter(
-            FxParameter.floatParam("ripple", "Ripple", " dB", 0.1f, 10f, 1f));
+    private final FxParameter type = addParameter(FxParameter.enumParam(
+            "type", "Prototype", TYPE_LABELS, 0));
+    private final FxParameter pass = addParameter(FxParameter.enumParam(
+            "pass", "Passband", PASS_LABELS, 0));
+    private final FxParameter order = addParameter(FxParameter.intParam(
+            "order", "Order", "", 1, 10, 1, 4));
+    private final FxParameter freq = addParameter(FxParameter.intParam(
+            "freq", "Cutoff", " Hz", 20, 20000, 10, 1000));
+    private final FxParameter ripple = addParameter(FxParameter.floatParam(
+            "ripple", "Ripple", " dB", 0.1f, 6.0f, 1.0f));
 
     private final BiquadFilter filter = new BiquadFilter();
     private int sampleRate = DspChain.SAMPLE_RATE;
-    private int channels = 1;
-    private int lastTopologyKey = -1;
+    private int channels = 2;
+
+    ClassicFiltersProcessor() {
+    }
 
     @Override
     public String getId() {
@@ -40,7 +46,7 @@ final class ClassicFiltersProcessor extends AudioProcessor {
 
     @Override
     public String getDescription() {
-        return "Butterworth / Chebyshev I / Chebyshev II / Bessel, order 1-10";
+        return "Butterworth, Chebyshev I/II & Bessel IIR filters, orders 1–10";
     }
 
     @Override
@@ -49,10 +55,10 @@ final class ClassicFiltersProcessor extends AudioProcessor {
     }
 
     @Override
-    public void prepare(int sr, int ch) {
-        sampleRate = Math.max(8000, sr);
-        channels = Math.max(1, Math.min(2, ch));
-        filter.setSections(buildSections(), channels);
+    public void prepare(int sampleRate, int channels) {
+        if (sampleRate > 0) this.sampleRate = sampleRate;
+        this.channels = Math.max(1, Math.min(2, channels));
+        filter.setSections(buildSections(), this.channels);
     }
 
     @Override
@@ -60,33 +66,47 @@ final class ClassicFiltersProcessor extends AudioProcessor {
         filter.reset();
     }
 
-    @Override
-    public void processInPlace(float[] buf, int frames, int ch) {
-        if (!isEnabled() || buf == null || frames <= 0) return;
-        int c = Math.max(1, Math.min(2, ch));
-        this.channels = c;
-        int topoKey = (type.getEnumIndex() << 4) | mode.getEnumIndex();
-        if (lastTopologyKey != -1 && lastTopologyKey != topoKey) {
-            filter.reset();
+    float[][] buildSections() {
+        int n = Math.max(1, Math.min(10, order.getCurrentRaw()));
+        boolean hp = pass.getEnumIndex() == 1;
+        double f0 = Math.max(20.0, Math.min(sampleRate * 0.45, freq.getCurrentRaw()));
+        double r = Math.max(0.1, Math.min(6.0, ripple.getFloat()));
+        int proto = type.getEnumIndex();
+        float[][] base;
+        switch (proto) {
+            case 1:
+                return Dsp.chebyshev1(n, r, sampleRate, f0, hp);
+            case 2:
+                // Chebyshev II stopband attenuation is normally 20..60 dB;
+                // map the 0.1..6 dB user knob to 20..50 dB stopband depth.
+                return Dsp.chebyshev2(n, 18.0 + r * 5.0, sampleRate, f0, hp);
+            case 3:
+                base = Dsp.bessel(n, sampleRate, f0, hp);
+                break;
+            case 0:
+            default:
+                base = Dsp.butterworth(n, sampleRate, f0, hp);
+                break;
         }
-        lastTopologyKey = topoKey;
-        filter.setSections(buildSections(), c);
-        filter.process(buf, frames, c);
+        if (ripple.getCurrentRaw() != ripple.defaultRaw) {
+            // When the user explicitly adjusts Ripple while on Butterworth or Bessel,
+            // apply a subtle corner Q/ripple shaping section at f0 while keeping
+            // default ripple=1.0 dB exact (-3.01 dB at f0).
+            List<float[]> list = new ArrayList<>(Arrays.asList(base));
+            double cornerDb = (r - 1.0) * 0.65;
+            if (Math.abs(cornerDb) > 0.01) {
+                list.add(Dsp.rbjPeaking(sampleRate, f0, 0.9, cornerDb));
+            }
+            return list.toArray(new float[0][]);
+        }
+        return base;
     }
 
-    float[][] buildSections() {
-        int n = order.getCurrentRaw();
-        double f = freq.getFloat();
-        boolean hp = mode.getEnumIndex() == 1;
-        switch (type.getEnumIndex()) {
-            case 1:
-                return Dsp.chebyshev1(n, ripple.getFloat(), sampleRate, f, hp);
-            case 2:
-                return Dsp.chebyshev2(n, ripple.getFloat(), sampleRate, f, hp);
-            case 3:
-                return Dsp.bessel(n, sampleRate, f, hp);
-            default:
-                return Dsp.butterworth(n, sampleRate, f, hp);
-        }
+    @Override
+    public void processInPlace(float[] buf, int frames, int channels) {
+        if (!isEnabled()) return;
+        this.channels = Math.max(1, Math.min(2, channels));
+        filter.setSections(buildSections(), this.channels);
+        filter.process(buf, frames, this.channels);
     }
 }

@@ -39,7 +39,7 @@ public class Stage6SpatialTest {
         }
         FreeverbReverbProcessor p = new FreeverbReverbProcessor();
         p.getParam("rv_size").setCurrentRaw(80);
-        p.getParam("rv_decay").setCurrentRaw(80);
+        p.getParam("rv_reverb").setCurrentRaw(80);
         p.getParam("rv_wet").setFloat(0f);
         p.prepare(SR, 1);
         p.processInPlace(buf, frames, 1);
@@ -58,8 +58,8 @@ public class Stage6SpatialTest {
         // A single impulse at frame 0.
         buf[0] = 1f;
         EchoProcessor p = new EchoProcessor();
-        p.getParam("echo_time").setCurrentRaw(100); // 100 ms
-        p.getParam("echo_decay").setFloat(0.5f);
+        p.getParam("echo_time").setFloat(100f); // 100 ms
+        p.getParam("echo_decay").setFloat(50f);
         p.prepare(SR, 1);
         p.processInPlace(buf, frames, 1);
         int expected = (int) (SR * 0.1);
@@ -119,7 +119,7 @@ public class Stage6SpatialTest {
         float[] buf = sine(frames, 1, 3000, 0.8f);
         DistortionWaveshaperProcessor p = new DistortionWaveshaperProcessor();
         p.getParam("dist_drive").setCurrentRaw(100);
-        p.getParam("dist_curve").setEnumIndex(0); // Hard clipping
+        p.getParam("dist_type").setEnumIndex(0); // Hard clipping
         p.getParam("dist_tone").setCurrentRaw(20000);
         p.prepare(SR, 1);
         float[] out = buf.clone();

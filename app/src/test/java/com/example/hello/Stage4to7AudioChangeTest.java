@@ -160,7 +160,7 @@ public class Stage4to7AudioChangeTest {
                 9600, 2);
 
         EchoProcessor echo = new EchoProcessor();
-        echo.getParam("echo_time").setCurrentRaw(50);
+        echo.getParam("echo_time").setFloat(50f);
         assertModifies("Echo", echo, sine(9600, 2, 800, 0.4f), 9600, 2);
 
         StereoImagingProcessor stereo = new StereoImagingProcessor();

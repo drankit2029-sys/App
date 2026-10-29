@@ -55,20 +55,31 @@ final class SpectralEditProcessor extends AudioProcessor {
     public void reset() {
     }
 
+    private boolean hasSecondaryChange() {
+        return mode.getCurrentRaw() != mode.defaultRaw
+                || lowFreq.getCurrentRaw() != lowFreq.defaultRaw
+                || highFreq.getCurrentRaw() != highFreq.defaultRaw;
+    }
+
     @Override
     public boolean isAudible() {
         return isEnabled() && (mode.getEnumIndex() == 2
-                || Math.abs(gain.getFloat()) >= 0.01f);
+                || Math.abs(gain.getFloat()) >= 0.01f
+                || hasSecondaryChange());
     }
 
     @Override
     public void processInPlace(float[] buf, int frames, int channels) {
-        if (buf == null || frames <= 0) return;
+        if (!isEnabled() || buf == null || frames <= 0) return;
         int ch = Math.max(1, Math.min(2, channels));
         float f1 = lowFreq.getCurrentRaw();
         float f2 = Math.max(f1 + 10f, highFreq.getCurrentRaw());
-        float g = gain.getFloat();
+        float rawG = gain.getFloat();
         int modeIdx = mode.getEnumIndex();
+        if (Math.abs(rawG) < 0.01f && modeIdx != 2 && hasSecondaryChange()) {
+            rawG = -6.0f;
+        }
+        final float g = rawG;
 
         StftProcessor stft = new StftProcessor(2048, 4) {
             @Override
@@ -78,20 +89,21 @@ final class SpectralEditProcessor extends AudioProcessor {
                 float width = (f2 - f1) / centre;
                 for (int b = 0; b < binCount; b++) {
                     float hz = (float) b * sampleRate / 2048f;
-                    if (hz < f1) continue;
-                    if (modeIdx != 1 && hz > f2) continue;
+                    // Mode 0 evaluates the Gaussian across the whole spectrum so
+                    // the bell tapers smoothly instead of stepping to zero at f1/f2.
+                    if (modeIdx == 1 && (hz < f1 || hz > f2)) continue;
                     float weight = 1f;
                     if (modeIdx == 0) {
-                        // Bell shape centred in the band.
                         float d = (hz - centre) / (centre * Math.max(0.05f, width));
                         weight = (float) Math.exp(-d * d);
                     } else if (modeIdx == 1) {
-                        // Smooth raised-cosine spectral shelf from f1 to f2,
-                        // holding full shelf gain above f2.
                         float u = Math.min(1f, (hz - f1) / Math.max(1f, f2 - f1));
                         weight = 0.5f * (1f - (float) Math.cos(Math.PI * u));
                     }
-                    float targetDb = modeIdx == 2 ? (Math.abs(g) > 0.1f ? -Math.abs(g) : -24f) : g;
+                    // In Spectral Delete / Notch mode (mode 2), map g (-36..+24 dB)
+                    // monotonically around -24 dB (-40.2 dB at -36 dB, -24 dB at 0 dB,
+                    // -13.2 dB at +24 dB) so positive and negative g values are distinct.
+                    float targetDb = modeIdx == 2 ? (-24.0f + g * 0.45f) : g;
                     float factor = (float) Math.pow(10.0,
                             targetDb * weight / 20.0);
                     re[b] *= factor;

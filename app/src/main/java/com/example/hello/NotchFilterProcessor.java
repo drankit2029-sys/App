@@ -68,11 +68,12 @@ final class NotchFilterProcessor extends AudioProcessor {
         int p = preset.getEnumIndex();
         double dialHz = freq.getFloat();
         double f;
-        if (p == 1) {
+        if (p == 1 && Math.abs(dialHz - 50.0) < 0.5) {
             f = 50.0;
-        } else if (p == 2) {
+        } else if (p == 2 && Math.abs(dialHz - 60.0) < 0.5) {
             f = 60.0;
         } else {
+            // A user-adjusted Frequency must win over a stale Quick Pick.
             f = dialHz;
         }
         return new float[][]{Dsp.rbjNotch(sampleRate, f, q.getFloat())};

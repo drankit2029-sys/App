@@ -2,7 +2,7 @@ package com.example.hello;
 
 /**
  * Stage 7 audio generator: renders tone, chirp, white / pink / brown noise,
- * silence, a rhythm track, a plucked string or DTMF tones into the region.
+ * silence, a rhythm track, or ITU-T Q.23 DTMF tones into the region.
  *
  * <p>The generator writes over the selected region, so it behaves like
  * Audacity's Generate command rather than a filter.
@@ -11,8 +11,10 @@ final class AudioGeneratorTool extends AudioProcessor {
 
     private static final String[] TYPE_LABELS = {"Tone & Chirp", "Noise",
             "Silence", "Rhythm Track", "DTMF"};
-    private static final String[] WAVE_LABELS = {"Sine", "Square", "Sawtooth",
-            "Triangle", "Square No-Alias"};
+    // Tone/chirp reads the first name; Noise reads the color after the slash.
+    private static final String[] WAVE_LABELS = {
+            "Sine / White", "Square / Pink", "Sawtooth / Brown",
+            "Triangle / Blue", "No-Alias / Velvet"};
 
     private final FxParameter type = addParameter(FxParameter.enumParam(
             "gen_type", "Generator", TYPE_LABELS, 0));
@@ -103,13 +105,9 @@ final class AudioGeneratorTool extends AudioProcessor {
         return true;
     }
 
-    /**
-     * Offline-only effect: it is rendered through
-     * {@link #processOfflineRegion} instead of the realtime chain.
-     */
     @Override
     public void processInPlace(float[] buf, int frames, int channels) {
-        // No realtime path: the realtime rack skips offline-only processors.
+        // Offline-only effect: rendered through processOfflineRegion.
     }
 
     @Override
@@ -120,10 +118,24 @@ final class AudioGeneratorTool extends AudioProcessor {
     @Override
     public float[] processOfflineRegion(float[] in, int frames, int channels) {
         if (in == null || frames <= 0) return in;
+        reset();
         int ch = Math.max(1, Math.min(2, channels));
-        int outFrames = Math.max(1, Math.round(duration.getFloat() * sampleRate));
-        float[] out = new float[outFrames * ch];
         int typeIdx = type.getEnumIndex();
+        // If the user adjusted Tempo (BPM) or DTMF Sequence while Generator is
+        // still on Tone & Chirp (0), honor those controls directly.
+        if (typeIdx == 0) {
+            if (sequence.getCurrentRaw() != sequence.defaultRaw) {
+                typeIdx = 4;
+            } else if (tempo.getCurrentRaw() != tempo.defaultRaw) {
+                typeIdx = 3;
+            }
+        }
+        // Silence replaces the selection with silence of the same length;
+        // every other generator honors its explicit Duration dial.
+        int outFrames = typeIdx == 2
+                ? Math.max(1, frames)
+                : Math.max(1, Math.round(duration.getFloat() * sampleRate));
+        float[] out = new float[outFrames * ch];
         float amp = amplitude.getCurrentRaw() / 100f;
         switch (typeIdx) {
             case 0: // Tone & chirp
@@ -158,8 +170,6 @@ final class AudioGeneratorTool extends AudioProcessor {
     }
 
     private void renderNoise(float[] out, int frames, int ch, float amp) {
-        // The noise type is taken from the waveform selector: square stands
-        // for white, triangle for pink and sawtooth for brown.
         int waveIdx = wave.getEnumIndex();
         float pinkB0 = 0f;
         float pinkB1 = 0f;
@@ -170,20 +180,16 @@ final class AudioGeneratorTool extends AudioProcessor {
             if (waveIdx == 0) {
                 s = white;
             } else if (waveIdx == 1) {
-                // Pink (Paul Kellet's economy filter).
                 pinkB0 = 0.99765f * pinkB0 + white * 0.0990460f;
                 pinkB1 = 0.96300f * pinkB1 + white * 0.2965164f;
                 s = (pinkB0 + pinkB1 + white * 0.1848f) * 0.4f;
             } else if (waveIdx == 2) {
-                // Brown (leaky integrator).
                 brown = (brown + white * 0.02f) * 0.998f;
                 s = brown * 3.5f;
             } else if (waveIdx == 3) {
-                // Blue / differentiated high-frequency noise.
                 s = (white - pinkB0) * 0.5f;
                 pinkB0 = white;
             } else {
-                // Velvet / sparse impulse noise.
                 s = Math.abs(white) > 0.85f ? (white > 0f ? 1f : -1f) : 0f;
             }
             for (int c = 0; c < ch; c++) out[f * ch + c] = s * amp;
@@ -191,23 +197,26 @@ final class AudioGeneratorTool extends AudioProcessor {
     }
 
     private void renderRhythm(float[] out, int frames, int ch, float amp) {
-        int bpm = tempo.getCurrentRaw();
-        int framesPerBeat = Math.max(1, (int) (60.0 * sampleRate / bpm));
-        int index = 0;
+        int bpm = Math.max(30, Math.min(300, tempo.getCurrentRaw()));
+        int framesPerBeat = Math.max(1, (int) Math.round(60.0 * sampleRate / bpm));
+        double pingHz = startFreq.getCurrentRaw() != startFreq.defaultRaw
+                ? startFreq.getCurrentRaw() : 880.0;
         for (int f = 0; f < frames; f++) {
             int pos = f % framesPerBeat;
             float s = 0f;
             if (pos < framesPerBeat / 8) {
-                // A short damped sine "ping".
                 double t = pos / (double) sampleRate;
-                s = (float) (Math.sin(2 * Math.PI * 880 * t)
+                s = (float) (Math.sin(2 * Math.PI * pingHz * t)
                         * Math.exp(-t * 40.0));
             }
             for (int c = 0; c < ch; c++) out[f * ch + c] = s * amp * 0.8f;
-            index++;
         }
     }
 
+    /**
+     * Renders exact ITU-T Q.23 dual-tone multi-frequency (DTMF) keypad digits:
+     * 1-3 -> row 697 Hz, 4-6 -> row 770 Hz, 7-9 -> row 852 Hz, 0 -> row 941 Hz / col 1336 Hz.
+     */
     private void renderDtmf(float[] out, int frames, int ch, float amp) {
         int seqVal = Math.max(0, sequence.getCurrentRaw());
         String digitsStr = String.valueOf(seqVal);
@@ -222,9 +231,16 @@ final class AudioGeneratorTool extends AudioProcessor {
                 continue; // inter-digit silence gap
             }
             int dChar = digitsStr.charAt(slotIdx) - '0';
-            int digit = ((dChar >= 0 && dChar <= 9 ? dChar : 0) + slotIdx + (seqVal & 3)) & 0x0F;
-            int row = (digit / 4) & 3;
-            int col = digit & 3;
+            int row;
+            int col;
+            if (dChar >= 1 && dChar <= 9) {
+                row = (dChar - 1) / 3;
+                col = (dChar - 1) % 3;
+            } else {
+                // Digit '0' sits on row 3 (941 Hz), col 1 (1336 Hz)
+                row = 3;
+                col = 1;
+            }
             double f1 = rows[row];
             double f2 = cols[col];
             double t = posInSlot / (double) sampleRate;
@@ -267,4 +283,3 @@ final class AudioGeneratorTool extends AudioProcessor {
         return (bits / (float) 0x7FFFFFFF) * 2f - 1f;
     }
 }
-

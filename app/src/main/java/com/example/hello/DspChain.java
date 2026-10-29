@@ -59,7 +59,7 @@ public final class DspChain {
                 "Cutoff", 40, 160, 10, 80, " Hz"),
         VOCAL_PRESENCE("presence", "Vocal Presence & Air",
                 "Clarity boost in the 3.5 kHz articulation band",
-                "Boost", 0, 100, 5, 45, "%"),
+                "Presence", 0, 100, 5, 45, "%"),
         WARMTH_BODY("warmth", "Warmth & Chest Body",
                 "Rich low-mid contour around 180 Hz for thin mics",
                 "Warmth", 0, 100, 5, 40, "%"),
@@ -73,16 +73,16 @@ public final class DspChain {
         // ---- Stage 3 EQ & filter suite (ids match the processor ids) ----
         PARAMETRIC_EQ6("eq6", "6-Band Parametric EQ",
                 "Console EQ: low/high cut plus four musical bell/shelf bands",
-                "Output", -1800, 1800, 50, 0, " dB"),
+                "Output Gain", -1800, 1800, 50, 0, " dB"),
         GRAPHIC_EQ("geq", "Graphic EQ",
                 "10-band ISO or 31-band 1/3-octave sliders",
-                "Output", -1800, 1800, 50, 0, " dB"),
+                "Output Gain", -1800, 1800, 50, 0, " dB"),
         FILTER_CURVE_EQ("fcurve", "Filter Curve EQ",
                 "Draw an arbitrary response curve; linear-phase FIR match",
-                "Output", -1800, 1800, 50, 0, " dB"),
+                "Output Gain", -1800, 1800, 50, 0, " dB"),
         BASS_TREBLE("basstreble", "Bass & Treble",
                 "Classic 250 Hz / 3.5 kHz tone stack with volume",
-                "Bass", -3000, 3000, 100, 0, " dB"),
+                "Bass (250 Hz)", -3000, 3000, 100, 0, " dB"),
         HIGH_PASS_FILTER("highpass", "High-Pass Filter",
                 "Rumble & plosive removal, 6-48 dB/oct Butterworth",
                 "Cutoff", 20, 20000, 10, 80, " Hz"),
@@ -91,10 +91,10 @@ public final class DspChain {
                 "Cutoff", 20, 20000, 10, 12000, " Hz"),
         NOTCH_FILTER("notch", "Notch Filter",
                 "Surgical null for mains hum and resonances",
-                "Frequency", 20, 20000, 10, 60, " Hz"),
+                "Center Freq", 20, 20000, 10, 60, " Hz"),
         SHELF_FILTER("shelf", "Shelf Filter",
                 "Broad high/low tonal shelf with adjustable slope",
-                "Gain", -2400, 2400, 10, 0, " dB"),
+                "Shelf Gain", -2400, 2400, 10, 0, " dB"),
         CLASSIC_FILTERS("classic", "Classic Filters",
                 "Butterworth / Chebyshev I / Chebyshev II / Bessel",
                 "Cutoff", 20, 20000, 10, 1000, " Hz"),
@@ -102,22 +102,22 @@ public final class DspChain {
         // ---- Stage 4 dynamics & leveling suite ----
         AMPLIFY("amplify", "Amplify",
                 "Two-pass gain with an automatic non-clipping peak scan",
-                "Gain", -5000, 5000, 100, 0, " dB"),
+                "Amplification", -5000, 5000, 100, 0, " dB"),
         NORMALIZE("normalize", "Normalize",
                 "Peak or RMS normalization with DC-offset removal",
-                "Target", -6000, 0, 100, -100, " dBFS"),
+                "Target Peak", -6000, 0, 100, -100, " dB"),
         LOUDNESS_NORMALIZATION("loudness", "Loudness Normalization",
                 "EBU R128 K-weighted LUFS normalization with true-peak ceiling",
-                "Target", -7000, 0, 100, -1600, " LUFS"),
+                "Target Loudness", -7000, 0, 100, -1600, " dB"),
         DYNAMIC_COMPRESSOR("dyncomp", "Compressor",
                 "Soft-knee dynamics compressor with noise-floor freeze",
                 "Threshold", -6000, -100, 100, -1800, " dB"),
         MULTIBAND_COMPRESSOR("mbcomp", "Multiband Compressor",
                 "3-band Linkwitz-Riley vocal leveler",
-                "Amount", 0, 100, 1, 40, " %"),
+                "Overall Amount", 0, 100, 1, 65, "%"),
         BRICKWALL_LIMITER_STAGE4("bricklim", "Brickwall Limiter",
                 "3 ms look-ahead limiter with soft/hard ceiling",
-                "Ceiling", -1500, -5, 5, -30, " dBFS"),
+                "Ceiling", -1500, -5, 5, -30, " dB"),
         NOISE_GATE_EXPANDER("gateexp", "Gate / Expander",
                 "Hysteresis gate and downward expander with sidechain HPF",
                 "Threshold", -9600, -600, 100, -4200, " dB"),
@@ -126,59 +126,59 @@ public final class DspChain {
                 "Threshold", -4800, 0, 100, -1800, " dB"),
         AUTO_DUCK("autoduck", "Auto Duck",
                 "Speech-triggered ducking envelope with pause bridging",
-                "Duck", -3600, 0, 100, -1200, " dB"),
+                "Duck Amount", -3600, 0, 100, -1200, " dB"),
 
         // ---- Stage 5 restoration suite ----
         SPECTRAL_NOISE_REDUCTION("specnr", "Spectral Noise Reduction",
                 "STFT spectral subtraction against a learned noise profile",
-                "Reduction", 0, 4800, 100, 1200, " dB"),
+                "Noise Reduction", 0, 4800, 100, 1800, " dB"),
         CLICK_REMOVAL("declick", "Click Removal",
                 "Detects and repairs isolated digital clicks and pops",
                 "Threshold", 1, 900, 1, 200, ""),
         CLIP_FIX("clipfix", "Clip Fix",
                 "Cubic-spline de-clipper with headroom attenuation",
-                "Threshold", 80, 100, 1, 95, " %"),
+                "Clipping Threshold", 80, 100, 1, 95, "%"),
         REPAIR("repair", "Repair",
                 "LPC short-glitch interpolator for dropouts and damage",
-                "Order", 8, 32, 1, 16, ""),
+                "Prediction Order", 8, 32, 1, 16, ""),
         DE_HUM("dehum", "De-Hum",
                 "Notch cascade at the mains frequency and its harmonics",
-                "Frequency", 45, 65, 1, 50, " Hz"),
+                "Base Frequency", 45, 65, 1, 50, " Hz"),
         PLOSIVE_SUPPRESSOR("plosive", "Plosive & Breath Suppressor",
                 "Dynamic sub-140 Hz plosive tamer with breath attenuation",
-                "Sensitivity", 0, 100, 1, 50, " %"),
+                "Plosive Cut Sensitivity", 0, 100, 1, 60, "%"),
 
         // ---- Stage 6 spatial, distortion & modulation suite ----
         FREEVERB_REVERB("reverb", "Studio Reverb",
                 "Freeverb-style stereo reverb with damping and width",
-                "Room Size", 0, 100, 1, 55, " %"),
+                "Room Size", 0, 100, 1, 55, "%"),
         MULTI_DELAY("multidelay", "Multi-Echo Delay",
                 "Regular, bouncing-ball or reverse multi-tap echo",
-                "Delay", 10, 3000, 10, 300, " ms"),
+                "Delay Time", 10, 3000, 10, 280, " ms"),
         ECHO("echo", "Echo",
                 "Simple feedback echo with adjustable decay",
-                "Delay", 10, 5000, 10, 500, " ms"),
+                "Delay Time", 1000, 500000, 1000, 40000, " ms"),
         STEREO_IMAGING("stereoimg", "Stereo Imaging",
                 "Pan, mid/side width and phase controls",
-                "Pan", -100, 100, 1, 0, " %"),
+                "Pan (L ↔ R)", -100, 100, 1, 0, "%"),
         DISTORTION("distort", "Distortion",
                 "11-mode waveshaper with oversampling and tone control",
-                "Drive", 0, 100, 1, 50, " %"),
+                "Drive", 0, 100, 1, 45, "%"),
         PHASER("phaser", "Phaser",
                 "Multi-stage all-pass phaser with LFO and feedback",
-                "Mix", 0, 100, 1, 50, " %"),
+                "Dry/Wet", 0, 100, 1, 50, "%"),
         CHORUS_FLANGER("chorus", "Chorus & Flanger",
                 "Modulated delay with cubic Hermite fractional reads",
-                "Mix", 0, 100, 1, 50, " %"),
+                "Wet/Dry Mix", 0, 100, 1, 50, "%"),
         TREMOLO("tremolo", "Tremolo",
                 "Amplitude modulation with five LFO waveforms",
-                "Depth", 0, 100, 1, 40, " %"),
+                "Depth", 0, 100, 1, 50, "%"),
         WAHWAH("wah", "Wahwah",
                 "Swept resonant band-pass with envelope auto-wah",
-                "Depth", 0, 100, 1, 70, " %"),
+                "Depth", 0, 100, 1, 70, "%"),
         VOCODER("vocoder", "Vocoder",
                 "Band-filterbank vocoder with an internal carrier",
-                "Pitch", 50, 400, 1, 110, " Hz"),
+                "Carrier Pitch", 50, 400, 1, 110, " Hz"),
 
         // ---- Stage 7 time, utility, generator & analyzer suite ----
         CHANGE_PITCH("changepitch", "Change Pitch",
@@ -186,22 +186,22 @@ public final class DspChain {
                 "Semitones", -2400, 2400, 50, 0, ""),
         CHANGE_TEMPO("tempo", "Change Tempo",
                 "WSOLA time stretch without changing the pitch",
-                "Change", -7500, 30000, 100, 0, " %"),
+                "Percent Change", -7500, 30000, 100, 0, "%"),
         CHANGE_SPEED_AND_PITCH("speedpitch", "Change Speed and Pitch",
                 "Varispeed resampler: duration and pitch change together",
-                "Speed", 25, 400, 5, 100, " %"),
+                "Speed Multiplier", 25, 400, 5, 100, "x"),
         SLIDING_STRETCH("slidestretch", "Sliding Stretch",
                 "Continuous tempo and pitch ramp across the region",
-                "Initial", -7500, 30000, 100, 0, " %"),
+                "Initial Tempo Change", -7500, 30000, 100, 0, "%"),
         PAULSTRETCH("paulstretch", "Paulstretch",
                 "Extreme random-phase ambient time stretch",
-                "Factor", 150, 10000, 50, 800, " %"),
+                "Stretch Factor", 150, 10000, 50, 800, "x"),
         FADE("fade", "Fade",
                 "Fade in, fade out, studio fade or custom curve",
-                "Length", 1, 100, 1, 20, " %"),
+                "Length", 1, 100, 1, 20, "%"),
         TIMELINE_UTILITY("timeline", "Timeline Utility",
                 "Invert polarity, reverse the region or repeat it",
-                "Repeats", 1, 50, 1, 2, ""),
+                "Number of Repeats", 1, 50, 1, 2, ""),
         TRUNCATE_SILENCE("truncsil", "Truncate Silence",
                 "Automatic pause shortener with truncate or compress",
                 "Threshold", -8000, -2000, 100, -4000, " dB"),
@@ -210,7 +210,7 @@ public final class DspChain {
                 "Gain", -3600, 2400, 100, 0, " dB"),
         AUDIO_GENERATOR("generator", "Audio Generator",
                 "Tone, chirp, noise, rhythm or DTMF generator",
-                "Amplitude", 0, 100, 1, 50, " %");
+                "Amplitude", 0, 100, 1, 50, "%");
 
         public final String id;
         public final String title;
@@ -528,8 +528,12 @@ public final class DspChain {
             warmthPct = 0;
             gatePct = 0;
             limiterPct = 0;
+            java.util.Set<EffectType> seenLegacy = new java.util.HashSet<>();
             for (EffectSlot s : slots) {
                 if (!s.enabled || s.wetDry <= 0.001f) continue;
+                // The canonical legacy processor binds to the first slot of
+                // each type; a later duplicate must not overwrite its value.
+                if (s.type.isLegacyStage() && !seenLegacy.add(s.type)) continue;
                 switch (s.type) {
                     case LOW_CUT_HPF:
                         hpfEnabled = s.value > 0;
@@ -726,9 +730,12 @@ public final class DspChain {
                 return true;
             }
             for (EffectSlot s : slots) {
-                if (s != null && s.enabled && s.type != null
-                        && !s.type.isLegacyStage() && s.wetDry > 0.001f) {
-                    if (isStage3SlotAudible(s)) {
+                if (s != null && s.enabled && s.type != null && s.wetDry > 0.001f) {
+                    if (s.type.isLegacyStage()) {
+                        if (!s.extraParams.isEmpty() && isProcessorAudible(s)) {
+                            return true;
+                        }
+                    } else if (isStage3SlotAudible(s)) {
                         return true;
                     }
                 }
@@ -737,11 +744,10 @@ public final class DspChain {
         }
 
         /**
-         * True when a Stage 3 slot's current parameters actually alter the
-         * signal. A flat EQ / 0 dB shelf is enabled but inaudible; treating it
-         * as active would arm save-time baking and push undo state that
-         * {@link DspChain#isActive()} (via the processors' isAudible())
-         * refuses to record.
+         * True when a slot's current parameters actually alter the signal.
+         * Untouched neutral defaults (0 dB gain, flat bands) return false,
+         * while any non-default primary or secondary parameter adjustment that
+         * makes the processor audible returns true.
          */
         private static boolean isStage3SlotAudible(EffectSlot s) {
             switch (s.type) {
@@ -749,25 +755,25 @@ public final class DspChain {
                     if (s.value != 0) return true;
                     if (s.extraParams.getOrDefault("b1f", 80) > 20) return true;
                     if (s.extraParams.getOrDefault("b6f", 20000) < 20000) return true;
-                    return s.extraParams.getOrDefault("b2g", 0) != 0
+                    if (s.extraParams.getOrDefault("b2g", 0) != 0
                             || s.extraParams.getOrDefault("b3g", 0) != 0
                             || s.extraParams.getOrDefault("b4g", 0) != 0
-                            || s.extraParams.getOrDefault("b5g", 0) != 0;
+                            || s.extraParams.getOrDefault("b5g", 0) != 0) {
+                        return true;
+                    }
+                    return isProcessorAudible(s);
                 case GRAPHIC_EQ:
                     if (s.value != 0) return true;
-                    int count = s.extraParams.getOrDefault("bands", 0) == 1 ? 31 : 10;
-                    for (int i = 0; i < count; i++) {
+                    for (int i = 0; i < 31; i++) {
                         if (s.extraParams.getOrDefault("g" + i, 0) != 0) return true;
                     }
-                    return false;
+                    return isProcessorAudible(s);
                 case FILTER_CURVE_EQ:
                     if (s.value != 0) return true;
-                    int n = Math.max(2, Math.min(FilterCurveEqProcessor.MAX_NODES,
-                            s.extraParams.getOrDefault("npts", 8)));
-                    for (int i = 0; i < n; i++) {
+                    for (int i = 0; i < FilterCurveEqProcessor.MAX_NODES; i++) {
                         if (s.extraParams.getOrDefault("pg" + i, 0) != 0) return true;
                     }
-                    return false;
+                    return isProcessorAudible(s);
                 case BASS_TREBLE:
                     if (s.value != 0 || s.extraParams.getOrDefault("vol", 0) != 0) {
                         return true;
@@ -775,7 +781,7 @@ public final class DspChain {
                     boolean linked = s.extraParams.getOrDefault("link", 0) != 0;
                     return linked || s.extraParams.getOrDefault("treble", 0) != 0;
                 case SHELF_FILTER:
-                    return s.value != 0;
+                    return s.value != 0 || isProcessorAudible(s);
                 default:
                     return isProcessorAudible(s);
             }
@@ -1128,12 +1134,37 @@ public final class DspChain {
                 FxParameter fp = p.getParam(key);
                 if (fp != null) fp.setCurrentRaw(e.getValue());
             }
+            if (s.type.isLegacyStage() && p.getInstanceKey() == null
+                    && s.enabled && !s.extraParams.isEmpty()) {
+                if (s.type == EffectType.BRICKWALL_LIMITER && p instanceof ProLimiterProcessor) {
+                    boolean hasExtra = s.extraParams.getOrDefault("limiter_ceiling", -20) < -25
+                            || s.extraParams.getOrDefault("limiter_release", 80) != 80;
+                    if (hasExtra) p.setEnabled(true);
+                } else {
+                    p.setEnabled(true);
+                }
+            }
+            p.prepare(rack.getSampleRate(), channels);
         }
     }
 
     /** Processor parameter driven by the slot card's main dial. */
     static String primaryParamId(EffectType type) {
+        if (type == null) return null;
         switch (type) {
+            case NOISE_SUPPRESSION:
+            case DE_ESSER:
+            case COMPRESSOR:
+            case ROOM_GATE:
+                return "amt";
+            case LOW_CUT_HPF:
+                return "cutoff";
+            case VOCAL_PRESENCE:
+                return "presence";
+            case WARMTH_BODY:
+                return "warmth";
+            case BRICKWALL_LIMITER:
+                return "drive";
             case PARAMETRIC_EQ6:
             case GRAPHIC_EQ:
             case FILTER_CURVE_EQ:
@@ -1420,6 +1451,10 @@ public final class DspChain {
         }
     }
 
+    public void setSampleRate(int sampleRate) {
+        rack.setSampleRate(sampleRate);
+    }
+
     public void processInPlace(float[] buf, int frames) {
         rack.processInPlace(buf, frames);
     }
@@ -1428,13 +1463,14 @@ public final class DspChain {
      * Renders an entire region through both offline processors (such as
      * Change Speed and Pitch, Change Tempo, Change Pitch, Audio Generator,
      * Fade, Timeline Utility, Truncate Silence, Paulstretch, Sliding Stretch)
-     * and the in-place processor chain, returning the processed interleaved
-     * buffer (whose frame count may differ from {@code endFrame - startFrame}).
+     * and the in-place processor chain in rack order, returning the processed
+     * interleaved buffer.
      */
     public float[] renderRegionOfflineAndInPlace(File raw, long startFrame,
                                                  long endFrame, int sampleRate)
             throws Exception {
         if (raw == null || !raw.exists()) return null;
+        if (sampleRate > 0) setSampleRate(sampleRate);
         float[] buf = EditEngine.readFloatSelection(raw, startFrame, endFrame);
         if (buf == null || buf.length == 0) return buf;
         int curFrames = buf.length / Math.max(1, channels);
@@ -1460,7 +1496,12 @@ public final class DspChain {
         }
         if (hasInPlaceProcessors() && curFrames > 0) {
             reset();
-            prepareOffline(raw, startFrame, endFrame, sampleRate, channels);
+            // Do not pre-scan the raw file if an offline processor (such as
+            // Audio Generator or Fade) already replaced the in-memory buffer;
+            // level tools will measure the actual in-memory buffer on first pass.
+            if (offlineProcessors().isEmpty()) {
+                prepareOffline(raw, startFrame, endFrame, sampleRate, channels);
+            }
             int chunk = 4096;
             float[] block = new float[chunk * channels];
             for (int off = 0; off < curFrames; off += chunk) {

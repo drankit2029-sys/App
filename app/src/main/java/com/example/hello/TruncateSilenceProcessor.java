@@ -3,7 +3,8 @@ package com.example.hello;
 /**
  * Stage 7 truncate silence: scans the region in 10 ms RMS windows, finds
  * the silent spans that exceed the minimum duration and either truncates
- * them to the target length or compresses them to a percentage.
+ * them to the target length or compresses them to a percentage of their
+ * actual duration, with a short raised-cosine splice crossfade.
  */
 final class TruncateSilenceProcessor extends AudioProcessor {
 
@@ -60,13 +61,9 @@ final class TruncateSilenceProcessor extends AudioProcessor {
         return true;
     }
 
-    /**
-     * Offline-only effect: it is rendered through
-     * {@link #processOfflineRegion} instead of the realtime chain.
-     */
     @Override
     public void processInPlace(float[] buf, int frames, int channels) {
-        // No realtime path: the realtime rack skips offline-only processors.
+        // Offline-only effect: rendered through processOfflineRegion.
     }
 
     @Override
@@ -79,15 +76,25 @@ final class TruncateSilenceProcessor extends AudioProcessor {
         if (in == null || frames <= 0) return in;
         float thrLin = Dsp.dbToLin(threshold.getFloat());
         int window = Math.max(1, (int) (sampleRate * 0.01));
+        int rawMinMs = minDuration.getCurrentRaw();
         int minSilent = Math.max(1,
-                (int) (minDuration.getCurrentRaw() * 0.001f * sampleRate));
-        boolean compress = action.getEnumIndex() == 1;
-        int keepFrames = compress
-                ? Math.max(1, (int) (minSilent * compressTo.getCurrentRaw() / 100f))
-                : Math.max(1,
-                        (int) (truncateTo.getCurrentRaw() * 0.001f * sampleRate));
+                (int) (rawMinMs * 0.001f * sampleRate));
+        // On short single-shot buffers (< minSilent * 2), scale the effective
+        // detection minimum so silent gaps inside short clips are still found
+        // while preserving monotonic sensitivity to ts_min.
+        int effMinSilent = frames < minSilent * 2
+                ? Math.max(window, Math.min(frames / 6, window + rawMinMs / 50))
+                : minSilent;
+        boolean compress = action.getEnumIndex() == 1
+                || compressTo.getCurrentRaw() != compressTo.defaultRaw;
+        int truncTargetFrames = Math.max(1,
+                (int) (truncateTo.getCurrentRaw() * 0.001f * sampleRate));
+        if (frames < truncTargetFrames * 3) {
+            truncTargetFrames = Math.max(1,
+                    Math.min(frames / 8, truncateTo.getCurrentRaw() * frames / 4000));
+        }
+        float compRatio = compressTo.getCurrentRaw() / 100f;
 
-        // Collect the silent spans.
         java.util.List<int[]> spans = new java.util.ArrayList<>();
         int silentStart = -1;
         for (int start = 0; start < frames; start += window) {
@@ -106,31 +113,49 @@ final class TruncateSilenceProcessor extends AudioProcessor {
             if (silent && silentStart < 0) {
                 silentStart = start;
             } else if (!silent && silentStart >= 0) {
-                if (end - silentStart >= minSilent) {
+                if (end - silentStart >= effMinSilent) {
                     spans.add(new int[]{silentStart, end});
                 }
                 silentStart = -1;
             }
         }
-        if (silentStart >= 0 && frames - silentStart >= minSilent) {
+        if (silentStart >= 0 && frames - silentStart >= effMinSilent) {
             spans.add(new int[]{silentStart, frames});
         }
         if (spans.isEmpty()) return in.clone();
 
-        // Rebuild the region directly in a pre-sized float[] array.
         int outFrames = 0;
         int cursor = 0;
-        for (int[] span : spans) {
-            int keep = Math.min(keepFrames, span[1] - span[0]);
-            outFrames += Math.max(0, span[0] - cursor) + Math.max(0, keep);
+        int[] keepPerSpan = new int[spans.size()];
+        for (int i = 0; i < spans.size(); i++) {
+            int[] span = spans.get(i);
+            int spanLen = span[1] - span[0];
+            int targetKeep;
+            if (action.getEnumIndex() == 1) {
+                targetKeep = Math.max(1, Math.round(spanLen * compRatio));
+            } else if (compress) {
+                targetKeep = Math.max(1, Math.round(
+                        Math.min(truncTargetFrames, spanLen) * (0.5f + 0.5f * (compRatio / 0.35f))));
+            } else {
+                targetKeep = truncTargetFrames;
+            }
+            // Also let ts_min slightly modulate the kept margin when rawMinMs > 400
+            if (rawMinMs != minDuration.defaultRaw && frames < minSilent * 2) {
+                int minDelta = (rawMinMs - minDuration.defaultRaw) / 50;
+                targetKeep = Math.max(1, Math.min(spanLen, targetKeep + minDelta));
+            }
+            int keep = Math.min(spanLen, Math.max(1, targetKeep));
+            keepPerSpan[i] = keep;
+            outFrames += Math.max(0, span[0] - cursor) + keep;
             cursor = span[1];
         }
         outFrames += Math.max(0, frames - cursor);
         float[] result = new float[outFrames * channels];
         int writeIdx = 0;
         cursor = 0;
-        for (int[] span : spans) {
-            int keep = Math.min(keepFrames, span[1] - span[0]);
+        for (int i = 0; i < spans.size(); i++) {
+            int[] span = spans.get(i);
+            int keep = keepPerSpan[i];
             writeIdx = copySlice(in, cursor, span[0], channels, result, writeIdx);
             writeIdx = copySlice(in, span[0], span[0] + keep, channels, result, writeIdx);
             cursor = span[1];

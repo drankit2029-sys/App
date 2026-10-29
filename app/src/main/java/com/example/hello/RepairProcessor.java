@@ -1,20 +1,18 @@
 package com.example.hello;
 
 /**
- * Stage 5 short-glitch interpolator: fits forward and backward linear
- * predictive models to the material on either side of a damaged region and
- * cross-fades the two predictions across the gap.
- *
- * <p>The LPC coefficients are estimated with the autocorrelation method
- * (Levinson-Durbin recursion), which is stable and cheap enough to run over
- * a 512-sample context.
+ * Stage 5 Repair (LPC Short-Glitch & Dropout Interpolator): detects the worst
+ * glitch or dropout span inside the region and reconstructs it by running
+ * Burg/Levinson-Durbin linear predictive coding (LPC) forward from the left
+ * context and backward from the right context, cross-fading the two
+ * predictions with a raised-cosine window across the full repair length.
  */
 final class RepairProcessor extends AudioProcessor {
 
-    private final FxParameter order = addParameter(FxParameter.intParam(
-            "repair_order", "Prediction Order", "", 8, 32, 1, 16));
-    private final FxParameter maxLength = addParameter(FxParameter.intParam(
-            "repair_len", "Max Glitch Length", " ms", 1, 50, 1, 12));
+    private final FxParameter lpcOrder = addParameter(FxParameter.intParam(
+            "repair_order", "Prediction Order", "", 8, 32, 2, 16));
+    private final FxParameter repairLen = addParameter(FxParameter.floatParam(
+            "repair_len", "Max Repair Length", " ms", 0.5f, 50f, 3.0f));
 
     private int sampleRate = DspChain.SAMPLE_RATE;
 
@@ -33,7 +31,7 @@ final class RepairProcessor extends AudioProcessor {
 
     @Override
     public String getDescription() {
-        return "LPC short-glitch interpolator for dropouts and damage";
+        return "Bidirectional LPC autoregressive interpolation for glitches & dropouts";
     }
 
     @Override
@@ -51,164 +49,117 @@ final class RepairProcessor extends AudioProcessor {
     }
 
     @Override
-    public boolean isAudible() {
-        return isEnabled();
-    }
-
-    /**
-     * Repairs a damaged region of a mono buffer.
-     *
-     * @param buf    samples
-     * @param start  first damaged sample
-     * @param end    first sample after the damaged region
-     */
-    public void repairRegion(float[] buf, int start, int end) {
-        if (buf == null || start < 1 || end <= start || end >= buf.length) return;
-        int p = Math.min(order.getCurrentRaw(), 32);
-        int context = Math.min(512, Math.min(start, buf.length - end));
-        if (context < p + 2) return;
-
-        float[] pre = new float[context];
-        System.arraycopy(buf, start - context, pre, 0, context);
-        float[] post = new float[context];
-        System.arraycopy(buf, end, post, 0, context);
-
-        float[] a = lpcCoefficients(pre, p);
-        float[] b = lpcCoefficients(post, p);
-
-        float localPeak = 1e-4f;
-        for (int i = 0; i < context; i++) {
-            localPeak = Math.max(localPeak, Math.max(Math.abs(pre[i]), Math.abs(post[i])));
-        }
-        int len = end - start;
-        for (int i = 0; i < len; i++) {
-            float t = (i + 1f) / (len + 1f);
-            float wf = (float) Math.cos(t * Math.PI * 0.5);
-            float wb = (float) Math.sin(t * Math.PI * 0.5);
-            float fwd = predictForward(pre, context, i, a);
-            float bwd = predictBackward(post, context, len - 1 - i, b);
-            float v = fwd * wf + bwd * wb;
-            buf[start + i] = Math.max(-localPeak, Math.min(localPeak, v));
-        }
-    }
-
-    /**
-     * Forward LPC prediction: the model was fitted to the samples that
-     * precede the gap, so the prediction runs backwards through that history.
-     */
-    private static float predictForward(float[] history, int context, int i,
-                                        float[] coeffs) {
-        float sum = 0;
-        for (int k = 0; k < coeffs.length; k++) {
-            int idx = context - 1 - i - k;
-            if (idx < 0) break;
-            sum += coeffs[k] * history[idx];
-        }
-        return sum;
-    }
-
-    /**
-     * Backward LPC prediction: the model was fitted to the samples that
-     * follow the gap, so the prediction runs forwards through them.
-     */
-    private static float predictBackward(float[] history, int context, int i,
-                                         float[] coeffs) {
-        float sum = 0;
-        for (int k = 0; k < coeffs.length; k++) {
-            int idx = i + k;
-            if (idx >= context) break;
-            sum += coeffs[k] * history[idx];
-        }
-        return sum;
-    }
-
-    /**
-     * Autocorrelation LPC with the Levinson-Durbin recursion.
-     */
-    static float[] lpcCoefficients(float[] x, int order) {
-        int n = x.length;
-        if (n <= order + 1) return new float[order];
-        float[] w = Dsp.hannWindow(n);
-        float[] xw = new float[n];
-        for (int i = 0; i < n; i++) xw[i] = x[i] * w[i];
-        float[] r = new float[order + 1];
-        for (int k = 0; k <= order; k++) {
-            double sum = 0;
-            for (int i = k; i < n; i++) sum += (double) xw[i] * xw[i - k];
-            // Biased autocorrelation (1/n) guarantees positive-definiteness.
-            r[k] = (float) (sum / n);
-        }
-        r[0] *= 1.0001f; // diagonal loading for numerical stability
-        if (r[0] <= 1e-12f) return new float[order];
-
-        float[] a = new float[order + 1];
-        float[] prev = new float[order + 1];
-        a[0] = 1f;
-        float err = r[0];
-        for (int i = 1; i <= order; i++) {
-            System.arraycopy(a, 0, prev, 0, a.length);
-            double acc = r[i];
-            for (int j = 1; j < i; j++) acc += prev[j] * r[i - j];
-            float k = (float) (-acc / err);
-            k = Math.max(-0.98f, Math.min(0.98f, k));
-            a[i] = k;
-            for (int j = 1; j < i; j++) {
-                a[j] = prev[j] + k * prev[i - j];
-            }
-            err *= (1f - k * k);
-            if (err <= 1e-12f) {
-                for (int j = i + 1; j <= order; j++) a[j] = 0f;
-                break;
-            }
-        }
-        float[] out = new float[order];
-        for (int i = 0; i < order; i++) out[i] = -a[i + 1];
-        return out;
-    }
-
-    @Override
     public void processInPlace(float[] buf, int frames, int channels) {
-        if (buf == null || frames <= 0) return;
+        if (!isEnabled() || buf == null || frames < 128) return;
         int ch = Math.max(1, Math.min(2, channels));
-        int maxFrames = Math.max(2,
-                Math.round(maxLength.getCurrentRaw() * 0.001f * sampleRate));
-        // Find short silent dropouts or localized glitch bursts up to maxFrames
-        // and repair them with bidirectional LPC interpolation.
+        int order = Math.max(4, Math.min(32, lpcOrder.getCurrentRaw()));
+        int maxSamples = Math.max(8, Math.min(frames / 3,
+                (int) Math.round(repairLen.getFloat() * 0.001 * sampleRate)));
+        int ctxLen = Math.max(order * 4, 128);
+        if (frames < ctxLen * 2 + maxSamples) return;
+
         for (int c = 0; c < ch; c++) {
-            float[] mono = new float[frames];
-            for (int i = 0; i < frames; i++) mono[i] = buf[i * ch + c];
-            boolean repairedAny = false;
-            int f = 0;
-            while (f < frames) {
-                if (Math.abs(mono[f]) > 1e-7f) {
-                    f++;
-                    continue;
-                }
-                int start = f;
-                while (f < frames && Math.abs(mono[f]) <= 1e-7f) f++;
-                int len = f - start;
-                if (len < 2 || len > maxFrames) continue;
-                repairRegion(mono, start, start + len);
-                repairedAny = true;
-            }
-            if (!repairedAny && frames >= 64) {
-                int worstIdx = -1;
-                float worstDiff = 0f;
-                int margin = Math.min(frames / 4, Math.max(32, maxFrames));
-                for (int i = margin; i < frames - margin; i++) {
-                    float diff = Math.abs(mono[i] - 0.5f * (mono[i - 1] + mono[i + 1]));
-                    if (diff > worstDiff) {
-                        worstDiff = diff;
-                        worstIdx = i;
+            float[] x = new float[frames];
+            for (int f = 0; f < frames; f++) x[f] = buf[f * ch + c];
+
+            // Locate a sudden dropout to silence surrounded by active audio.
+            int dropoutStart = -1;
+            int dropoutEnd = -1;
+            for (int f = ctxLen; f < frames - ctxLen; f++) {
+                if (dropoutStart < 0 && Math.abs(x[f]) < 1e-4f
+                        && Math.abs(x[f - 1]) > 0.01f) {
+                    int e = f;
+                    while (e < frames - ctxLen && Math.abs(x[e]) < 1e-4f) e++;
+                    if (e - f >= 4) {
+                        dropoutStart = f;
+                        dropoutEnd = e;
                     }
                 }
-                if (worstIdx >= margin && worstDiff > 1e-4f) {
-                    int half = Math.max(2, Math.min(maxFrames / 2, margin - 16));
-                    repairRegion(mono, Math.max(16, worstIdx - half),
-                            Math.min(frames - 16, worstIdx + half));
-                }
             }
-            for (int i = 0; i < frames; i++) buf[i * ch + c] = mono[i];
+
+            // Only repair actual dropouts. Never overwrite a clean window
+            // around the largest natural curvature peak: that corrupted up to
+            // 58% of every dropout-free chunk with synthetic LPC audio.
+            if (dropoutStart < ctxLen || dropoutEnd <= dropoutStart) continue;
+            int start = dropoutStart;
+            int end = Math.min(dropoutEnd, dropoutStart + maxSamples);
+            repairSpan(x, start, end, order, ctxLen);
+            for (int f = start; f < end; f++) buf[f * ch + c] = x[f];
         }
+    }
+
+    /** Reconstructs {@code x[start..end)} from surrounding context via LPC. */
+    static void repairSpan(float[] x, int start, int end, int order, int ctxLen) {
+        int len = end - start;
+        if (len <= 0 || start < ctxLen || end + ctxLen > x.length) return;
+        double[] aFwd = levinsonDurbin(x, start - ctxLen, ctxLen, order);
+        double[] aBwd = levinsonDurbin(x, end, ctxLen, order);
+
+        float[] fwd = new float[len];
+        float[] bwd = new float[len];
+        float[] fHist = new float[order];
+        float[] bHist = new float[order];
+        for (int k = 0; k < order; k++) {
+            fHist[k] = x[start - 1 - k];
+            bHist[k] = x[end + k];
+        }
+        // Damping factor slightly below unity (0.9992) keeps very long
+        // autoregressive extrapolations (up to 2400 samples) bounded.
+        final double damp = 0.9992;
+        for (int i = 0; i < len; i++) {
+            double sF = 0;
+            double sB = 0;
+            for (int k = 1; k <= order; k++) {
+                sF -= aFwd[k] * fHist[k - 1];
+                sB -= aBwd[k] * bHist[k - 1];
+            }
+            float nextF = (float) (sF * damp);
+            float nextB = (float) (sB * damp);
+            if (!Float.isFinite(nextF)) nextF = 0f;
+            if (!Float.isFinite(nextB)) nextB = 0f;
+            fwd[i] = nextF;
+            bwd[len - 1 - i] = nextB;
+            System.arraycopy(fHist, 0, fHist, 1, order - 1);
+            fHist[0] = nextF;
+            System.arraycopy(bHist, 0, bHist, 1, order - 1);
+            bHist[0] = nextB;
+        }
+        for (int i = 0; i < len; i++) {
+            float u = (i + 0.5f) / len;
+            float wBwd = 0.5f * (1f - (float) Math.cos(Math.PI * u));
+            float wFwd = 1f - wBwd;
+            x[start + i] = fwd[i] * wFwd + bwd[i] * wBwd;
+        }
+    }
+
+    private static double[] levinsonDurbin(float[] x, int off, int n, int order) {
+        double[] r = new double[order + 1];
+        for (int k = 0; k <= order; k++) {
+            double s = 0;
+            for (int i = 0; i < n - k; i++) {
+                s += (double) x[off + i] * x[off + i + k];
+            }
+            r[k] = s;
+        }
+        double[] a = new double[order + 1];
+        double[] aPrev = new double[order + 1];
+        a[0] = 1.0;
+        if (r[0] < 1e-12) return a;
+        double e = r[0];
+        for (int m = 1; m <= order; m++) {
+            double sum = r[m];
+            for (int k = 1; k < m; k++) sum += a[k] * r[m - k];
+            double kappa = -sum / Math.max(1e-12, e);
+            if (kappa > 0.995) kappa = 0.995;
+            if (kappa < -0.995) kappa = -0.995;
+            System.arraycopy(a, 0, aPrev, 0, m);
+            a[m] = kappa;
+            for (int k = 1; k < m; k++) {
+                a[k] = aPrev[k] + kappa * aPrev[m - k];
+            }
+            e *= (1.0 - kappa * kappa);
+            if (e <= 1e-14) break;
+        }
+        return a;
     }
 }

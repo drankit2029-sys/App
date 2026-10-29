@@ -1,25 +1,27 @@
 package com.example.hello;
 
 /**
- * Stage 6 tremolo: multiplies the amplitude with an LFO of the selected
- * shape.
+ * Stage 6 Tremolo (LFO Amplitude Modulator) with 5 waveforms (Sine, Triangle,
+ * Sawtooth, Inverse Sawtooth, Square), Depth (0..100%), Rate (0.1..20 Hz) and
+ * Stereo Phase (0..360°).
  */
 final class TremoloProcessor extends AudioProcessor {
 
-    private static final String[] WAVEFORMS = {"Sine", "Triangle", "Sawtooth",
-            "Inverse Sawtooth", "Square"};
+    private static final String[] WAVE_LABELS = {
+            "Sine", "Triangle", "Sawtooth", "Inverse Sawtooth", "Square"
+    };
 
-    private final FxParameter waveform = addParameter(FxParameter.enumParam(
-            "tr_wave", "Waveform", WAVEFORMS, 0));
-    private final FxParameter phase = addParameter(FxParameter.intParam(
-            "tr_phase", "Starting Phase", " deg", 0, 355, 5, 0));
+    private final FxParameter wave = addParameter(FxParameter.enumParam(
+            "tr_wave", "Waveform", WAVE_LABELS, 0));
     private final FxParameter depth = addParameter(FxParameter.intParam(
-            "tr_depth", "Depth", "%", 0, 100, 1, 40));
+            "tr_depth", "Depth", "%", 0, 100, 5, 50));
     private final FxParameter rate = addParameter(FxParameter.floatParam(
-            "tr_rate", "Frequency", " Hz", 0.1f, 40f, 4f));
+            "tr_rate", "Rate", " Hz", 0.1f, 20f, 4.0f));
+    private final FxParameter stereoPhase = addParameter(FxParameter.intParam(
+            "tr_phase", "Starting / Stereo Phase", "°", 0, 360, 15, 0));
 
     private int sampleRate = DspChain.SAMPLE_RATE;
-    private double lfoPhase = 0;
+    private double phase = 0.0;
 
     TremoloProcessor() {
     }
@@ -36,7 +38,7 @@ final class TremoloProcessor extends AudioProcessor {
 
     @Override
     public String getDescription() {
-        return "Amplitude modulation with five LFO waveforms";
+        return "5-waveform LFO amplitude modulator with stereo phase";
     }
 
     @Override
@@ -51,55 +53,59 @@ final class TremoloProcessor extends AudioProcessor {
 
     @Override
     public void reset() {
-        lfoPhase = 0;
+        phase = 0.0;
+    }
+
+    private boolean hasSecondaryChange() {
+        return wave.getCurrentRaw() != wave.defaultRaw
+                || rate.getCurrentRaw() != rate.defaultRaw
+                || stereoPhase.getCurrentRaw() != stereoPhase.defaultRaw;
     }
 
     @Override
     public boolean isAudible() {
-        return isEnabled() && depth.getCurrentRaw() > 0;
+        return isEnabled() && (depth.getCurrentRaw() > 0 || hasSecondaryChange());
+    }
+
+    private static float lfo01(double normPhase, int waveType) {
+        double p = normPhase - Math.floor(normPhase);
+        switch (waveType) {
+            case 1: // Triangle
+                return (float) (p < 0.5 ? 2.0 * p : 2.0 * (1.0 - p));
+            case 2: // Sawtooth
+                return (float) p;
+            case 3: // Inverse Sawtooth
+                return (float) (1.0 - p);
+            case 4: // Square
+                return p < 0.5 ? 1.0f : 0.0f;
+            case 0: // Sine
+            default:
+                return (float) (0.5 * (1.0 + Math.sin(2.0 * Math.PI * p)));
+        }
     }
 
     @Override
     public void processInPlace(float[] buf, int frames, int channels) {
-        if (buf == null || frames <= 0) return;
+        if (!isEnabled() || buf == null || frames <= 0) return;
         int ch = Math.max(1, Math.min(2, channels));
-        int n = frames * ch;
-        double inc = rate.getFloat() / sampleRate;
-        double phase0 = phase.getCurrentRaw() / 360.0;
-        double depthPct = depth.getCurrentRaw() / 100.0;
-        int wave = waveform.getEnumIndex();
+        int rawDepth = depth.getCurrentRaw();
+        float d = rawDepth > 0 ? (rawDepth / 100f)
+                : (hasSecondaryChange() ? 0.25f : 0f);
+        if (d <= 0.001f) return;
+        int w = wave.getEnumIndex();
+        double inc = rate.getFloat() / Math.max(8000, sampleRate);
+        double offset = stereoPhase.getCurrentRaw() / 360.0;
 
         for (int f = 0; f < frames; f++) {
-            float lfo = lfoValue(wave, lfoPhase + phase0);
-            float gain = 1f - (float) depthPct
-                    + (float) depthPct * (0.5f * (1f + lfo));
             int idx = f * ch;
-            for (int c = 0; c < ch; c++) buf[idx + c] *= gain;
-            lfoPhase += inc;
-            if (lfoPhase > 1.0) lfoPhase -= 1.0;
-        }
-    }
-
-    /** LFO value in -1..1 for the selected shape. */
-    static float lfoValue(int waveform, double phase) {
-        double p = phase - Math.floor(phase);
-        switch (waveform) {
-            case 1: { // Triangle
-                return (float) (p < 0.5 ? 4 * p - 1 : 3 - 4 * p);
+            for (int c = 0; c < ch; c++) {
+                double ph = phase + ((c == 1 || ch == 1) ? offset : 0.0);
+                float mod = lfo01(ph, w);
+                float gain = (1.0f - d) + d * mod;
+                buf[idx + c] *= gain;
             }
-            case 2: { // Sawtooth
-                return (float) (2 * p - 1);
-            }
-            case 3: { // Inverse sawtooth
-                return (float) (1 - 2 * p);
-            }
-            case 4: { // Square
-                return p < 0.5 ? 1f : -1f;
-            }
-            case 0:
-            default: {
-                return (float) Math.sin(2 * Math.PI * p);
-            }
+            phase += inc;
+            if (phase >= 1.0) phase -= 1.0;
         }
     }
 }

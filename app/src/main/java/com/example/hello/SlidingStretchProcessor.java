@@ -3,7 +3,8 @@ package com.example.hello;
 /**
  * Stage 7 sliding stretch: a time-varying WSOLA whose stretch ratio and
  * pitch factor ramp linearly from the initial to the final value across the
- * processed region.
+ * processed region, with raised-cosine crossfades across segment boundaries
+ * so transitions are click-free.
  */
 final class SlidingStretchProcessor extends AudioProcessor {
 
@@ -12,9 +13,9 @@ final class SlidingStretchProcessor extends AudioProcessor {
     private final FxParameter finalTempo = addParameter(FxParameter.floatParam(
             "slide_final", "Final Tempo Change", "%", -75f, 300f, 0f));
     private final FxParameter initialPitch = addParameter(FxParameter.floatParam(
-            "slide_pitchinit", "Initial Pitch Shift", "", -24f, 24f, 0f));
+            "slide_pitchinit", "Initial Pitch Shift", " st", -24f, 24f, 0f));
     private final FxParameter finalPitch = addParameter(FxParameter.floatParam(
-            "slide_pitchfinal", "Final Pitch Shift", "", -24f, 24f, 0f));
+            "slide_pitchfinal", "Final Pitch Shift", " st", -24f, 24f, 0f));
 
     private int sampleRate = DspChain.SAMPLE_RATE;
 
@@ -55,13 +56,9 @@ final class SlidingStretchProcessor extends AudioProcessor {
         return true;
     }
 
-    /**
-     * Offline-only effect: it is rendered through
-     * {@link #processOfflineRegion} instead of the realtime chain.
-     */
     @Override
     public void processInPlace(float[] buf, int frames, int channels) {
-        // No realtime path: the realtime rack skips offline-only processors.
+        // Offline-only effect: rendered through processOfflineRegion.
     }
 
     @Override
@@ -85,7 +82,9 @@ final class SlidingStretchProcessor extends AudioProcessor {
         }
         WsolaTimePitchProcessor wsola = new WsolaTimePitchProcessor(sampleRate);
         final int segments = 8;
+        final int overlapIn = Math.min(120, Math.max(0, frames / (segments * 4)));
         float[][] segBuffers = new float[segments][];
+        int[] coreFrames = new int[segments];
         int totalOutFrames = 0;
         int inPos = 0;
         for (int s = 0; s < segments; s++) {
@@ -98,27 +97,53 @@ final class SlidingStretchProcessor extends AudioProcessor {
                 segBuffers[s] = new float[0];
                 continue;
             }
-            float[] chunk = new float[segIn * channels];
+            int extIn = Math.min(frames - inPos, segIn + (s < segments - 1 ? overlapIn : 0));
+            float[] chunk = new float[extIn * channels];
             System.arraycopy(in, inPos * channels, chunk, 0, chunk.length);
             float[] processed = chunk;
             if (Math.abs(pitch) > 1e-6) {
-                processed = wsola.pitchShift(chunk, segIn, channels, pitch);
+                processed = wsola.pitchShift(chunk, extIn, channels, pitch, true);
             }
             if (Math.abs(ratio - 1.0) > 1e-6) {
                 processed = wsola.timeStretch(processed,
-                        processed.length / channels, channels, ratio);
+                        processed.length / channels, channels, ratio, true);
             }
             segBuffers[s] = processed;
-            totalOutFrames += processed.length / channels;
+            int procFrames = processed.length / channels;
+            int core = (s < segments - 1 && extIn > segIn)
+                    ? Math.max(1, (int) Math.round(procFrames * (segIn / (double) extIn)))
+                    : procFrames;
+            coreFrames[s] = Math.min(procFrames, core);
+            totalOutFrames += coreFrames[s];
             inPos += segIn;
             if (inPos >= frames) break;
         }
         float[] out = new float[Math.max(1, totalOutFrames) * channels];
-        int outPos = 0;
-        for (float[] seg : segBuffers) {
+        int outFramePos = 0;
+        for (int s = 0; s < segments; s++) {
+            float[] seg = segBuffers[s];
             if (seg == null || seg.length == 0) continue;
-            System.arraycopy(seg, 0, out, outPos, seg.length);
-            outPos += seg.length;
+            int segTotalF = seg.length / channels;
+            int coreF = coreFrames[s];
+            int xfade = (s > 0) ? Math.min(64, Math.min(coreF / 4, outFramePos)) : 0;
+            if (xfade > 0) {
+                for (int f = 0; f < xfade; f++) {
+                    float wIn = 0.5f * (1f - (float) Math.cos(Math.PI * (f + 0.5) / xfade));
+                    float wOut = 1f - wIn;
+                    int dstBase = (outFramePos - xfade + f) * channels;
+                    int srcBase = f * channels;
+                    for (int c = 0; c < channels; c++) {
+                        out[dstBase + c] = out[dstBase + c] * wOut + seg[srcBase + c] * wIn;
+                    }
+                }
+            }
+            int copyStartF = xfade;
+            int copyCountF = Math.max(0, Math.min(coreF, segTotalF) - copyStartF);
+            if (copyCountF > 0 && outFramePos + copyCountF <= totalOutFrames) {
+                System.arraycopy(seg, copyStartF * channels,
+                        out, outFramePos * channels, copyCountF * channels);
+                outFramePos += copyCountF;
+            }
         }
         return out;
     }

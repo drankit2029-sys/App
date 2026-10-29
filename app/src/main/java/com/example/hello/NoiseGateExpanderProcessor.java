@@ -1,41 +1,40 @@
 package com.example.hello;
 
 /**
- * Stage 4 noise gate / downward expander with a hysteresis state machine
- * (closed, attack, open, hold, release), a sidechain high-pass so low
- * rumble cannot false-trigger the gate, and a configurable level reduction
- * range.
+ * Stage 4 Noise Gate / Downward Expander with Open Threshold, Close
+ * Hysteresis, Ratio (or hard Gate), Range/Floor dB, Attack, Hold, Release,
+ * and a Sidechain High-Pass filter so low-frequency rumble cannot false-open
+ * the gate.
  */
 final class NoiseGateExpanderProcessor extends AudioProcessor {
 
-    private static final String[] MODE_LABELS = {"Gate", "Downward Expander"};
+    private static final String[] MODE_LABELS = {"Gate", "Expander"};
 
     private final FxParameter mode = addParameter(FxParameter.enumParam(
-            "gate_mode", "Mode", MODE_LABELS, 0));
+            "gate_mode", "Mode", MODE_LABELS, 1));
     private final FxParameter threshold = addParameter(FxParameter.dbParam(
             "gate_thresh", "Threshold", -96f, -6f, -42f));
     private final FxParameter hysteresis = addParameter(FxParameter.dbParam(
             "gate_hyst", "Hysteresis", 0f, 12f, 4f));
-    private final FxParameter range = addParameter(FxParameter.dbParam(
-            "gate_range", "Level Reduction", -100f, 0f, -24f));
     private final FxParameter ratio = addParameter(FxParameter.floatParam(
-            "gate_ratio", "Ratio", ":1", 1.2f, 10f, 2.5f));
-    private final FxParameter attack = addParameter(FxParameter.floatParam(
-            "gate_attack", "Attack", " ms", 0.5f, 250f, 8f));
-    private final FxParameter hold = addParameter(FxParameter.floatParam(
-            "gate_hold", "Hold", " ms", 0f, 1000f, 60f));
-    private final FxParameter release = addParameter(FxParameter.floatParam(
-            "gate_release", "Release", " ms", 10f, 3000f, 220f));
-    private final FxParameter sidechainHpf = addParameter(FxParameter.intParam(
-            "gate_hpf", "Sidechain HPF", " Hz", 20, 2000, 10, 120));
+            "gate_ratio", "Ratio", ":1", 1.5f, 20f, 4.0f));
+    private final FxParameter range = addParameter(FxParameter.dbParam(
+            "gate_range", "Range / Floor", -90f, 0f, -24f));
+    private final FxParameter attack = addParameter(FxParameter.intParam(
+            "gate_att", "Attack", " ms", 1, 100, 1, 3));
+    private final FxParameter hold = addParameter(FxParameter.intParam(
+            "gate_hold", "Hold", " ms", 0, 1000, 10, 40));
+    private final FxParameter release = addParameter(FxParameter.intParam(
+            "gate_rel", "Release", " ms", 10, 2000, 10, 180));
+    private final FxParameter scHpf = addParameter(FxParameter.intParam(
+            "gate_schpf", "Sidechain HPF", " Hz", 20, 600, 10, 120));
 
     private int sampleRate = DspChain.SAMPLE_RATE;
-    private int channels = 2;
-    private BiquadFilter scFilter = new BiquadFilter();
-    private DynamicsDetector.PeakHold peakHold;
-    private float gainDb = 0f;
+    private final BiquadFilter scFilter = new BiquadFilter();
+    private float env = 0f;
+    private float currentGain = 1.0f;
+    private int holdLeft = 0;
     private boolean open = false;
-    private int holdCounter = 0;
 
     NoiseGateExpanderProcessor() {
     }
@@ -52,7 +51,7 @@ final class NoiseGateExpanderProcessor extends AudioProcessor {
 
     @Override
     public String getDescription() {
-        return "Hysteresis gate and downward expander with sidechain HPF";
+        return "Hysteresis noise gate & downward expander with sidechain HPF";
     }
 
     @Override
@@ -63,127 +62,78 @@ final class NoiseGateExpanderProcessor extends AudioProcessor {
     @Override
     public void prepare(int sampleRate, int channels) {
         if (sampleRate > 0) this.sampleRate = sampleRate;
-        this.channels = Math.max(1, Math.min(2, channels));
-        peakHold = new DynamicsDetector.PeakHold();
-        rebuildSidechain();
+        rebuildSidechain(channels);
+    }
+
+    private void rebuildSidechain(int ch) {
+        int fc = scHpf.getCurrentRaw();
+        if (fc > 20) {
+            scFilter.setSections(new float[][]{
+                    Dsp.rbjHighPass(sampleRate, Math.min(fc, sampleRate * 0.45), 0.7071)
+            }, Math.max(1, Math.min(2, ch)));
+        } else {
+            scFilter.setSections(new float[0][], 1);
+        }
     }
 
     @Override
     public void reset() {
         scFilter.reset();
-        if (peakHold != null) peakHold.reset();
-        gainDb = 0f;
+        env = 0f;
+        currentGain = 1.0f;
+        holdLeft = 0;
         open = false;
-        holdCounter = 0;
-    }
-
-    @Override
-    public boolean isAudible() {
-        return isEnabled() && range.getFloat() < -0.01f;
-    }
-
-    private void rebuildSidechain() {
-        float f = Math.max(20f, sidechainHpf.getCurrentRaw());
-        scFilter.setSections(new float[][]{Dsp.rbjHighPass(sampleRate, f, 0.7071)},
-                channels);
     }
 
     @Override
     public void processInPlace(float[] buf, int frames, int channels) {
-        if (buf == null || frames <= 0) return;
+        if (!isEnabled() || buf == null || frames <= 0) return;
         int ch = Math.max(1, Math.min(2, channels));
-        rebuildSidechain();
-        if (peakHold == null) peakHold = new DynamicsDetector.PeakHold();
+        int sr = Math.max(8000, sampleRate);
+        rebuildSidechain(ch);
 
-        float thresh = threshold.getFloat();
-        float hyst = hysteresis.getFloat();
-        float rangeDb = range.getFloat();
-        boolean expander = mode.getEnumIndex() == 1;
-        float expRatio = ratio.getFloat();
-        float attCoef = (float) (1.0 - Math.exp(-1.0
-                / (Math.max(0.0005f, attack.getFloat() * 0.001f) * sampleRate)));
-        float relCoef = (float) (1.0 - Math.exp(-1.0
-                / (Math.max(0.001f, release.getFloat() * 0.001f) * sampleRate)));
-        float holdMs = hold.getFloat();
-        int holdFrames = Math.max(0,
-                (int) (holdMs * 0.001f * sampleRate));
-
-        float maxSigDb = -120f;
-        float minSigDb = 0f;
-        for (int off = 0; off < frames; off += 256) {
-            int cnt = Math.min(256, frames - off);
-            float pk = peakOf(buf, off, cnt, ch);
-            float db = Dsp.linToDb(pk);
-            if (off == 0 || db < minSigDb) minSigDb = db;
-            if (db > maxSigDb) maxSigDb = db;
+        float[] sc = buf.clone();
+        if (scFilter.sectionCount() > 0) {
+            scFilter.process(sc, frames, ch);
         }
-        float normT = (thresh - (-96f)) / 90f;
-        float effThresh = (minSigDb > thresh + 6f)
-                ? (minSigDb + normT * Math.max(6f, maxSigDb - minSigDb))
-                : thresh;
 
-        final int block = 32;
-        int offset = 0;
-        while (offset < frames) {
-            int n = Math.min(block, frames - offset);
-            float[] side = new float[n * ch];
-            System.arraycopy(buf, offset * ch, side, 0, side.length);
-            scFilter.process(side, n, ch);
-            float levelDb = Dsp.linToDb(peakOf(side, 0, n, ch));
-            float detectDb = peakHold.update(levelDb, n,
-                    holdMs, sampleRate);
+        float openDb = threshold.getFloat();
+        float closeDb = openDb - Math.max(0f, hysteresis.getFloat());
+        float openLin = Dsp.dbToLin(openDb);
+        float closeLin = Dsp.dbToLin(closeDb);
+        float floorLin = Dsp.dbToLin(range.getFloat());
+        float r = mode.getEnumIndex() == 0 ? 20f : Math.max(1.2f, ratio.getFloat());
+        int holdSamples = (int) (sr * (hold.getCurrentRaw() / 1000.0f));
+        float attAlpha = 1.0f - (float) Math.exp(-1.0 / (sr * Math.max(0.0005f, attack.getCurrentRaw() / 1000.0f)));
+        float relAlpha = 1.0f - (float) Math.exp(-1.0 / (sr * Math.max(0.005f, release.getCurrentRaw() / 1000.0f)));
 
-            if (!open) {
-                if (detectDb > effThresh + hyst * 0.5f) {
-                    open = true;
-                    holdCounter = holdFrames;
-                }
+        for (int f = 0; f < frames; f++) {
+            int idx = f * ch;
+            float peak = Math.abs(sc[idx]);
+            if (ch == 2) peak = Math.max(peak, Math.abs(sc[idx + 1]));
+            env += (peak > env ? 0.05f : 0.002f) * (peak - env);
+
+            if (peak >= openLin) {
+                open = true;
+                holdLeft = holdSamples;
+            } else if (open && env < closeLin) {
+                if (holdLeft > 0) holdLeft--;
+                else open = false;
+            }
+
+            float want;
+            if (open) {
+                // An open gate is unity gain; never partially attenuate speech
+                // that is above the user's Threshold.
+                want = 1.0f;
             } else {
-                if (detectDb < effThresh - hyst * 0.5f) {
-                    if (holdCounter > 0) {
-                        holdCounter -= n;
-                    } else {
-                        open = false;
-                    }
-                } else {
-                    holdCounter = holdFrames;
-                }
+                float envDb = DspChain.fastLinToDb(env + 1e-7f);
+                float under = Math.max(0f, openDb - envDb);
+                float attenDb = -under * (r - 1.0f);
+                want = Math.max(floorLin, DspChain.fastDbToLin(attenDb));
             }
-
-            float target;
-            if (expander) {
-                target = open ? 0f : DynamicsDetector.expanderGainDb(
-                        detectDb, effThresh + hyst * 0.25f, rangeDb, expRatio);
-            } else {
-                float kneeSpan = Math.max(1f, 6f / Math.max(1f, expRatio * 0.5f));
-                if (open) {
-                    float margin = Math.max(0f, (effThresh + kneeSpan) - detectDb);
-                    target = margin > 0f ? (rangeDb * Math.min(0.35f, margin / (kneeSpan * 3f))) : 0f;
-                } else {
-                    float under = Math.max(0f, (effThresh - hyst * 0.25f) - detectDb);
-                    float ratioFactor = Math.min(1f, (under + 1f) * (expRatio / 10f));
-                    target = rangeDb * (0.55f + 0.45f * ratioFactor);
-                }
-            }
-            for (int f = 0; f < n; f++) {
-                float coef = (target > gainDb) ? attCoef : relCoef;
-                gainDb += coef * (target - gainDb);
-                float g = Dsp.dbToLin(gainDb);
-                int idx = (offset + f) * ch;
-                for (int c = 0; c < ch; c++) buf[idx + c] *= g;
-            }
-            offset += n;
+            currentGain += (want > currentGain ? attAlpha : relAlpha) * (want - currentGain);
+            for (int c = 0; c < ch; c++) buf[idx + c] *= currentGain;
         }
-    }
-
-    private static float peakOf(float[] buf, int startFrame, int frames, int ch) {
-        float peak = 0f;
-        int start = startFrame * ch;
-        int end = Math.min(buf.length, start + frames * ch);
-        for (int i = start; i < end; i++) {
-            float a = Math.abs(buf[i]);
-            if (a > peak) peak = a;
-        }
-        return peak;
     }
 }

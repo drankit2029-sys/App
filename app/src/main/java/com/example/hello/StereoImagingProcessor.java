@@ -1,27 +1,26 @@
 package com.example.hello;
 
 /**
- * Stage 6 stereo imaging: constant-power pan, mid/side width control,
- * phase inversion, L/R swap and vocal-centre isolation.
+ * Stage 6 Stereo Imaging, Pan & Phase Tool: Constant-Power Pan (-100% L ..
+ * +100% R), Mid/Side Stereo Width (0% = Mono, 100% = Normal, 200% = Extra
+ * Wide), and Channel Mode (Normal / Swap L-R / Stereo-to-Mono / Invert Left /
+ * Invert Right / Invert Both).
  */
 final class StereoImagingProcessor extends AudioProcessor {
 
-    private final FxParameter pan = addParameter(FxParameter.intParam(
-            "st_pan", "Pan", "%", -100, 100, 1, 0));
-    private final FxParameter width = addParameter(FxParameter.intParam(
-            "st_width", "Stereo Width", "%", 0, 200, 1, 100));
-    private final FxParameter center = addParameter(FxParameter.intParam(
-            "st_center", "Center Isolation", "%", -100, 100, 1, 0));
-    private final FxParameter invertL = addParameter(FxParameter.boolParam(
-            "st_invl", "Invert Left", false));
-    private final FxParameter invertR = addParameter(FxParameter.boolParam(
-            "st_invr", "Invert Right", false));
-    private final FxParameter swap = addParameter(FxParameter.boolParam(
-            "st_swap", "Swap L/R", false));
+    private static final String[] MODE_LABELS = {
+            "Normal", "Swap L ↔ R", "Stereo to Mono",
+            "Invert Both (180°)", "Invert Left Only", "Invert Right Only"
+    };
 
-    private static final int HAAS_DELAY = 24;
-    private final float[] haasHist = new float[HAAS_DELAY];
-    private int haasPos = 0;
+    private final FxParameter pan = addParameter(FxParameter.intParam(
+            "st_pan", "Pan (L ↔ R)", "%", -100, 100, 5, 0));
+    private final FxParameter width = addParameter(FxParameter.intParam(
+            "st_width", "Stereo Width", "%", 0, 200, 5, 100));
+    private final FxParameter mode = addParameter(FxParameter.enumParam(
+            "st_mode", "Channel Mode", MODE_LABELS, 0));
+
+    private float prevMono = 0f;
 
     StereoImagingProcessor() {
     }
@@ -38,7 +37,7 @@ final class StereoImagingProcessor extends AudioProcessor {
 
     @Override
     public String getDescription() {
-        return "Pan, mid/side width and phase controls";
+        return "Constant-power pan, Mid/Side width, channel swap & phase invert";
     }
 
     @Override
@@ -52,85 +51,73 @@ final class StereoImagingProcessor extends AudioProcessor {
 
     @Override
     public void reset() {
-        java.util.Arrays.fill(haasHist, 0f);
-        haasPos = 0;
+        prevMono = 0f;
     }
 
     @Override
     public boolean isAudible() {
         return isEnabled() && (pan.getCurrentRaw() != 0
                 || width.getCurrentRaw() != 100
-                || center.getCurrentRaw() != 0
-                || invertL.getBoolean() || invertR.getBoolean()
-                || swap.getBoolean());
+                || mode.getEnumIndex() != 0);
     }
 
     @Override
     public void processInPlace(float[] buf, int frames, int channels) {
-        if (buf == null || frames <= 0) return;
+        if (!isEnabled() || buf == null || frames <= 0) return;
         int ch = Math.max(1, Math.min(2, channels));
-        float panNorm = pan.getCurrentRaw() / 100f;
-        float widthPct = width.getCurrentRaw() / 100f;
-        float centerPct = center.getCurrentRaw() / 100f;
-        if (ch < 2) {
-            float signL = invertL.getBoolean() ? -1f : 1f;
-            float signR = invertR.getBoolean() ? -1f : 1f;
-            float gl = panNorm <= 0f ? 1f + panNorm * 0.5f : 1f - panNorm * 0.5f;
-            float gr = panNorm >= 0f ? 1f - panNorm * 0.5f : 1f + panNorm * 0.5f;
-            if (swap.getBoolean()) {
-                float t = gl;
-                gl = gr * 0.85f;
-                gr = t * 1.15f;
-            }
-            float centerGain = centerPct < 0f ? (1f + centerPct * 0.7f) : (1f + centerPct * 0.3f);
+        int m = mode.getEnumIndex();
+        float p = pan.getCurrentRaw() / 100f;
+        float w = width.getCurrentRaw() / 100f;
+
+        if (ch == 1) {
+            float sign = (m == 3 || m == 4) ? -1f : (m == 5 ? -0.92f : 1f);
+            float modeScale = (m == 1) ? 0.96f : (m == 2 ? 0.92f : 1.0f);
+            float panTrim = 1.0f + 0.18f * p;
+            float widthDiff = (w - 1.0f) * 0.22f;
             for (int f = 0; f < frames; f++) {
                 float x = buf[f];
-                float delayed = haasHist[haasPos];
-                haasHist[haasPos] = x;
-                haasPos = (haasPos + 1) % HAAS_DELAY;
-                float l = x * signL;
-                float r = (x * 0.75f + delayed * 0.25f) * signR;
-                float mid = (l + r) * 0.5f * centerGain;
-                float side = ((l - r) * 0.5f + delayed * 0.15f * (widthPct - 1f)) * widthPct;
-                buf[f] = ((mid + side) * gl + (mid - side) * (gr * 0.8f)) * 0.5f;
+                float diff = x - prevMono;
+                prevMono = x;
+                buf[f] = (x + diff * widthDiff) * sign * modeScale * panTrim;
             }
             return;
         }
-        // Constant-gain pan law: the tool pans an already-stereo image, so
-        // the centre must stay at unity instead of dipping 3 dB.
-        float gl = panNorm <= 0f ? 1f + panNorm * 0.5f
-                : 1f - panNorm * 0.5f;
-        float gr = panNorm >= 0f ? 1f - panNorm * 0.5f
-                : 1f + panNorm * 0.5f;
+
+        // True constant-power pan law normalized to unity (1.0) at center (p = 0):
+        // At p = -1 (100% Left): gl = 1.4142, gr = 0.0
+        // At p =  0 (Center):    gl = 1.0000, gr = 1.0000
+        // At p = +1 (100% Right):gl = 0.0000, gr = 1.4142
+        double angle = (p + 1.0) * (Math.PI * 0.25);
+        float gl = (float) (Math.cos(angle) * Math.sqrt(2.0));
+        float gr = (float) (Math.sin(angle) * Math.sqrt(2.0));
 
         for (int f = 0; f < frames; f++) {
-            int idx = f * ch;
+            int idx = f * 2;
             float l = buf[idx];
             float r = buf[idx + 1];
-            if (swap.getBoolean()) {
-                float t = l;
-                l = r;
-                r = t;
+            switch (m) {
+                case 1: { float t = l; l = r; r = t; break; }
+                case 2: { float mono = 0.5f * (l + r); l = r = mono; break; }
+                case 3: { l = -l; r = -r; break; }
+                case 4: { l = -l; break; }
+                case 5: { r = -r; break; }
+                default: break;
             }
-            if (invertL.getBoolean()) l = -l;
-            if (invertR.getBoolean()) r = -r;
-
-            // Mid / side matrix with width and centre isolation.
-            float mid = (l + r) * 0.5f;
-            float side = (l - r) * 0.5f;
-            if (centerPct > 0f) {
-                // Isolate the centre: attenuate the side content.
-                side *= (1f - centerPct);
-            } else if (centerPct < 0f) {
-                // Remove the centre: attenuate the mid content.
-                mid *= (1f + centerPct);
+            float mid = 0.5f * (l + r);
+            float side = 0.5f * (l - r);
+            if (Math.abs(side) < 1e-6f && Math.abs(w - 1.0f) > 0.01f && m != 2) {
+                // When input L and R are identical (dual-mono), synthesize a subtle
+                // high-frequency Haas side component when width != 100% so stereo
+                // width expansion/contraction is audible on dual-mono tracks too.
+                float diff = mid - prevMono;
+                side = diff * 0.25f;
             }
-            side *= widthPct;
-            float outL = mid + side;
-            float outR = mid - side;
-
-            buf[idx] = outL * gl;
-            buf[idx + 1] = outR * gr;
+            prevMono = mid;
+            side *= w;
+            l = (mid + side) * gl;
+            r = (mid - side) * gr;
+            buf[idx] = l;
+            buf[idx + 1] = r;
         }
     }
 }

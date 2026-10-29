@@ -150,6 +150,8 @@ public final class RawFloatPlayer {
     private volatile long generation;
     private volatile DspChain dspChain;
     private volatile long stopAtFrame = -1;
+    /** Output length of the offline-rendered buffer, 0 when none is active. */
+    private volatile int offlineOutFrames = 0;
 
     /**
      * Real-time peak amplitude (0..1) of the audio currently playing through
@@ -187,6 +189,7 @@ public final class RawFloatPlayer {
         stop = false;
         paused = false;
         stopAtFrame = -1;
+        offlineOutFrames = 0;
         framePos = Math.max(0, Math.min(totalFrames, frame));
         startFramePos = framePos;
         maxReportedFrame = framePos;
@@ -204,6 +207,7 @@ public final class RawFloatPlayer {
         framePos = Math.max(0, Math.min(totalFrames, startFrame));
         startFramePos = framePos;
         maxReportedFrame = framePos;
+        offlineOutFrames = 0;
         playStartedRealtimeMs = SystemClock.elapsedRealtime();
         stopAtFrame = (endFrame > framePos && endFrame <= totalFrames)
                 ? endFrame : -1;
@@ -230,6 +234,17 @@ public final class RawFloatPlayer {
         level = 0f;
     }
 
+    /** Maps output-buffer playback frames onto source frames for time-stretched previews. */
+    private long mapPlaybackHead(long head, long limit) {
+        long span = Math.max(0L, limit - startFramePos);
+        int out = offlineOutFrames;
+        if (out > 0 && span > 0) {
+            long mapped = startFramePos + head * span / out;
+            return Math.min(limit, Math.max(startFramePos, mapped));
+        }
+        return Math.min(limit, startFramePos + head);
+    }
+
     public long positionFrames() {
         long limit = (stopAtFrame > 0 && stopAtFrame <= totalFrames)
                 ? stopAtFrame : totalFrames;
@@ -239,14 +254,14 @@ public final class RawFloatPlayer {
                 try {
                     long head = t.getPlaybackHeadPosition() & 0xFFFFFFFFL;
                     if (head > 0) {
-                        long pos = Math.min(limit, startFramePos + head);
+                        long pos = mapPlaybackHead(head, limit);
                         if (pos > maxReportedFrame) maxReportedFrame = pos;
                         return maxReportedFrame;
                     }
                     long elapsed = SystemClock.elapsedRealtime() - playStartedRealtimeMs;
                     if (elapsed > 160L && framePos > startFramePos) {
-                        long sim = Math.min(limit,
-                                startFramePos + (elapsed * RecordingEngine.SAMPLE_RATE / 1000L));
+                        long headFrames = elapsed * RecordingEngine.SAMPLE_RATE / 1000L;
+                        long sim = mapPlaybackHead(headFrames, limit);
                         if (sim > maxReportedFrame) maxReportedFrame = sim;
                         return maxReportedFrame;
                     }
@@ -323,11 +338,34 @@ public final class RawFloatPlayer {
             activeTrack = track;
             long writtenFrames = 0;
             DspChain preChain = this.dspChain;
+            int fileSr = RecordingEngine.SAMPLE_RATE;
+            try {
+                Dsp.WavHeader wh = Dsp.parseWavHeader(r);
+                if (wh.sampleRate > 0) fileSr = wh.sampleRate;
+            } catch (Exception ignored) {}
             if (preChain != null && preChain.isActive()) {
                 try {
+                    preChain.setSampleRate(fileSr);
                     preChain.reset();
                     preChain.prepareOffline(file, startFramePos, limitFrame,
-                            RecordingEngine.SAMPLE_RATE, channels);
+                            fileSr, channels);
+                    // Prime algorithmic latency (e.g. STFT hop or FIR group delay)
+                    // so live playback does not emit initial zero-padded silence.
+                    if (preChain.offlineProcessors().isEmpty()) {
+                        int lat = Math.max(0, preChain.getLatencyFrames());
+                        long primePos = startFramePos;
+                        while (lat > 0 && primePos < limitFrame) {
+                            int step = (int) Math.min(1024, Math.min(lat, limitFrame - primePos));
+                            r.seek(dataStart + primePos * channels * 4L);
+                            r.readFully(raw, 0, step * channels * 4);
+                            fb.clear();
+                            fb.limit(step * channels);
+                            fb.get(buf, 0, step * channels);
+                            preChain.processInPlace(buf, step);
+                            primePos += step;
+                            lat -= step;
+                        }
+                    }
                 } catch (Exception ignored) {}
             }
             if (preChain != null && preChain.isActive()
@@ -337,6 +375,7 @@ public final class RawFloatPlayer {
                         RecordingEngine.SAMPLE_RATE);
                 if (offlineBuf != null && offlineBuf.length > 0) {
                     int outFrames = offlineBuf.length / channels;
+                    offlineOutFrames = outFrames;
                     int curOut = 0;
                     while (!stop && curOut < outFrames) {
                         int want = Math.min(1024, outFrames - curOut);
@@ -364,6 +403,7 @@ public final class RawFloatPlayer {
                                 (double) curOut / Math.max(1, outFrames)
                                         * (limitFrame - startFramePos));
                     }
+                    offlineOutFrames = 0;
                     if (!stop) {
                         framePos = limitFrame;
                     }

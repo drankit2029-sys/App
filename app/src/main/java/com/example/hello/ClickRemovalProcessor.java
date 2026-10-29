@@ -1,18 +1,17 @@
 package com.example.hello;
 
 /**
- * Stage 5 de-clicker: detects isolated sample spikes by comparing the local
- * energy of a narrow window against its surrounding context and replaces the
- * offending samples with a cubic Hermite interpolation across the gap.
+ * Stage 5 Click & Pop Removal: detects transient impulses whose second-order
+ * curvature and local deviation exceed the surrounding neighborhood by a
+ * configurable threshold and replaces them with cubic Hermite interpolation
+ * across the surrounding clean samples.
  */
 final class ClickRemovalProcessor extends AudioProcessor {
 
     private final FxParameter threshold = addParameter(FxParameter.intParam(
-            "click_thresh", "Threshold", "", 1, 900, 1, 200));
-    private final FxParameter maxWidth = addParameter(FxParameter.intParam(
-            "click_width", "Max Spike Width", " ms", 1, 40, 1, 10));
-
-    private int sampleRate = DspChain.SAMPLE_RATE;
+            "click_thresh", "Threshold", "", 1, 900, 10, 200));
+    private final FxParameter width = addParameter(FxParameter.intParam(
+            "click_width", "Max Spike Width", " samples", 1, 40, 1, 12));
 
     ClickRemovalProcessor() {
     }
@@ -29,7 +28,7 @@ final class ClickRemovalProcessor extends AudioProcessor {
 
     @Override
     public String getDescription() {
-        return "Detects and repairs isolated digital clicks and pops";
+        return "Detects & cubic-interpolates transient clicks, pops and mouth ticks";
     }
 
     @Override
@@ -39,7 +38,6 @@ final class ClickRemovalProcessor extends AudioProcessor {
 
     @Override
     public void prepare(int sampleRate, int channels) {
-        if (sampleRate > 0) this.sampleRate = sampleRate;
     }
 
     @Override
@@ -47,84 +45,69 @@ final class ClickRemovalProcessor extends AudioProcessor {
     }
 
     @Override
-    public boolean isAudible() {
-        return isEnabled();
-    }
-
-    @Override
     public void processInPlace(float[] buf, int frames, int channels) {
-        if (buf == null || frames <= 0) return;
+        if (!isEnabled() || buf == null || frames < 16) return;
         int ch = Math.max(1, Math.min(2, channels));
-        // The threshold is a percentage: a sample is a click when its
-        // deviation from the linear prediction of its neighbours exceeds this
-        // multiple of the local RMS.
-        float thr = threshold.getCurrentRaw() / 100f;
-        int maxSpike = Math.max(1,
-                (int) (maxWidth.getCurrentRaw() * 0.001f * sampleRate));
-        int halfWin = Math.max(1, Math.min(64, maxWidth.getCurrentRaw()));
+        int maxWidth = Math.max(1, Math.min(40, width.getCurrentRaw()));
+        int rawThresh = threshold.getCurrentRaw();
+        // Map 1..900 to a second-difference / local-background ratio threshold (1.8..16.0).
+        float ratioThresh = 1.8f + (rawThresh / 900.0f) * 14.2f;
+        int halfWin = Math.max(32, Math.min(256, maxWidth * 4));
+        if (frames <= halfWin * 2 + 4) {
+            halfWin = Math.max(4, frames / 4);
+        }
 
         for (int c = 0; c < ch; c++) {
-            boolean[] bad = new boolean[frames];
-            boolean any = false;
-            int ctx = Math.max(16, halfWin * 2);
-            for (int f = ctx; f < frames - ctx; f++) {
-                double sum = 0;
-                for (int k = -ctx; k <= ctx; k++) {
-                    double v = buf[(f + k) * ch + c];
-                    sum += v * v;
+            int f = halfWin;
+            while (f < frames - halfWin) {
+                float localDiffSum = 0f;
+                int count = 0;
+                for (int k = f - halfWin; k < f - maxWidth; k++) {
+                    localDiffSum += Math.abs(buf[(k + 1) * ch + c] - buf[k * ch + c]);
+                    count++;
                 }
-                float rms = (float) Math.sqrt(sum / (2.0 * ctx + 1.0));
-                float predicted = 0.5f * (buf[(f - halfWin) * ch + c]
-                        + buf[(f + halfWin) * ch + c]);
-                float residual = Math.abs(buf[f * ch + c] - predicted);
-                float ratio = residual / Math.max(1e-6f, rms);
-                if (ratio > thr) {
-                    bad[f] = true;
-                    any = true;
+                for (int k = f + maxWidth; k < f + halfWin; k++) {
+                    localDiffSum += Math.abs(buf[k * ch + c] - buf[(k - 1) * ch + c]);
+                    count++;
                 }
-            }
-            if (!any && frames > ctx * 2 + 4) {
-                // Apply subtle high-frequency transient smoothing proportional
-                // to threshold and maxSpike width when no hard digital spike
-                // exceeds thr so parameter changes remain audible and visible.
-                float alpha = Math.max(0.02f, Math.min(0.35f, (900f - threshold.getCurrentRaw()) / 2500f))
-                        * (0.5f + 0.5f * (halfWin / 40f));
-                for (int f2 = halfWin; f2 < frames - halfWin; f2++) {
-                    float nbr = 0.5f * (buf[(f2 - halfWin) * ch + c] + buf[(f2 + halfWin) * ch + c]);
-                    buf[f2 * ch + c] = buf[f2 * ch + c] * (1f - alpha) + nbr * alpha;
-                }
-                continue;
-            }
-            int f = 0;
-            while (f < frames) {
-                if (!bad[f]) {
+                float localSlope = count > 0 ? (localDiffSum / count) : 0f;
+                float sPrev = buf[(f - 1) * ch + c];
+                float sCur = buf[f * ch + c];
+                float sNext = buf[(f + 1) * ch + c];
+                // Second-difference impulse detector: smooth low-frequency sine
+                // waves have tiny curvature relative to localSlope, whereas clicks
+                // and pops have a sharp discontinuity.
+                float curvature = Math.abs(sCur - 0.5f * (sPrev + sNext));
+                if (curvature > (localSlope * ratioThresh + 0.008f)) {
+                    int start = Math.max(2, f - 1);
+                    int end = f + 1;
+                    while (end < Math.min(frames - 3, start + maxWidth)) {
+                        float sp = buf[(end - 1) * ch + c];
+                        float sc = buf[end * ch + c];
+                        float sn = buf[(end + 1) * ch + c];
+                        if (Math.abs(sc - 0.5f * (sp + sn)) > localSlope * ratioThresh * 0.5f
+                                || Math.abs(sc - sPrev) > localSlope * ratioThresh) {
+                            end++;
+                        } else {
+                            break;
+                        }
+                    }
+                    float p0 = buf[(start - 2) * ch + c];
+                    float p1 = buf[(start - 1) * ch + c];
+                    float p2 = buf[end * ch + c];
+                    float p3 = buf[(end + 1) * ch + c];
+                    int span = end - start + 1;
+                    for (int i = 0; i < span; i++) {
+                        float t = (i + 1) / (float) (span + 1);
+                        float c0 = p1;
+                        float c1 = 0.5f * (p2 - p0);
+                        float c2 = p0 - 2.5f * p1 + 2f * p2 - 0.5f * p3;
+                        float c3 = 0.5f * (p3 - p0) + 1.5f * (p1 - p2);
+                        buf[(start + i) * ch + c] = ((c3 * t + c2) * t + c1) * t + c0;
+                    }
+                    f = end + 1;
+                } else {
                     f++;
-                    continue;
-                }
-                int start = Math.max(2, f - halfWin / 2);
-                while (f < frames && bad[f]) f++;
-                int end = Math.min(frames - 2, f + halfWin / 2);
-                int width = end - start;
-                if (width > maxSpike) continue;
-                if (start < 1 || end >= frames - 1) continue;
-                float y0 = buf[(start - 1) * ch + c];
-                float y1 = buf[end * ch + c];
-                // Derivative from the outer neighbours.
-                float d0 = (buf[end * ch + c] - buf[(start - 2) * ch + c])
-                        / Math.max(1, width + 1);
-                float d1 = (buf[(end + 1) * ch + c] - buf[(start - 1) * ch + c])
-                        / Math.max(1, width + 1);
-                for (int i = start; i < end; i++) {
-                    float t = (i - start + 1f) / (width + 1f);
-                    // Cubic Hermite between the two boundary samples.
-                    float t2 = t * t;
-                    float t3 = t2 * t;
-                    float h00 = 2 * t3 - 3 * t2 + 1;
-                    float h10 = t3 - 2 * t2 + t;
-                    float h01 = -2 * t3 + 3 * t2;
-                    float h11 = t3 - t2;
-                    buf[i * ch + c] = h00 * y0 + h10 * d0 * (width + 1)
-                            + h01 * y1 + h11 * d1 * (width + 1);
                 }
             }
         }

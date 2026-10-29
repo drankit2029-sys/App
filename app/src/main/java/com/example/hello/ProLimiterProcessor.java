@@ -1,31 +1,26 @@
 package com.example.hello;
 
 /**
- * Professional brickwall ceiling limiter: zero-latency peak detection with
- * 4x inter-sample interpolation, programme-dependent release and an
- * adjustable ceiling. It keeps the legacy safety role for the rack: whenever
- * an upstream gain stage is active the limiter can enforce the ceiling even
- * with its own mix at zero.
+ * Brickwall ceiling limiter ("Brickwall Limiter Pro"). Drives up to +12 dB into
+ * a user-configurable soft-clip ceiling, and doubles as the safety ceiling when
+ * any upstream gain stage (compressor, warmth, presence) is active.
+ *
+ * <p>When acting purely as an automatic safety ceiling ({@code drive == 0} and
+ * secondary parameters at defaults), signals below the ceiling pass untouched
+ * and only peaks approaching or exceeding the ceiling are limited.
  */
-final class ProLimiterProcessor extends AudioProcessor {
+public final class ProLimiterProcessor extends AudioProcessor {
 
-    private static final int DECIM = 16;
-
-    private final FxParameter drive = addParameter(FxParameter.intParam(
-            "drive", "Drive", "%", 0, 100, 1, 50));
-    private final FxParameter ceiling = addParameter(FxParameter.dbParam(
-            "limiter_ceiling", "Ceiling", -6f, 0f, -0.2f));
-    private final FxParameter release = addParameter(FxParameter.intParam(
-            "limiter_release", "Release", " ms", 20, 500, 5, 80));
-
-    private volatile boolean safetyOn = false;
+    private final FxParameter drive = addParameter(
+            FxParameter.intParam("drive", "Drive", "%", 0, 100, 5, 0));
+    private final FxParameter ceiling = addParameter(
+            FxParameter.floatParam("limiter_ceiling", "Ceiling", " dBFS", -6.0f, -0.1f, -0.2f));
+    private final FxParameter release = addParameter(
+            FxParameter.intParam("limiter_release", "Release", " ms", 10, 500, 10, 80));
 
     private int sampleRate = DspChain.SAMPLE_RATE;
-    private float gainCur = 1f;
-    private final float[] prev = new float[2];
-
-    ProLimiterProcessor() {
-    }
+    private boolean safetyOn = false;
+    private float limGain = 1.0f;
 
     @Override
     public String getId() {
@@ -39,7 +34,7 @@ final class ProLimiterProcessor extends AudioProcessor {
 
     @Override
     public String getDescription() {
-        return "True-peak ceiling, drive and programme release";
+        return "Zero-overshoot ceiling limiter with up to +12 dB drive";
     }
 
     @Override
@@ -54,124 +49,90 @@ final class ProLimiterProcessor extends AudioProcessor {
 
     @Override
     public void reset() {
-        gainCur = 1f;
-        prev[0] = prev[1] = 0f;
+        limGain = 1.0f;
+    }
+
+    void setLegacyState(int drivePct, boolean safetyCeiling) {
+        drive.setCurrentRaw(drivePct);
+        this.safetyOn = safetyCeiling;
+    }
+
+    public boolean isSafetyOn() {
+        return safetyOn;
+    }
+
+    private boolean hasExplicitLimiterDial() {
+        return drive.getCurrentRaw() > 0
+                || ceiling.getFloat() < -0.25f
+                || release.getCurrentRaw() != 80;
     }
 
     @Override
     public boolean isAudible() {
-        return isEnabled() && (drive01() > 0.001f
-                || ceiling.getFloat() < -0.25f
-                || release.getCurrentRaw() != 80
-                || safetyOn);
-    }
-
-    void setLegacyState(int drivePct, boolean safety) {
-        drive.setCurrentRaw(drivePct);
-        this.safetyOn = safety;
-    }
-
-    boolean isSafetyOn() {
-        return safetyOn;
-    }
-
-    private float drive01() {
-        return drive.getCurrentRaw() / 100f;
+        return isEnabled() && (hasExplicitLimiterDial() || safetyOn);
     }
 
     private float ceilingLin() {
-        return DspChain.fastDbToLin(ceiling.getCurrentRaw() / 100f);
-    }
-
-    /**
-     * Unity-gain ceiling pass used when the limiter's wet/dry mix is below
-     * 1.0 while upstream gain stages still need peak protection.
-     */
-    void enforceSafetyCeiling(float[] buf, int frames, int channels) {
-        if (buf == null || frames <= 0) return;
-        float c = ceilingLin();
-        int n = Math.min(buf.length, frames * Math.max(1,
-                Math.min(2, channels)));
-        for (int i = 0; i < n; i++) {
-            buf[i] = softCeiling(buf[i], c);
-        }
+        return Math.min(0.99f, Math.max(0.25f,
+                DspChain.fastDbToLin(ceiling.getFloat())));
     }
 
     @Override
     public void processInPlace(float[] buf, int frames, int channels) {
-        if (!isEnabled()) return;
-        if (buf == null || frames <= 0) return;
-        final int ch = Math.max(1, Math.min(2, channels));
-        final float lAmt = drive01();
-        if (lAmt <= 0.001f && !safetyOn
-                && ceiling.getFloat() >= -0.25f
-                && release.getCurrentRaw() == 80) {
-            return;
-        }
+        float lAmt = drive.getCurrentRaw() / 100.0f;
+        boolean explicitLimiter = hasExplicitLimiterDial();
+        if (!explicitLimiter && !safetyOn) return;
 
-        final float c = ceilingLin();
-        // Smooth quadratic-linear drive curve (0..6.5 dB) so initial low drive
-        // settings (1%..20%) never produce an exaggerated jump on the waveform.
-        final float driveDb = (0.30f * lAmt + 0.70f * lAmt * lAmt) * 6.5f;
-        final float driveLin = lAmt > 0.001f
-                ? DspChain.fastDbToLin(driveDb) : 1.0f;
-        final float relSec = Math.max(1, release.getCurrentRaw()) * 0.001f;
-        final float relCoef = (float) (1.0 - Math.exp(-1.0
-                / (relSec * sampleRate)));
-        final float attCoef = (float) (1.0 - Math.exp(-1.0
-                / (0.0015f * sampleRate)));
+        int sr = Math.max(8000, sampleRate);
+        float c = ceilingLin();
+        float limDrive = lAmt > 0.001f ? DspChain.fastDbToLin(12.0f * lAmt) : 1.0f;
+        float relSec = Math.max(0.005f, release.getCurrentRaw() / 1000.0f);
+        float relAlpha = 1.0f - (float) Math.exp(-1.0 / (sr * relSec));
+        float attAlpha = 1.0f - (float) Math.exp(-1.0 / (sr * 0.0005f));
 
-        float bufPeak = 0f;
-        for (int i = 0; i < frames * ch; i++) {
-            float a = Math.abs(buf[i] * driveLin);
-            if (a > bufPeak) bufPeak = a;
-        }
-        final float effThresh = Math.min(c, Math.max(1e-4f, bufPeak * 0.72f));
+        // Only limit peaks at or above the user's true ceiling. A relative
+        // threshold based on the chunk peak compressed quiet material far
+        // below the ceiling.
+        float effThresh = c;
 
-        int offset = 0;
-        while (offset < frames) {
-            int blk = Math.min(DECIM, frames - offset);
-            for (int f = 0; f < blk; f++) {
-                int idx = (offset + f) * ch;
-                float peak = 0f;
-                for (int cc = 0; cc < ch; cc++) {
-                    float x = buf[idx + cc] * driveLin;
-                    float p = prev[cc];
-                    float tp = Math.max(Math.abs(x), Math.abs(p));
-                    tp = Math.max(tp, Math.abs(0.25f * x + 0.75f * p));
-                    tp = Math.max(tp, Math.abs(0.5f * x + 0.5f * p));
-                    tp = Math.max(tp, Math.abs(0.75f * x + 0.25f * p));
-                    peak = Math.max(peak, tp);
-                }
-                float desired = 1f;
-                if (peak > c) {
-                    desired = c / peak;
-                } else if (peak > effThresh && effThresh > 1e-5f) {
-                    float ratio = effThresh / peak;
-                    desired = 0.75f + 0.25f * ratio;
-                }
-                if (desired < gainCur) {
-                    gainCur += attCoef * (desired - gainCur);
-                } else {
-                    gainCur += relCoef * (desired - gainCur);
-                }
-                for (int cc = 0; cc < ch; cc++) {
-                    float x = buf[idx + cc] * driveLin;
-                    prev[cc] = x;
-                    buf[idx + cc] = softCeiling(x * gainCur, c);
-                }
+        for (int f = 0; f < frames; f++) {
+            int idx = f * channels;
+            float sL = buf[idx] * limDrive;
+            float sR = channels == 2 ? buf[idx + 1] * limDrive : sL;
+            float peak = Math.max(Math.abs(sL), Math.abs(sR));
+            float want = peak > effThresh ? (effThresh / peak) : 1.0f;
+            limGain += (want < limGain ? attAlpha : relAlpha) * (want - limGain);
+            sL *= limGain;
+            sR *= limGain;
+            buf[idx] = softClipSample(sL, c);
+            if (channels == 2) {
+                buf[idx + 1] = softClipSample(sR, c);
             }
-            offset += blk;
         }
     }
 
-    private static float softCeiling(float y, float c) {
-        float ay = Math.abs(y);
-        float knee = c * 0.85f;
-        if (ay <= knee) return y;
-        float range = c - knee;
-        float d = ay - knee;
-        float lim = knee + range * (d / (range + d));
-        return y >= 0f ? lim : -lim;
+    /**
+     * Enforces the soft-clip ceiling in place after a partial wet/dry blend
+     * so upstream gain stages cannot clip the output when safety limiting is
+     * active.
+     */
+    void enforceSafetyCeiling(float[] buf, int frames, int channels) {
+        if (buf == null || frames <= 0) return;
+        float c = ceilingLin();
+        int n = Math.min(buf.length, frames * channels);
+        for (int i = 0; i < n; i++) {
+            buf[i] = softClipSample(buf[i], c);
+        }
+    }
+
+    private static float softClipSample(float x, float c) {
+        float ax = Math.abs(x);
+        float knee = 0.85f * c;
+        if (ax <= knee) return x;
+        float span = Math.max(1e-6f, c - knee);
+        float over = (ax - knee) / span;
+        // Continuous C1 saturation approaching c asymptotically:
+        float shaped = knee + span * (over / (1.0f + over));
+        return Math.copySign(Math.min(c, shaped), x);
     }
 }

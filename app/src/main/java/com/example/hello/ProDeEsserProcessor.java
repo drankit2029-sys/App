@@ -1,50 +1,54 @@
 package com.example.hello;
 
 /**
- * Professional de-esser: a 4th-order sibilance sidechain (two cascaded
- * constant-peak band-passes) drives smooth, programme-dependent gain
- * reduction. Band centre and width are adjustable, and the reduction can be
- * applied to the sibilance band only (split mode) or to the whole signal
- * (broadband mode).
- *
- * <p>The detector compares band energy to full-band energy, so it follows a
- * quiet close-mic take and a loud take equally well without a fixed level
- * threshold. Stereo channels share one gain so the image stays stable.
+ * Split-band relative sibilance suppressor ("De-Esser Pro"). Uses a phase-coherent
+ * resonant band-pass detector/subtractor in Split-band mode (or broadband attenuation
+ * in Broadband mode) so sibilance is reduced without phase-cancelling or boosting
+ * the 3.5 kHz crossover skirts.
  */
-final class ProDeEsserProcessor extends AudioProcessor {
+public final class ProDeEsserProcessor extends AudioProcessor {
 
-    private static final int BLOCK = 16;
-    private static final float INV_BLOCK = 1.0f / BLOCK;
-    private static final float EPS = 1e-12f;
-
-    private final FxParameter amt = addParameter(FxParameter.intParam(
-            "amt", "Reduction", "%", 0, 100, 1, 45));
-    private final FxParameter freq = addParameter(FxParameter.intParam(
-            "deess_freq", "Frequency", " Hz", 4500, 9500, 100, 6800));
-    private final FxParameter width = addParameter(FxParameter.floatParam(
-            "deess_width", "Width", " Q", 0.6f, 3.0f, 1.5f));
-    private final FxParameter mode = addParameter(FxParameter.enumParam(
-            "deess_mode", "Mode", new String[]{"Split band", "Broadband"}, 0));
-
-    private final float[][] b0 = new float[2][2];
-    private final float[][] a1 = new float[2][2];
-    private final float[][] a2 = new float[2][2];
-    private final float[][] z1 = new float[2][2];
-    private final float[][] z2 = new float[2][2];
-    private final float[] scratchSib = new float[BLOCK * 2];
+    private final FxParameter amt = addParameter(
+            FxParameter.intParam("amt", "Reduction", "%", 0, 100, 5, 0));
+    private final FxParameter freq = addParameter(
+            FxParameter.intParam("deess_freq", "Center Freq", " Hz", 3500, 10000, 250, 6500));
+    private final FxParameter width = addParameter(
+            FxParameter.intParam("deess_width", "Bandwidth", "%", 10, 100, 5, 50));
+    private final FxParameter mode = addParameter(
+            FxParameter.enumParam("deess_mode", "Mode",
+                    new String[]{"Split-band", "Broadband"}, 0));
 
     private int sampleRate = DspChain.SAMPLE_RATE;
+    private float bpB0, bpB1, bpB2, bpA1, bpA2;
     private int cachedFreq = -1;
     private int cachedWidth = -1;
-    private int cachedRate = -1;
+    private int cachedSr = -1;
 
-    private float sibEnv = 1e-7f;
-    private float fullEnv = 1e-6f;
-    private float cutCur = 0f;
-    private float cutTarget = 0f;
+    private float bpZ1L, bpZ2L;
+    private float bpZ1R, bpZ2R;
+    private float sibEnv, fullEnv;
 
-    ProDeEsserProcessor() {
+    public ProDeEsserProcessor() {
         updateCoefficients();
+    }
+
+    private void updateCoefficients() {
+        int fc = Math.max(2000, Math.min(12000, freq.getCurrentRaw()));
+        int wPct = Math.max(10, Math.min(100, width.getCurrentRaw()));
+        int sr = Math.max(8000, sampleRate);
+        if (fc == cachedFreq && wPct == cachedWidth && sr == cachedSr) return;
+        cachedFreq = fc;
+        cachedWidth = wPct;
+        cachedSr = sr;
+
+        double w01 = (wPct - 10) / 90.0;
+        double q = Math.max(0.35, 2.4 - 1.85 * w01);
+        float[] coeffs = Dsp.rbjBandPass(sr, Math.min(fc, sr * 0.45), q);
+        bpB0 = coeffs[0];
+        bpB1 = coeffs[1];
+        bpB2 = coeffs[2];
+        bpA1 = coeffs[3];
+        bpA2 = coeffs[4];
     }
 
     @Override
@@ -59,7 +63,7 @@ final class ProDeEsserProcessor extends AudioProcessor {
 
     @Override
     public String getDescription() {
-        return "4th-order adaptive sibilance control, split or broadband";
+        return "Split-band relative sibilance suppressor";
     }
 
     @Override
@@ -70,142 +74,86 @@ final class ProDeEsserProcessor extends AudioProcessor {
     @Override
     public void prepare(int sampleRate, int channels) {
         if (sampleRate > 0) this.sampleRate = sampleRate;
+        cachedSr = -1;
         updateCoefficients();
     }
 
     @Override
     public void reset() {
-        for (int c = 0; c < 2; c++) {
-            for (int s = 0; s < 2; s++) {
-                z1[c][s] = 0f;
-                z2[c][s] = 0f;
-            }
-        }
-        sibEnv = 1e-7f;
-        fullEnv = 1e-6f;
-        cutCur = 0f;
-        cutTarget = 0f;
-    }
-
-    @Override
-    public boolean isAudible() {
-        return isEnabled() && amt01() > 0.001f;
+        bpZ1L = bpZ2L = 0f;
+        bpZ1R = bpZ2R = 0f;
+        sibEnv = fullEnv = 0f;
     }
 
     void setLegacyAmount(int pct) {
         amt.setCurrentRaw(pct);
     }
 
-    private float amt01() {
-        return amt.getCurrentRaw() / 100f;
+    private boolean hasNonDefaultSecondary() {
+        return freq.getCurrentRaw() != freq.defaultRaw
+                || width.getCurrentRaw() != width.defaultRaw
+                || mode.getCurrentRaw() != mode.defaultRaw;
+    }
+
+    @Override
+    public boolean isAudible() {
+        return isEnabled() && (amt.getCurrentRaw() > 0 || hasNonDefaultSecondary());
     }
 
     @Override
     public void processInPlace(float[] buf, int frames, int channels) {
-        if (!isEnabled()) return;
-        if (buf == null || frames <= 0) return;
-        final int ch = Math.max(1, Math.min(2, channels));
-        final float amount = amt01();
-        if (amount <= 0.001f) return;
+        int rawAmt = amt.getCurrentRaw();
+        float dAmt = rawAmt > 0 ? (rawAmt / 100.0f)
+                : (hasNonDefaultSecondary() ? 0.30f : 0.0f);
+        if (dAmt <= 0.001f || frames <= 0) return;
+
         updateCoefficients();
-        final boolean broadband = mode.getCurrentRaw() != 0;
-        final float maxCutDb = 6f + 18f * amount;
-        final float threshDb = -3.0f - 18.0f * amount;
-        final float aSibAtt = blockCoef(0.0015f);
-        final float aSibRel = blockCoef(0.080f);
-        final float aFullAtt = blockCoef(0.010f);
-        final float aFullRel = blockCoef(0.150f);
+        boolean broadband = mode.getEnumIndex() == 1;
+        float maxCutDb = 20.0f * dAmt;
+        float ratioThresh = 0.28f - 0.14f * dAmt;
 
-        int offset = 0;
-        while (offset < frames) {
-            int blk = Math.min(BLOCK, frames - offset);
+        for (int f = 0; f < frames; f++) {
+            int idx = f * channels;
+            float sL = buf[idx];
+            float sibL = bpB0 * sL + bpZ1L;
+            bpZ1L = bpB1 * sL - bpA1 * sibL + bpZ2L;
+            bpZ2L = bpB2 * sL - bpA2 * sibL;
 
-            float sibEnergy = 0f;
-            float fullEnergy = 0f;
-            for (int f = 0; f < blk; f++) {
-                int idx = (offset + f) * ch;
-                int sIdx = f * ch;
-                for (int c = 0; c < ch; c++) {
-                    float x = buf[idx + c];
-                    float sib = bandPass(x, c);
-                    scratchSib[sIdx + c] = sib;
-                    sibEnergy += sib * sib;
-                    fullEnergy += x * x;
+            float sR = sL;
+            float sibR = sibL;
+            if (channels == 2) {
+                sR = buf[idx + 1];
+                sibR = bpB0 * sR + bpZ1R;
+                bpZ1R = bpB1 * sR - bpA1 * sibR + bpZ2R;
+                bpZ2R = bpB2 * sR - bpA2 * sibR;
+            }
+
+            float sibAbs = channels == 2
+                    ? 0.5f * (Math.abs(sibL) + Math.abs(sibR))
+                    : Math.abs(sibL);
+            float fullAbs = channels == 2
+                    ? 0.5f * (Math.abs(sL) + Math.abs(sR))
+                    : Math.abs(sL);
+            sibEnv += (sibAbs > sibEnv ? 0.08f : 0.004f) * (sibAbs - sibEnv);
+            fullEnv += (fullAbs > fullEnv ? 0.04f : 0.0015f) * (fullAbs - fullEnv);
+
+            float sibRatio = sibEnv / (fullEnv + 0.0015f);
+            float g = 1.0f;
+            if (sibRatio > ratioThresh) {
+                float over = Math.min(1.0f, (sibRatio - ratioThresh) * 2.2f);
+                g = DspChain.fastDbToLin(-maxCutDb * over);
+            }
+            if (broadband) {
+                buf[idx] = sL * g;
+                if (channels == 2) buf[idx + 1] = sR * g;
+            } else {
+                // Phase-coherent sibilance band subtraction:
+                // at g=1 output is exact dry sL; at g<1 only the resonant band is attenuated.
+                float cut = 1.0f - g;
+                buf[idx] = sL - sibL * cut;
+                if (channels == 2) {
+                    buf[idx + 1] = sR - sibR * cut;
                 }
-            }
-            float invN = 1.0f / (blk * ch);
-            sibEnv += (sibEnergy * invN > sibEnv ? aSibAtt : aSibRel)
-                    * (sibEnergy * invN - sibEnv);
-            fullEnv += (fullEnergy * invN > fullEnv ? aFullAtt : aFullRel)
-                    * (fullEnergy * invN - fullEnv);
-
-            float ratioDb = 0.5f * DspChain.fastLinToDb(sibEnv + EPS)
-                    - 0.5f * DspChain.fastLinToDb(fullEnv + 1e-9f);
-            float wantCut = 0f;
-            if (ratioDb > threshDb && fullEnv > 1e-7f) {
-                float overDb = Math.min(maxCutDb,
-                        (ratioDb - threshDb) * 1.4f);
-                wantCut = 1f - DspChain.fastDbToLin(-overDb);
-            }
-            float alpha = wantCut > cutTarget ? 0.50f : 0.12f;
-            cutTarget += alpha * (wantCut - cutTarget);
-            float dCut = (cutTarget - cutCur) * INV_BLOCK;
-
-            for (int f = 0; f < blk; f++) {
-                cutCur += dCut;
-                int idx = (offset + f) * ch;
-                int sIdx = f * ch;
-                for (int c = 0; c < ch; c++) {
-                    if (broadband) {
-                        buf[idx + c] *= 1f - cutCur;
-                    } else {
-                        buf[idx + c] -= cutCur * scratchSib[sIdx + c];
-                    }
-                }
-            }
-            offset += blk;
-        }
-    }
-
-    /** One biquad stage; the second stage is run right after in bandPass. */
-    private float bandPass(float x, int c) {
-        float y = b0[c][0] * x + z1[c][0];
-        z1[c][0] = -a1[c][0] * y + z2[c][0];
-        z2[c][0] = -b0[c][0] * x - a2[c][0] * y;
-        float z = b0[c][1] * y + z1[c][1];
-        z1[c][1] = -a1[c][1] * z + z2[c][1];
-        z2[c][1] = -b0[c][1] * y - a2[c][1] * z;
-        return z;
-    }
-
-    private float blockCoef(float seconds) {
-        return (float) (1.0 - Math.exp(-BLOCK / (seconds * sampleRate)));
-    }
-
-    private void updateCoefficients() {
-        int hz = Math.max(4500, Math.min(9500, freq.getCurrentRaw()));
-        int wRaw = width.clampRaw(width.getCurrentRaw());
-        if (hz == cachedFreq && wRaw == cachedWidth
-                && sampleRate == cachedRate) {
-            return;
-        }
-        cachedFreq = hz;
-        cachedWidth = wRaw;
-        cachedRate = sampleRate;
-        double q = wRaw / 100.0;
-        double w0 = 2.0 * Math.PI * hz / sampleRate;
-        double cos = Math.cos(w0);
-        double sin = Math.sin(w0);
-        double alpha = sin / (2.0 * q);
-        double a0Inv = 1.0 / (1.0 + alpha);
-        float nb0 = (float) (alpha * a0Inv);
-        float na1 = (float) (-2.0 * cos * a0Inv);
-        float na2 = (float) ((1.0 - alpha) * a0Inv);
-        for (int c = 0; c < 2; c++) {
-            for (int s = 0; s < 2; s++) {
-                b0[c][s] = nb0;
-                a1[c][s] = na1;
-                a2[c][s] = na2;
             }
         }
     }

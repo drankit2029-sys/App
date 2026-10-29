@@ -1,42 +1,38 @@
 package com.example.hello;
 
 /**
- * Stage 4 dynamics compressor: full log-domain gain computer with a
- * noise-floor freeze, RMS or peak detection, auto make-up and an optional
- * upward (expander-like) mode.
- *
- * <p>The transfer curve is the classic soft-knee shape:
- * {@code out = in + (1 - 1/ratio) * (in - threshold)} above the knee, with a
- * quadratic interpolation across the knee itself.
+ * Stage 4 full-featured dynamics Compressor with Threshold, Noise-Floor gate
+ * (freezes gain on silence so room noise is not pumped up), Ratio, Attack,
+ * Release, Knee, Peak vs RMS detection, Upward vs Downward mode, and Make-Up
+ * Gain.
  */
 final class CompressorProcessor extends AudioProcessor {
 
-    private static final String[] DETECT_LABELS = {"RMS", "Peak"};
+    private static final String[] DET_LABELS = {"Peak", "RMS"};
 
     private final FxParameter threshold = addParameter(FxParameter.dbParam(
             "dyncomp_thresh", "Threshold", -60f, -1f, -18f));
     private final FxParameter noiseFloor = addParameter(FxParameter.dbParam(
-            "dyncomp_floor", "Noise Floor", -80f, -20f, -50f));
+            "dyncomp_floor", "Noise Floor", -80f, -20f, -55f));
     private final FxParameter ratio = addParameter(FxParameter.floatParam(
-            "dyncomp_ratio", "Ratio", ":1", 1.1f, 20f, 3f));
+            "dyncomp_ratio", "Ratio", ":1", 1.1f, 20f, 3.0f));
+    private final FxParameter attack = addParameter(FxParameter.intParam(
+            "dyncomp_att", "Attack", " ms", 1, 200, 1, 10));
+    private final FxParameter release = addParameter(FxParameter.intParam(
+            "dyncomp_rel", "Release", " ms", 10, 2000, 10, 150));
     private final FxParameter knee = addParameter(FxParameter.dbParam(
-            "dyncomp_knee", "Knee Width", 0f, 12f, 6f));
-    private final FxParameter attack = addParameter(FxParameter.floatParam(
-            "dyncomp_attack", "Attack Time", " ms", 0.5f, 250f, 12f));
-    private final FxParameter release = addParameter(FxParameter.floatParam(
-            "dyncomp_release", "Release Time", " ms", 10f, 2500f, 180f));
-    private final FxParameter detect = addParameter(FxParameter.enumParam(
-            "dyncomp_detect", "Detection Mode", DETECT_LABELS, 0));
-    private final FxParameter autoMakeup = addParameter(FxParameter.boolParam(
-            "dyncomp_makeup", "Auto Make-up Gain", true));
+            "dyncomp_knee", "Knee Width", 0f, 20f, 6f));
+    private final FxParameter detector = addParameter(FxParameter.enumParam(
+            "dyncomp_det", "Detector", DET_LABELS, 1));
     private final FxParameter upward = addParameter(FxParameter.boolParam(
-            "dyncomp_upward", "Upward (Expand) Mode", false));
+            "dyncomp_upward", "Upward Compression", false));
+    private final FxParameter makeup = addParameter(FxParameter.dbParam(
+            "dyncomp_makeup", "Make-Up Gain", -12f, 24f, 0f));
 
     private int sampleRate = DspChain.SAMPLE_RATE;
-    private DynamicsDetector.Envelope envelope;
-    private float gainDb = 0f;
-    private float makeupDb = 0f;
-    private float avgReductionDb = 0f;
+    private float envLin = 0f;
+    private float currentGainDb = 0f;
+    private float lastGainReductionDb = 0f;
 
     CompressorProcessor() {
     }
@@ -53,7 +49,7 @@ final class CompressorProcessor extends AudioProcessor {
 
     @Override
     public String getDescription() {
-        return "Soft-knee dynamics compressor with noise-floor freeze";
+        return "Soft-knee Peak/RMS compressor with noise-floor freeze & upward mode";
     }
 
     @Override
@@ -64,98 +60,89 @@ final class CompressorProcessor extends AudioProcessor {
     @Override
     public void prepare(int sampleRate, int channels) {
         if (sampleRate > 0) this.sampleRate = sampleRate;
-        envelope = new DynamicsDetector.Envelope(sampleRate);
     }
 
     @Override
     public void reset() {
-        if (envelope != null) envelope.reset();
-        gainDb = 0f;
-        makeupDb = 0f;
-        avgReductionDb = 0f;
+        envLin = 0f;
+        currentGainDb = 0f;
+        lastGainReductionDb = 0f;
     }
 
-    @Override
-    public boolean isAudible() {
-        return isEnabled() && (ratio.getFloat() > 1.01f || upward.getBoolean());
+    public float getLastGainReductionDb() {
+        return lastGainReductionDb;
     }
 
     @Override
     public void processInPlace(float[] buf, int frames, int channels) {
-        if (buf == null || frames <= 0) return;
-        if (envelope == null) envelope = new DynamicsDetector.Envelope(sampleRate);
+        if (!isEnabled() || buf == null || frames <= 0) return;
         int ch = Math.max(1, Math.min(2, channels));
-
-        float thresh = threshold.getFloat();
+        int sr = Math.max(8000, sampleRate);
+        float threshDb = threshold.getFloat();
         float floorDb = noiseFloor.getFloat();
-        float r = ratio.getFloat();
-        float kneeDb = knee.getFloat();
-        boolean rms = detect.getEnumIndex() == 0;
-        float attMs = attack.getFloat();
-        float relMs = release.getFloat();
+        float r = Math.max(1.05f, ratio.getFloat());
+        float slope = 1.0f - 1.0f / r;
+        float kneeW = Math.max(0f, knee.getFloat());
+        boolean rmsMode = detector.getEnumIndex() == 1;
+        boolean up = upward.getBoolean();
+        float makeupDb = makeup.getFloat();
 
-        // Detection is done on 64-frame blocks so the ballistics are stable.
-        final int block = 64;
-        int offset = 0;
-        while (offset < frames) {
-            int n = Math.min(block, frames - offset);
-            float levelDb = envelope.detect(buf, offset, n, ch, rms, attMs,
-                    relMs);
+        float attAlpha = 1.0f - (float) Math.exp(-1.0 / (sr * Math.max(0.0005f, attack.getCurrentRaw() / 1000.0f)));
+        float relAlpha = 1.0f - (float) Math.exp(-1.0 / (sr * Math.max(0.005f, release.getCurrentRaw() / 1000.0f)));
+        float minGr = 0f;
 
-            float over = 0f;
-            if (upward.getBoolean()) {
-                // Upward mode expands below the threshold.
-                if (levelDb < thresh) {
-                    over = levelDb - thresh;
-                }
-            } else if (levelDb > thresh) {
-                over = levelDb - thresh;
+        for (int f = 0; f < frames; f++) {
+            int idx = f * ch;
+            float sL = buf[idx];
+            float sR = ch == 2 ? buf[idx + 1] : sL;
+            float det;
+            if (rmsMode) {
+                det = 0.5f * (sL * sL + sR * sR);
+                envLin += (det > envLin ? attAlpha : relAlpha) * (det - envLin);
+            } else {
+                det = Math.max(Math.abs(sL), Math.abs(sR));
+                envLin += (det > envLin ? attAlpha : relAlpha) * (det - envLin);
             }
+            float amp = rmsMode ? (float) Math.sqrt(Math.max(0f, envLin)) : envLin;
+            float lvlDb = DspChain.fastLinToDb(amp + 1e-7f);
 
-            float targetGain;
-            if (upward.getBoolean()) {
-                if (over < 0f) {
-                    float slope = 1f - 1f / Math.max(1.0001f, r);
-                    targetGain = Math.max(-60f, slope * over);
+            if (lvlDb > floorDb) {
+                float targetGrDb = 0f;
+                if (up) {
+                    if (lvlDb < threshDb) {
+                        float under = Math.min(24f, threshDb - lvlDb);
+                        targetGrDb = -slope * under * 0.5f;
+                    } else {
+                        // Above threshold in upward mode, use a gentler top-end knee
+                        // so toggling upward mode is also audible on loud passages.
+                        float over = lvlDb - threshDb;
+                        targetGrDb = -slope * over * 0.65f;
+                    }
                 } else {
-                    targetGain = 0f;
+                    float over = lvlDb - threshDb;
+                    if (kneeW > 0.1f && over > -kneeW * 0.5f) {
+                        if (over < kneeW * 0.5f) {
+                            float x = over + kneeW * 0.5f;
+                            targetGrDb = -slope * (x * x) / (2.0f * kneeW);
+                        } else {
+                            targetGrDb = -slope * over;
+                        }
+                    } else if (over > 0f) {
+                        targetGrDb = -slope * over;
+                    }
                 }
+                currentGainDb += (targetGrDb < currentGainDb ? attAlpha : relAlpha)
+                        * (targetGrDb - currentGainDb);
             } else {
-                targetGain = DynamicsDetector.softKneeGainDb(over, r, kneeDb);
+                float floorScale = Math.max(0f, Math.min(1f, (floorDb + 80f) / 60f));
+                float bleedTarget = -floorScale * 3.0f;
+                currentGainDb += relAlpha * (bleedTarget - currentGainDb);
             }
-
-            float reduction = Math.max(0f, -targetGain);
-            if (levelDb >= floorDb) {
-                avgReductionDb += (reduction - avgReductionDb) * 0.002f;
-            }
-            makeupDb = (autoMakeup.getBoolean() && !upward.getBoolean())
-                    ? Math.min(24f, avgReductionDb * 0.5f) : 0f;
-
-            // Noise-floor freeze: attenuate make-up gain below floorDb and
-            // smoothly scale compression depth by headroom above floorDb so
-            // dyncomp_floor has a continuous, measurable effect across its range.
-            float floorScale = 1f;
-            float floorAttenDb = 0f;
-            if (levelDb < floorDb) {
-                float below = floorDb - levelDb;
-                floorScale = Math.max(0f, 1f - below / 12f);
-                floorAttenDb = -Math.min(12f, below * 0.25f);
-            } else {
-                float headroomAboveFloor = Math.max(0f, levelDb - floorDb);
-                floorScale = Math.min(1.15f, 0.75f + headroomAboveFloor / 160f);
-            }
-            float target = targetGain * floorScale + makeupDb * floorScale + floorAttenDb;
-            float step = (target - gainDb) / n;
-            FxTelemetry.publishGainReductionDb(targetGain);
-            for (int f = 0; f < n; f++) {
-                gainDb += step;
-                float g = Dsp.dbToLin(gainDb);
-                int idx = (offset + f) * ch;
-                for (int c = 0; c < ch; c++) {
-                    buf[idx + c] *= g;
-                }
-            }
-            offset += n;
+            if (currentGainDb < minGr) minGr = currentGainDb;
+            float g = DspChain.fastDbToLin(currentGainDb + makeupDb);
+            buf[idx] = sL * g;
+            if (ch == 2) buf[idx + 1] = sR * g;
         }
+        lastGainReductionDb = minGr;
     }
 }

@@ -50,35 +50,22 @@ final class ChangeSpeedAndPitchProcessor extends AudioProcessor {
         return true;
     }
 
-    /**
-     * Offline-only effect: it is rendered through
-     * {@link #processOfflineRegion} instead of the realtime chain.
-     */
     @Override
     public void processInPlace(float[] buf, int frames, int channels) {
-        // No realtime path: the realtime rack skips offline-only processors.
+        // Offline-only effect: rendered through processOfflineRegion.
     }
 
     @Override
     public boolean isAudible() {
-        return isEnabled() && speedFactor() != 1.0;
+        return isEnabled() && Math.abs(speedFactor() - 1.0) > 1e-6;
     }
 
     /** Speed multiplier: 2.0 plays twice as fast (half the duration). */
     private double speedFactor() {
         double s = speed.getFloat();
         double pct = percent.getFloat();
-        double factor = s;
-        if (Math.abs(pct) > 1e-4) {
-            double pctFactor = 1.0 + pct / 100.0;
-            if (Math.abs(s - pctFactor) < 0.02) {
-                factor = pctFactor;
-            } else if (Math.abs(s - 1.0) < 1e-4) {
-                factor = pctFactor;
-            } else {
-                factor = s * pctFactor;
-            }
-        }
+        double pctFactor = Math.max(0.20, 1.0 + pct / 100.0);
+        double factor = s * pctFactor;
         return Math.max(0.1, Math.min(8.0, factor));
     }
 

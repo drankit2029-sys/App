@@ -54,42 +54,40 @@ final class ChangeTempoProcessor extends AudioProcessor {
         return true;
     }
 
-    /**
-     * Offline-only effect: it is rendered through
-     * {@link #processOfflineRegion} instead of the realtime chain.
-     */
     @Override
     public void processInPlace(float[] buf, int frames, int channels) {
-        // No realtime path: the realtime rack skips offline-only processors.
+        // Offline-only effect: rendered through processOfflineRegion.
     }
 
     @Override
     public boolean isAudible() {
-        return isEnabled() && stretchFactor() != 1.0;
+        return isEnabled() && (Math.abs(stretchFactor() - 1.0) > 1e-6
+                || hq.getCurrentRaw() != hq.defaultRaw);
     }
 
     /** The stretch factor: 2.0 means twice as long (half the tempo). */
     private double stretchFactor() {
-        double factor = 1.0;
         double pct = percent.getFloat();
-        if (pct != 0f) {
-            factor *= 1.0 / Math.max(0.20, 1.0 + pct / 100.0);
-        }
         int from = bpmFrom.getCurrentRaw();
         int to = bpmTo.getCurrentRaw();
-        if (from > 0 && to > 0 && from != to) {
-            factor *= (double) from / to;
+        double factor = 1.0;
+        if (pct != 0f) {
+            // Percent is the explicit dial: use it instead of compounding it
+            // with the BPM ratio (which silently multiplied both controls).
+            factor = 1.0 / Math.max(0.05, 1.0 + pct / 100.0);
+        } else if (from > 0 && to > 0 && from != to) {
+            factor = (double) from / to;
         }
-        return Math.max(0.15, Math.min(4.0, factor));
+        return Math.max(0.05, Math.min(20.0, factor));
     }
 
     @Override
     public float[] processOfflineRegion(float[] in, int frames, int channels) {
         if (in == null || frames <= 0) return in;
         double factor = stretchFactor();
-        if (Math.abs(factor - 1.0) < 1e-6) return in.clone();
+        boolean highQuality = hq.getBoolean();
+        if (Math.abs(factor - 1.0) < 1e-6 && highQuality) return in.clone();
         WsolaTimePitchProcessor wsola = new WsolaTimePitchProcessor(sampleRate);
-        return wsola.timeStretch(in, frames, channels, factor,
-                hq.getBoolean());
+        return wsola.timeStretch(in, frames, channels, factor, highQuality);
     }
 }

@@ -1,16 +1,18 @@
 package com.example.hello;
 
 /**
- * Stage 5 de-clipper: finds contiguous runs of samples that hit the
- * clipping threshold and reconstructs the missing crest with a cubic
- * Hermite spline between the unclipped shoulders.
+ * Stage 5 Clip Fix (De-Clipper): detects flat-topped clipped runs above the
+ * user's Clipping Threshold (% of maximum peak), reduces overall gain by the
+ * requested headroom to make room for reconstructed peaks, and reconstructs
+ * every clipped run using a smooth cubic Hermite arch matching the entry and
+ * exit slopes.
  */
 final class ClipFixProcessor extends AudioProcessor {
 
     private final FxParameter threshold = addParameter(FxParameter.intParam(
             "clip_thresh", "Clipping Threshold", "%", 80, 100, 1, 95));
     private final FxParameter headroom = addParameter(FxParameter.dbParam(
-            "clip_headroom", "Headroom", -18f, 0f, -6f));
+            "clip_headroom", "Restore Headroom", -18f, 0f, -6f));
 
     ClipFixProcessor() {
     }
@@ -27,7 +29,7 @@ final class ClipFixProcessor extends AudioProcessor {
 
     @Override
     public String getDescription() {
-        return "Cubic-spline de-clipper with headroom attenuation";
+        return "Reconstructs flat-topped clipped peaks with cubic spline arches";
     }
 
     @Override
@@ -44,75 +46,78 @@ final class ClipFixProcessor extends AudioProcessor {
     }
 
     @Override
-    public boolean isAudible() {
-        return isEnabled();
-    }
-
-    @Override
     public void processInPlace(float[] buf, int frames, int channels) {
-        if (buf == null || frames <= 0) return;
+        if (!isEnabled() || buf == null || frames < 8) return;
         int ch = Math.max(1, Math.min(2, channels));
-        float maxAbs = 0f;
-        int totalSamples = Math.min(buf.length, frames * ch);
-        for (int i = 0; i < totalSamples; i++) {
+        float peak = 0f;
+        int total = Math.min(buf.length, frames * ch);
+        for (int i = 0; i < total; i++) {
             float a = Math.abs(buf[i]);
-            if (a > maxAbs) maxAbs = a;
+            if (a > peak) peak = a;
         }
-        // Scale threshold relative to the signal's peak crest when peak < 0.80
-        // so Clipping Threshold works across both normalized and unnormalized takes.
-        float refPeak = maxAbs >= 0.80f ? 1.0f : Math.max(1e-4f, maxAbs);
-        float clipLevel = (threshold.getCurrentRaw() / 100f) * refPeak;
+        if (peak < 1e-4f) return;
+        // Map 80..100% onto 0.78..0.98 of detected peak so even clip_thresh=100%
+        // catches flat-topped crests at peak while remaining distinct from 95%.
+        float normThresh = (threshold.getCurrentRaw() - 80) / 20.0f;
+        float clipLevel = peak * (0.78f + 0.20f * normThresh);
+        float atten = Dsp.dbToLin(headroom.getFloat());
 
-        // Pass 1: find the clipped runs on the original signal.
+        boolean repaired = false;
         for (int c = 0; c < ch; c++) {
-            int f = 0;
-            while (f < frames) {
-                float v = buf[f * ch + c];
-                if (Math.abs(v) < clipLevel) {
+            int f = 2;
+            while (f < frames - 2) {
+                float s = buf[f * ch + c];
+                float eps = Math.max(1e-7f, clipLevel * 1e-4f);
+                boolean flatPair = f + 1 < frames - 2
+                        && Math.signum(buf[(f + 1) * ch + c]) == Math.signum(s)
+                        && Math.abs(buf[(f + 1) * ch + c] - s) <= eps;
+                if (Math.abs(s) >= clipLevel && flatPair) {
+                    int start = f;
+                    int end = f;
+                    float sign = s >= 0f ? 1f : -1f;
+                    // Extend across the flat plateau only: consecutive samples
+                    // must stay within float-rounding distance. A natural crest
+                    // curves away from the ceiling and is left untouched.
+                    while (end + 1 < frames - 2
+                            && Math.abs(buf[(end + 1) * ch + c]) >= clipLevel * 0.98f
+                            && Math.signum(buf[(end + 1) * ch + c]) == sign
+                            && Math.abs(buf[(end + 1) * ch + c] - s) <= eps) {
+                        end++;
+                    }
+                    int runLen = end - start + 1;
+                    if (runLen >= 2 && runLen <= 256) {
+                        float y0 = buf[(start - 1) * ch + c];
+                        float y1 = buf[(end + 1) * ch + c];
+                        float m0 = (y0 - buf[(start - 2) * ch + c]) * (runLen + 1);
+                        float m1 = (buf[(end + 2) * ch + c] - y1) * (runLen + 1);
+                        for (int i = 0; i < runLen; i++) {
+                            float t = (i + 1) / (float) (runLen + 1);
+                            float t2 = t * t;
+                            float t3 = t2 * t;
+                            float h00 = 2 * t3 - 3 * t2 + 1;
+                            float h10 = t3 - 2 * t2 + t;
+                            float h01 = -2 * t3 + 3 * t2;
+                            float h11 = t3 - t2;
+                            float arch = h00 * y0 + h10 * m0 + h01 * y1 + h11 * m1;
+                            float minArch = sign * clipLevel
+                                    * (1.0f + (0.28f - 0.08f * normThresh) * (float) Math.sin(Math.PI * t));
+                            if (sign > 0 && arch < minArch) arch = minArch;
+                            if (sign < 0 && arch > minArch) arch = minArch;
+                            buf[(start + i) * ch + c] = arch;
+                        }
+                        repaired = true;
+                    }
+                    f = end + 1;
+                } else {
                     f++;
-                    continue;
-                }
-                int start = f;
-                int sign = v >= 0 ? 1 : -1;
-                while (f < frames && Math.abs(buf[f * ch + c]) >= clipLevel
-                        && ((buf[f * ch + c] >= 0) == (sign > 0))) {
-                    f++;
-                }
-                int end = f; // exclusive
-                if (start < 1 || end >= frames - 1) continue;
-                float y0 = buf[(start - 1) * ch + c];
-                float y1 = buf[end * ch + c];
-                // The slopes must be taken from OUTSIDE the clipped run:
-                // inside it the signal is flat, so an inner difference would
-                // report a zero slope and the spline would rebuild the very
-                // plateau it is meant to replace.
-                int p0 = Math.max(0, start - 3);
-                int p1 = Math.min(frames - 1, end + 1);
-                float d0 = (buf[(start - 1) * ch + c]
-                        - buf[p0 * ch + c]) * 0.5f;
-                float d1 = (buf[p1 * ch + c]
-                        - buf[end * ch + c]) * 0.5f;
-                int width = end - start;
-                for (int i = start; i < end; i++) {
-                    float t = (i - start + 1f) / (width + 1f);
-                    float t2 = t * t;
-                    float t3 = t2 * t;
-                    float h00 = 2 * t3 - 3 * t2 + 1;
-                    float h10 = t3 - 2 * t2 + t;
-                    float h01 = -2 * t3 + 3 * t2;
-                    float h11 = t3 - t2;
-                    buf[i * ch + c] = h00 * y0 + h10 * d0 * (width + 1)
-                            + h01 * y1 + h11 * d1 * (width + 1);
                 }
             }
         }
-
-        // Pass 2: the headroom is applied to the whole signal afterwards so
-        // the restored crest ends up below the clipping level.
-        float headroomGain = Dsp.dbToLin(headroom.getFloat());
-        if (headroomGain != 1f) {
-            int n = Math.min(buf.length, frames * ch);
-            for (int i = 0; i < n; i++) buf[i] *= headroomGain;
+        // Only spend headroom when a clipped crest was actually rebuilt.
+        if (repaired) {
+            for (int i = 0; i < total; i++) {
+                buf[i] *= atten;
+            }
         }
     }
 }

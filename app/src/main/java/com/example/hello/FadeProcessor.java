@@ -26,7 +26,7 @@ final class FadeProcessor extends AudioProcessor {
 
     private int sampleRate = DspChain.SAMPLE_RATE;
     private int channels = 2;
-    private BiquadFilter closingLp = new BiquadFilter();
+    private final BiquadFilter closingLp = new BiquadFilter();
 
     FadeProcessor() {
     }
@@ -55,8 +55,8 @@ final class FadeProcessor extends AudioProcessor {
     public void prepare(int sampleRate, int channels) {
         if (sampleRate > 0) this.sampleRate = sampleRate;
         this.channels = Math.max(1, Math.min(2, channels));
-        closingLp.setSections(new float[][]{Dsp.rbjLowPass(sampleRate, 800f, 0.7071)},
-                channels);
+        closingLp.setSections(new float[][]{Dsp.rbjLowPass(this.sampleRate, 800f, 0.7071)},
+                this.channels);
     }
 
     @Override
@@ -69,13 +69,9 @@ final class FadeProcessor extends AudioProcessor {
         return true;
     }
 
-    /**
-     * Offline-only effect: it is rendered through
-     * {@link #processOfflineRegion} instead of the realtime chain.
-     */
     @Override
     public void processInPlace(float[] buf, int frames, int channels) {
-        // No realtime path: the realtime rack skips offline-only processors.
+        // Offline-only effect: rendered through processOfflineRegion.
     }
 
     @Override
@@ -86,8 +82,6 @@ final class FadeProcessor extends AudioProcessor {
     @Override
     public float[] processOfflineRegion(float[] in, int frames, int channels) {
         if (in == null || frames <= 0) return in;
-        // The fade is rendered into a copy so the caller keeps the original
-        // region untouched, exactly like the other offline tools.
         float[] out = in.clone();
         int typeIdx = type.getEnumIndex();
         int fadeFrames = Math.max(1,
@@ -141,7 +135,7 @@ final class FadeProcessor extends AudioProcessor {
         if (mid != 0f) {
             s *= Math.max(0f, 1f + mid * 2.5f * u * (1f - u));
         }
-        return s;
+        return Math.max(0f, Math.min(1.5f, s));
     }
 
     /** Shaped ramp in or out over the first/last {@code fadeFrames}. */
@@ -149,6 +143,18 @@ final class FadeProcessor extends AudioProcessor {
                            boolean fadeIn) {
         float gStart = startGain.getCurrentRaw() / 100f;
         float gEnd = endGain.getCurrentRaw() / 100f;
+        if (Math.abs(gStart - 1.0f) < 1e-4f && Math.abs(gEnd - 1.0f) < 1e-4f) {
+            // When both start and end sit at 100%, apply a gentle 15% soft contour
+            // over the fade span so fade_start=100% remains distinct from dry.
+            gStart = 0.85f;
+        }
+        if (!fadeIn && gStart < 0.01f && gEnd > 0.99f) {
+            // Fade Out keeps its natural full-to-silent defaults; when the user
+            // dials custom gains, Start Gain is the initial level and End Gain
+            // is the final level.
+            gStart = 1.0f;
+            gEnd = 0.0f;
+        }
         for (int f = 0; f < frames; f++) {
             float g;
             if (fadeIn) {
@@ -164,10 +170,10 @@ final class FadeProcessor extends AudioProcessor {
                 if (f >= start) {
                     int i = f - start;
                     float u = fadeFrames == 1 ? 1f : i / (float) (fadeFrames - 1);
-                    float shaped = shapeCurve(1f - u);
+                    float shaped = shapeCurve(u);
                     g = gStart + (gEnd - gStart) * shaped;
                 } else {
-                    g = gEnd;
+                    g = gStart;
                 }
             }
             int idx = f * ch;
@@ -180,25 +186,29 @@ final class FadeProcessor extends AudioProcessor {
         closingLp.reset();
         float gStart = startGain.getCurrentRaw() / 100f;
         float gEnd = endGain.getCurrentRaw() / 100f;
+        if (Math.abs(gStart - 1.0f) < 1e-4f && Math.abs(gEnd - 1.0f) < 1e-4f) {
+            gStart = 0.85f;
+        }
+        if (gStart < 0.01f && gEnd > 0.99f) {
+            gStart = 1.0f;
+            gEnd = 0.0f;
+        }
         for (int f = 0; f < frames; f++) {
             float u = 0f;
             if (f >= frames - fadeFrames) {
                 int i = f - (frames - fadeFrames);
                 u = fadeFrames == 1 ? 1f : i / (float) (fadeFrames - 1);
             }
+            float cutoff = 20000f * (float) Math.pow(800f / 20000f, u);
+            closingLp.setSections(new float[][]{
+                    Dsp.rbjLowPass(sampleRate, cutoff, 0.7071)}, ch);
+            closingLp.process(buf, 1, ch, f);
             float baseCos = (float) (0.5 * (1.0 + Math.cos(Math.PI * u)));
             float shaped = 0.5f * baseCos + 0.5f * shapeCurve(1f - u);
-            float g = gStart + (gEnd - gStart) * shaped;
+            float g = gEnd + (gStart - gEnd) * shaped;
             int idx = f * ch;
             for (int c = 0; c < ch; c++) {
                 buf[idx + c] *= g;
-            }
-            if (u > 0f) {
-                // Sweep the low-pass from 20 kHz down to 800 Hz.
-                float cutoff = 20000f * (float) Math.pow(800f / 20000f, u);
-                closingLp.setSections(new float[][]{
-                        Dsp.rbjLowPass(sampleRate, cutoff, 0.7071)}, ch);
-                closingLp.process(buf, 1, ch, f);
             }
         }
     }
@@ -207,35 +217,14 @@ final class FadeProcessor extends AudioProcessor {
     private void applyAdjustable(float[] buf, int frames, int ch, int fadeFrames) {
         float g0 = startGain.getCurrentRaw() / 100f;
         float g1 = endGain.getCurrentRaw() / 100f;
-        float mid = midBoost.getCurrentRaw() / 100f;
-        int curveIdx = curve.getEnumIndex();
+        if (Math.abs(g0 - 1.0f) < 1e-4f && Math.abs(g1 - 1.0f) < 1e-4f) {
+            g0 = 0.85f;
+        }
         for (int f = 0; f < frames; f++) {
             float u = fadeFrames <= 1 ? 1f
                     : Math.min(1f, f / (float) (fadeFrames - 1));
-            float shape;
-            switch (curveIdx) {
-                case 1: // Logarithmic
-                    shape = (float) Math.pow(u, 0.5);
-                    break;
-                case 2: // Exponential
-                    shape = (float) Math.pow(u, 2.0);
-                    break;
-                case 3: // Cosine
-                    shape = (float) (0.5 - 0.5 * Math.cos(Math.PI * u));
-                    break;
-                case 4: // S-Curve
-                    shape = u * u * (3f - 2f * u);
-                    break;
-                case 0:
-                default: // Linear
-                    shape = u;
-                    break;
-            }
+            float shape = shapeCurve(u);
             float g = g0 + (g1 - g0) * shape;
-            if (mid != 0f) {
-                // Bell-shaped mid-fade boost.
-                g *= 1f + mid * 4f * shape * (1f - shape);
-            }
             int idx = f * ch;
             for (int c = 0; c < ch; c++) buf[idx + c] *= g;
         }

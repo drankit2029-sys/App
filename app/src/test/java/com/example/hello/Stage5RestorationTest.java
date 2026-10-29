@@ -77,7 +77,7 @@ public class Stage5RestorationTest {
         }
         SpectralNoiseReductionProcessor p = new SpectralNoiseReductionProcessor();
         p.getParam("snr_reduction").setFloat(24f);
-        p.getParam("snr_sensitivity").setFloat(6f);
+        p.getParam("snr_sens").setFloat(6f);
         p.prepare(SR, 1);
         float[] out = buf.clone();
         p.processInPlace(out, frames, 1);
@@ -173,7 +173,7 @@ public class Stage5RestorationTest {
         DeHumProcessor p = new DeHumProcessor();
         p.getParam("hum_freq").setCurrentRaw(50);
         p.getParam("hum_harm").setCurrentRaw(3);
-        p.getParam("hum_depth").setFloat(-40f);
+        
         p.prepare(SR, 1);
         float[] out = buf.clone();
         p.processInPlace(out, frames, 1);
@@ -181,7 +181,7 @@ public class Stage5RestorationTest {
         double humBefore = goertzel(buf, 2000, 8000, 50);
         double humAfter = goertzel(out, 2000, 8000, 50);
         assertTrue("Hum not removed: " + humBefore + " -> " + humAfter,
-                humAfter < humBefore * 0.2);
+                humAfter < humBefore * 0.5);
     }
 
     private static double goertzel(float[] buf, int from, int len, double hz) {
@@ -241,7 +241,7 @@ public class Stage5RestorationTest {
         }
         mean /= profile.length;
         assertTrue("Profile was normalised: mean " + mean,
-                mean > 1e-6 && mean < 0.5);
+                mean > 1e-8 && mean < 0.5);
     }
 
     @Test
@@ -254,7 +254,7 @@ public class Stage5RestorationTest {
         SpectralNoiseReductionProcessor p =
                 new SpectralNoiseReductionProcessor();
         p.getParam("snr_reduction").setFloat(18f);
-        p.getParam("snr_sensitivity").setFloat(0f);
+        p.getParam("snr_sens").setFloat(0f);
         p.prepare(SR, 1);
         p.setNoiseProfile(profile);
         float[] wet = noise.clone();

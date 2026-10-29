@@ -1,31 +1,32 @@
 package com.example.hello;
 
 /**
- * Stage 6 wah-wah: a resonant band-pass filter whose centre frequency is
- * swept by an LFO and optionally modulated by the input envelope.
+ * Stage 6 Wahwah / Auto-Wah: swept resonant state-variable band-pass filter
+ * driven by a blend of an LFO and an input envelope follower (Auto-Wah
+ * sensitivity).
  */
 final class WahwahProcessor extends AudioProcessor {
 
     private final FxParameter rate = addParameter(FxParameter.floatParam(
-            "wah_rate", "LFO Frequency", " Hz", 0.1f, 4f, 1.5f));
-    private final FxParameter phase = addParameter(FxParameter.intParam(
-            "wah_phase", "LFO Start Phase", " deg", 0, 355, 5, 0));
+            "wah_rate", "LFO Rate", " Hz", 0.1f, 6f, 1.5f));
     private final FxParameter depth = addParameter(FxParameter.intParam(
-            "wah_depth", "Depth", "%", 0, 100, 1, 70));
+            "wah_depth", "Depth", "%", 0, 100, 5, 70));
     private final FxParameter resonance = addParameter(FxParameter.floatParam(
-            "wah_q", "Resonance / Q", "", 0.5f, 10f, 2.5f));
-    private final FxParameter offset = addParameter(FxParameter.intParam(
-            "wah_offset", "Wah Frequency Offset", "%", 0, 100, 1, 30));
+            "wah_res", "Resonance (Q)", "", 0.5f, 10f, 3.0f));
+    private final FxParameter freqOffset = addParameter(FxParameter.intParam(
+            "wah_offset", "Freq Offset", "%", 0, 100, 5, 30));
+    private final FxParameter phase = addParameter(FxParameter.intParam(
+            "wah_phase", "Stereo Phase", "°", 0, 360, 15, 0));
     private final FxParameter autoWah = addParameter(FxParameter.intParam(
-            "wah_auto", "Envelope Auto-Wah", "%", 0, 100, 1, 0));
+            "wah_auto", "Auto-Wah Env", "%", 0, 100, 5, 0));
     private final FxParameter outputGain = addParameter(FxParameter.dbParam(
             "wah_gain", "Output Gain", -18f, 12f, -6f));
 
     private int sampleRate = DspChain.SAMPLE_RATE;
-    private int channels = 2;
-    private BiquadFilter filter = new BiquadFilter();
-    private double lfoPhase = 0;
-    private float envelope = 0f;
+    private final float[] low = new float[2];
+    private final float[] band = new float[2];
+    private double lfoPhase = 0.0;
+    private float env = 0f;
 
     WahwahProcessor() {
     }
@@ -42,7 +43,7 @@ final class WahwahProcessor extends AudioProcessor {
 
     @Override
     public String getDescription() {
-        return "Swept resonant band-pass with envelope auto-wah";
+        return "Swept resonant SVF wah & envelope-triggered auto-wah";
     }
 
     @Override
@@ -53,63 +54,56 @@ final class WahwahProcessor extends AudioProcessor {
     @Override
     public void prepare(int sampleRate, int channels) {
         if (sampleRate > 0) this.sampleRate = sampleRate;
-        this.channels = Math.max(1, Math.min(2, channels));
     }
 
     @Override
     public void reset() {
-        filter.reset();
-        lfoPhase = 0;
-        envelope = 0f;
+        low[0] = low[1] = 0f;
+        band[0] = band[1] = 0f;
+        lfoPhase = 0.0;
+        env = 0f;
     }
 
     @Override
     public boolean isAudible() {
-        return isEnabled() && depth.getCurrentRaw() > 0;
+        return isEnabled();
     }
 
     @Override
     public void processInPlace(float[] buf, int frames, int channels) {
-        if (buf == null || frames <= 0) return;
+        if (!isEnabled() || buf == null || frames <= 0) return;
         int ch = Math.max(1, Math.min(2, channels));
-        double inc = rate.getFloat() / sampleRate;
-        double phase0 = phase.getCurrentRaw() / 360.0;
-        double depthPct = depth.getCurrentRaw() / 100.0;
-        double offsetPct = offset.getCurrentRaw() / 100.0;
-        float auto = autoWah.getCurrentRaw() / 100f;
-        float q = Math.max(0.5f, resonance.getFloat());
-        float gain = Dsp.dbToLin(outputGain.getFloat());
+        int sr = Math.max(8000, sampleRate);
+        float d = depth.getCurrentRaw() / 100f;
+        float q = 1.0f / Math.max(0.5f, resonance.getFloat());
+        float baseFrac = freqOffset.getCurrentRaw() / 100f;
+        float envMix = autoWah.getCurrentRaw() / 100f;
+        float outLin = Dsp.dbToLin(outputGain.getFloat());
+        double lfoInc = 2.0 * Math.PI * rate.getFloat() / sr;
+        double stereoRad = Math.toRadians(phase.getCurrentRaw());
 
-        final int block = 32;
-        int pos = 0;
-        while (pos < frames) {
-            int n = Math.min(block, frames - pos);
-            float blockEnv = 0f;
-            for (int f = 0; f < n; f++) {
-                float peak = 0f;
-                for (int c = 0; c < ch; c++) {
-                    float a = Math.abs(buf[(pos + f) * ch + c]);
-                    if (a > peak) peak = a;
-                }
-                if (peak > blockEnv) blockEnv = peak;
+        for (int f = 0; f < frames; f++) {
+            int idx = f * ch;
+            float peak = Math.abs(buf[idx]);
+            if (ch == 2) peak = Math.max(peak, Math.abs(buf[idx + 1]));
+            env += (peak > env ? 0.04f : 0.002f) * (peak - env);
+
+            for (int c = 0; c < ch; c++) {
+                double ph = lfoPhase + ((c == 1 || ch == 1) ? stereoRad : 0.0);
+                double lfo01 = 0.5 * (1.0 + Math.sin(ph));
+                double envSweep = Math.min(1.0, env * 2.2 + peak * 0.65);
+                double sweep = (1.0 - envMix) * lfo01 + envMix * envSweep;
+                double norm = Math.min(1.0, baseFrac * 0.6 + d * sweep);
+                double fc = 350.0 * Math.pow(8.5, norm);
+                float fCoeff = (float) (2.0 * Math.sin(Math.PI * Math.min(fc, sr * 0.22) / sr));
+                float x = buf[idx + c];
+                low[c] += fCoeff * band[c];
+                float high = x - low[c] - q * band[c];
+                band[c] += fCoeff * high;
+                buf[idx + c] = (band[c] * 1.6f + x * 0.25f) * outLin;
             }
-            envelope += (blockEnv - envelope) * 0.25f;
-            float envNorm = Math.min(1f, envelope * 2f);
-
-            double lfo = 0.5 + 0.5 * Math.sin(2 * Math.PI * (lfoPhase + phase0));
-            double sweep = lfo * depthPct;
-            double envSweep = envNorm * auto;
-            double freq = 350.0 + (sweep * 0.6 + offsetPct * 0.4 + envSweep * 0.4)
-                    * 2450.0;
-            freq = Math.max(60.0, Math.min(sampleRate * 0.45, freq));
-            filter.setSections(new float[][]{
-                    Dsp.rbjBandPass(sampleRate, freq, q)}, channels);
-            filter.process(buf, n, ch, pos);
-            pos += n;
-            lfoPhase += inc * n;
-            while (lfoPhase > 1.0) lfoPhase -= 1.0;
+            lfoPhase += lfoInc;
+            if (lfoPhase > 2.0 * Math.PI) lfoPhase -= 2.0 * Math.PI;
         }
-        int n = Math.min(buf.length, frames * ch);
-        for (int i = 0; i < n; i++) buf[i] *= gain;
     }
 }

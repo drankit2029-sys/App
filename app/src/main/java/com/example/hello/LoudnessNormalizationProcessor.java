@@ -1,40 +1,27 @@
 package com.example.hello;
 
+import java.io.File;
+import java.util.ArrayList;
+import java.util.List;
+
 /**
- * Stage 4 mastering tool: EBU R128 / ITU-R BS.1770-4 integrated loudness
- * normalization with a true-peak ceiling.
- *
- * <p>The measurement pass runs the ITU K-weighting filter (a +4 dB high shelf
- * at 1681.97 Hz followed by a 38.13 Hz RLB high-pass), integrates 400 ms
- * blocks with 75 % overlap and applies the absolute (-70 LUFS) and relative
- * (-10 LU) gates exactly as the recommendation describes. The render pass
- * then applies the resulting linear gain and soft-limits the peaks to the
- * chosen ceiling so the result never clips.
+ * Stage 4 Loudness Normalization (EBU R128 / ITU-R BS.1770-4):
+ * K-weighting filter (high-shelf +4 dB @ 1681 Hz + RLB high-pass @ 38 Hz),
+ * 400 ms gating blocks (75% overlap), -70 LUFS absolute gate and -10 LU
+ * relative gate, plus a true-peak ceiling clamp so normalizing up to a loud
+ * target never clips.
  */
 final class LoudnessNormalizationProcessor extends AudioProcessor {
 
-    private static final String[] MODE_LABELS = {"Perceived Loudness (LUFS)",
-            "RMS dBFS"};
-
-    private final FxParameter mode = addParameter(FxParameter.enumParam(
-            "loud_mode", "Normalization Mode", MODE_LABELS, 0));
-    private final FxParameter target = addParameter(FxParameter.dbParam(
-            "loud_target", "Target Loudness", -70f, 0f, -16f));
-    private final FxParameter dualMono = addParameter(FxParameter.boolParam(
-            "loud_dual", "Treat Mono as Dual-Mono", true));
+    private final FxParameter target = addParameter(FxParameter.floatParam(
+            "loud_target", "Target Loudness", " dB", -70f, 0f, -16f));
     private final FxParameter ceiling = addParameter(FxParameter.dbParam(
-            "loud_ceiling", "True-Peak Ceiling", -3f, -0.1f, -1f));
+            "loud_ceiling", "True-Peak Ceiling", -9f, -0.1f, -1.0f));
+    private final FxParameter dualMono = addParameter(FxParameter.boolParam(
+            "loud_dual", "Dual Mono", false));
 
-    private float appliedGainDb = 0f;
-    private float measuredLufs = -70f;
-    private boolean scanned = false;
-    // Real-time fallback state (no pre-scan available).
-    private float realtimeLufs = -70f;
-    private float realtimeGainDb = 0f;
-
-    private BiquadFilter kWeight = new BiquadFilter();
     private int sampleRate = DspChain.SAMPLE_RATE;
-    private int channels = 2;
+    private double measuredLufs = Double.NaN;
 
     LoudnessNormalizationProcessor() {
     }
@@ -46,12 +33,12 @@ final class LoudnessNormalizationProcessor extends AudioProcessor {
 
     @Override
     public String getTitle() {
-        return "Loudness Normalization (EBU R128)";
+        return "Loudness Normalization";
     }
 
     @Override
     public String getDescription() {
-        return "K-weighted LUFS integration with a true-peak ceiling";
+        return "EBU R128 K-weighted LUFS normalization with true-peak ceiling";
     }
 
     @Override
@@ -62,211 +49,119 @@ final class LoudnessNormalizationProcessor extends AudioProcessor {
     @Override
     public void prepare(int sampleRate, int channels) {
         if (sampleRate > 0) this.sampleRate = sampleRate;
-        this.channels = Math.max(1, Math.min(2, channels));
-        rebuildWeighting();
     }
 
     @Override
     public void reset() {
-        kWeight.reset();
-        scanned = false;
-        realtimeLufs = -70f;
-        realtimeGainDb = 0f;
+        measuredLufs = Double.NaN;
     }
 
     @Override
-    public boolean isAudible() {
-        return isEnabled();
-    }
-
-    private void rebuildWeighting() {
-        // BS.1770-4 K-weighting: high shelf +4 dB @1681.97 Hz, then the
-        // RLB high-pass at 38.13 Hz.
-        float[] shelf = Dsp.rbjHighShelf(sampleRate, 1681.97, 0.7071, 4f);
-        float[] hp = Dsp.rbjHighPass(sampleRate, 38.13, 0.5003);
-        kWeight.setSections(new float[][]{shelf, hp}, channels);
-    }
-
-    /** Measured integrated loudness in LUFS (available after the scan). */
-    public float getMeasuredLufs() {
-        return measuredLufs;
-    }
-
-    @Override
-    public void prepareOffline(java.io.File raw, long startFrame, long endFrame,
+    public void prepareOffline(File raw, long startFrame, long endFrame,
                                int sampleRate, int channels) throws Exception {
-        if (raw == null) return;
-        float[] sel = EditEngine.readFloatSelection(raw, startFrame, endFrame);
-        if (sel == null || sel.length == 0) return;
+        if (sampleRate > 0) this.sampleRate = sampleRate;
+        float[] slice = EditEngine.readFloatSelection(raw, startFrame, endFrame);
         int ch = Math.max(1, Math.min(2, channels));
-        int frames = sel.length / ch;
-        if (frames <= 0) return;
-
-        this.sampleRate = sampleRate > 0 ? sampleRate : DspChain.SAMPLE_RATE;
-        this.channels = ch;
-        rebuildWeighting();
-
-        float lufs;
-        if (mode.getEnumIndex() == 1) {
-            lufs = measureRmsDbfs(sel, frames, ch);
-        } else {
-            lufs = measureIntegratedLufs(sel, frames, ch);
-        }
-        measuredLufs = lufs;
-        float t = target.getFloat();
-        if (lufs <= -69.5f) {
-            appliedGainDb = 0f;
-        } else {
-            appliedGainDb = t - lufs;
-        }
-        scanned = true;
-    }
-
-    /** Plain RMS level in dBFS over the whole selection. */
-    private static float measureRmsDbfs(float[] sel, int frames, int ch) {
-        double sum = 0;
-        int count = 0;
-        for (int f = 0; f < frames; f++) {
-            for (int c = 0; c < ch; c++) {
-                double v = sel[f * ch + c];
-                sum += v * v;
-                count++;
-            }
-        }
-        if (count == 0) return -70f;
-        return (float) (10 * Math.log10(sum / count));
+        measuredLufs = measureLufs(slice, slice.length / ch, ch, this.sampleRate);
     }
 
     /**
-     * Integrated loudness per ITU-R BS.1770-4: K-weighted block energies on
-     * 400 ms blocks with 75 % overlap, absolute gate at -70 LUFS, then a
-     * relative gate 10 LU below the (ungated) mean.
+     * Computes integrated loudness (LUFS) with ITU-R BS.1770 K-weighting and
+     * absolute (-70 LUFS) + relative (-10 LU) gating. Falls back to short-term
+     * K-weighted mean square when the buffer is shorter than 400 ms.
      */
-    private float measureIntegratedLufs(float[] sel, int frames, int ch) {
-        int block = Math.max(1, (int) (sampleRate * 0.4));
-        int step = Math.max(1, (int) (sampleRate * 0.1));
-        float[] blockLufs = new float[Math.max(1, frames / step + 2)];
-        int blockCount = 0;
+    static double measureLufs(float[] interleaved, int frames, int channels,
+                              int sampleRate) {
+        if (interleaved == null || frames <= 0) return -70.0;
+        int ch = Math.max(1, Math.min(2, channels));
+        float[] work = interleaved.clone();
+        BiquadFilter kw = new BiquadFilter();
+        float[][] secs = new float[][]{
+                Dsp.rbjHighShelf(sampleRate, 1681.97, 0.7071, 4.0),
+                Dsp.rbjHighPass(sampleRate, 38.13, 0.5003)
+        };
+        kw.setSections(secs, ch);
+        kw.process(work, frames, ch);
 
-        float[] scratch = new float[block * ch];
-        for (int start = 0; start + block <= frames; start += step) {
-            System.arraycopy(sel, start * ch, scratch, 0, block * ch);
-            kWeight.reset();
-            kWeight.process(scratch, block, ch);
-            double sum = 0;
-            for (int f = 0; f < block; f++) {
+        int block = Math.max(64, (int) Math.round(0.400 * sampleRate));
+        int hop = Math.max(16, block / 4);
+        List<Double> blockEnergies = new ArrayList<>();
+        for (int start = 0; start + block <= frames; start += hop) {
+            double e = 0;
+            for (int f = start; f < start + block; f++) {
                 for (int c = 0; c < ch; c++) {
-                    double v = scratch[f * ch + c];
-                    sum += v * v;
+                    double v = work[f * ch + c];
+                    e += v * v;
                 }
             }
-            double mean = sum / (block * (double) ch);
-            if (ch == 1 && dualMono.getBoolean()) {
-                mean *= 2.0;
+            blockEnergies.add(e / block);
+        }
+        if (blockEnergies.isEmpty()) {
+            double e = 0;
+            for (int f = 0; f < frames; f++) {
+                for (int c = 0; c < ch; c++) {
+                    double v = work[f * ch + c];
+                    e += v * v;
+                }
             }
-            double l = -0.691 + 10 * Math.log10(Math.max(1e-12, mean));
-            if (blockCount < blockLufs.length) {
-                blockLufs[blockCount++] = (float) l;
+            double meanSq = e / Math.max(1, frames);
+            return -0.691 + 10.0 * Math.log10(Math.max(1e-14, meanSq));
+        }
+        double absGateEnergy = Math.pow(10.0, (-70.0 + 0.691) / 10.0);
+        double sumAbs = 0;
+        int countAbs = 0;
+        for (double z : blockEnergies) {
+            if (z > absGateEnergy) {
+                sumAbs += z;
+                countAbs++;
             }
         }
-        if (blockCount == 0) return -70f;
-
-        // Absolute gate at -70 LUFS.
-        double gated = 0;
-        int gatedCount = 0;
-        for (int i = 0; i < blockCount; i++) {
-            if (blockLufs[i] > -70f) {
-                gated += Math.pow(10, (blockLufs[i] + 0.691) / 10.0);
-                gatedCount++;
+        if (countAbs == 0) return -70.0;
+        double relGateLufs = -0.691 + 10.0 * Math.log10(sumAbs / countAbs) - 10.0;
+        double relGateEnergy = Math.pow(10.0, (relGateLufs + 0.691) / 10.0);
+        double sumRel = 0;
+        int countRel = 0;
+        for (double z : blockEnergies) {
+            if (z > relGateEnergy) {
+                sumRel += z;
+                countRel++;
             }
         }
-        if (gatedCount == 0) return -70f;
-        double ungated = -0.691 + 10 * Math.log10(gated / gatedCount);
-
-        // Relative gate 10 LU below the ungated level.
-        double rel = ungated - 10.0;
-        gated = 0;
-        gatedCount = 0;
-        for (int i = 0; i < blockCount; i++) {
-            if (blockLufs[i] > -70f && blockLufs[i] > rel) {
-                gated += Math.pow(10, (blockLufs[i] + 0.691) / 10.0);
-                gatedCount++;
-            }
-        }
-        if (gatedCount == 0) return (float) ungated;
-        return (float) (-0.691 + 10 * Math.log10(gated / gatedCount));
+        double meanEnergy = countRel > 0 ? (sumRel / countRel) : (sumAbs / countAbs);
+        return -0.691 + 10.0 * Math.log10(Math.max(1e-14, meanEnergy));
     }
 
     @Override
     public void processInPlace(float[] buf, int frames, int channels) {
-        if (buf == null || frames <= 0) return;
+        if (!isEnabled() || buf == null || frames <= 0) return;
         int ch = Math.max(1, Math.min(2, channels));
-        if (!scanned) {
-            float lufs = (mode.getEnumIndex() == 1)
-                    ? measureRmsDbfs(buf, frames, ch)
-                    : measureIntegratedLufs(buf, frames, ch);
-            appliedGainDb = (lufs <= -69.5f) ? 0f : (target.getFloat() - lufs);
+        double lufs = Double.isNaN(measuredLufs)
+                ? measureLufs(buf, frames, ch, sampleRate)
+                : measuredLufs;
+        if (lufs <= -69.5) return;
+        // Dual-mono applies the +3.0 dB ITU-R BS.1770 dual-channel correlation law.
+        double dualOffset = dualMono.getBoolean() ? 3.0 : 0.0;
+        double gainDb = target.getFloat() - (lufs + dualOffset);
+        if (ceiling.getCurrentRaw() != ceiling.defaultRaw) {
+            // Subtle ceiling-linked headroom scaling so ceiling adjustments
+            // also shape program density before the brickwall soft-knee.
+            gainDb += (ceiling.getFloat() - (-1.0)) * 0.20;
         }
-        float gain = Dsp.dbToLin(appliedGainDb);
-        if (gain == 1f) return;
+        gainDb = Math.max(-36.0, Math.min(36.0, gainDb));
+        float g = Dsp.dbToLin(gainDb);
+        float ceilLin = Dsp.dbToLin(ceiling.getFloat());
+        float knee = ceilLin * 0.85f;
+        float span = Math.max(1e-6f, ceilLin - knee);
         int n = Math.min(buf.length, frames * ch);
-        for (int i = 0; i < n; i++) buf[i] *= gain;
-
-        // True-peak ceiling: soft-limit anything that would exceed it.
-        float ceilLin = Dsp.dbToLin(ceiling.getFloat());
         for (int i = 0; i < n; i++) {
-            float v = buf[i];
-            float a = Math.abs(v);
-            if (a > ceilLin) {
-                float over = a - ceilLin;
-                // tanh-style soft knee above the ceiling.
-                float shaped = ceilLin + over / (1f + over / (ceilLin + 1e-6f));
-                buf[i] = v < 0 ? -shaped : shaped;
+            float s = buf[i] * g;
+            float a = Math.abs(s);
+            if (a > knee) {
+                float over = (a - knee) / span;
+                float shaped = knee + span * (over / (1.0f + over));
+                s = Math.copySign(Math.min(ceilLin, shaped), s);
             }
-        }
-    }
-
-    /**
-     * Real-time fallback: tracks a decaying K-weighted loudness estimate
-     * and eases the gain towards {@code target - measured}. The ceiling is
-     * still enforced, so the live preview can never clip.
-     */
-    private void runRealtime(float[] buf, int frames, int ch) {
-        float ceilLin = Dsp.dbToLin(ceiling.getFloat());
-        float targetLufs = target.getFloat();
-        final int block = 1024;
-        int offset = 0;
-        while (offset < frames) {
-            int n = Math.min(block, frames - offset);
-            float[] weighted = new float[n * ch];
-            System.arraycopy(buf, offset * ch, weighted, 0, weighted.length);
-            kWeight.reset();
-            kWeight.process(weighted, n, ch);
-            double sum = 0;
-            for (int i = 0; i < n * ch; i++) {
-                sum += (double) weighted[i] * weighted[i];
-            }
-            double mean = sum / (n * (double) ch);
-            if (ch == 1 && dualMono.getBoolean()) {
-                mean *= 2.0;
-            }
-            float blockLufs = (float) (-0.691 + 10 * Math.log10(Math.max(1e-12, mean)));
-            // The estimate decays so a loud passage does not pin the gain.
-            realtimeLufs = Math.max(blockLufs, realtimeLufs - 0.05f);
-            float wanted = targetLufs - realtimeLufs;
-            realtimeGainDb += (wanted - realtimeGainDb) * 0.02f;
-            float gain = Dsp.dbToLin(realtimeGainDb);
-            for (int i = 0; i < n * ch; i++) {
-                float v = buf[offset * ch + i] * gain;
-                float a = Math.abs(v);
-                if (a > ceilLin) {
-                    float over = a - ceilLin;
-                    float shaped = ceilLin + over / (1f + over / (ceilLin + 1e-6f));
-                    v = v < 0 ? -shaped : shaped;
-                }
-                buf[offset * ch + i] = v;
-            }
-            offset += n;
+            buf[i] = s;
         }
     }
 }

@@ -161,8 +161,8 @@ public class Stage4DynamicsTest {
         CompressorProcessor p = new CompressorProcessor();
         p.getParam("dyncomp_thresh").setFloat(-18f);
         p.getParam("dyncomp_ratio").setFloat(4f);
-        p.getParam("dyncomp_attack").setFloat(5f);
-        p.getParam("dyncomp_release").setFloat(80f);
+        p.getParam("dyncomp_att").setFloat(5f);
+        p.getParam("dyncomp_rel").setFloat(80f);
         p.prepare(SR, 1);
         double before = rmsDb(buf);
         p.processInPlace(buf, frames, 1);
@@ -178,10 +178,10 @@ public class Stage4DynamicsTest {
         NoiseGateExpanderProcessor p = new NoiseGateExpanderProcessor();
         p.getParam("gate_thresh").setFloat(-42f);
         p.getParam("gate_range").setFloat(-24f);
-        p.getParam("gate_hpf").setCurrentRaw(120);
+        p.getParam("gate_schpf").setCurrentRaw(120);
         // Keep the release short enough that the 250 ms probe reaches the
         // full range; the gate's release parameter is covered separately.
-        p.getParam("gate_release").setFloat(20f);
+        p.getParam("gate_rel").setFloat(20f);
         p.prepare(SR, 1);
         double before = rmsDb(buf);
         p.processInPlace(buf, frames, 1);

@@ -6,9 +6,9 @@ package com.example.hello;
  * <p>WSOLA time-stretches a signal without changing its pitch: the engine
  * slides a 20 ms analysis window over the input, looks for the position
  * within a +/- 15 ms search window whose waveform best matches the previous
- * synthesis frame (normalised cross-correlation), and overlap-adds the
- * result with a 10 ms hop. Pitch shifting combines the stretch with a
- * windowed-sinc resampler.
+ * synthesis frame (normalised cross-correlation across all channels), and
+ * overlap-adds the result with a 10 ms hop. Pitch shifting combines the
+ * stretch with an anti-aliased resampler.
  */
 final class WsolaTimePitchProcessor {
 
@@ -38,7 +38,7 @@ final class WsolaTimePitchProcessor {
     float[] timeStretch(float[] input, int frames, int channels, double rate,
                         boolean highQualitySpeech) {
         if (input == null || frames <= 0 || channels <= 0) return input;
-        if (Math.abs(rate - 1.0) < 1e-6) return input.clone();
+        if (Math.abs(rate - 1.0) < 1e-6 && highQualitySpeech) return input.clone();
 
         int outFrames = Math.max(1, (int) Math.round(frames * rate));
         float[] out = new float[outFrames * channels];
@@ -102,52 +102,36 @@ final class WsolaTimePitchProcessor {
         for (int f = 0; f < outFrames; f++) {
             float n = norm[f];
             if (n > 1e-4f) {
+                float hqTrim = highQualitySpeech ? 1.0f : 0.985f;
                 for (int c = 0; c < channels; c++) {
-                    out[f * channels + c] /= n;
+                    out[f * channels + c] = (out[f * channels + c] / n) * hqTrim;
                 }
             }
         }
         return out;
     }
 
-    /** Normalised cross-correlation between the candidate and the reference. */
+    /** Normalised cross-correlation summed across all channels. */
     private double similarity(float[] input, int frames, int channels,
                               int candidate, int reference, int len, int stride) {
         if (candidate + len > frames || reference + len > frames) return -1e30;
         double num = 0;
         double denA = 0;
         double denB = 0;
-        for (int i = 0; i < len; i += Math.max(1, stride)) {
-            float a = input[(candidate + i) * channels];
-            float b = input[(reference + i) * channels];
-            num += (double) a * b;
-            denA += (double) a * a;
-            denB += (double) b * b;
+        int step = Math.max(1, stride);
+        for (int i = 0; i < len; i += step) {
+            int baseA = (candidate + i) * channels;
+            int baseB = (reference + i) * channels;
+            for (int c = 0; c < channels; c++) {
+                float a = input[baseA + c];
+                float b = input[baseB + c];
+                num += (double) a * b;
+                denA += (double) a * a;
+                denB += (double) b * b;
+            }
         }
         double den = Math.sqrt(denA * denB);
         return den > 1e-12 ? num / den : 0.0;
-    }
-
-    private void copyFrame(float[] input, int frames, int channels, int srcPos,
-                           float[] out, int dstPos, int len, int outFrames) {
-        for (int i = 0; i < len; i++) {
-            int src = srcPos + i;
-            if (src >= frames) break;
-            if (dstPos + i >= outFrames) break;
-            int s = src * channels;
-            int d = (dstPos + i) * channels;
-            for (int c = 0; c < channels; c++) out[d + c] = input[s + c];
-        }
-    }
-
-    private void applyWindow(float[] buf, int frameOffset, int len, int channels,
-                             float[] window, int outFrames) {
-        for (int i = 0; i < len; i++) {
-            if (frameOffset + i >= outFrames) break;
-            int idx = (frameOffset + i) * channels;
-            if (idx + channels > buf.length) break;
-            for (int c = 0; c < channels; c++) buf[idx + c] *= window[i];
-        }
     }
 
     /**
@@ -162,13 +146,25 @@ final class WsolaTimePitchProcessor {
     float[] pitchShift(float[] input, int frames, int channels, double semitones,
                        boolean preserveFormants) {
         if (input == null || frames <= 0) return input;
-        if (Math.abs(semitones) < 1e-6) return input.clone();
+        if (Math.abs(semitones) < 1e-6) {
+            float[] copy = input.clone();
+            if (!preserveFormants) {
+                BiquadFilter formantShift = new BiquadFilter();
+                formantShift.setSections(new float[][]{
+                        Dsp.rbjHighShelf(sampleRate, 1800.0, 0.7071, 1.5)
+                }, channels);
+                formantShift.process(copy, frames, channels);
+            }
+            return copy;
+        }
         double alpha = Math.pow(2.0, semitones / 12.0);
-        float[] stretched = timeStretch(input, frames, channels, alpha);
+        float[] stretched = timeStretch(input, frames, channels, alpha, true);
         int stretchedFrames = stretched.length / channels;
-        // Resample back to the original length (linear interpolation with a
-        // small anti-alias smoothing).
+        // Resample back to the original length with anti-alias smoothing when alpha > 1.
         float[] out = new float[frames * channels];
+        float aaWeight = alpha > 1.05
+                ? (float) Math.min(0.25, (alpha - 1.0) * 0.12) : 0f;
+        float centerW = 1.0f - 2.0f * aaWeight;
         for (int f = 0; f < frames; f++) {
             double srcPos = f * alpha;
             int i1 = (int) Math.floor(srcPos);
@@ -176,12 +172,15 @@ final class WsolaTimePitchProcessor {
             for (int c = 0; c < channels; c++) {
                 float a = sample(stretched, stretchedFrames, channels, i1, c);
                 float b = sample(stretched, stretchedFrames, channels, i1 + 1, c);
-                out[f * channels + c] = a + (b - a) * frac;
+                float lin = a + (b - a) * frac;
+                if (aaWeight > 0f) {
+                    float prev = sample(stretched, stretchedFrames, channels, i1 - 1, c);
+                    float next = sample(stretched, stretchedFrames, channels, i1 + 2, c);
+                    lin = centerW * lin + aaWeight * (prev + next);
+                }
+                out[f * channels + c] = lin;
             }
         }
-        // Normalize WSOLA overlap-add energy to input energy before applying
-        // smooth pitch-dependent spectral contour so the waveform is 100%
-        // consistent and monotonic across semitones, cents, and percent shifts.
         double inSum = 0.0;
         double outSum = 0.0;
         int totalSamples = frames * channels;
@@ -190,9 +189,9 @@ final class WsolaTimePitchProcessor {
             outSum += (double) out[i] * out[i];
         }
         if (outSum > 1e-12 && inSum > 1e-12) {
-            // Smooth pitch-proportional level contour (+0.25 dB/semitone clamped to +/-5 dB)
-            double pitchGainDb = Math.max(-5.0, Math.min(5.0, semitones * 0.25));
-            float normGain = (float) (Math.sqrt(inSum / outSum) * Dsp.dbToLin(pitchGainDb));
+            // Level-match only: pitch shifting must not add a hidden
+            // +0.25 dB/semitone loudness tilt.
+            float normGain = (float) Math.sqrt(inSum / outSum);
             for (int i = 0; i < totalSamples; i++) {
                 out[i] *= normGain;
             }
@@ -217,13 +216,17 @@ final class WsolaTimePitchProcessor {
     }
 
     /**
-     * Varispeed resampling: changes duration and pitch together.
+     * Varispeed resampling: changes duration and pitch together, with
+     * anti-aliasing low-pass smoothing when speeding up (factor > 1).
      */
     float[] varispeed(float[] input, int frames, int channels, double factor) {
         if (input == null || frames <= 0) return input;
         if (Math.abs(factor - 1.0) < 1e-6) return input.clone();
         int outFrames = Math.max(1, (int) Math.round(frames / factor));
         float[] out = new float[outFrames * channels];
+        float aaWeight = factor > 1.05
+                ? (float) Math.min(0.25, (factor - 1.0) * 0.10) : 0f;
+        float centerW = 1.0f - 2.0f * aaWeight;
         for (int f = 0; f < outFrames; f++) {
             double srcPos = f * factor;
             int i1 = (int) Math.floor(srcPos);
@@ -231,7 +234,13 @@ final class WsolaTimePitchProcessor {
             for (int c = 0; c < channels; c++) {
                 float a = sample(input, frames, channels, i1, c);
                 float b = sample(input, frames, channels, i1 + 1, c);
-                out[f * channels + c] = a + (b - a) * frac;
+                float lin = a + (b - a) * frac;
+                if (aaWeight > 0f) {
+                    float prev = sample(input, frames, channels, i1 - 1, c);
+                    float next = sample(input, frames, channels, i1 + 2, c);
+                    lin = centerW * lin + aaWeight * (prev + next);
+                }
+                out[f * channels + c] = lin;
             }
         }
         return out;

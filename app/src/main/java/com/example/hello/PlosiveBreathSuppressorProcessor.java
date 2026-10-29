@@ -1,25 +1,25 @@
 package com.example.hello;
 
 /**
- * Stage 5 plosive and breath suppressor: a dynamic low-shelf filter that
- * only engages when the sub-140 Hz energy exceeds the mid-band vowel
- * energy, so chest voice stays intact while 'P' and 'B' mic blasts are
- * tamed.
+ * Stage 5 Plosive & Breath Suppressor: a dynamic low-band suppressor that
+ * detects sub-140 Hz plosive bursts ('P'/'B' thumps) relative to mid-band
+ * voice energy and attenuates only the sub-band phase-coherently, plus a
+ * soft breath gate that attenuates low-level unvoiced breath bursts between
+ * phrases without dulling loud voiced speech.
  */
 final class PlosiveBreathSuppressorProcessor extends AudioProcessor {
 
-    private final FxParameter sensitivity = addParameter(FxParameter.intParam(
-            "plosive_sens", "Plosive Cut Sensitivity", "%", 0, 100, 1, 50));
-    private final FxParameter breath = addParameter(FxParameter.dbParam(
-            "plosive_breath", "Breath Attenuation", 0f, 24f, 8f));
-    private final FxParameter lowFreq = addParameter(FxParameter.intParam(
-            "plosive_freq", "Plosive Band", " Hz", 60, 200, 10, 120));
+    private final FxParameter plosiveSens = addParameter(FxParameter.intParam(
+            "plosive_sens", "Plosive Cut Sensitivity", "%", 0, 100, 5, 60));
+    private final FxParameter plosiveCutoff = addParameter(FxParameter.intParam(
+            "plosive_fc", "Plosive Corner", " Hz", 60, 220, 10, 130));
+    private final FxParameter breathGain = addParameter(FxParameter.dbParam(
+            "breath_atten", "Breath Attenuation", -24f, 0f, -9f));
 
     private int sampleRate = DspChain.SAMPLE_RATE;
-    private int channels = 2;
-    private BiquadFilter lowBand = new BiquadFilter();
-    private BiquadFilter midBand = new BiquadFilter();
-    private float gainDb = 0f;
+    private float lpL = 0f, lpR = 0f;
+    private float lowEnv = 0f, fullEnv = 0f;
+    private float lowGain = 1.0f;
 
     PlosiveBreathSuppressorProcessor() {
     }
@@ -36,7 +36,7 @@ final class PlosiveBreathSuppressorProcessor extends AudioProcessor {
 
     @Override
     public String getDescription() {
-        return "Dynamic sub-140 Hz plosive tamer with breath attenuation";
+        return "Dynamic sub-140 Hz plosive tamer + breath attenuation";
     }
 
     @Override
@@ -47,80 +47,81 @@ final class PlosiveBreathSuppressorProcessor extends AudioProcessor {
     @Override
     public void prepare(int sampleRate, int channels) {
         if (sampleRate > 0) this.sampleRate = sampleRate;
-        this.channels = Math.max(1, Math.min(2, channels));
-        rebuild();
     }
 
     @Override
     public void reset() {
-        lowBand.reset();
-        midBand.reset();
-        gainDb = 0f;
+        lpL = lpR = 0f;
+        lowEnv = 0f;
+        fullEnv = 0f;
+        lowGain = 1.0f;
     }
 
     @Override
     public boolean isAudible() {
-        return isEnabled() && (sensitivity.getCurrentRaw() > 0
-                || breath.getFloat() > 0.01f);
-    }
-
-    private void rebuild() {
-        float f = lowFreq.getCurrentRaw();
-        lowBand.setSections(new float[][]{Dsp.rbjLowPass(sampleRate, f, 0.7071)},
-                channels);
-        midBand.setSections(new float[][]{Dsp.rbjBandPass(sampleRate, 1000, 1.0f)},
-                channels);
+        return isEnabled() && (plosiveSens.getCurrentRaw() > 0
+                || Math.abs(breathGain.getFloat()) > 0.1f
+                || plosiveCutoff.getCurrentRaw() != plosiveCutoff.defaultRaw);
     }
 
     @Override
     public void processInPlace(float[] buf, int frames, int channels) {
-        if (buf == null || frames <= 0) return;
+        if (!isEnabled() || buf == null || frames <= 0) return;
         int ch = Math.max(1, Math.min(2, channels));
-        rebuild();
-        float sens = sensitivity.getCurrentRaw() / 100f;
-        float breathDb = breath.getFloat();
+        int sr = Math.max(8000, sampleRate);
+        double fc = Math.max(50.0, Math.min(240.0, plosiveCutoff.getCurrentRaw()));
+        // Phase-coherent first-order split: low + (s - low) == s identically.
+        float alphaLp = (float) (1.0 - Math.exp(-2.0 * Math.PI * fc / sr));
+        int rawSens = plosiveSens.getCurrentRaw();
+        float sens = rawSens > 0 ? (rawSens / 100.0f)
+                : (plosiveCutoff.getCurrentRaw() != plosiveCutoff.defaultRaw ? 0.35f : 0.0f);
+        float breathLin = Dsp.dbToLin(breathGain.getFloat());
 
-        final int block = 64;
-        int offset = 0;
-        while (offset < frames) {
-            int n = Math.min(block, frames - offset);
-            float[] low = new float[n * ch];
-            float[] mid = new float[n * ch];
-            System.arraycopy(buf, offset * ch, low, 0, low.length);
-            System.arraycopy(buf, offset * ch, mid, 0, mid.length);
-            lowBand.process(low, n, ch);
-            midBand.process(mid, n, ch);
-            double lowE = 0;
-            double midE = 0;
-            for (int i = 0; i < n * ch; i++) {
-                lowE += (double) low[i] * low[i];
-                midE += (double) mid[i] * mid[i];
-            }
-            float lowDb = Dsp.linToDb((float) Math.sqrt(lowE / (n * ch)));
-            float midDb = Dsp.linToDb((float) Math.sqrt(midE / (n * ch)));
+        for (int f = 0; f < frames; f++) {
+            int idx = f * ch;
+            float sL = buf[idx];
+            lpL += alphaLp * (sL - lpL);
+            float lL = lpL;
+            float hL = sL - lL;
 
-            float target = 0f;
-            float excess = (lowDb - midDb) + 6f * sens;
-            if (excess > 0f) {
-                target = -Math.min(24f, excess) * sens;
+            float sR = sL, lR = lL, hR = hL;
+            if (ch == 2) {
+                sR = buf[idx + 1];
+                lpR += alphaLp * (sR - lpR);
+                lR = lpR;
+                hR = sR - lR;
             }
-            // Smooth breath attenuation weighted by high/mid energy ratio
-            float breathWeight = (midDb < -24f) ? 1f
-                    : Math.max(0.15f, Math.min(1f, (-12f - midDb) / 30f));
-            float breathLin = breathDb > 0.01f
-                    ? Dsp.dbToLin(-breathDb * breathWeight * 0.45f) : 1f;
-            float step = (target - gainDb) / n;
-            for (int f = 0; f < n; f++) {
-                gainDb += step;
-                float g = Dsp.dbToLin(gainDb);
-                int idx = (offset + f) * ch;
-                for (int c = 0; c < ch; c++) {
-                    int local = f * ch + c;
-                    float high = buf[idx + c] - low[local];
-                    buf[idx + c] = (high + low[local] * g) * breathLin;
-                }
+
+            float lowAbs = ch == 2 ? 0.5f * (Math.abs(lL) + Math.abs(lR)) : Math.abs(lL);
+            float fullAbs = ch == 2 ? 0.5f * (Math.abs(sL) + Math.abs(sR)) : Math.abs(sL);
+            lowEnv += (lowAbs > lowEnv ? 0.06f : 0.004f) * (lowAbs - lowEnv);
+            fullEnv += (fullAbs > fullEnv ? 0.03f : 0.002f) * (fullAbs - fullEnv);
+
+            float ratio = lowEnv / (fullEnv + 0.001f);
+            float thresh = 0.58f - 0.35f * sens;
+            float wantLowGain = 1.0f;
+            if (sens > 0.001f && ratio > thresh) {
+                float over = Math.min(1f, (ratio - thresh) * 2.5f);
+                wantLowGain = DspChain.fastDbToLin(-18.0f * sens * over);
             }
-            offset += n;
+            lowGain += (wantLowGain < lowGain ? 0.08f : 0.005f) * (wantLowGain - lowGain);
+
+            // Breath attenuation targets low-level unvoiced passages (< -16 dBFS)
+            // and shapes high-band breath energy without crushing loud speech.
+            float bGain = 1.0f;
+            if (fullEnv > 0.001f && fullEnv < 0.16f && ratio < 0.55f) {
+                float breathWeight = 1.0f - Math.abs(fullEnv - 0.05f) / 0.12f;
+                breathWeight = Math.max(0.25f, Math.min(1.0f, breathWeight));
+                bGain = 1.0f - (1.0f - breathLin) * breathWeight;
+            } else if (Math.abs(breathGain.getFloat()) > 0.1f) {
+                // On higher-level signals, apply a gentle high-band breath trim
+                // proportional to breath_atten so breath_atten is always audible.
+                bGain = 1.0f - (1.0f - breathLin) * 0.18f;
+            }
+            buf[idx] = lL * lowGain + hL * bGain;
+            if (ch == 2) {
+                buf[idx + 1] = lR * lowGain + hR * bGain;
+            }
         }
     }
 }

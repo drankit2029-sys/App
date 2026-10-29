@@ -3931,7 +3931,7 @@ public class StudioFragment extends Fragment {
         sb.append(slot.enabled ? "Enabled • " : "Bypassed • ");
         AudioProcessor meta =
                 FxRackChain.getPrototypeProcessor(slot.type.id);
-        FxParameter primary = (meta != null && !slot.type.isLegacyStage())
+        FxParameter primary = meta != null
                 ? meta.getParam(DspChain.primaryParamId(slot.type)) : null;
         if (primary != null) {
             sb.append(primary.name).append(": ")
@@ -4273,12 +4273,13 @@ public class StudioFragment extends Fragment {
 
         TeleValue primary = new TeleValue(ctx);
         primary.setCaption(slot.type.paramLabel);
-        if (!slot.type.isLegacyStage()) {
+        {
             AudioProcessor dialMeta =
                     FxRackChain.getPrototypeProcessor(slot.type.id);
             FxParameter dialParam = dialMeta == null ? null
                     : dialMeta.getParam(DspChain.primaryParamId(slot.type));
             if (dialParam != null) {
+                primary.setCaption(dialParam.name);
                 primary.setValueScale(Math.max(1, dialParam.scaleDivisor));
                 primary.setValueFormatter(dialParam::formatRaw);
             }
@@ -4814,12 +4815,13 @@ public class StudioFragment extends Fragment {
 
             TeleValue ctl = new TeleValue(ctx);
             ctl.setCaption(slot.type.paramLabel);
-            if (!slot.type.isLegacyStage()) {
+            {
                 AudioProcessor dialMeta =
                         FxRackChain.getPrototypeProcessor(slot.type.id);
                 FxParameter dialParam = dialMeta == null ? null
                         : dialMeta.getParam(DspChain.primaryParamId(slot.type));
                 if (dialParam != null) {
+                    ctl.setCaption(dialParam.name);
                     ctl.setValueScale(Math.max(1, dialParam.scaleDivisor));
                     ctl.setValueFormatter(dialParam::formatRaw);
                 }
@@ -5922,6 +5924,10 @@ public class StudioFragment extends Fragment {
     /** Preserves the user's FX rack after a bake while marking the audio committed. */
     private void resetFxRackAfterApply() {
         if (dspConfig == null) return;
+        // The raw file already carries the baked chain. Keeping the slots
+        // enabled would let a later knob tweak roll back the bake and re-apply
+        // the whole rack over the entire file on save.
+        dspConfig.clearRack();
         try {
             dspConfig.save(requireContext());
         } catch (Exception ignored) {}
