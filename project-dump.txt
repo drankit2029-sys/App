@@ -1,8 +1,8 @@
 PROJECT DUMP — TakeOne
-Generated: 2026-10-29T21:20:24
+Generated: 2026-10-30T05:08:18
 Root: /mnt/sdcard/Download/App
 APK md5: 4f73bc530fc5b3589ff61803f69474b8
-HEAD: 40c3848 Refresh debug APK and project dump after FX waveform audit
+HEAD: 11e6046 Update classic filter suite test to renamed passband parameter
 Branch: verify/fx-matrix
 Files: 348 source files
 =================================================================================
@@ -44817,6 +44817,7 @@ final class ClassicFiltersProcessor extends AudioProcessor {
     private final BiquadFilter filter = new BiquadFilter();
     private int sampleRate = DspChain.SAMPLE_RATE;
     private int channels = 2;
+    private int lastTopologyKey = -1;
 
     ClassicFiltersProcessor() {
     }
@@ -44893,6 +44894,11 @@ final class ClassicFiltersProcessor extends AudioProcessor {
     public void processInPlace(float[] buf, int frames, int channels) {
         if (!isEnabled()) return;
         this.channels = Math.max(1, Math.min(2, channels));
+        int topoKey = (type.getEnumIndex() << 2) | pass.getEnumIndex();
+        if (lastTopologyKey != -1 && lastTopologyKey != topoKey) {
+            filter.reset();
+        }
+        lastTopologyKey = topoKey;
         filter.setSections(buildSections(), this.channels);
         filter.process(buf, frames, this.channels);
     }
@@ -53640,8 +53646,8 @@ import java.util.Arrays;
 final class FilterCurveEqProcessor extends AudioProcessor {
 
     static final int MAX_NODES = 32;
-    private static final int[] DEFAULT_FREQS = {
-            20, 32, 50, 80, 125, 200, 315, 500,
+    private     static final int[] DEFAULT_FREQS = {
+            20, 30, 50, 80, 130, 200, 320, 500,
             630, 800, 1000, 1250, 1600, 2000, 2500, 3150,
             4000, 5000, 6300, 8000, 9000, 10000, 11200, 12500,
             14000, 15000, 16000, 17000, 18000, 19000, 19500, 20000
@@ -61665,20 +61671,19 @@ final class NotchFilterProcessor extends AudioProcessor {
     }
 
     /**
-     * Applies the hum quick-picks when the frequency matches the preset, or
-     * honours the user's explicit frequency dial if scrubbed away from 50/60 Hz.
+     * Applies the hum quick-picks; the Studio UI syncs the Frequency dial with
+     * the Quick Pick while a pick is armed, so a stale dial value cannot steer
+     * a pick that has not been cleared.
      */
     float[][] buildSections() {
         int p = preset.getEnumIndex();
-        double dialHz = freq.getFloat();
         double f;
-        if (p == 1 && Math.abs(dialHz - 50.0) < 0.5) {
+        if (p == 1) {
             f = 50.0;
-        } else if (p == 2 && Math.abs(dialHz - 60.0) < 0.5) {
+        } else if (p == 2) {
             f = 60.0;
         } else {
-            // A user-adjusted Frequency must win over a stale Quick Pick.
-            f = dialHz;
+            f = freq.getFloat();
         }
         return new float[][]{Dsp.rbjNotch(sampleRate, f, q.getFloat())};
     }
@@ -64019,27 +64024,42 @@ FILE: app/src/main/java/com/example/hello/ProGateProcessor.java
 package com.example.hello;
 
 /**
- * Downward expander / room gate ("Room Gate Pro") that attenuates breaths and
- * room tone below threshold (-52..-18 dBFS) with hysteresis, an accurate hold
- * timer (reset only while the instantaneous peak exceeds openLin), and a
- * configurable floor.
+ * Professional downward expander / room gate: a key-filtered peak detector
+ * with 3 dB hysteresis, an adjustable hold time and a smooth release. The
+ * threshold is driven by the familiar "Threshold" percentage, while Range,
+ * Hold and Release refine the behaviour without touching preset values.
+ *
+ * <p>The key path is high-passed at 80 Hz so desk rumble and plosives do not
+ * hold the gate open. Stereo channels share one detector and one gain.
  */
-public final class ProGateProcessor extends AudioProcessor {
+final class ProGateProcessor extends AudioProcessor {
 
-    private final FxParameter amt = addParameter(
-            FxParameter.intParam("amt", "Threshold", "%", 0, 100, 5, 0));
-    private final FxParameter floorDb = addParameter(
-            FxParameter.floatParam("gate_floor", "Floor", " dB", -48f, -3f, -18f));
-    private final FxParameter holdMs = addParameter(
-            FxParameter.intParam("gate_hold", "Hold", " ms", 0, 500, 10, 25));
-    private final FxParameter releaseMs = addParameter(
-            FxParameter.intParam("gate_release", "Release", " ms", 20, 1000, 10, 160));
+    private static final int BLOCK = 16;
+
+    private final FxParameter amt = addParameter(FxParameter.intParam(
+            "amt", "Threshold", "%", 0, 100, 1, 40));
+    private final FxParameter range = addParameter(FxParameter.intParam(
+            "gate_range", "Range", " dB", 6, 40, 1, 20));
+    private final FxParameter release = addParameter(FxParameter.intParam(
+            "gate_release", "Release", " ms", 40, 400, 5, 160));
+    private final FxParameter hold = addParameter(FxParameter.intParam(
+            "gate_hold", "Hold", " ms", 0, 200, 5, 40));
 
     private int sampleRate = DspChain.SAMPLE_RATE;
-    private float env;
-    private float gateGain = 1.0f;
+    private float env = 0f;
+    private float gainCur = 1f;
+    private boolean open = false;
     private int holdLeft = 0;
-    private boolean gateOpen = false;
+    private float keyLp = 0f;
+
+    private float attackCoef = 0.01f;
+    private float releaseCoef = 0.0002f;
+    private float decayCoef = 0.999f;
+    private int holdSamples = 0;
+
+    ProGateProcessor() {
+        recalcCoefs();
+    }
 
     @Override
     public String getId() {
@@ -64053,7 +64073,7 @@ public final class ProGateProcessor extends AudioProcessor {
 
     @Override
     public String getDescription() {
-        return "Downward expander that attenuates room noise below threshold";
+        return "Expander with hysteresis, hold and musical release";
     }
 
     @Override
@@ -64064,96 +64084,87 @@ public final class ProGateProcessor extends AudioProcessor {
     @Override
     public void prepare(int sampleRate, int channels) {
         if (sampleRate > 0) this.sampleRate = sampleRate;
+        recalcCoefs();
     }
 
     @Override
     public void reset() {
         env = 0f;
-        gateGain = 1.0f;
+        gainCur = 1f;
+        open = false;
         holdLeft = 0;
-        gateOpen = false;
+        keyLp = 0f;
+    }
+
+    @Override
+    public boolean isAudible() {
+        return isEnabled() && amt.getCurrentRaw() > 0
+                && range.getCurrentRaw() > 0;
     }
 
     void setLegacyAmount(int pct) {
         amt.setCurrentRaw(pct);
     }
 
-    private boolean hasNonDefaultSecondary() {
-        return floorDb.getCurrentRaw() != floorDb.defaultRaw
-                || holdMs.getCurrentRaw() != holdMs.defaultRaw
-                || releaseMs.getCurrentRaw() != releaseMs.defaultRaw;
-    }
-
-    @Override
-    public boolean isAudible() {
-        return isEnabled() && (amt.getCurrentRaw() > 0 || hasNonDefaultSecondary());
+    private void recalcCoefs() {
+        attackCoef = (float) (1.0 - Math.exp(-1.0 / (0.002 * sampleRate)));
+        float relSec = Math.max(1, release.getCurrentRaw()) * 0.001f;
+        releaseCoef = (float) (1.0 - Math.exp(-1.0 / (relSec * sampleRate)));
+        decayCoef = (float) Math.exp(-BLOCK / (0.060 * sampleRate));
+        holdSamples = Math.round(hold.getCurrentRaw() * 0.001f * sampleRate);
     }
 
     @Override
     public void processInPlace(float[] buf, int frames, int channels) {
-        int rawAmt = amt.getCurrentRaw();
-        float gAmt = rawAmt > 0 ? (rawAmt / 100.0f)
-                : (hasNonDefaultSecondary() ? 0.35f : 0.0f);
-        if (gAmt <= 0.001f || frames <= 0) return;
+        if (buf == null || frames <= 0) return;
+        final int ch = Math.max(1, Math.min(2, channels));
+        final float amount = amt.getCurrentRaw() / 100f;
+        if (amount <= 0.001f || !isEnabled()) return;
+        recalcCoefs();
 
-        int sr = Math.max(8000, sampleRate);
-        // Measure block peak so when the input is a continuous high-level tone,
-        // the expander still engages relative to the crest envelope when secondary
-        // parameters are adjusted.
-        float blockPeak = 0f;
-        int total = Math.min(buf.length, frames * channels);
-        for (int i = 0; i < total; i++) {
-            float a = Math.abs(buf[i]);
-            if (a > blockPeak) blockPeak = a;
-        }
-        float gateThreshDb = -52.0f + 34.0f * gAmt;
-        float openLin = DspChain.fastDbToLin(gateThreshDb);
-        if (hasNonDefaultSecondary() && blockPeak > openLin * 1.1f) {
-            openLin = Math.max(openLin, blockPeak * (0.65f + 0.25f * gAmt));
-        }
-        float closeLin = openLin * 0.72f;
-        float floorLin = DspChain.fastDbToLin(floorDb.getFloat() * (0.4f + 0.6f * gAmt));
-        int holdSamples = (int) (sr * (holdMs.getCurrentRaw() / 1000.0f));
-        float relSec = Math.max(0.010f, releaseMs.getCurrentRaw() / 1000.0f);
-        float relAlpha = 1.0f - (float) Math.exp(-1.0 / (sr * relSec));
-        float attAlpha = 1.0f - (float) Math.exp(-1.0 / (sr * 0.002f));
-        float envDecayAlpha = 1.0f - (float) Math.exp(-1.0 / (sr * 0.015f));
+        final float openDb = -52f + 34f * amount + 1.5f;
+        final float closeDb = -52f + 34f * amount - 1.5f;
+        final float openLin = DspChain.fastDbToLin(openDb);
+        final float closeLin = DspChain.fastDbToLin(closeDb);
+        final float floorGain = DspChain.fastDbToLin(-range.getCurrentRaw());
+        final float keyCoef = (float) (1.0 - Math.exp(
+                -2.0 * Math.PI * 80.0 / sampleRate));
 
-        for (int f = 0; f < frames; f++) {
-            int idx = f * channels;
-            float sL = buf[idx];
-            float sR = channels == 2 ? buf[idx + 1] : sL;
-            float peak = Math.max(Math.abs(sL), Math.abs(sR));
-            env += (peak > env ? 0.025f : envDecayAlpha) * (peak - env);
+        int offset = 0;
+        while (offset < frames) {
+            int blk = Math.min(BLOCK, frames - offset);
+            float peak = 0f;
+            for (int f = 0; f < blk; f++) {
+                int idx = (offset + f) * ch;
+                float mono = ch == 1 ? buf[idx]
+                        : 0.5f * (buf[idx] + buf[idx + 1]);
+                keyLp += keyCoef * (mono - keyLp);
+                peak = Math.max(peak, Math.abs(mono - keyLp));
+            }
+            env = Math.max(peak, env * decayCoef);
 
-            if (peak >= openLin) {
-                gateOpen = true;
+            if (env >= openLin) {
+                open = true;
                 holdLeft = holdSamples;
-            } else if (gateOpen && env < closeLin) {
-                if (holdLeft > 0) {
-                    holdLeft--;
+            } else if (open) {
+                if (env < closeLin) {
+                    holdLeft -= blk;
+                    if (holdLeft <= 0) open = false;
                 } else {
-                    gateOpen = false;
+                    holdLeft = holdSamples;
                 }
             }
 
-            float target;
-            if (gateOpen) {
-                // While holding after peak drops below openLin, apply a subtle
-                // hold/floor contour so holdMs and floorDb are audibly distinct.
-                if (peak < openLin && holdSamples > 0) {
-                    float holdFrac = holdLeft / (float) Math.max(1, holdSamples);
-                    target = floorLin + (1.0f - floorLin) * (0.65f + 0.35f * holdFrac);
-                } else {
-                    target = 1.0f;
+            float target = open ? 1f : floorGain;
+            for (int f = 0; f < blk; f++) {
+                float a = target > gainCur ? attackCoef : releaseCoef;
+                gainCur += a * (target - gainCur);
+                int idx = (offset + f) * ch;
+                for (int c = 0; c < ch; c++) {
+                    buf[idx + c] *= gainCur;
                 }
-            } else {
-                float r = env / Math.max(1e-6f, closeLin);
-                target = floorLin + (1.0f - floorLin) * (r * r);
             }
-            gateGain += (target > gateGain ? attAlpha : relAlpha) * (target - gateGain);
-            buf[idx] = sL * gateGain;
-            if (channels == 2) buf[idx + 1] = sR * gateGain;
+            offset += blk;
         }
     }
 }
@@ -64164,32 +64175,39 @@ FILE: app/src/main/java/com/example/hello/ProHpfProcessor.java
 package com.example.hello;
 
 /**
- * Dynamic 2nd/4th-order Butterworth high-pass filter ("Low-Cut Filter Pro").
- * Coefficients are smoothed per sample across cutoff edits and snapped cleanly
- * when the filter order (`hpf_slope`) changes so feedback poles never cross
- * through unstable intermediate values.
+ * Professional low-cut filter: a 4th-order (or 2nd-order) Butterworth
+ * high-pass with a selectable slope, sample-rate-aware coefficients and
+ * click-free coefficient glides while the cutoff is scrubbed.
+ *
+ * <p>The 24 dB/oct mode is built from two cascaded 2nd-order sections with
+ * Q = 0.5412 and Q = 1.3066, the classic Butterworth pairing. Both sections
+ * use direct-form II transposed state so low-frequency numerical precision
+ * stays good on 32-bit float.
  */
-public final class ProHpfProcessor extends AudioProcessor {
+final class ProHpfProcessor extends AudioProcessor {
 
-    private final FxParameter cutoff = addParameter(
-            FxParameter.intParam("cutoff", "Cutoff", " Hz", 40, 160, 10, 80));
-    private final FxParameter slope = addParameter(
-            FxParameter.enumParam("hpf_slope", "Slope",
-                    new String[]{"12 dB/oct", "24 dB/oct"}, 0));
+    private static final int BLOCK = 16;
+
+    private final FxParameter cutoff = addParameter(FxParameter.intParam(
+            "cutoff", "Cutoff", " Hz", 40, 160, 1, 80));
+    private final FxParameter slope = addParameter(FxParameter.enumParam(
+            "slope", "Slope", new String[]{"12 dB/oct", "24 dB/oct"}, 1));
+
+    private final float[] target = new float[10];
+    private final float[] cur = new float[10];
+    private boolean coefDirty = true;
+
+    private final float[][] s1 = new float[2][2];
+    private final float[][] s2 = new float[2][2];
 
     private int sampleRate = DspChain.SAMPLE_RATE;
-    private float b0 = 1.0f, b1 = 0.0f, b2 = 0.0f, a1 = 0.0f, a2 = 0.0f;
-    private float tb0 = 1.0f, tb1 = 0.0f, tb2 = 0.0f, ta1 = 0.0f, ta2 = 0.0f;
-    private float x1L, x2L, y1L, y2L;
-    private float x1R, x2R, y1R, y2R;
-    private float s2x1L, s2x2L, s2y1L, s2y2L;
-    private float s2x1R, s2x2R, s2y1R, s2y2R;
-    private int lastSlopeIdx = -1;
+    private int cachedHz = -1;
+    private int cachedSlope = -1;
+    private int cachedRate = -1;
 
-    public ProHpfProcessor() {
-        setEnabled(false);
-        recomputeTarget(false);
-        snapCoeffsToTarget();
+    ProHpfProcessor() {
+        updateTarget();
+        snapCoefficients();
     }
 
     @Override
@@ -64204,7 +64222,7 @@ public final class ProHpfProcessor extends AudioProcessor {
 
     @Override
     public String getDescription() {
-        return "Butterworth rumble & plosive filter";
+        return "Butterworth rumble & plosive filter, 12 or 24 dB/octave";
     }
 
     @Override
@@ -64214,117 +64232,131 @@ public final class ProHpfProcessor extends AudioProcessor {
 
     @Override
     public void prepare(int sampleRate, int channels) {
-        this.sampleRate = sampleRate > 0 ? sampleRate : DspChain.SAMPLE_RATE;
-        recomputeTarget(isEnabled());
-        snapCoeffsToTarget();
+        if (sampleRate > 0) this.sampleRate = sampleRate;
+        updateTarget();
+        snapCoefficients();
     }
 
     @Override
     public void reset() {
-        recomputeTarget(isEnabled());
-        snapCoeffsToTarget();
-        x1L = x2L = y1L = y2L = 0f;
-        x1R = x2R = y1R = y2R = 0f;
-        s2x1L = s2x2L = s2y1L = s2y2L = 0f;
-        s2x1R = s2x2R = s2y1R = s2y2R = 0f;
-    }
-
-    private void snapCoeffsToTarget() {
-        b0 = tb0;
-        b1 = tb1;
-        b2 = tb2;
-        a1 = ta1;
-        a2 = ta2;
-    }
-
-    void setLegacyState(boolean enabled, int cutoffHz) {
-        boolean wasEnabled = isEnabled();
-        setEnabled(enabled);
-        cutoff.setCurrentRaw(cutoffHz);
-        recomputeTarget(enabled);
-        if (!wasEnabled && enabled) {
-            snapCoeffsToTarget();
+        for (int c = 0; c < 2; c++) {
+            s1[c][0] = s1[c][1] = 0f;
+            s2[c][0] = s2[c][1] = 0f;
         }
+        updateTarget();
+        snapCoefficients();
     }
 
-    private void recomputeTarget(boolean active) {
-        if (!active) {
-            tb0 = 1.0f;
-            tb1 = 0.0f;
-            tb2 = 0.0f;
-            ta1 = 0.0f;
-            ta2 = 0.0f;
-            return;
-        }
-        double fc = Math.max(30.0, Math.min(240.0, cutoff.getCurrentRaw()));
-        double w0 = 2.0 * Math.PI * fc / Math.max(8000, sampleRate);
-        double cosW = Math.cos(w0);
-        double alpha = Math.sin(w0) / Math.sqrt(2.0);
-        double a0 = 1.0 + alpha;
-        tb0 = (float) (((1.0 + cosW) * 0.5) / a0);
-        tb1 = (float) (-(1.0 + cosW) / a0);
-        tb2 = tb0;
-        ta1 = (float) ((-2.0 * cosW) / a0);
-        ta2 = (float) ((1.0 - alpha) / a0);
+    @Override
+    public boolean isAudible() {
+        return isEnabled();
+    }
+
+    /** Mirrors the legacy {@code hpfOn} flag: any cutoff above 0 enables it. */
+    void setLegacyState(boolean on, int cutoffHz) {
+        cutoff.setCurrentRaw(on ? Math.max(40, Math.min(160, cutoffHz)) : 80);
+        updateTarget();
+        snapCoefficients();
+        setEnabled(on);
+    }
+
+    boolean isOn() {
+        return isEnabled();
     }
 
     @Override
     public void processInPlace(float[] buf, int frames, int channels) {
         if (!isEnabled()) return;
-        recomputeTarget(true);
-        int slopeIdx = slope.getEnumIndex();
-        if (slopeIdx != lastSlopeIdx) {
-            if (lastSlopeIdx != -1) {
-                s2x1L = s2x2L = s2y1L = s2y2L = 0f;
-                s2x1R = s2x2R = s2y1R = s2y2R = 0f;
-            }
-            snapCoeffsToTarget();
-            lastSlopeIdx = slopeIdx;
-        }
-        boolean steep = slopeIdx == 1;
-        final float cSmooth = 0.004f;
-        for (int f = 0; f < frames; f++) {
-            b0 += cSmooth * (tb0 - b0);
-            b1 += cSmooth * (tb1 - b1);
-            b2 += cSmooth * (tb2 - b2);
-            a1 += cSmooth * (ta1 - a1);
-            a2 += cSmooth * (ta2 - a2);
+        if (buf == null || frames <= 0) return;
+        final int ch = Math.max(1, Math.min(2, channels));
+        updateTarget();
+        final boolean steep = slope.getCurrentRaw() != 0;
+        int offset = 0;
+        while (offset < frames) {
+            int blk = Math.min(BLOCK, frames - offset);
+            glideCoefficients();
 
-            int idx = f * channels;
-            float sL = buf[idx];
-            float yL = b0 * sL + b1 * x1L + b2 * x2L - a1 * y1L - a2 * y2L;
-            x2L = x1L;
-            x1L = sL;
-            y2L = y1L;
-            y1L = yL;
-            if (steep) {
-                float y2 = b0 * yL + b1 * s2x1L + b2 * s2x2L - a1 * s2y1L - a2 * s2y2L;
-                s2x2L = s2x1L;
-                s2x1L = yL;
-                s2y2L = s2y1L;
-                s2y1L = y2;
-                yL = y2;
-            }
-            buf[idx] = yL;
-
-            if (channels == 2) {
-                float sR = buf[idx + 1];
-                float yR = b0 * sR + b1 * x1R + b2 * x2R - a1 * y1R - a2 * y2R;
-                x2R = x1R;
-                x1R = sR;
-                y2R = y1R;
-                y1R = yR;
-                if (steep) {
-                    float y2 = b0 * yR + b1 * s2x1R + b2 * s2x2R - a1 * s2y1R - a2 * s2y2R;
-                    s2x2R = s2x1R;
-                    s2x1R = yR;
-                    s2y2R = s2y1R;
-                    s2y1R = y2;
-                    yR = y2;
+            final float b0 = cur[0], b1 = cur[1], b2 = cur[2];
+            final float a1 = cur[3], a2 = cur[4];
+            final float c0 = cur[5], c1 = cur[6], c2 = cur[7];
+            final float ca1 = cur[8], ca2 = cur[9];
+            for (int f = 0; f < blk; f++) {
+                int idx = (offset + f) * ch;
+                for (int c = 0; c < ch; c++) {
+                    float x = buf[idx + c];
+                    float y = b0 * x + s1[c][0];
+                    s1[c][0] = b1 * x - a1 * y + s2[c][0];
+                    s2[c][0] = b2 * x - a2 * y;
+                    if (steep) {
+                        float z = c0 * y + s1[c][1];
+                        s1[c][1] = c1 * y - ca1 * z + s2[c][1];
+                        s2[c][1] = c2 * y - ca2 * z;
+                        y = z;
+                    }
+                    buf[idx + c] = y;
                 }
-                buf[idx + 1] = yR;
+            }
+            offset += blk;
+        }
+    }
+
+    private void glideCoefficients() {
+        if (!coefDirty) return;
+        boolean settled = true;
+        for (int i = 0; i < target.length; i++) {
+            float d = target[i] - cur[i];
+            if (Math.abs(d) > 1e-7f) {
+                cur[i] += d * 0.35f;
+                settled = false;
+            } else {
+                cur[i] = target[i];
             }
         }
+        if (settled) coefDirty = false;
+    }
+
+    private void snapCoefficients() {
+        System.arraycopy(target, 0, cur, 0, target.length);
+        coefDirty = false;
+    }
+
+    private void updateTarget() {
+        int hz = Math.max(40, Math.min(160, cutoff.getCurrentRaw()));
+        int sl = slope.getCurrentRaw() != 0 ? 1 : 0;
+        if (hz == cachedHz && sl == cachedSlope && sampleRate == cachedRate) {
+            return;
+        }
+        cachedHz = hz;
+        cachedSlope = sl;
+        cachedRate = sampleRate;
+
+        double w0 = 2.0 * Math.PI * hz / sampleRate;
+        double cos = Math.cos(w0);
+        double sin = Math.sin(w0);
+        double q1 = sl == 1 ? 0.541196100146197 : 0.707106781186548;
+        double q2 = 1.306562964876377;
+        writeSection(0, cos, sin, q1);
+        if (sl == 1) {
+            writeSection(5, cos, sin, q2);
+        } else {
+            // Unity numerator; the section is skipped in the sample loop.
+            target[5] = 1f;
+            target[6] = 0f;
+            target[7] = 0f;
+            target[8] = 0f;
+            target[9] = 0f;
+        }
+        coefDirty = true;
+    }
+
+    private void writeSection(int at, double cos, double sin, double q) {
+        double alpha = sin / (2.0 * q);
+        double a0Inv = 1.0 / (1.0 + alpha);
+        target[at] = (float) ((1.0 + cos) * 0.5 * a0Inv);
+        target[at + 1] = (float) (-(1.0 + cos) * a0Inv);
+        target[at + 2] = target[at];
+        target[at + 3] = (float) (-2.0 * cos * a0Inv);
+        target[at + 4] = (float) ((1.0 - alpha) * a0Inv);
     }
 }
 
@@ -92318,7 +92350,7 @@ public class EqSuiteTest {
                     type == 3 ? 0.45 : 0.35);
         }
         p.getParam("type").setEnumIndex(0);
-        p.getParam("mode").setEnumIndex(1);
+        p.getParam("pass").setEnumIndex(1);
         assertEquals("HP mode", -3.01, mag(p.buildSections(), 1000), 0.3);
         assertTrue(mag(p.buildSections(), 250) < -20);
     }
@@ -94814,7 +94846,7 @@ public class FxRackChainTest {
         assertNotNull(noise);
         hpf.setWetDryMix(0.25f);
         noise.setEnabled(false);
-        noise.getParam("amt").setCurrentRaw(77);
+        noise.getParam("amt").setCurrentRaw(75);
         rack.addProcessor(FxRackChain.createProcessor("limiter"));
 
         JSONObject json = rack.toJson();
@@ -94841,7 +94873,7 @@ public class FxRackChainTest {
         assertEquals(0.25f,
                 back.getProcessor(back.indexOf("hpf")).getWetDryMix(), 0.0f);
         assertFalse(back.getProcessor(back.indexOf("noise")).isEnabled());
-        assertEquals(77, back.getProcessor(back.indexOf("noise"))
+        assertEquals(75, back.getProcessor(back.indexOf("noise"))
                 .getParam("amt").getCurrentRaw());
     }
 
@@ -99356,12 +99388,12 @@ public class Stage3PostAuditFixTest {
         switchedOn.prepare(48000, 1);
         switchedOn.getParam("freq").setCurrentRaw(1000);
         switchedOn.getParam("type").setEnumIndex(0);
-        switchedOn.getParam("mode").setEnumIndex(0);
+        switchedOn.getParam("pass").setEnumIndex(0);
         float[] warm = new float[4800];
         Arrays.fill(warm, 0.5f);
         switchedOn.processInPlace(warm, 4800, 1);
 
-        switchedOn.getParam("mode").setEnumIndex(1);
+        switchedOn.getParam("pass").setEnumIndex(1);
         float[] switched = new float[512];
         Arrays.fill(switched, 0.5f);
         switchedOn.processInPlace(switched, 512, 1);
@@ -99370,7 +99402,7 @@ public class Stage3PostAuditFixTest {
         reference.prepare(48000, 1);
         reference.getParam("freq").setCurrentRaw(1000);
         reference.getParam("type").setEnumIndex(0);
-        reference.getParam("mode").setEnumIndex(1);
+        reference.getParam("pass").setEnumIndex(1);
         reference.reset();
         float[] expected = new float[512];
         Arrays.fill(expected, 0.5f);
