@@ -115,8 +115,8 @@ public class FxPipelineTest {
         cfg.slots.clear();
         DspChain.EffectSlot deess = new DspChain.EffectSlot(
                 DspChain.EffectType.DE_ESSER, true, 65, true);
-        deess.extraParams.put("deess_freq", 7200);
-        deess.extraParams.put("deess_width", 150);
+        deess.extraParams.put("deess_freq", 7500);
+        deess.extraParams.put("deess_width", 50);
         deess.extraParams.put("deess_mode", 1);
         cfg.slots.add(deess);
         cfg.syncLegacyFieldsFromSlots();
@@ -125,17 +125,17 @@ public class FxPipelineTest {
         DspChain.Config loaded = DspChain.Config.load(ctx);
         assertEquals(1, loaded.slots.size());
         DspChain.EffectSlot back = loaded.slots.get(0);
-        assertEquals(Integer.valueOf(7200),
+        assertEquals(Integer.valueOf(7500),
                 back.extraParams.get("deess_freq"));
-        assertEquals(Integer.valueOf(150),
+        assertEquals(Integer.valueOf(50),
                 back.extraParams.get("deess_width"));
         assertEquals(Integer.valueOf(1), back.extraParams.get("deess_mode"));
 
         DspChain chain = new DspChain(2, loaded);
         ProDeEsserProcessor p = (ProDeEsserProcessor) chain.getRack()
                 .getProcessor(chain.getRack().indexOf("deess"));
-        assertEquals(7200, p.getParam("deess_freq").getCurrentRaw());
-        assertEquals(150, p.getParam("deess_width").getCurrentRaw());
+        assertEquals(7500, p.getParam("deess_freq").getCurrentRaw());
+        assertEquals(50, p.getParam("deess_width").getCurrentRaw());
         assertEquals(1, p.getParam("deess_mode").getCurrentRaw());
     }
 
