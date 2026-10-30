@@ -519,8 +519,7 @@ public class ConversionJobsTest {
     }
 
     @Test
-    public void firstRecordingAllowsAllEditsAfterSavingAndReplacingWhileSecondBlocks()
-            throws Exception {
+    public void freeTierStaysLockedForEveryTakeUntilProIsActive() throws Exception {
         for (Take t : new java.util.ArrayList<>(TakesRepository.all())) {
             TakesRepository.deleteImmediateForReplace(t.id);
         }
@@ -529,11 +528,11 @@ public class ConversionJobsTest {
         }
         ctx().getSharedPreferences("takeone", Context.MODE_PRIVATE)
                 .edit().clear().commit();
+        TrialAndBillingManager.setTestOverridePro(null);
 
         TrialAndBillingManager mgr = TrialAndBillingManager.get(ctx());
-        mgr.setActiveStudioSourceId(-1L);
-        assertTrue("Fresh first recording must allow all features",
-                mgr.evaluateFreeTierAccessForRecording(-1L));
+        assertFalse("A fresh install without a purchase must be on the free tier",
+                mgr.evaluateEntitlement());
 
         File dir = RecordingEngine.takesDir(ctx());
         File f1 = new File(dir, "first_take_" + System.nanoTime() + ".m4a");
@@ -541,42 +540,31 @@ public class ConversionJobsTest {
             w.write(new byte[2048]);
         }
         Take firstTake = TakesRepository.addRecording(f1, 2000L, "First Take", "M4A");
-        assertEquals(firstTake.id, mgr.getFreeRecordingId());
 
-        // Editing the first recording after saving it once MUST still be allowed
-        mgr.setActiveStudioSourceId(firstTake.id);
-        assertTrue("Editing first recording after saving once must be allowed",
-                mgr.evaluateFreeTierAccessForRecording(firstTake.id));
+        // The one-free-recording allowance is gone: saving the first take no
+        // longer unlocks Pro, so a reinstall cannot reset the paywall gate.
+        assertFalse("First recording must not bypass the paywall",
+                mgr.evaluateEntitlement());
 
-        // Replacing the first recording preserves its immutable ID and keeps edits allowed
-        File f1Replaced = new File(dir, "first_take_rep_" + System.nanoTime() + ".m4a");
-        try (java.io.RandomAccessFile w = new java.io.RandomAccessFile(f1Replaced, "rw")) {
-            w.write(new byte[2048]);
+        // Belt and braces: a leftover legacy free-recording marker must not
+        // unlock Pro either (fresh installs simply have no such marker).
+        ctx().getSharedPreferences("takeone", Context.MODE_PRIVATE).edit()
+                .putBoolean("free_recording_used", true)
+                .putLong("free_recording_id", firstTake.id)
+                .commit();
+        assertFalse("Legacy free-recording state must not unlock Pro",
+                mgr.evaluateEntitlement());
+
+        // A Play-managed trial or paid purchase is what unlocks every take.
+        TrialAndBillingManager.setTestOverridePro(true);
+        try {
+            assertTrue("An active trial or purchase must unlock the free tier",
+                    mgr.evaluateEntitlement());
+        } finally {
+            TrialAndBillingManager.setTestOverridePro(null);
         }
-        Take replacedFirst = TakesRepository.replaceRecording(
-                firstTake.id, f1Replaced, 2500L, "First Take Edited", "M4A");
-        assertEquals("Immutable ID must be preserved on Replace",
-                firstTake.id, replacedFirst.id);
-        assertTrue("Editing first recording after Replace must still be allowed",
-                mgr.evaluateFreeTierAccessForRecording(replacedFirst.id));
 
-        // Starting a 2nd recording (-1) or editing a 2nd recording must be blocked
-        mgr.setActiveStudioSourceId(-1L);
-        assertFalse("Starting a 2nd recording must be gated by paywall",
-                mgr.evaluateFreeTierAccessForRecording(-1L));
-
-        File f2 = new File(dir, "second_take_" + System.nanoTime() + ".m4a");
-        try (java.io.RandomAccessFile w = new java.io.RandomAccessFile(f2, "rw")) {
-            w.write(new byte[2048]);
-        }
-        Take secondTake = TakesRepository.addRecording(f2, 2000L, "Second Take", "M4A");
-        assertFalse("Editing 2nd recording must be gated by paywall",
-                mgr.evaluateFreeTierAccessForRecording(secondTake.id));
-        assertTrue("Editing 1st recording must still be allowed even after 2nd recording exists",
-                mgr.evaluateFreeTierAccessForRecording(replacedFirst.id));
-
-        TakesRepository.deleteImmediateForReplace(replacedFirst.id);
-        TakesRepository.deleteImmediateForReplace(secondTake.id);
+        TakesRepository.deleteImmediateForReplace(firstTake.id);
     }
 
     @Test

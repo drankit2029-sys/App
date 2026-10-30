@@ -618,11 +618,6 @@ public final class TakesRepository {
         }
         Take t = buildTakeWithId(effId, file, durationMs, title, format);
         TAKES.add(0, t);
-        if (app != null) {
-            try {
-                TrialAndBillingManager.get(app).onRecordingSaved(t.id);
-            } catch (Exception ignored) {}
-        }
         // If a filename-based float master was created before the Take was
         // registered, migrate it to the canonical ID-based path now.
         if (file != null && file.getParentFile() != null) {
@@ -651,11 +646,6 @@ public final class TakesRepository {
         Take t = buildTakeWithId(id, file, durationMs, title, format);
         t.origin = "imported";
         TAKES.add(0, t);
-        if (app != null) {
-            try {
-                TrialAndBillingManager.get(app).onRecordingSaved(t.id);
-            } catch (Exception ignored) {}
-        }
         persistAsync(t);
         fireChanged();
         return t;

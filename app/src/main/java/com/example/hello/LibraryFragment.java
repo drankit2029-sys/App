@@ -1690,7 +1690,6 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         // "Converting to 32-bit float" modal.
         final long immutableRecordingId =
                 ConversionJobs.resolveRecordingId(sourceId);
-        TrialAndBillingManager.get(appCtx).setActiveStudioSourceId(sourceId);
         final File floatSrc = TakesRepository.resolveFloatMaster(
                 immutableRecordingId, src);
         final boolean alreadyFloat = AudioImporter.isNativeFloatWav(floatSrc);

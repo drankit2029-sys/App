@@ -238,6 +238,9 @@ public class MainActivity extends AppCompatActivity {
     protected void onResume() {
         super.onResume();
         if (backCallback != null) backCallback.setEnabled(true);
+        // Re-read entitlement so a lapsed or cancelled free trial re-locks the
+        // editing tools, and a purchase made on another device is restored.
+        TrialAndBillingManager.get(this).refreshPurchasesAsync();
         syncFabWithEngine();
         for (ConversionJob j : ConversionJobs.active()) {
             if (ConversionJob.QUEUED.equals(j.state)) {

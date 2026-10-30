@@ -434,7 +434,7 @@ public class StudioFragment extends Fragment {
             PressAnim.applySoft(btnPreviewPlay, 0.95f);
             btnPreviewPlay.setOnClickListener(view -> {
                 if (!TrialAndBillingManager.requireProOrShowPaywall(
-                        requireActivity(), editSourceId, "Replace", null)) {
+                        requireActivity(), "Replace", null)) {
                     return;
                 }
                 if (fxPanelOpen) return;
@@ -468,7 +468,7 @@ public class StudioFragment extends Fragment {
             PressAnim.applySoft(btnSelectRange, 0.95f);
             btnSelectRange.setOnClickListener(view -> {
                 if (!TrialAndBillingManager.requireProOrShowPaywall(
-                        requireActivity(), editSourceId, "Select", null)) {
+                        requireActivity(), "Select", null)) {
                     return;
                 }
                 if (replaceModeArmed) return;
@@ -499,7 +499,7 @@ public class StudioFragment extends Fragment {
             PressAnim.applySoft(btnReplaceSeg, 0.95f);
             btnReplaceSeg.setOnClickListener(view -> {
                 if (!TrialAndBillingManager.requireProOrShowPaywall(
-                        requireActivity(), editSourceId, "Select & Replace", null)) {
+                        requireActivity(), "Select & Replace", null)) {
                     return;
                 }
                 if (replaceModeArmed || fxPanelOpen) return;
@@ -513,7 +513,7 @@ public class StudioFragment extends Fragment {
             PressAnim.applySoft(btnTrimCrop, 0.95f);
             btnTrimCrop.setOnClickListener(view -> {
                 if (!TrialAndBillingManager.requireProOrShowPaywall(
-                        requireActivity(), editSourceId, "Trim", null)) {
+                        requireActivity(), "Trim", null)) {
                     return;
                 }
                 if (replaceModeArmed || fxPanelOpen) return;
@@ -527,7 +527,7 @@ public class StudioFragment extends Fragment {
             PressAnim.applySoft(btnDspFx, 0.95f);
             btnDspFx.setOnClickListener(view -> {
                 if (!TrialAndBillingManager.requireProOrShowPaywall(
-                        requireActivity(), editSourceId, "Effects", null)) {
+                        requireActivity(), "Effects", null)) {
                     return;
                 }
                 if (replaceModeArmed) return;
@@ -540,7 +540,7 @@ public class StudioFragment extends Fragment {
             PressAnim.applySoft(btnEditUndo, 0.95f);
             btnEditUndo.setOnClickListener(view -> {
                 if (!TrialAndBillingManager.requireProOrShowPaywall(
-                        requireActivity(), editSourceId, "Undo", null)) {
+                        requireActivity(), "Undo", null)) {
                     return;
                 }
                 if (replaceModeArmed || fxPanelOpen) return;
@@ -552,7 +552,7 @@ public class StudioFragment extends Fragment {
             PressAnim.applySoft(btnEditRedo, 0.95f);
             btnEditRedo.setOnClickListener(view -> {
                 if (!TrialAndBillingManager.requireProOrShowPaywall(
-                        requireActivity(), editSourceId, "Redo", null)) {
+                        requireActivity(), "Redo", null)) {
                     return;
                 }
                 if (replaceModeArmed || fxPanelOpen) return;
@@ -698,10 +698,8 @@ public class StudioFragment extends Fragment {
             editSourceId = savedInstanceState.getLong("editSourceId", -1);
             editSourceTitle = savedInstanceState.getString("editSourceTitle");
         }
-        TrialAndBillingManager.get(requireContext())
-                .setActiveStudioSourceId(editSourceId);
         if (!TrialAndBillingManager.get(requireContext())
-                .hasProAccessForRecording(editSourceId)) {
+                .hasProAccess()) {
             replaceModeArmed = false;
             if (dspConfig != null && dspConfig.isActive()) {
                 dspConfig.resetAll();
@@ -1484,7 +1482,7 @@ public class StudioFragment extends Fragment {
     private void applyZoomValue(int bp) {
         if (waveform == null) return;
         if (isAdded() && !TrialAndBillingManager.requireProOrShowPaywall(
-                requireActivity(), editSourceId, "Waveform Zoom", null)) {
+                requireActivity(), "Waveform Zoom", null)) {
             refreshZoomValue();
             return;
         }
@@ -1536,7 +1534,7 @@ public class StudioFragment extends Fragment {
     private void stepZoom(int dir) {
         if (waveform == null || zoomValue == null) return;
         if (isAdded() && !TrialAndBillingManager.requireProOrShowPaywall(
-                requireActivity(), editSourceId, "Waveform Zoom", null)) {
+                requireActivity(), "Waveform Zoom", null)) {
             return;
         }
         int minBp = currentMinZoomBp();
@@ -1808,7 +1806,6 @@ public class StudioFragment extends Fragment {
             final Context appCtx = requireContext().getApplicationContext();
             editSourceId = -1;
             editSourceTitle = null;
-            TrialAndBillingManager.get(appCtx).setActiveStudioSourceId(-1);
             engine.abortAndDelete();
             EditLink.clear(appCtx);
             activity().exitStudio();
@@ -1878,8 +1875,6 @@ public class StudioFragment extends Fragment {
             // a later save cannot inherit a previous take's replace choice.
             editSourceId = -1;
             editSourceTitle = null;
-            TrialAndBillingManager.get(requireContext())
-                    .setActiveStudioSourceId(-1);
             dspBakedToRaw = false;
             dspSubRangeBaked = false;
             lastEditWasSubRangeBake = false;
@@ -2299,8 +2294,6 @@ public class StudioFragment extends Fragment {
                             // below is an ordinary one.
                             editSourceId = -1;
                             editSourceTitle = null;
-                            TrialAndBillingManager.get(requireContext())
-                                    .setActiveStudioSourceId(-1);
                             try {
                                 EditLink.clear(requireContext());
                             } catch (Exception ignored) {}
@@ -2349,7 +2342,6 @@ public class StudioFragment extends Fragment {
         final int saveChannels = engine.channels;
         editSourceId = -1;
         editSourceTitle = null;
-        TrialAndBillingManager.get(appCtx).setActiveStudioSourceId(-1);
         EditLink.clear(appCtx);
         new Thread(() -> {
             ConversionJobs.SaveResult r = null;
@@ -2495,7 +2487,6 @@ public class StudioFragment extends Fragment {
         final boolean wasEdit = (editSourceId != -1);
         editSourceId = -1;
         editSourceTitle = null;
-        TrialAndBillingManager.get(appCtx).setActiveStudioSourceId(-1);
 
         // Leave Studio immediately; never wait for file cleanup or a popup.
         act.exitStudio();
@@ -2529,7 +2520,6 @@ public class StudioFragment extends Fragment {
             replaceSavedTailFile = null;
         }
         final Context appCtx = requireContext().getApplicationContext();
-        TrialAndBillingManager.get(appCtx).setActiveStudioSourceId(-1);
         new Thread(() -> {
             engine.abortAndDelete();
             editSourceId = -1;
@@ -2560,8 +2550,6 @@ public class StudioFragment extends Fragment {
         }
         if (!engine.hasSession()) {
             editSourceId = -1;
-            TrialAndBillingManager.get(requireContext())
-                    .setActiveStudioSourceId(-1);
             try {
                 EditLink.clear(requireContext());
             } catch (Exception ignored) {}
@@ -3135,7 +3123,7 @@ public class StudioFragment extends Fragment {
         // is styled exclusively by paintEditorStrip() based on replaceModeArmed.
         if (btnPreviewPlay != null && isAdded()) {
             boolean proUnlocked = TrialAndBillingManager.get(requireContext())
-                    .hasProAccessForRecording(editSourceId);
+                    .hasProAccess();
             boolean showActive = proUnlocked && replaceModeArmed
                     && (isSessionEditable()
                             || engine.state == RecordingEngine.State.RECORDING);
@@ -3166,14 +3154,13 @@ public class StudioFragment extends Fragment {
 
         TrialAndBillingManager billing =
                 TrialAndBillingManager.get(requireContext());
-        billing.setActiveStudioSourceId(editSourceId);
-        boolean proUnlocked = billing.hasProAccessForRecording(editSourceId);
+        boolean proUnlocked = billing.hasProAccess();
 
         if (zoomValue != null) {
             zoomValue.setPaywallInterceptor(proUnlocked ? null : () -> {
                 if (isAdded()) {
                     TrialAndBillingManager.requireProOrShowPaywall(
-                            requireActivity(), editSourceId, "Waveform Zoom", null);
+                            requireActivity(), "Waveform Zoom", null);
                 }
             });
         }
@@ -3184,15 +3171,15 @@ public class StudioFragment extends Fragment {
         // transport, so every other editing action is locked until it closes.
         //
         // Button state rules:
-        // - When proUnlocked is true (first recording, including when saved
-        //   and re-edited, or Paid Pro):
+        // - When proUnlocked is true (paid Pro, including the Play-managed
+        //   free trial, or the lifetime unlock):
         //   * Active buttons are visually enabled (alpha = 1f, 0xFFF2F4F7)
         //     and clickable (setEnabled(true), setClickable(true)).
         //   * Disabled buttons (e.g. before/during recording when !canEdit,
         //     Undo/Redo with no history, or buttons locked by Replace/FX mode)
         //     are visually disabled (alpha = 0.35f, 0xFF5D6672) and
         //     NON-clickable (setEnabled(false), setClickable(false)).
-        // - When proUnlocked is false (subsequent / 2nd+ recordings):
+        // - When proUnlocked is false (free tier):
         //   * All locked buttons are visually disabled (alpha = 0.35f,
         //     0xFF5D6672) AND clickable (setEnabled(true), setClickable(true))
         //     so pressing any of them immediately opens the paywall.
@@ -5987,9 +5974,6 @@ public class StudioFragment extends Fragment {
         boolean unfin = hasSession && isUnfinalised();
         draftBadge.setVisibility(unfin ? View.VISIBLE : View.GONE);
 
-        TrialAndBillingManager billing =
-                TrialAndBillingManager.get(requireContext());
-        billing.setActiveStudioSourceId(editSourceId);
         formatBadge.setText(preset.shortLabel + " → "
                 + TakeSaver.labelFor(preset, saveFormat));
         formatBadge.setEnabled(!saving);

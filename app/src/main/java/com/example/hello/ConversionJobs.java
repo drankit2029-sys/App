@@ -509,11 +509,6 @@ public final class ConversionJobs {
         NEG_TO_RAW.put(job.takeId(), raw.getAbsolutePath());
         ACTIVE.put(job.jobId, job);
         job.write();
-        if (ctx != null) {
-            try {
-                TrialAndBillingManager.get(ctx).onRecordingSaved(job.recordingId);
-            } catch (Exception ignored) {}
-        }
         fireChanged();
         return job;
     }
@@ -840,10 +835,6 @@ public final class ConversionJobs {
         synchronized (ConversionJobs.class) {
             RAW_TO_RECORDING_ID.put(raw.getAbsolutePath(), recordingId);
         }
-        if (ctx != null) {
-            TrialAndBillingManager.get(ctx).onRecordingSaved(recordingId);
-        }
-
         String title = (replaceTitle != null && !replaceTitle.trim().isEmpty())
                 ? replaceTitle.trim()
                 : (e.takeName != null ? e.takeName : "");

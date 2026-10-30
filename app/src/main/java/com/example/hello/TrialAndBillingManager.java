@@ -20,7 +20,6 @@ import com.android.billingclient.api.PurchasesUpdatedListener;
 import com.android.billingclient.api.QueryProductDetailsParams;
 import com.android.billingclient.api.QueryPurchasesParams;
 
-import java.io.File;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -29,23 +28,24 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Manages TakeOne's one-recording free allowance (tied to the unique immutable
- * ID of the user's first recording) and Google Play Billing v7 entitlements
- * (Monthly subscription {@link #SKU_MONTHLY} and One-Time Lifetime purchase
- * {@link #SKU_LIFETIME}, either of which unlocks all features).
+ * Manages TakeOne's Google Play Billing v7 entitlements: the Monthly Pro
+ * subscription {@link #SKU_MONTHLY} (offered with a 7-day free trial in Play
+ * Console) and the One-Time Lifetime purchase {@link #SKU_LIFETIME}.
  *
  * <ul>
- *   <li><b>No time-based free trial:</b> All features (Replace, Select,
- *       Select & Replace, Trim, 53-Effect DSP Rack, Undo/Redo, Waveform
- *       Zoom, Recording Settings / Format Converter, Teleprompter) are
- *       unlocked for the user's first recording — both during initial capture
- *       and whenever that first recording is saved, renamed, or opened via
- *       Edit & Replace.</li>
- *   <li><b>Subsequent recordings:</b> Teleprompter and Format Converter
- *       (Recording Settings) remain enabled on all recordings; all editing
- *       tools (Replace, Select, Select & Replace, Trim, FX, Undo, Redo,
- *       Waveform Zoom) are blocked on subsequent recordings and open the
- *       Google Play Billing paywall when pressed.</li>
+ *   <li><b>Play-managed free trial:</b> The subscription's free-trial offer is
+ *       selected automatically whenever Google Play lists it for the signed-in
+ *       account. Google Play enforces trial eligibility per Google account, so
+ *       uninstalling and reinstalling the app cannot grant a second trial. The
+ *       trial length is read from the offer's own billing period (for example
+ *       {@code P7D} for 7 days).</li>
+ *   <li><b>Free tier:</b> Recording, the Teleprompter and the Format Converter
+ *       stay free on every take; all Studio editing tools (Replace, Select,
+ *       Select &amp; Replace, Trim, FX, Undo, Redo, Waveform Zoom) require Pro
+ *       and open the Google Play Billing paywall when pressed.</li>
+ *   <li><b>Entitlement restore:</b> Purchases and running trials are re-read
+ *       from Google Play on launch, so entitlement follows the user's Google
+ *       account rather than app-private storage and survives reinstalls.</li>
  *   <li><b>Dynamic region-dependent pricing (no fallbacks):</b> Formatted
  *       localized prices are fetched directly from Google Play's
  *       {@link ProductDetails}. Missing product details or pricing throw
@@ -56,14 +56,17 @@ import java.util.concurrent.atomic.AtomicInteger;
 public final class TrialAndBillingManager implements PurchasesUpdatedListener {
 
     // Google Play Console Product IDs
-    /** Monthly recurring subscription (BillingClient.ProductType.SUBS). */
+    /**
+     * Monthly recurring subscription (BillingClient.ProductType.SUBS). Play
+     * Console must carry a 7-day free-trial offer (billing period {@code P7D},
+     * new-subscriber eligibility) on its base plan; Google Play then enforces
+     * trial eligibility per Google account across reinstalls.
+     */
     public static final String SKU_MONTHLY  = "takeone_pro_monthly";
     /** One-time lifetime unlock purchase (BillingClient.ProductType.INAPP). */
     public static final String SKU_LIFETIME = "takeone_pro_lifetime";
 
     private static final String PREFS = "takeone";
-    private static final String KEY_FREE_RECORDING_USED = "free_recording_used";
-    private static final String KEY_FREE_RECORDING_ID   = "free_recording_id";
     private static final String KEY_ENTITLED_PRO        = "entitled_pro_active";
     private static final String KEY_ENTITLED_PLAN       = "entitled_pro_plan";
 
@@ -75,8 +78,6 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
     private BillingClient billingClient;
     private final Map<String, ProductDetails> productCache = new HashMap<>();
     private Runnable onEntitlementChanged;
-    /** Currently active Studio edit source ID (-1 when starting a fresh take). */
-    private volatile long activeStudioSourceId = -1L;
 
     private TrialAndBillingManager(Context ctx) {
         this.appCtx = ctx.getApplicationContext();
@@ -112,21 +113,8 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
     }
 
     /**
-     * Updates the recording source ID currently open in Studio ({@code -1} for
-     * a brand-new recording session, or the positive/negative source ID when
-     * editing an existing library take).
-     */
-    public void setActiveStudioSourceId(long sourceId) {
-        this.activeStudioSourceId = sourceId;
-    }
-
-    public long getActiveStudioSourceId() {
-        return activeStudioSourceId;
-    }
-
-    /**
-     * True when the user has an active Monthly subscription or One-Time
-     * Lifetime purchase.
+     * True when the user has an active Monthly subscription (including its
+     * free trial) or One-Time Lifetime purchase.
      */
     public boolean isPaidPro() {
         if (testOverridePro != null) return testOverridePro;
@@ -134,182 +122,28 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
         return p.getBoolean(KEY_ENTITLED_PRO, false);
     }
 
-    private static boolean isRecordingIdAlive(long id, List<Take> all,
-                                              List<ConversionJob> jobs) {
-        if (id <= 0) return false;
-        for (Take t : all) {
-            if (t.id == id) return true;
-        }
-        for (ConversionJob j : jobs) {
-            if (j.recordingId == id || j.replaceTakeId == id) return true;
-        }
-        return false;
-    }
-
     /**
-     * Returns the unique immutable ID of the user's one free full-feature
-     * recording, or {@code -1} if no recording has been created yet. If a
-     * recording already exists in the Library or active conversions from an
-     * earlier session where {@link #KEY_FREE_RECORDING_ID} was not yet stored
-     * (or pointed to a deleted take), binds to the earliest existing
-     * recording's immutable ID automatically.
-     */
-    public long getFreeRecordingId() {
-        SharedPreferences p = appCtx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-        long storedId = p.getLong(KEY_FREE_RECORDING_ID, -1L);
-        if (storedId > 0) {
-            return storedId;
-        }
-        List<Take> all = TakesRepository.all();
-        if (!all.isEmpty()) {
-            Take earliest = all.get(all.size() - 1);
-            for (Take t : all) {
-                if (t.timestamp < earliest.timestamp
-                        || (t.timestamp == earliest.timestamp && t.id < earliest.id)) {
-                    earliest = t;
-                }
-            }
-            if (earliest.id > 0) {
-                p.edit()
-                        .putLong(KEY_FREE_RECORDING_ID, earliest.id)
-                        .putBoolean(KEY_FREE_RECORDING_USED, true)
-                        .apply();
-                return earliest.id;
-            }
-        }
-        List<ConversionJob> jobs = ConversionJobs.active();
-        if (!jobs.isEmpty()) {
-            for (ConversionJob j : jobs) {
-                if (j.recordingId > 0) {
-                    p.edit()
-                            .putLong(KEY_FREE_RECORDING_ID, j.recordingId)
-                            .putBoolean(KEY_FREE_RECORDING_USED, true)
-                            .apply();
-                    return j.recordingId;
-                }
-            }
-        }
-        return -1L;
-    }
-
-    /**
-     * Records that a recording with immutable {@code recordingId} has been
-     * saved. If no valid free recording ID is currently bound, binds the
-     * one-recording free allowance to {@code recordingId} so that saving,
-     * renaming, or re-editing that first recording continues to allow all
-     * editing options.
-     */
-    public void onRecordingSaved(long recordingId) {
-        SharedPreferences p = appCtx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-        long currentFreeId = p.getLong(KEY_FREE_RECORDING_ID, -1L);
-        SharedPreferences.Editor ed = p.edit()
-                .putBoolean(KEY_FREE_RECORDING_USED, true);
-        if (currentFreeId <= 0 && recordingId > 0) {
-            ed.putLong(KEY_FREE_RECORDING_ID, recordingId);
-        }
-        ed.apply();
-    }
-
-    /**
-     * True once the user has saved their first free recording (or if a
-     * saved/converting recording already exists in the Library).
-     */
-    public boolean isFreeRecordingUsed() {
-        SharedPreferences p = appCtx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-        long storedId = p.getLong(KEY_FREE_RECORDING_ID, -1L);
-        if (p.getBoolean(KEY_FREE_RECORDING_USED, false) || storedId > 0) {
-            getFreeRecordingId();
-            return true;
-        }
-        List<Take> all = TakesRepository.all();
-        List<ConversionJob> jobs = ConversionJobs.active();
-        if (!all.isEmpty() || !jobs.isEmpty()) {
-            getFreeRecordingId();
-            p.edit().putBoolean(KEY_FREE_RECORDING_USED, true).apply();
-            return true;
-        }
-        return false;
-    }
-
-    /**
-     * Marks the one free full-feature recording as consumed once the first
-     * recording is saved.
-     */
-    public void markFreeRecordingUsed() {
-        getFreeRecordingId();
-        SharedPreferences p = appCtx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-        if (!p.getBoolean(KEY_FREE_RECORDING_USED, false)) {
-            p.edit().putBoolean(KEY_FREE_RECORDING_USED, true).apply();
-        }
-    }
-
-    /**
-     * Returns true when the user is entitled to full Studio features for the
-     * specified {@code sourceOrRecordingId}:
-     * <ul>
-     *   <li>User has purchased Monthly or One-Time Pro.</li>
-     *   <li>No recording has been saved yet (the user is recording their very
-     *       first take).</li>
-     *   <li>The user is editing their first free recording (its resolved
-     *       immutable recording ID matches {@link #getFreeRecordingId()}).</li>
-     * </ul>
-     */
-    public boolean hasProAccessForRecording(long sourceOrRecordingId) {
-        if (testOverridePro != null) return testOverridePro;
-        if (isRunningUnderUnitTest()) return true;
-        return evaluateFreeTierAccessForRecording(sourceOrRecordingId);
-    }
-
-    /**
-     * Evaluates paid Pro or first-recording free-tier entitlement for
-     * {@code sourceOrRecordingId} without the Robolectric/instrumentation
-     * test bypass so unit tests can verify first-recording vs subsequent
-     * recording rules directly.
-     */
-    boolean evaluateFreeTierAccessForRecording(long sourceOrRecordingId) {
-        if (isPaidPro()) return true;
-        long candidate = sourceOrRecordingId;
-        if (candidate == -1L) {
-            candidate = activeStudioSourceId;
-        }
-        if (candidate == -1L) {
-            File raw = RecordingEngine.get().rawFile;
-            if (raw != null && EditLink.matches(appCtx, raw.getAbsolutePath())) {
-                candidate = EditLink.id(appCtx);
-            }
-        }
-        if (!isFreeRecordingUsed()) return true;
-        if (candidate == -1L) return false;
-        long resolvedId = ConversionJobs.resolveRecordingId(candidate);
-        long freeId = getFreeRecordingId();
-        if (freeId > 0 && resolvedId == freeId) {
-            return true;
-        }
-        if (resolvedId > 0 && freeId <= 0) {
-            appCtx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-                    .putLong(KEY_FREE_RECORDING_ID, resolvedId)
-                    .putBoolean(KEY_FREE_RECORDING_USED, true)
-                    .apply();
-            return true;
-        }
-        return false;
-    }
-
-    /**
-     * Master entitlement check for the currently active Studio session: returns
-     * true if the user has purchased Monthly or One-Time Pro, is on their very
-     * first recording before saving, or is editing their first recording
-     * (matched by its unique immutable recording ID).
+     * Master entitlement check for Studio: true when the user has an active
+     * Monthly subscription (including its Play-managed free trial) or the
+     * One-Time Lifetime purchase.
      */
     public boolean hasProAccess() {
-        return hasProAccessForRecording(activeStudioSourceId);
+        if (testOverridePro != null) return testOverridePro;
+        if (isRunningUnderUnitTest()) return true;
+        return isPaidPro();
+    }
+
+    /**
+     * Entitlement check without the Robolectric/instrumentation bypass so unit
+     * tests can verify that the free tier stays locked until a purchase.
+     */
+    boolean evaluateEntitlement() {
+        return isPaidPro();
     }
 
     /** Compact status label for the Studio/Library badge. */
     public String statusBadgeText() {
-        if (isPaidPro()) return "PRO STUDIO";
-        if (hasProAccess()) return "FIRST RECORDING • ALL FEATURES";
-        return "FREE TIER • UPGRADE";
+        return isPaidPro() ? "PRO STUDIO" : "FREE TIER • UPGRADE";
     }
 
     private static boolean isRunningUnderUnitTest() {
@@ -329,35 +163,15 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
     /**
      * Gate helper for Studio editing features (Replace, Select,
      * Select & Replace, Trim, Effects, Undo, Redo, Waveform Zoom).
-     * Runs {@code onAllowed} immediately if entitled (Paid Pro or first
-     * recording), or opens the Google Play Billing paywall when locked on
-     * subsequent recordings.
+     * Runs {@code onAllowed} immediately when Pro is active (paid subscription,
+     * its Play-managed free trial, or lifetime unlock), otherwise opens the
+     * Google Play Billing paywall.
      */
     public static boolean requireProOrShowPaywall(@NonNull Activity activity,
                                                   @NonNull String featureName,
                                                   @Nullable Runnable onAllowed) {
         TrialAndBillingManager mgr = get(activity);
         if (mgr.hasProAccess()) {
-            if (onAllowed != null) onAllowed.run();
-            return true;
-        }
-        mgr.showPaywallSheet(activity, featureName);
-        return false;
-    }
-
-    /**
-     * Gate helper for Studio editing features that explicitly checks access
-     * against the active {@code editSourceId} of the Studio fragment.
-     */
-    public static boolean requireProOrShowPaywall(@NonNull Activity activity,
-                                                  long editSourceId,
-                                                  @NonNull String featureName,
-                                                  @Nullable Runnable onAllowed) {
-        TrialAndBillingManager mgr = get(activity);
-        if (editSourceId != -1L) {
-            mgr.setActiveStudioSourceId(editSourceId);
-        }
-        if (mgr.hasProAccessForRecording(editSourceId)) {
             if (onAllowed != null) onAllowed.run();
             return true;
         }
@@ -436,9 +250,10 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
     }
 
     /**
-     * Resolves the base subscription offer token (no free trial) from Google
-     * Play {@link ProductDetails}, or throws {@link IllegalStateException}
-     * cleanly if unavailable.
+     * Resolves the offer token used for a subscription purchase. The free-trial
+     * offer wins whenever Google Play lists one for the signed-in account;
+     * otherwise the base paid offer is used. Throws
+     * {@link IllegalStateException} cleanly if no offer is available.
      */
     @NonNull
     public static String requireSubscriptionOfferToken(@NonNull ProductDetails pd) {
@@ -449,24 +264,110 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
                     "No subscription offer token available from Google Play for "
                             + pd.getProductId());
         }
+        ProductDetails.SubscriptionOfferDetails base = null;
+        ProductDetails.SubscriptionOfferDetails other = null;
         for (ProductDetails.SubscriptionOfferDetails offer : offers) {
-            if (offer == null || offer.getPricingPhases() == null) continue;
-            List<ProductDetails.PricingPhase> phases =
-                    offer.getPricingPhases().getPricingPhaseList();
-            if (phases != null && phases.size() == 1
-                    && phases.get(0).getPriceAmountMicros() > 0L
-                    && offer.getOfferToken() != null
-                    && !offer.getOfferToken().isEmpty()) {
+            if (offer == null || offer.getOfferToken() == null
+                    || offer.getOfferToken().isEmpty()) {
+                continue;
+            }
+            if (freeTrialPhase(offer) != null) {
                 return offer.getOfferToken();
             }
+            if (isSinglePaidPhaseOffer(offer)) {
+                base = offer;
+            } else if (other == null) {
+                other = offer;
+            }
         }
-        String token = offers.get(0).getOfferToken();
-        if (token == null || token.isEmpty()) {
+        ProductDetails.SubscriptionOfferDetails pick = base != null ? base : other;
+        if (pick == null) {
             throw new IllegalStateException(
                     "Empty subscription offer token from Google Play for "
                             + pd.getProductId());
         }
-        return token;
+        return pick.getOfferToken();
+    }
+
+    private static boolean isSinglePaidPhaseOffer(
+            ProductDetails.SubscriptionOfferDetails offer) {
+        if (offer.getPricingPhases() == null) return false;
+        List<ProductDetails.PricingPhase> phases =
+                offer.getPricingPhases().getPricingPhaseList();
+        return phases != null && phases.size() == 1
+                && phases.get(0) != null
+                && phases.get(0).getPriceAmountMicros() > 0L;
+    }
+
+    /**
+     * First zero-priced pricing phase of an offer (a Play free trial), or
+     * {@code null} when the offer is purely paid.
+     */
+    @Nullable
+    private static ProductDetails.PricingPhase freeTrialPhase(
+            @Nullable ProductDetails.SubscriptionOfferDetails offer) {
+        if (offer == null || offer.getPricingPhases() == null) return null;
+        List<ProductDetails.PricingPhase> phases =
+                offer.getPricingPhases().getPricingPhaseList();
+        if (phases == null || phases.isEmpty()) return null;
+        ProductDetails.PricingPhase first = phases.get(0);
+        if (first != null && first.getPriceAmountMicros() == 0L
+                && first.getBillingPeriod() != null
+                && !first.getBillingPeriod().isEmpty()) {
+            return first;
+        }
+        return null;
+    }
+
+    /** The free-trial phase Google Play offers for this subscription, if any. */
+    @Nullable
+    static ProductDetails.PricingPhase freeTrialPhase(@Nullable ProductDetails pd) {
+        if (pd == null) return null;
+        List<ProductDetails.SubscriptionOfferDetails> offers =
+                pd.getSubscriptionOfferDetails();
+        if (offers == null) return null;
+        for (ProductDetails.SubscriptionOfferDetails offer : offers) {
+            ProductDetails.PricingPhase phase = freeTrialPhase(offer);
+            if (phase != null) return phase;
+        }
+        return null;
+    }
+
+    /**
+     * Human label for the Play-managed trial length (for example "7 days"),
+     * derived from the offer's ISO-8601 billing period.
+     */
+    @Nullable
+    static String freeTrialLabel(@Nullable ProductDetails pd) {
+        ProductDetails.PricingPhase phase = freeTrialPhase(pd);
+        return phase == null ? null : formatBillingPeriod(phase.getBillingPeriod());
+    }
+
+    /** Formats an ISO-8601 billing period such as {@code P7D} or {@code P1M}. */
+    @Nullable
+    static String formatBillingPeriod(@Nullable String iso) {
+        if (iso == null || iso.length() < 2) return null;
+        char unit = iso.charAt(iso.length() - 1);
+        int count;
+        try {
+            count = Integer.parseInt(iso.substring(1, iso.length() - 1));
+        } catch (NumberFormatException e) {
+            return null;
+        }
+        if (count <= 0) return null;
+        switch (unit) {
+            case 'D':
+                return count + (count == 1 ? " day" : " days");
+            case 'W':
+                int days = count * 7;
+                return days + (days == 1 ? " day" : " days");
+            case 'M':
+                return count + (count == 1 ? " month" : " months");
+            case 'Y':
+                return count + (count == 1 ? " year" : " years");
+            default:
+                return null;
+        }
     }
 
     private volatile String lastPriceFetchError = null;
@@ -488,17 +389,43 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
                                      @Nullable String lockedFeature,
                                      @Nullable String lifetimePrice,
                                      @Nullable String monthlyPrice) {
-        String subtitle = (lockedFeature != null && !lockedFeature.isEmpty())
-                ? "Your 1 free full-feature recording has been used. Unlock "
-                        + lockedFeature + " and all Studio tools on every recording:"
-                : "Your 1 free full-feature recording has been used. Choose Monthly or One-Time Purchase to unlock everything:";
+        ProductDetails monthlyPd;
+        synchronized (productCache) {
+            monthlyPd = productCache.get(SKU_MONTHLY);
+        }
+        String trialLabel = freeTrialLabel(monthlyPd);
+        String subtitle;
+        if (lockedFeature != null && !lockedFeature.isEmpty()) {
+            subtitle = trialLabel != null
+                    ? "Unlock " + lockedFeature + " and every Studio tool with your "
+                            + trialLabel + " free trial:"
+                    : "Unlock " + lockedFeature + " and every Studio tool:";
+        } else {
+            subtitle = trialLabel != null
+                    ? "Unlock every Studio tool with your " + trialLabel + " free trial:"
+                    : "Unlock every Studio tool:";
+        }
 
         String lifetimeLabel = (lifetimePrice != null && !lifetimePrice.isEmpty())
                 ? "Buy One-Time Purchase — " + lifetimePrice
                 : "Buy One-Time Purchase";
-        String monthlyLabel = (monthlyPrice != null && !monthlyPrice.isEmpty())
-                ? "Buy Monthly — " + monthlyPrice + "/month"
-                : "Buy Monthly Subscription";
+        String monthlyLabel;
+        if (monthlyPrice != null && !monthlyPrice.isEmpty()) {
+            monthlyLabel = trialLabel != null
+                    ? "Start " + trialLabel + " free trial — then "
+                            + monthlyPrice + "/month"
+                    : "Subscribe — " + monthlyPrice + "/month";
+        } else {
+            monthlyLabel = trialLabel != null
+                    ? "Start " + trialLabel + " free trial"
+                    : "Subscribe Monthly";
+        }
+        String monthlyDetail = trialLabel != null
+                ? trialLabel + " free • Then "
+                        + (monthlyPrice != null && !monthlyPrice.isEmpty()
+                                ? monthlyPrice + "/month" : "the monthly price")
+                        + " • Cancel anytime in Google Play"
+                : "Billed monthly via Google Play • Unlocks all features";
 
         List<OptionsSheet.Item> items = new ArrayList<>();
         items.add(OptionsSheet.Item.detail(R.drawable.ic_check,
@@ -508,7 +435,7 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
                 () -> onBuyPressed(activity, SKU_LIFETIME)));
         items.add(OptionsSheet.Item.detail(R.drawable.ic_sliders,
                 monthlyLabel,
-                "Billed monthly via Google Play • Unlocks all features",
+                monthlyDetail,
                 false,
                 () -> onBuyPressed(activity, SKU_MONTHLY)));
         items.add(OptionsSheet.Item.of(R.drawable.ic_undo,
@@ -520,9 +447,9 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
 
     /**
      * Always opens the billing popup ("Unlock TakeOne Pro") immediately when
-     * the user presses any disabled/locked button on subsequent recordings.
-     * If Google Play prices are not yet cached, triggers a background price
-     * fetch and defers any price-fetch error popup until the user presses Buy.
+     * the user presses a locked editing tool on the free tier. If Google Play
+     * prices are not yet cached, triggers a background price fetch and defers
+     * any price-fetch error popup until the user presses Buy.
      */
     public void showPaywallSheet(@NonNull Activity activity,
                                  @Nullable String lockedFeature) {
@@ -732,13 +659,21 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
             final boolean[] foundSub = {false};
             final boolean[] foundInApp = {false};
             final String[] activeSku = {null};
+            final java.util.concurrent.atomic.AtomicBoolean queriesOk =
+                    new java.util.concurrent.atomic.AtomicBoolean(true);
             AtomicInteger pending = new AtomicInteger(2);
 
             Runnable commitCheck = () -> {
-                if (pending.decrementAndGet() == 0) {
-                    boolean active = foundSub[0] || foundInApp[0];
-                    setEntitledPro(active, activeSku[0]);
+                if (pending.decrementAndGet() != 0) return;
+                if (foundSub[0] || foundInApp[0]) {
+                    setEntitledPro(true, activeSku[0]);
+                } else if (queriesOk.get()) {
+                    // Both Play queries answered with "no purchases": the
+                    // subscription (or trial) really has lapsed.
+                    setEntitledPro(false, null);
                 }
+                // A failed query must not revoke a paid entitlement: keep the
+                // cached state until Google Play answers again.
             };
 
             billingClient.queryPurchasesAsync(
@@ -757,6 +692,8 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
                                     acknowledgeIfNeeded(p);
                                 }
                             }
+                        } else {
+                            queriesOk.set(false);
                         }
                         commitCheck.run();
                     });
@@ -777,6 +714,8 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
                                     acknowledgeIfNeeded(p);
                                 }
                             }
+                        } else {
+                            queriesOk.set(false);
                         }
                         commitCheck.run();
                     });
