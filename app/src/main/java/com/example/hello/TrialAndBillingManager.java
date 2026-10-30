@@ -70,6 +70,14 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
     private static final String KEY_ENTITLED_PRO        = "entitled_pro_active";
     private static final String KEY_ENTITLED_PLAN       = "entitled_pro_plan";
 
+    /**
+     * DEBUG SWITCH: while true, every Studio tool behaves as if Pro is owned
+     * and the paywall is never shown. Flip to {@code false} to restore the
+     * real Google Play entitlement checks. Explicit test overrides still win,
+     * so paywall unit tests keep exercising the locked path.
+     */
+    private static final boolean DEBUG_FORCE_PRO = true;
+
     private static volatile TrialAndBillingManager instance;
     private static volatile Boolean testOverridePro = null;
 
@@ -129,6 +137,7 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
      */
     public boolean hasProAccess() {
         if (testOverridePro != null) return testOverridePro;
+        if (DEBUG_FORCE_PRO) return true;
         if (isRunningUnderUnitTest()) return true;
         return isPaidPro();
     }
@@ -143,7 +152,7 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
 
     /** Compact status label for the Studio/Library badge. */
     public String statusBadgeText() {
-        return isPaidPro() ? "PRO STUDIO" : "FREE TIER • UPGRADE";
+        return hasProAccess() ? "PRO STUDIO" : "FREE TIER • UPGRADE";
     }
 
     private static boolean isRunningUnderUnitTest() {
