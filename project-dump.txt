@@ -1,8 +1,8 @@
 PROJECT DUMP — TakeOne
-Generated: 2026-10-30T07:32:38
+Generated: 2026-10-30T07:41:52
 Root: /mnt/sdcard/Download/App
 APK md5: 4f73bc530fc5b3589ff61803f69474b8
-HEAD: 8a4f1a7 Restore +6.5 dB limiter drive curve so FX commit fades stay calibrated
+HEAD: f8e3c52 Restore learned-profile STFT noise suppression with FFT-window latency
 Branch: verify/fx-matrix
 Files: 348 source files
 =================================================================================
@@ -60981,82 +60981,70 @@ package com.example.hello;
 
 import org.json.JSONArray;
 
-import java.util.Arrays;
-
 /**
- * Learned-profile STFT spectral-subtraction denoiser for the "Noise Suppression
- * Pro" rack stage.
+ * Professional spectral noise suppressor with a learned noise profile.
  *
- * <p>Uses a 1024-sample Hann-windowed FFT with 50% overlap (hop = 512 samples
- * = 10.67 ms at 48 kHz), where {@code sin^2(pi*n/N) + cos^2(pi*n/N) = 1} gives
- * unity COLA reconstruction when gains are 1.0.
+ * <p>Workflow: the user selects a noise-only region of the take and taps
+ * <em>Learn from selection</em> in the FX rack; {@link #learnProfile(float[], int)}
+ * averages the short-time spectrum of that region into a per-bin noise power
+ * profile which is persisted with the slot. Applying the effect then performs
+ * overlap-add spectral subtraction against that profile, so hiss, hum and room
+ * tone are attenuated far more musically than the old percentage-driven
+ * three-band gate, while loud voice bins pass through untouched.
  *
- * <p>Two operating modes:
- * <ul>
- *   <li><b>Learned profile (primary)</b>: The user selects a noise-only region
- *       on the waveform and taps "Learn from selection". {@link #learnProfile}
- *       averages the Welch power spectrum across that region and stores the
- *       513-bin floor on the slot. Subsequent playback/apply subtracts that
- *       exact floor with a 3-bin frequency neighborhood smoother and a musical-
- *       noise floor so speech formants stay natural.</li>
- *   <li><b>Adaptive fallback</b>: When no profile has been learned yet, tracks
- *       a per-bin minimum-statistics floor so the effect still reduces steady
- *       hiss out of the box.</li>
- * </ul>
+ * <p>When no profile has been learned the processor falls back to an adaptive
+ * per-bin minimum tracker, so presets still denoise out of the box. The stage
+ * is a fixed-latency STFT processor: {@link #FFT_SIZE} frames of algorithmic
+ * delay, reported through {@link #getLatencyFrames()} so offline range commits
+ * prime and drain it exactly.
  */
-public final class NoiseSuppressionProcessor extends AudioProcessor {
+final class NoiseSuppressionProcessor extends AudioProcessor {
 
-    public static final int FFT_SIZE = 1024;
-    public static final int HOP_SIZE = 512;
-    public static final int BINS = FFT_SIZE / 2 + 1;
+    static final int FFT_SIZE = 2048;
+    static final int HOP = 512;
+    static final int BINS = FFT_SIZE / 2 + 1;
 
-    private static final float[] HANN = new float[FFT_SIZE];
-    static {
+    private static final float OLA_SCALE = 2f / 3f;
+    private static final float POWER_FLOOR = 1e-14f;
+
+    private static final float[] WINDOW = buildWindow();
+
+    private final FxParameter amt = addParameter(FxParameter.intParam(
+            "amt", "Intensity", "%", 0, 100, 1, 50));
+    private final FxParameter smooth = addParameter(FxParameter.intParam(
+            "smooth", "Smoothing", "%", 0, 100, 1, 50));
+
+    private final float[][] inHist = {
+            new float[FFT_SIZE], new float[FFT_SIZE]};
+    private final float[][] ola = {
+            new float[FFT_SIZE], new float[FFT_SIZE]};
+    private final float[][] re = {
+            new float[FFT_SIZE], new float[FFT_SIZE]};
+    private final float[][] im = {
+            new float[FFT_SIZE], new float[FFT_SIZE]};
+    private final float[] gainPrev = new float[BINS];
+    private final float[] noiseEst = new float[BINS];
+
+    private float[][] outQ = {new float[0], new float[0]};
+    private int outCount = 0;
+    private int histFill = 0;
+    private long inputConsumed = 0L;
+    private long genuinePopped = 0L;
+    private boolean noiseInit = false;
+
+    private volatile float[] profile;
+
+    NoiseSuppressionProcessor() {
+        java.util.Arrays.fill(gainPrev, 1f);
+    }
+
+    private static float[] buildWindow() {
+        float[] w = new float[FFT_SIZE];
         for (int i = 0; i < FFT_SIZE; i++) {
-            HANN[i] = (float) (0.5 * (1.0 - Math.cos(2.0 * Math.PI * i / FFT_SIZE)));
+            w[i] = (float) (0.5 - 0.5 * Math.cos(
+                    2.0 * Math.PI * i / FFT_SIZE));
         }
-    }
-
-    private final FxParameter amt = addParameter(
-            FxParameter.intParam("amt", "Intensity", "%", 0, 100, 5, 0));
-    private final FxParameter floor = addParameter(
-            FxParameter.floatParam("floor", "Spectral Floor", " dB", -42f, -6f, -24f));
-    private final FxParameter smooth = addParameter(
-            FxParameter.intParam("smooth", "Smoothing", "%", 0, 100, 5, 60));
-
-    private int sampleRate = DspChain.SAMPLE_RATE;
-    private int channels = 2;
-
-    private volatile float[] learnedProfile;
-    private final float[] adaptiveFloor = new float[BINS];
-    private boolean adaptivePrimed = false;
-
-    private float[][] inFifo;
-    private float[][] outAccum;
-    private float[][] outReady;
-    private int fifoFill = 0;
-    private int readyRead = 0;
-    private int readyCount = 0;
-
-    private final float[] re = new float[FFT_SIZE];
-    private final float[] im = new float[FFT_SIZE];
-    private final float[] rawGain = new float[BINS];
-    private final float[] smoothGain = new float[BINS];
-    private final float[] prevGain = new float[BINS];
-
-    public NoiseSuppressionProcessor() {
-        allocateBuffers(2);
-        Arrays.fill(prevGain, 1.0f);
-    }
-
-    private void allocateBuffers(int ch) {
-        int c = Math.max(1, Math.min(2, ch));
-        inFifo = new float[c][FFT_SIZE];
-        outAccum = new float[c][FFT_SIZE];
-        outReady = new float[c][FFT_SIZE * 4];
-        fifoFill = 0;
-        readyRead = 0;
-        readyCount = 0;
+        return w;
     }
 
     @Override
@@ -61071,7 +61059,8 @@ public final class NoiseSuppressionProcessor extends AudioProcessor {
 
     @Override
     public String getDescription() {
-        return "Learned-profile STFT spectral denoiser";
+        return "Learned-profile spectral denoiser: analyze a noise-only "
+                + "selection, then apply";
     }
 
     @Override
@@ -61080,364 +61069,287 @@ public final class NoiseSuppressionProcessor extends AudioProcessor {
     }
 
     @Override
+    public boolean handlesOwnWetDryMix() {
+        return true;
+    }
+
+    @Override
+    public boolean isAudible() {
+        return isEnabled() && amt.getCurrentRaw() > 0
+                && getWetDryMix() > 0.001f;
+    }
+
+    @Override
     public int getLatencyFrames() {
-        return HOP_SIZE;
+        return isAudible() ? FFT_SIZE : 0;
+    }
+
+    /**
+     * The spectral stage has no decaying tail: its FFT_SIZE is the analysis
+     * latency, which is already reported by {@link #getLatencyFrames()} and
+     * compensated by the offline range commit. Reporting it as a tail too
+     * would make the engine flush a phantom decay after every apply.
+     */
+    @Override
+    public int getTailFrames() {
+        return 0;
     }
 
     @Override
     public void prepare(int sampleRate, int channels) {
-        if (sampleRate > 0) this.sampleRate = sampleRate;
-        int c = Math.max(1, Math.min(2, channels));
-        if (c != this.channels || inFifo == null || inFifo.length != c) {
-            this.channels = c;
-            allocateBuffers(c);
-        }
     }
 
     @Override
     public void reset() {
-        if (inFifo != null) {
-            for (int c = 0; c < inFifo.length; c++) {
-                Arrays.fill(inFifo[c], 0f);
-                Arrays.fill(outAccum[c], 0f);
-                Arrays.fill(outReady[c], 0f);
-            }
+        for (int c = 0; c < 2; c++) {
+            java.util.Arrays.fill(inHist[c], 0f);
+            java.util.Arrays.fill(ola[c], 0f);
         }
-        fifoFill = 0;
-        readyRead = 0;
-        readyCount = 0;
-        Arrays.fill(adaptiveFloor, 0f);
-        Arrays.fill(prevGain, 1.0f);
-        adaptivePrimed = false;
+        java.util.Arrays.fill(gainPrev, 1f);
+        java.util.Arrays.fill(noiseEst, 0f);
+        noiseInit = false;
+        histFill = 0;
+        outCount = 0;
+        inputConsumed = 0L;
+        genuinePopped = 0L;
     }
 
     void setLegacyAmount(int pct) {
         amt.setCurrentRaw(pct);
     }
 
-    public void setNoiseProfile(float[] profile) {
-        if (profile != null && profile.length == BINS) {
-            float[] copy = new float[BINS];
-            System.arraycopy(profile, 0, copy, 0, BINS);
-            this.learnedProfile = copy;
-        } else {
-            this.learnedProfile = null;
-        }
+    /** Installs (or clears with {@code null}) a learned noise power profile. */
+    void setNoiseProfile(float[] p) {
+        profile = (p != null && p.length == BINS) ? p : null;
     }
 
-    public float[] getNoiseProfile() {
-        return learnedProfile;
-    }
-
-    public boolean hasLearnedProfile() {
-        return learnedProfile != null;
+    float[] getNoiseProfile() {
+        return profile;
     }
 
     @Override
-    public boolean isAudible() {
-        if (!isEnabled()) return false;
-        if (amt.getCurrentRaw() > 0) return true;
-        return floor.getCurrentRaw() != floor.defaultRaw
-                || smooth.getCurrentRaw() != smooth.defaultRaw;
-    }
+    public void processInPlace(float[] buf, int frames, int channels) {
+        if (!isEnabled()) return;
+        if (buf == null || frames <= 0) return;
+        final int ch = Math.max(1, Math.min(2, channels));
+        final float mix = getWetDryMix();
+        if (amt.getCurrentRaw() <= 0 || mix <= 0.001f) return;
 
-    @Override
-    public void processInPlace(float[] buf, int frames, int ch) {
-        int rawAmt = amt.getCurrentRaw();
-        boolean hasSecondary = floor.getCurrentRaw() != floor.defaultRaw
-                || smooth.getCurrentRaw() != smooth.defaultRaw;
-        float nAmt = rawAmt > 0 ? (rawAmt / 100.0f) : (hasSecondary ? 0.25f : 0.0f);
-        if (nAmt <= 0.001f || frames <= 0) return;
+        ensureOutCapacity(outCount + frames + 2 * HOP);
+        int off = 0;
+        while (off < frames) {
+            int take = Math.min(FFT_SIZE - histFill, frames - off);
+            if (take > 0) {
+                for (int f = 0; f < take; f++) {
+                    for (int c = 0; c < ch; c++) {
+                        inHist[c][histFill + f] = buf[(off + f) * ch + c];
+                    }
+                }
+                histFill += take;
+                off += take;
+                inputConsumed += take;
+            }
+            if (histFill < FFT_SIZE) continue;
 
-        int cCount = Math.max(1, Math.min(2, ch));
-        if (inFifo == null || inFifo.length != cCount) {
-            prepare(sampleRate, cCount);
+            processFrame(ch, mix);
+
+            for (int c = 0; c < ch; c++) {
+                System.arraycopy(inHist[c], HOP, inHist[c], 0,
+                        FFT_SIZE - HOP);
+            }
+            histFill = FFT_SIZE - HOP;
         }
 
-        int pos = 0;
-        while (pos < frames) {
-            int space = FFT_SIZE - fifoFill;
-            int step = Math.min(space, frames - pos);
-            for (int f = 0; f < step; f++) {
-                int base = (pos + f) * cCount;
-                int slot = fifoFill + f;
-                for (int c = 0; c < cCount; c++) {
-                    inFifo[c][slot] = buf[base + c];
-                }
+        long ready = Math.max(0L, inputConsumed - FFT_SIZE);
+        int readyInQueue = (int) Math.min(outCount,
+                Math.max(0L, ready - genuinePopped));
+        int give = Math.min(frames, readyInQueue);
+        for (int f = 0; f < give; f++) {
+            for (int c = 0; c < ch; c++) {
+                buf[f * ch + c] = outQ[c][f];
             }
-            fifoFill += step;
-
-            if (fifoFill == FFT_SIZE) {
-                processFrame(cCount, nAmt);
-                for (int c = 0; c < cCount; c++) {
-                    System.arraycopy(inFifo[c], HOP_SIZE, inFifo[c], 0, HOP_SIZE);
-                }
-                fifoFill = HOP_SIZE;
+        }
+        for (int f = give; f < frames; f++) {
+            for (int c = 0; c < ch; c++) {
+                buf[f * ch + c] = 0f;
             }
+        }
+        genuinePopped += give;
+        if (give > 0) {
+            int left = outCount - give;
+            for (int c = 0; c < ch; c++) {
+                System.arraycopy(outQ[c], give, outQ[c], 0, left);
+            }
+            outCount = left;
+        }
+    }
 
-            for (int f = 0; f < step; f++) {
-                int base = (pos + f) * cCount;
-                if (readyCount > 0) {
-                    for (int c = 0; c < cCount; c++) {
-                        buf[base + c] = outReady[c][readyRead];
-                    }
-                    readyRead++;
-                    readyCount--;
-                    if (readyCount == 0) {
-                        readyRead = 0;
-                    }
+    private void processFrame(int ch, float mix) {
+        final float amt01 = amt.getCurrentRaw() / 100f;
+        final float smooth01 = smooth.getCurrentRaw() / 100f;
+        final float overSub = 1f + 2f * amt01;
+        final float floorGain = Dsp.dbToLin(-(6.0 + 24.0 * amt01));
+        final float floorSq = floorGain * floorGain;
+        final float[] prof = profile;
+
+        for (int c = 0; c < ch; c++) {
+            java.util.Arrays.fill(im[c], 0f);
+            for (int n = 0; n < FFT_SIZE; n++) {
+                re[c][n] = inHist[c][n] * WINDOW[n];
+            }
+            Dsp.fft(re[c], im[c], false);
+        }
+
+        for (int k = 0; k <= BINS - 1; k++) {
+            float pow = 0f;
+            for (int c = 0; c < ch; c++) {
+                pow += re[c][k] * re[c][k] + im[c][k] * im[c][k];
+            }
+            pow /= ch;
+
+            float pn;
+            if (prof != null) {
+                pn = Math.max(POWER_FLOOR, prof[k]);
+            } else {
+                if (!noiseInit) {
+                    noiseEst[k] = Math.max(POWER_FLOOR, pow);
                 } else {
-                    for (int c = 0; c < cCount; c++) {
-                        buf[base + c] = 0f;
-                    }
+                    // Symmetric slow tracker: converged on stationary noise it
+                    // sits at the mean bin power, which is exactly what the
+                    // subtraction expects (a minimum tracker would bias far
+                    // below the mean and leave the noise almost untouched).
+                    float track = 0.01f + 0.04f * smooth01;
+                    noiseEst[k] += track * (pow - noiseEst[k]);
+                    if (noiseEst[k] < POWER_FLOOR) noiseEst[k] = POWER_FLOOR;
+                }
+                pn = Math.max(POWER_FLOOR, noiseEst[k]);
+            }
+
+            float snr = pow / pn;
+            float g2 = 1f - overSub / Math.max(snr, 1e-6f);
+            float g = (float) Math.sqrt(Math.max(g2, floorSq));
+            g = Math.min(1f, g);
+
+            float prev = gainPrev[k];
+            float mem = g < prev ? (0.95f - 0.75f * smooth01)
+                    : (0.55f + 0.40f * smooth01);
+            float gOut = prev * mem + g * (1f - mem);
+            gainPrev[k] = gOut;
+
+            re[0][k] *= gOut;
+            im[0][k] *= gOut;
+            if (ch > 1) {
+                re[1][k] *= gOut;
+                im[1][k] *= gOut;
+            }
+            if (k > 0 && k < BINS - 1) {
+                int m = FFT_SIZE - k;
+                re[0][m] *= gOut;
+                im[0][m] *= gOut;
+                if (ch > 1) {
+                    re[1][m] *= gOut;
+                    im[1][m] *= gOut;
                 }
             }
-            pos += step;
+        }
+        noiseInit = true;
+
+        for (int c = 0; c < ch; c++) {
+            Dsp.fft(re[c], im[c], true);
+            for (int n = 0; n < FFT_SIZE; n++) {
+                ola[c][n] += re[c][n] * WINDOW[n] * OLA_SCALE;
+            }
+        }
+
+        for (int n = 0; n < HOP; n++) {
+            for (int c = 0; c < ch; c++) {
+                float wet = ola[c][n];
+                float dry = inHist[c][n];
+                outQ[c][outCount + n] = mix * wet + (1f - mix) * dry;
+            }
+        }
+        outCount += HOP;
+
+        for (int c = 0; c < ch; c++) {
+            System.arraycopy(ola[c], HOP, ola[c], 0, FFT_SIZE - HOP);
+            java.util.Arrays.fill(ola[c], FFT_SIZE - HOP, FFT_SIZE, 0f);
         }
     }
 
-    private void processFrame(int cCount, float nAmt) {
-        float[] prof = this.learnedProfile;
-        boolean profiled = (prof != null && prof.length == BINS);
-
-        float sm = smooth.getCurrentRaw() / 100.0f;
-        float floorDbVal = floor.getFloat();
-        float gFloor = DspChain.fastDbToLin(floorDbVal * (0.4f + 0.6f * nAmt));
-        if (profiled) {
-            // Smoothing subtly shapes the effective spectral floor so smooth=0..100%
-            // is audibly and measurably distinct even on stationary single-tone inputs.
-            gFloor = Math.max(0.003f, Math.min(0.65f, gFloor * (0.85f + 0.30f * sm)));
-        } else {
-            gFloor = Math.max(0.02f, Math.min(0.65f, gFloor));
+    private void ensureOutCapacity(int capacity) {
+        if (outQ[0].length >= capacity) return;
+        float[][] grown = {new float[capacity], new float[capacity]};
+        if (outCount > 0) {
+            System.arraycopy(outQ[0], 0, grown[0], 0, outCount);
+            System.arraycopy(outQ[1], 0, grown[1], 0, outCount);
         }
-        float overSub = profiled
-                ? (1.0f + 4.0f * nAmt * nAmt * (1.05f - 0.10f * sm))
-                : (0.8f + 2.2f * nAmt);
-        float timeAlpha = 0.15f + 0.75f * sm;
-
-        for (int c = 0; c < cCount; c++) {
-            float[] chanIn = inFifo[c];
-            for (int i = 0; i < FFT_SIZE; i++) {
-                re[i] = chanIn[i] * HANN[i];
-                im[i] = 0f;
-            }
-            fft(re, im, false);
-
-            if (c == 0) {
-                for (int b = 0; b < BINS; b++) {
-                    float p = re[b] * re[b] + im[b] * im[b];
-                    float noiseP;
-                    if (profiled) {
-                        noiseP = prof[b];
-                    } else {
-                        if (!adaptivePrimed) {
-                            adaptiveFloor[b] = p;
-                        } else {
-                            float cur = adaptiveFloor[b];
-                            if (p < cur) {
-                                adaptiveFloor[b] = cur + 0.35f * (p - cur);
-                            } else {
-                                // Slow upward leak so sustained voice formants are not
-                                // misclassified as stationary noise floor.
-                                adaptiveFloor[b] = cur + 0.006f * (p - cur);
-                            }
-                        }
-                        noiseP = adaptiveFloor[b];
-                    }
-
-                    float sub = p - overSub * noiseP;
-                    float g;
-                    if (p <= 1e-16f || sub <= 0f) {
-                        g = gFloor;
-                    } else {
-                        g = (float) Math.sqrt(sub / p);
-                        if (g < gFloor) g = gFloor;
-                        if (g > 1.0f) g = 1.0f;
-                    }
-                    rawGain[b] = g;
-                }
-                adaptivePrimed = true;
-
-                // Variable-width spectral neighborhood smoother driven by `sm`:
-                // sm=0% uses minimal neighbor bleed, sm=100% uses wider 5-bin smoothing.
-                float centerW = 0.85f - 0.45f * sm;
-                float side1W = (1.0f - centerW) * 0.35f;
-                float side2W = (1.0f - centerW) * 0.15f;
-                for (int b = 0; b < BINS; b++) {
-                    float g0 = rawGain[b];
-                    float gm1 = b > 0 ? rawGain[b - 1] : g0;
-                    float gp1 = b + 1 < BINS ? rawGain[b + 1] : g0;
-                    float gm2 = b > 1 ? rawGain[b - 2] : gm1;
-                    float gp2 = b + 2 < BINS ? rawGain[b + 2] : gp1;
-                    float avg = centerW * g0 + side1W * (gm1 + gp1) + side2W * (gm2 + gp2);
-                    float prev = prevGain[b];
-                    float gSmooth = avg < prev
-                            ? (0.55f * avg + 0.45f * prev)
-                            : ((1.0f - timeAlpha) * avg + timeAlpha * prev);
-                    prevGain[b] = gSmooth;
-                    smoothGain[b] = gSmooth;
-                }
-            }
-
-            re[0] *= smoothGain[0];
-            im[0] = 0f;
-            re[BINS - 1] *= smoothGain[BINS - 1];
-            im[BINS - 1] = 0f;
-            for (int b = 1; b < BINS - 1; b++) {
-                float g = smoothGain[b];
-                re[b] *= g;
-                im[b] *= g;
-                int sym = FFT_SIZE - b;
-                re[sym] *= g;
-                im[sym] *= g;
-            }
-
-            fft(re, im, true);
-
-            float[] accum = outAccum[c];
-            for (int i = 0; i < FFT_SIZE; i++) {
-                accum[i] += re[i];
-            }
-
-            ensureReadyCapacity(cCount, HOP_SIZE);
-            int writeBase = readyRead + readyCount;
-            System.arraycopy(accum, 0, outReady[c], writeBase, HOP_SIZE);
-            System.arraycopy(accum, HOP_SIZE, accum, 0, HOP_SIZE);
-            Arrays.fill(accum, HOP_SIZE, FFT_SIZE, 0f);
-        }
-        readyCount += HOP_SIZE;
-    }
-
-    private void ensureReadyCapacity(int cCount, int incoming) {
-        if (readyRead > 0 && readyRead + readyCount + incoming > outReady[0].length) {
-            for (int c = 0; c < cCount; c++) {
-                System.arraycopy(outReady[c], readyRead, outReady[c], 0, readyCount);
-            }
-            readyRead = 0;
-        }
-        if (readyRead + readyCount + incoming > outReady[0].length) {
-            int newCap = Math.max(outReady[0].length * 2,
-                    readyRead + readyCount + incoming + FFT_SIZE);
-            for (int c = 0; c < cCount; c++) {
-                outReady[c] = Arrays.copyOf(outReady[c], newCap);
-            }
-        }
+        outQ = grown;
     }
 
     /**
-     * Learns the average per-bin power spectrum of a selected noise-only
-     * region (interleaved float samples).
-     *
-     * @param samples  interleaved float samples from the selected region
-     * @param channels 1 or 2
-     * @return a {@link #BINS}-element power profile, or null if the selection
-     *         is shorter than one FFT window
+     * Learns a per-bin noise power profile from interleaved samples of a
+     * noise-only selection. Returns {@code null} when the selection is too
+     * short for one full analysis frame.
      */
-    public static float[] learnProfile(float[] samples, int channels) {
-        if (samples == null) return null;
+    static float[] learnProfile(float[] interleaved, int channels) {
+        if (interleaved == null || interleaved.length == 0) return null;
         int ch = Math.max(1, Math.min(2, channels));
-        int totalFrames = samples.length / ch;
+        int totalFrames = interleaved.length / ch;
         if (totalFrames < FFT_SIZE) return null;
 
-        float[] sumPower = new float[BINS];
+        float[] acc = new float[BINS];
         float[] re = new float[FFT_SIZE];
         float[] im = new float[FFT_SIZE];
-        int windows = 0;
-
-        for (int start = 0; start + FFT_SIZE <= totalFrames; start += HOP_SIZE) {
-            for (int i = 0; i < FFT_SIZE; i++) {
-                int base = (start + i) * ch;
-                float mono = samples[base];
-                if (ch == 2) {
-                    mono = 0.5f * (mono + samples[base + 1]);
+        int frameCount = 0;
+        for (int start = 0; start + FFT_SIZE <= totalFrames; start += HOP) {
+            for (int c = 0; c < ch; c++) {
+                java.util.Arrays.fill(im, 0f);
+                for (int n = 0; n < FFT_SIZE; n++) {
+                    re[n] = interleaved[(start + n) * ch + c] * WINDOW[n];
                 }
-                re[i] = mono * HANN[i];
-                im[i] = 0f;
+                Dsp.fft(re, im, false);
+                for (int k = 0; k < BINS; k++) {
+                    acc[k] += re[k] * re[k] + im[k] * im[k];
+                }
             }
-            fft(re, im, false);
-            for (int b = 0; b < BINS; b++) {
-                float p = re[b] * re[b] + im[b] * im[b];
-                sumPower[b] += p;
-            }
-            windows++;
+            frameCount++;
         }
-        if (windows == 0) return null;
-        float inv = 1.15f / windows;
-        for (int b = 0; b < BINS; b++) {
-            sumPower[b] *= inv;
+        if (frameCount == 0) return null;
+
+        float inv = 1f / (frameCount * ch);
+        for (int k = 0; k < BINS; k++) {
+            acc[k] = Math.max(POWER_FLOOR, acc[k] * inv);
         }
-        return sumPower;
+        float[] smoothProfile = new float[BINS];
+        smoothProfile[0] = acc[0];
+        smoothProfile[BINS - 1] = acc[BINS - 1];
+        for (int k = 1; k < BINS - 1; k++) {
+            smoothProfile[k] = (acc[k - 1] + 2f * acc[k] + acc[k + 1]) * 0.25f;
+        }
+        return smoothProfile;
     }
 
-    public static JSONArray profileToJson(float[] profile) {
-        if (profile == null) return null;
+    static JSONArray profileToJson(float[] p) {
         JSONArray a = new JSONArray();
-        for (float v : profile) {
-            try {
-                a.put((double) v);
-            } catch (Exception ignored) {}
+        if (p == null) return a;
+        for (float v : p) {
+            a.put(Math.round(Dsp.linToDb(v) * 10f));
         }
         return a;
     }
 
-    public static float[] profileFromJson(JSONArray a) {
-        if (a == null || a.length() != BINS) return null;
-        float[] out = new float[BINS];
-        for (int i = 0; i < BINS; i++) {
-            out[i] = (float) a.optDouble(i, 0.0);
+    static float[] profileFromJson(JSONArray a) {
+        // Profiles are serialised through the same dB helpers by both
+        // profiled effects, so accept the stored bin count instead of
+        // assuming this processor's BINS (Spectral Noise Reduction learns a
+        // 1024-point profile). The owning processor validates the length when
+        // the profile is installed.
+        if (a == null || a.length() == 0) return null;
+        float[] p = new float[a.length()];
+        for (int i = 0; i < a.length(); i++) {
+            p[i] = Dsp.dbToLin(a.optInt(i, -1200) / 10.0);
         }
-        return out;
-    }
-
-    /** In-place radix-2 Cooley-Tukey complex FFT. */
-    static void fft(float[] re, float[] im, boolean inverse) {
-        final int n = re.length;
-        for (int i = 1, j = 0; i < n; i++) {
-            int bit = n >> 1;
-            for (; (j & bit) != 0; bit >>= 1) {
-                j ^= bit;
-            }
-            j ^= bit;
-            if (i < j) {
-                float tr = re[i];
-                re[i] = re[j];
-                re[j] = tr;
-                float ti = im[i];
-                im[i] = im[j];
-                im[j] = ti;
-            }
-        }
-        double sign = inverse ? 1.0 : -1.0;
-        for (int len = 2; len <= n; len <<= 1) {
-            int half = len >> 1;
-            double ang = sign * 2.0 * Math.PI / len;
-            float wLenR = (float) Math.cos(ang);
-            float wLenI = (float) Math.sin(ang);
-            for (int i = 0; i < n; i += len) {
-                float wR = 1.0f;
-                float wI = 0.0f;
-                for (int j = 0; j < half; j++) {
-                    int u = i + j;
-                    int v = u + half;
-                    float vR = re[v] * wR - im[v] * wI;
-                    float vI = re[v] * wI + im[v] * wR;
-                    re[v] = re[u] - vR;
-                    im[v] = im[u] - vI;
-                    re[u] += vR;
-                    im[u] += vI;
-                    float nextWR = wR * wLenR - wI * wLenI;
-                    wI = wR * wLenI + wI * wLenR;
-                    wR = nextWR;
-                }
-            }
-        }
-        if (inverse) {
-            float inv = 1.0f / n;
-            for (int i = 0; i < n; i++) {
-                re[i] *= inv;
-                im[i] *= inv;
-            }
-        }
+        return p;
     }
 }
 
