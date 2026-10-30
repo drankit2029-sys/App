@@ -1,56 +1,79 @@
 package com.example.hello;
 
-import java.util.Arrays;
+import java.util.Locale;
 
 /**
- * Stage 3 Filter Curve / Arbitrary Response EQ.
+ * Stage 3 · A3: Filter Curve EQ. Up to 32 draggable frequency/gain nodes
+ * design a linear-phase FIR whose magnitude matches the drawn curve; audio
+ * runs through a uniform overlap-add FFT convolution (block 256). Node
+ * geometry persists per slot through {@code extraParams} (npts, pf#, pg#),
+ * so it survives rack save/load without bespoke serialization.
  *
- * <p>Up to {@link #MAX_NODES} user control points {@code (freqHz, gainDb)} are
- * interpolated linearly in dB over log-frequency onto a dense FFT grid,
- * converted to a real-even magnitude spectrum, inverse-FFT'd, circularly
- * shifted to the center of an N-tap symmetric linear-phase kernel, and
- * multiplied by a Blackman window. Filtering runs via overlap-add FFT
- * convolution so arbitrary drawn curves have zero phase distortion.
+ * <p>Fixes BUG-01 &amp; BUG-02:
+ * <ul>
+ *   <li>Reports its exact linear-phase group delay ({@code taps / 2} frames) via
+ *       {@link #getLatencyFrames()} so offline bakes align and drain the FIR
+ *       without leading silence or tail truncation.</li>
+ *   <li>Blends {@link #getWetDryMix()} phase-coherently inside the linear-phase
+ *       target magnitude ({@code (1 - mix) + mix * wetMag}) and overrides
+ *       {@link #handlesOwnWetDryMix()} so partial wet/dry mixes never comb-filter
+ *       against an undelayed dry copy.</li>
+ *   <li>Spaced default frequencies across all 32 nodes so nodes 8..31 never
+ *       collide at 16 kHz.</li>
+ * </ul>
  */
 final class FilterCurveEqProcessor extends AudioProcessor {
 
     static final int MAX_NODES = 32;
-    private     static final int[] DEFAULT_FREQS = {
-            20, 30, 50, 80, 130, 200, 320, 500,
-            630, 800, 1000, 1250, 1600, 2000, 2500, 3150,
-            4000, 5000, 6300, 8000, 9000, 10000, 11200, 12500,
-            14000, 15000, 16000, 17000, 18000, 19000, 19500, 20000
-    };
-    static double defaultFreq(int index) {
-        int i = Math.max(0, Math.min(index, DEFAULT_FREQS.length - 1));
-        return DEFAULT_FREQS[i];
-    }
+    private static final int BLOCK = 256;
+    private static final String[] TAP_LABELS = {"1024", "2048", "4096"};
 
-    private static final String[] TAP_LABELS = {"257 taps", "513 taps", "1025 taps"};
+    private final FxParameter out = addParameter(
+            FxParameter.dbParam("out", "Output", -18f, 18f, 0f));
+    private final FxParameter npts = addParameter(
+            FxParameter.intParam("npts", "Points", "", 2, MAX_NODES, 1, 8));
+    private final FxParameter tapsSel = addParameter(
+            FxParameter.enumParam("taps", "Precision", TAP_LABELS, 1));
+    private final FxParameter[] nodeFreq = new FxParameter[MAX_NODES];
+    private final FxParameter[] nodeGain = new FxParameter[MAX_NODES];
 
-    private final FxParameter numPoints = addParameter(FxParameter.intParam(
-            "npts", "Curve Points", "", 2, MAX_NODES, 1, 8));
-    private final FxParameter tapChoice = addParameter(FxParameter.enumParam(
-            "taps", "FIR Length", TAP_LABELS, 1));
-    private final FxParameter outGain = addParameter(FxParameter.dbParam(
-            "out", "Output Gain", -18f, 18f, 0f));
-    private final FxParameter[] nodeFreqs = new FxParameter[MAX_NODES];
-    private final FxParameter[] nodeGains = new FxParameter[MAX_NODES];
+    private final BiquadFilter outputGain = new BiquadFilter();
 
+    private float[] ir = new float[0];
+    private float[] hRe = new float[0];
+    private float[] hIm = new float[0];
+    private float[][] carry = new float[2][0];
+    private float[] inRe = new float[0];
+    private float[] inIm = new float[0];
+    private int fftSize = 0;
     private int sampleRate = DspChain.SAMPLE_RATE;
-    private int channels = 2;
-    private float[] kernel = new float[]{1.0f};
-    private float[][] history = new float[2][0];
-    private int lastHash = 0;
+    private int channels = 1;
+    private long designKey = Long.MIN_VALUE;
 
     FilterCurveEqProcessor() {
         for (int i = 0; i < MAX_NODES; i++) {
-            nodeFreqs[i] = addParameter(FxParameter.intParam(
-                    "pf" + i, "Node " + (i + 1) + " Freq", " Hz",
-                    20, 20000, 10, DEFAULT_FREQS[i]));
-            nodeGains[i] = addParameter(FxParameter.dbParam(
-                    "pg" + i, "Node " + (i + 1) + " Gain", -24f, 24f, 0f));
+            double f = defaultFreq(i);
+            nodeFreq[i] = addParameter(FxParameter.intParam(
+                    "pf" + i, "F" + (i + 1), " Hz", 20, 20000, 1, (int) f));
         }
+        for (int i = 0; i < MAX_NODES; i++) {
+            nodeGain[i] = addParameter(FxParameter.dbParam(
+                    "pg" + i, "G" + (i + 1), -24f, 24f, 0f));
+        }
+    }
+
+    /**
+     * Default node layout: the first eight nodes (the default point count)
+     * span 40 Hz to 16 kHz logarithmically; additional nodes (8..31) are
+     * strictly increasing from 16,167 Hz up to 20,000 Hz so every node has a
+     * unique default frequency and drag bounds never invert.
+     */
+    static double defaultFreq(int index) {
+        if (index <= 7) {
+            return Math.round(40.0 * Math.pow(400.0, Math.max(0, index) / 7.0));
+        }
+        int clamped = Math.min(index, MAX_NODES - 1);
+        return Math.round(16000.0 + (4000.0 * (clamped - 7)) / (MAX_NODES - 8));
     }
 
     @Override
@@ -65,50 +88,12 @@ final class FilterCurveEqProcessor extends AudioProcessor {
 
     @Override
     public String getDescription() {
-        return "Draw an arbitrary frequency curve; linear-phase FIR match";
+        return "Draw an arbitrary response curve; linear-phase FIR (1024-4096 taps)";
     }
 
     @Override
     public FxCategory getCategory() {
         return FxCategory.EQUALIZER;
-    }
-
-    private int effectiveNodeCount() {
-        int n = Math.max(2, Math.min(MAX_NODES, numPoints.getCurrentRaw()));
-        for (int i = n; i < MAX_NODES; i++) {
-            if (Math.abs(nodeGains[i].getFloat()) > 0.01f
-                    || nodeFreqs[i].getCurrentRaw() != nodeFreqs[i].defaultRaw) {
-                n = i + 1;
-            }
-        }
-        return n;
-    }
-
-    private boolean hasAnyNodeOrConfigChange() {
-        if (numPoints.getCurrentRaw() != numPoints.defaultRaw) return true;
-        if (tapChoice.getCurrentRaw() != tapChoice.defaultRaw) return true;
-        for (int i = 0; i < MAX_NODES; i++) {
-            if (Math.abs(nodeGains[i].getFloat()) > 0.01f) return true;
-            if (nodeFreqs[i].getCurrentRaw() != nodeFreqs[i].defaultRaw) return true;
-        }
-        return false;
-    }
-
-    @Override
-    public boolean isAudible() {
-        if (!isEnabled()) return false;
-        if (Math.abs(outGain.getFloat()) > 0.01f) return true;
-        return hasAnyNodeOrConfigChange();
-    }
-
-    /**
-     * Reports the linear-phase FIR group delay ({@code (taps - 1) / 2} frames)
-     * so offline range commits can prime and drain the symmetric kernel without
-     * shifting the edited audio relative to dry splice boundaries.
-     */
-    @Override
-    public int getLatencyFrames() {
-        return (tapCount() - 1) / 2;
     }
 
     @Override
@@ -117,174 +102,211 @@ final class FilterCurveEqProcessor extends AudioProcessor {
     }
 
     @Override
-    public void prepare(int sampleRate, int channels) {
-        if (sampleRate > 0) this.sampleRate = sampleRate;
-        this.channels = Math.max(1, Math.min(2, channels));
-        lastHash = 0;
-        ensureKernel();
+    public int getLatencyFrames() {
+        return isAudible() ? tapsForIndex(tapsSel.getEnumIndex()) / 2 : 0;
+    }
+
+    /**
+     * The linear-phase FIR has group delay, not a decaying tail; the delay
+     * is already reported by {@link #getLatencyFrames()}.
+     */
+    @Override
+    public int getTailFrames() {
+        return 0;
+    }
+
+    @Override
+    public boolean isAudible() {
+        if (!isEnabled() || getWetDryMix() <= 0.001f) return false;
+        if (out.getCurrentRaw() != 0) return true;
+        int n = Math.max(2, Math.min(MAX_NODES, npts.getCurrentRaw()));
+        for (int i = 0; i < n; i++) {
+            if (nodeGain[i].getCurrentRaw() != 0) return true;
+        }
+        return false;
+    }
+
+    @Override
+    public void prepare(int sr, int ch) {
+        sampleRate = Math.max(8000, sr);
+        channels = Math.max(1, Math.min(2, ch));
+        designKey = Long.MIN_VALUE;
+        rebuild();
     }
 
     @Override
     public void reset() {
-        for (int c = 0; c < history.length; c++) {
-            Arrays.fill(history[c], 0f);
+        for (float[] c : carry) {
+            if (c != null) java.util.Arrays.fill(c, 0f);
         }
-    }
-
-    int tapCount() {
-        switch (tapChoice.getEnumIndex()) {
-            case 0: return 257;
-            case 2: return 1025;
-            default: return 513;
-        }
-    }
-
-    /** Evaluates the piecewise-linear-in-log-f curve at {@code fHz} (in dB). */
-    double evalCurveDb(double fHz) {
-        int n = effectiveNodeCount();
-        double[] lf = new double[n];
-        double[] gd = new double[n];
-        boolean anyExplicitGain = false;
-        for (int i = 0; i < n; i++) {
-            if (Math.abs(nodeGains[i].getFloat()) > 0.01f) {
-                anyExplicitGain = true;
-                break;
-            }
-        }
-        for (int i = 0; i < n; i++) {
-            int rawF = nodeFreqs[i].getCurrentRaw();
-            lf[i] = Math.log(Math.max(10.0, rawF));
-            double g = nodeGains[i].getFloat();
-            if (Math.abs(g) <= 0.01 && rawF != nodeFreqs[i].defaultRaw) {
-                double rel = Math.log((double) Math.max(10, rawF)
-                        / Math.max(10, nodeFreqs[i].defaultRaw));
-                g = Math.max(-6.0, Math.min(6.0, rel * 2.5));
-                if (Math.abs(g) < 0.75) g = rel >= 0 ? 0.75 : -0.75;
-            }
-            gd[i] = g;
-        }
-        if (!anyExplicitGain && (numPoints.getCurrentRaw() != numPoints.defaultRaw
-                || tapChoice.getCurrentRaw() != tapChoice.defaultRaw)) {
-            double metaTilt = (numPoints.getCurrentRaw() - numPoints.defaultRaw) * 0.08
-                    + (tapChoice.getCurrentRaw() - tapChoice.defaultRaw) * 0.55;
-            for (int i = 0; i < n; i++) {
-                double pos = n <= 1 ? 0.5 : (double) i / (n - 1) - 0.5;
-                gd[i] += metaTilt * pos;
-            }
-        }
-        // Sort by frequency so out-of-order drags still produce a function.
-        for (int i = 1; i < n; i++) {
-            double kf = lf[i], kg = gd[i];
-            int j = i - 1;
-            while (j >= 0 && lf[j] > kf) {
-                lf[j + 1] = lf[j];
-                gd[j + 1] = gd[j];
-                j--;
-            }
-            lf[j + 1] = kf;
-            gd[j + 1] = kg;
-        }
-        double x = Math.log(Math.max(10.0, fHz));
-        if (x <= lf[0]) return gd[0] + outGain.getFloat();
-        if (x >= lf[n - 1]) return gd[n - 1] + outGain.getFloat();
-        for (int i = 0; i < n - 1; i++) {
-            if (x >= lf[i] && x <= lf[i + 1]) {
-                double span = lf[i + 1] - lf[i];
-                double t = span < 1e-9 ? 0.0 : (x - lf[i]) / span;
-                return gd[i] + t * (gd[i + 1] - gd[i]) + outGain.getFloat();
-            }
-        }
-        return gd[n - 1] + outGain.getFloat();
-    }
-
-    /** Builds the linear-phase FIR kernel (package-private for tests). */
-    float[] buildKernel() {
-        int taps = tapCount();
-        int fftN = 2048;
-        float[] re = new float[fftN];
-        float[] im = new float[fftN];
-        int half = fftN / 2;
-        for (int k = 0; k <= half; k++) {
-            double f = k == 0 ? 10.0 : (k * (double) sampleRate / fftN);
-            double db = evalCurveDb(f);
-            float mag = Dsp.dbToLin(db);
-            re[k] = mag;
-            if (k > 0 && k < half) re[fftN - k] = mag;
-        }
-        Dsp.fft(re, im, true);
-        float[] win = Dsp.blackmanWindow(taps);
-        float[] h = new float[taps];
-        int center = taps / 2;
-        for (int n = 0; n < taps; n++) {
-            int shift = (n - center + fftN) & (fftN - 1);
-            h[n] = re[shift] * win[n];
-        }
-        return h;
-    }
-
-    private int paramHash() {
-        int h = sampleRate * 31 + numPoints.getCurrentRaw();
-        h = h * 31 + tapChoice.getCurrentRaw();
-        h = h * 31 + outGain.getCurrentRaw();
-        int n = effectiveNodeCount();
-        for (int i = 0; i < n; i++) {
-            h = h * 31 + nodeFreqs[i].getCurrentRaw();
-            h = h * 31 + nodeGains[i].getCurrentRaw();
-        }
-        return h;
-    }
-
-    private void ensureKernel() {
-        int h = paramHash();
-        if (h == lastHash && kernel.length == tapCount()) return;
-        lastHash = h;
-        kernel = buildKernel();
-        int tail = Math.max(0, kernel.length - 1);
-        if (history[0].length != tail) {
-            int oldTail = history[0].length;
-            float[][] nextHist = new float[2][tail];
-            int keep = Math.min(oldTail, tail);
-            if (keep > 0) {
-                for (int c = 0; c < 2; c++) {
-                    System.arraycopy(history[c], oldTail - keep,
-                            nextHist[c], tail - keep, keep);
-                }
-            }
-            history = nextHist;
-        }
+        outputGain.reset();
     }
 
     @Override
-    public void processInPlace(float[] buf, int frames, int channels) {
-        if (!isEnabled() || frames <= 0) return;
-        ensureKernel();
-        final int ch = Math.max(1, Math.min(2, channels));
-        final float[] h = kernel;
-        final int taps = h.length;
-        final int tail = taps - 1;
-        final int center = taps / 2;
-        final float mix = getWetDryMix();
-        final boolean partialMix = mix < 0.9999f;
-        final float dryWeight = 1.0f - mix;
-        for (int c = 0; c < ch; c++) {
-            float[] hist = history[c];
-            int ext = tail + frames;
-            float[] x = new float[ext];
-            System.arraycopy(hist, 0, x, 0, tail);
-            for (int f = 0; f < frames; f++) x[tail + f] = buf[f * ch + c];
-            for (int f = 0; f < frames; f++) {
-                float acc = 0f;
-                int base = f + tail;
-                for (int k = 0; k < taps; k++) {
-                    acc += x[base - k] * h[k];
-                }
-                if (partialMix) {
-                    float delayedDry = x[base - center];
-                    acc = delayedDry * dryWeight + acc * mix;
-                }
-                buf[f * ch + c] = acc;
-            }
-            System.arraycopy(x, frames, hist, 0, tail);
+    public void processInPlace(float[] buf, int frames, int ch) {
+        if (buf == null || frames <= 0) return;
+        float mix = getWetDryMix();
+        if (mix <= 0.001f || !isAudible()) return;
+        rebuild();
+        int c = Math.max(1, Math.min(2, ch));
+        offset256(buf, frames, c);
+    }
+
+    private void rebuild() {
+        long key = designKeyNow();
+        if (key == designKey) return;
+        designKey = key;
+        int taps = tapsForIndex(tapsSel.getEnumIndex());
+        int n = Math.max(2, Math.min(MAX_NODES, npts.getCurrentRaw()));
+        double[][] nodes = new double[n][2];
+        for (int i = 0; i < n; i++) {
+            nodes[i][0] = nodeFreq[i].getFloat();
+            nodes[i][1] = nodeGain[i].getFloat();
         }
+        sortNodes(nodes);
+        designFir(nodes, taps, getWetDryMix(), out.getFloat());
+        installCarry();
+    }
+
+    private long designKeyNow() {
+        long h = 1469598103934665603L;
+        h = h * 31 + sampleRate;
+        h = h * 31 + channels;
+        h = h * 31 + npts.getCurrentRaw();
+        h = h * 31 + tapsSel.getCurrentRaw();
+        h = h * 31 + out.getCurrentRaw();
+        h = h * 31 + Math.round(getWetDryMix() * 1000f);
+        int n = Math.max(2, Math.min(MAX_NODES, npts.getCurrentRaw()));
+        for (int i = 0; i < n; i++) {
+            h = h * 31 + nodeFreq[i].getCurrentRaw();
+            h = h * 31 + nodeGain[i].getCurrentRaw();
+        }
+        return h;
+    }
+
+    private static void sortNodes(double[][] nodes) {
+        for (int i = 1; i < nodes.length; i++) {
+            double[] v = nodes[i];
+            int j = i - 1;
+            while (j >= 0 && nodes[j][0] > v[0]) {
+                nodes[j + 1] = nodes[j];
+                j--;
+            }
+            nodes[j + 1] = v;
+        }
+    }
+
+    /**
+     * Builds the windowed impulse response via inverse FFT of the curve,
+     * blending wet/dry phase-coherently at the identical linear-phase center
+     * ({@code taps / 2}) so partial mixes never comb-filter.
+     */
+    private void designFir(double[][] nodes, int taps, float mix, float outDb) {
+        int size = 2;
+        while (size < BLOCK + taps - 1) size <<= 1;
+        fftSize = size;
+        float[] re = new float[size];
+        float[] im = new float[size];
+        int half = size / 2;
+        float w = Math.max(0f, Math.min(1f, mix));
+        float d = 1f - w;
+        for (int k = 0; k <= half; k++) {
+            double f = k * (double) sampleRate / size;
+            double db = curveDbAt(nodes, f) + outDb;
+            float wetMag = Dsp.dbToLin(db);
+            float mag = d + w * wetMag;
+            re[k] = mag;
+            if (k > 0 && k < half) re[size - k] = mag;
+        }
+        Dsp.fft(re, im, true);
+        float[] win = Dsp.blackmanWindow(taps);
+        ir = new float[taps];
+        for (int t = 0; t < taps; t++) {
+            int src = ((t - taps / 2) % size + size) % size;
+            ir[t] = re[src] * win[t];
+        }
+        if (hRe.length != size) {
+            hRe = new float[size];
+            hIm = new float[size];
+            inRe = new float[size];
+            inIm = new float[size];
+        }
+        java.util.Arrays.fill(hRe, 0f);
+        java.util.Arrays.fill(hIm, 0f);
+        System.arraycopy(ir, 0, hRe, 0, taps);
+        Dsp.fft(hRe, hIm, false);
+    }
+
+    /** Piecewise-linear dB interpolation over the sorted nodes (log-f axis). */
+    private static double curveDbAt(double[][] nodes, double f) {
+        if (f <= nodes[0][0]) return nodes[0][1];
+        int last = nodes.length - 1;
+        if (f >= nodes[last][0]) return nodes[last][1];
+        for (int i = 0; i < last; i++) {
+            double f0 = nodes[i][0], f1 = nodes[i + 1][0];
+            if (f >= f0 && f <= f1) {
+                double denom = Math.log(f1) - Math.log(f0);
+                if (Math.abs(denom) < 1e-9) return nodes[i + 1][1];
+                double t = (Math.log(f) - Math.log(f0)) / denom;
+                return nodes[i][1] + t * (nodes[i + 1][1] - nodes[i][1]);
+            }
+        }
+        return nodes[last][1];
+    }
+
+    private void installCarry() {
+        if (carry[0].length != fftSize - BLOCK) {
+            carry = new float[][]{new float[fftSize - BLOCK],
+                    new float[fftSize - BLOCK]};
+        }
+    }
+
+    /** Uniform overlap-add blocks of 256 frames through the FIR. */
+    private void offset256(float[] buf, int frames, int c) {
+        if (ir.length == 0 || fftSize == 0) return;
+        int off = 0;
+        while (off < frames) {
+            int blk = Math.min(BLOCK, frames - off);
+            for (int chn = 0; chn < c; chn++) {
+                java.util.Arrays.fill(inRe, 0f);
+                java.util.Arrays.fill(inIm, 0f);
+                for (int f = 0; f < blk; f++) {
+                    inRe[f] = buf[(off + f) * c + chn];
+                }
+                Dsp.fft(inRe, inIm, false);
+                for (int k = 0; k < fftSize; k++) {
+                    float rr = inRe[k] * hRe[k] - inIm[k] * hIm[k];
+                    float ii = inRe[k] * hIm[k] + inIm[k] * hRe[k];
+                    inRe[k] = rr;
+                    inIm[k] = ii;
+                }
+                Dsp.fft(inRe, inIm, true);
+                float[] cr = carry[chn];
+                for (int f = 0; f < blk; f++) {
+                    buf[(off + f) * c + chn] = inRe[f] + cr[f];
+                }
+                int keep = fftSize - BLOCK;
+                for (int j = 0; j < keep; j++) {
+                    int m = j + blk;
+                    float prev = m < keep ? cr[m] : 0f;
+                    cr[j] = prev + inRe[m];
+                }
+            }
+            off += blk;
+        }
+    }
+
+    static int tapsForIndex(int idx) {
+        switch (idx) {
+            case 0: return 1024;
+            case 2: return 4096;
+            default: return 2048;
+        }
+    }
+
+    String curveSummary() {
+        int n = Math.max(2, Math.min(MAX_NODES, npts.getCurrentRaw()));
+        return String.format(Locale.US, "%d pts · %s", n, TAP_LABELS[
+                Math.max(0, Math.min(2, tapsSel.getEnumIndex()))]);
     }
 }
