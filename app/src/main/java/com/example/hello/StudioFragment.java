@@ -5924,10 +5924,6 @@ public class StudioFragment extends Fragment {
     /** Preserves the user's FX rack after a bake while marking the audio committed. */
     private void resetFxRackAfterApply() {
         if (dspConfig == null) return;
-        // The raw file already carries the baked chain. Keeping the slots
-        // enabled would let a later knob tweak roll back the bake and re-apply
-        // the whole rack over the entire file on save.
-        dspConfig.clearRack();
         try {
             dspConfig.save(requireContext());
         } catch (Exception ignored) {}

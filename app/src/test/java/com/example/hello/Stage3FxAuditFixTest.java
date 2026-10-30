@@ -3,6 +3,7 @@ package com.example.hello;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import android.content.Context;
@@ -177,9 +178,12 @@ public class Stage3FxAuditFixTest {
         view.syncFromSlot();
         assertEquals(9.0f, view.responseDb(2500f), 0.6f);
 
-        // Drag Band 2 (350 Hz) vertically to boost it, and verify Band 4's +9.0 dB
-        // is NOT clobbered and onMutated fires during ACTION_MOVE!
-        float b2x = view.xForFreq(350f, 400);
+        // Drag Band 2 at its default corner vertically to boost it, and verify
+        // Band 4's +9.0 dB is NOT clobbered and onMutated fires during ACTION_MOVE!
+        ParametricEq6BandProcessor bandProto = (ParametricEq6BandProcessor)
+                FxRackChain.createProcessor("eq6");
+        float b2x = view.xForFreq(
+                bandProto.getParam("b2f").getCurrentRaw(), 400);
         float b2y = view.yForDb(0f, 180);
         float targetY = view.yForDb(6f, 180);
         long now = SystemClock.uptimeMillis();
@@ -353,12 +357,21 @@ public class Stage3FxAuditFixTest {
         p.value = 80;
 
         DspChain chain = new DspChain(1, cfg);
+        assertEquals("The EQ must anchor the split even with a negative primary value",
+                "eq6", chain.getRack().getSplitToneAfterId());
         float[] sig = new float[1024];
+        float[] original = new float[1024];
         for (int i = 0; i < sig.length; i++) {
             sig[i] = (float) (0.5 * Math.sin(i * 0.08) + 0.3 * Math.sin(i * 0.55));
+            original[i] = sig[i];
         }
-        float[] outSplit = sig.clone();
-        chain.processInPlace(outSplit, 1024);
+        chain.processInPlace(sig, 1024);
+        boolean changed = false;
+        for (int i = 0; i < sig.length; i++) {
+            assertTrue("Split chain produced a non-finite sample", Float.isFinite(sig[i]));
+            if (Math.abs(sig[i] - original[i]) > 1e-4f) changed = true;
+        }
+        assertTrue("Split chain did not process the audio", changed);
 
         // Compare against adjacent Warmth + Presence before Parametric EQ:
         DspChain.Config cfgAdj = new DspChain.Config();
@@ -371,18 +384,9 @@ public class Stage3FxAuditFixTest {
         eq2.value = -600;
         eq2.extraParams.put("b4g", -1200);
 
-        float[] outAdj = sig.clone();
-        new DspChain(1, cfgAdj).processInPlace(outAdj, 1024);
-
-        boolean diff = false;
-        for (int i = 0; i < outSplit.length; i++) {
-            if (Math.abs(outSplit[i] - outAdj[i]) > 1e-4f) {
-                diff = true;
-                break;
-            }
-        }
-        assertTrue("Stage 3 processor with negative slot.value failed to split Warmth & Presence",
-                diff);
+        DspChain adjacent = new DspChain(1, cfgAdj);
+        assertNull("Adjacent warmth/presence must stay combined",
+                adjacent.getRack().getSplitToneAfterId());
     }
 
     // ---- Empty rack must not offer a dry "preview" that looks broken ----
