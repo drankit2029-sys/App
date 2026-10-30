@@ -35,9 +35,8 @@ public class FxCommitAndCrossfadeTest {
     /** Session rate the engine writes WAV headers at (48 kHz). */
     private static final int SR = 48000;
 
-    /** Full drive maps to 6.5 dB and the soft knee settles at 0.9362. */
-    private static final float LIMITER_GAIN =
-            DspChain.fastDbToLin(6.5f) * 0.9362f;
+    /** Full drive maps to 6.5 dB; the test signal stays below the ceiling. */
+    private static final float LIMITER_GAIN = DspChain.fastDbToLin(6.5f);
 
     private static File writeSineWav(File dir, String name, int frames,
                                      int channels, float amp) throws Exception {

@@ -85,7 +85,8 @@ public final class ProLimiterProcessor extends AudioProcessor {
 
         int sr = Math.max(8000, sampleRate);
         float c = ceilingLin();
-        float limDrive = lAmt > 0.001f ? DspChain.fastDbToLin(12.0f * lAmt) : 1.0f;
+        float driveDb = (0.30f * lAmt + 0.70f * lAmt * lAmt) * 6.5f;
+        float limDrive = lAmt > 0.001f ? DspChain.fastDbToLin(driveDb) : 1.0f;
         float relSec = Math.max(0.005f, release.getCurrentRaw() / 1000.0f);
         float relAlpha = 1.0f - (float) Math.exp(-1.0 / (sr * relSec));
         float attAlpha = 1.0f - (float) Math.exp(-1.0 / (sr * 0.0005f));
