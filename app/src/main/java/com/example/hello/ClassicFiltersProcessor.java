@@ -78,9 +78,7 @@ final class ClassicFiltersProcessor extends AudioProcessor {
             case 1:
                 return Dsp.chebyshev1(n, r, sampleRate, f0, hp);
             case 2:
-                // Chebyshev II stopband attenuation is normally 20..60 dB;
-                // map the 0.1..6 dB user knob to 20..50 dB stopband depth.
-                return Dsp.chebyshev2(n, 18.0 + r * 5.0, sampleRate, f0, hp);
+                return Dsp.chebyshev2(n, r, sampleRate, f0, hp);
             case 3:
                 base = Dsp.bessel(n, sampleRate, f0, hp);
                 break;
