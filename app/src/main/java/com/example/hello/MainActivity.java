@@ -36,6 +36,7 @@ public class MainActivity extends AppCompatActivity {
         CrashLog.install(this);
         AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES);
         super.onCreate(savedInstanceState);
+        setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
         setContentView(R.layout.activity_main);
 
         fabWrap = findViewById(R.id.fabWrap);
@@ -275,8 +276,13 @@ public class MainActivity extends AppCompatActivity {
         } catch (Exception ignored) {}
     }
 
+    public boolean isInStudio() {
+        return inStudio;
+    }
+
     public void openStudio() {
         inStudio = true;
+        AdMobManager.get(this).preloadInterstitial();
         syncFabWithEngine();
         getSupportFragmentManager().beginTransaction()
                 .setCustomAnimations(R.anim.slide_in_right, R.anim.fade_out,
@@ -298,6 +304,7 @@ public class MainActivity extends AppCompatActivity {
     private void openStudioWithSession(String rawPath, boolean autostart,
                                        long editSourceId, String editSourceTitle) {
         inStudio = true;
+        AdMobManager.get(this).preloadInterstitial();
         syncFabWithEngine();
         StudioFragment f = new StudioFragment();
         Bundle b = new Bundle();

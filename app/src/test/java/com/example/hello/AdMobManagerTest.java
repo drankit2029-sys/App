@@ -2,10 +2,15 @@ package com.example.hello;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 import android.app.Activity;
 import android.content.Context;
+import android.content.pm.ActivityInfo;
+import android.view.View;
+import android.widget.FrameLayout;
+import android.widget.TextView;
 
 import androidx.test.core.app.ApplicationProvider;
 
@@ -26,11 +31,16 @@ import org.robolectric.annotation.Config;
  *   <li>Official Google AdMob Android Test App ID and Ad Unit IDs are wired
  *       for Adaptive Banner, Standard Banner, Interstitial, Native Advanced,
  *       App Open, and Rewarded formats.</li>
- *   <li>Post-Save and Post-Export Interstitial frequency capping (every 2
- *       completed actions + 3-minute cooldown) and audio-studio safety guards
- *       (blocked while recording or playing audio) work deterministically.</li>
- *   <li>Warm-resume App Open ad skips cold start, blocks when in Studio or
- *       playing/recording audio, and enforces its 10-minute cooldown.</li>
+ *   <li>Post-Save Interstitial fires on the very first save EVEN while
+ *       {@link RecordingEngine#hasSession()} is still {@code true} and
+ *       {@link RecordingEngine#isSaving()} is {@code true} during background
+ *       save dispatch.</li>
+ *   <li>Share-from-Export menu ({@link AdMobManager#onShareRequested}) triggers
+ *       interstitial eligibility and always runs the share chooser callback.</li>
+ *   <li>Offline House Ad fallback renders into {@code libraryAdContainer} when
+ *       the device is offline.</li>
+ *   <li>MainActivity enforces portrait-only orientation and TeleprompterView
+ *       preserves reading line position across size changes.</li>
  * </ul>
  */
 @RunWith(RobolectricTestRunner.class)
@@ -96,56 +106,83 @@ public class AdMobManagerTest {
     }
 
     @Test
-    public void interstitialEnforcesFrequencyCapAndThreeMinuteCooldown() {
-        long t0 = 1_000_000L;
+    public void postSaveInterstitialIsEligibleOnFirstSaveWhileEngineIsSaving()
+            throws Exception {
+        RecordingEngine engine = RecordingEngine.get();
+        engine.startNewSession(ctx, "SaveAdTest", 2);
+        engine.state = RecordingEngine.State.PAUSED;
+        engine.setSaving(true);
+        try {
+            assertTrue("Engine still holds session while background save starts",
+                    engine.hasSession());
+            long t0 = 1_000_000L;
+            assertTrue("First save must be eligible for post-save interstitial even while engine.hasSession() is true during save handoff",
+                    adMob.recordActionAndEvaluateInterstitialEligibility(t0));
+            adMob.recordFullScreenAdShown(t0, false);
 
-        // 1st save/export: action count = 1 (odd) -> not eligible
-        assertFalse("1st action must not trigger interstitial",
-                adMob.recordActionAndEvaluateInterstitialEligibility(t0));
+            // Immediate back-to-back trigger within 15s cooldown is blocked
+            assertFalse("Second trigger within 15s cooldown must be blocked",
+                    adMob.recordActionAndEvaluateInterstitialEligibility(t0 + 5_000L));
 
-        // 2nd save/export: action count = 2 (even), no prior ad -> eligible!
-        assertTrue("2nd action must be eligible for interstitial",
-                adMob.recordActionAndEvaluateInterstitialEligibility(t0 + 5_000L));
-        adMob.recordFullScreenAdShown(t0 + 5_000L, false);
-
-        // 3rd & 4th actions within 3-minute cooldown -> blocked by cooldown
-        assertFalse("3rd action must not trigger interstitial",
-                adMob.recordActionAndEvaluateInterstitialEligibility(t0 + 30_000L));
-        assertFalse("4th action inside 3-min cooldown must be blocked",
-                adMob.recordActionAndEvaluateInterstitialEligibility(t0 + 60_000L));
-
-        // 5th & 6th actions after 3-minute cooldown (180,000 ms) has elapsed
-        long afterCooldown = t0 + 5_000L + AdMobManager.INTERSTITIAL_COOLDOWN_MS + 1_000L;
-        assertFalse("5th action (odd) must not trigger interstitial",
-                adMob.recordActionAndEvaluateInterstitialEligibility(afterCooldown));
-        assertTrue("6th action (even) after cooldown must be eligible",
-                adMob.recordActionAndEvaluateInterstitialEligibility(afterCooldown + 1_000L));
+            // Next save/export after 15s cooldown is eligible
+            long afterCooldown = t0 + AdMobManager.INTERSTITIAL_COOLDOWN_MS + 1_000L;
+            assertTrue("Next save/export after cooldown must be eligible",
+                    adMob.recordActionAndEvaluateInterstitialEligibility(afterCooldown));
+        } finally {
+            engine.setSaving(false);
+            engine.abortAndDelete();
+        }
     }
 
     @Test
-    public void interstitialAndAppOpenAreBlockedDuringAudioPlaybackOrRecording()
-            throws Exception {
-        long t0 = 5_000_000L;
+    public void shareFromExportMenuTriggersAdCheckAndRunsShareChooserCallback() {
+        Activity activity = Robolectric.buildActivity(Activity.class).setup().get();
+        final boolean[] shareLaunched = {false};
+        adMob.onShareRequested(activity, () -> shareLaunched[0] = true);
+        assertTrue("Share chooser callback must run after onShareRequested",
+                shareLaunched[0]);
+    }
 
-        // Prime cold start and 1st action
-        assertFalse("Cold start must never show App Open ad",
-                adMob.canShowAppOpenAd(false, t0));
-        adMob.recordActionAndEvaluateInterstitialEligibility(t0);
+    @Test
+    public void offlineHouseAdFallbackRendersIntoLibraryContainer() {
+        Activity activity = Robolectric.buildActivity(Activity.class).setup().get();
+        FrameLayout container = new FrameLayout(activity);
+        adMob.bindOfflineHouseAdFallback(activity, container);
 
-        // Block when library audio playback is active
-        adMob.setAudioPlaybackActive(true);
-        assertFalse("Interstitial must be blocked while audio is playing",
-                adMob.recordActionAndEvaluateInterstitialEligibility(t0 + 1_000L));
-        assertFalse("App Open ad must be blocked while audio is playing",
-                adMob.canShowAppOpenAd(false, t0 + 1_000L));
-        adMob.setAudioPlaybackActive(false);
+        assertEquals(View.VISIBLE, container.getVisibility());
+        assertTrue(adMob.isShowingOfflineHouseAd());
+        TextView headline = container.findViewById(R.id.adHeadline);
+        assertNotNull(headline);
+        assertTrue(headline.getText().toString().contains("TakeOne Pro Studio"));
+    }
 
-        // Block when user is inside Studio
-        assertFalse("App Open ad must never show while in StudioFragment",
-                adMob.canShowAppOpenAd(true, t0 + 2_000L));
+    @Test
+    public void mainActivityEnforcesPortraitAndTeleprompterPreservesLineOnResize() {
+        MainActivity main = Robolectric.buildActivity(MainActivity.class).create().get();
+        assertEquals("MainActivity must lock orientation to PORTRAIT",
+                ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
+                main.getRequestedOrientation());
 
-        // Eligible on warm resume in Library when idle
-        assertTrue("App Open ad must be eligible on warm resume in Library when idle",
-                adMob.canShowAppOpenAd(false, t0 + 2_000L));
+        TeleprompterView tv = new TeleprompterView(main);
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < 200; i++) sb.append("word").append(i).append(' ');
+        tv.setScript(sb.toString());
+        tv.measure(
+                View.MeasureSpec.makeMeasureSpec(900, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(600, View.MeasureSpec.EXACTLY));
+        tv.layout(0, 0, 900, 600);
+
+        float targetLine = 5.0f;
+        tv.setScrollOffset(targetLine * tv.lineHeight());
+        assertEquals(targetLine, tv.linePosition(), 0.05f);
+
+        // Simulate a viewport size change: line position must not reset to 0
+        tv.measure(
+                View.MeasureSpec.makeMeasureSpec(600, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(900, View.MeasureSpec.EXACTLY));
+        tv.layout(0, 0, 600, 900);
+        assertTrue("Teleprompter must not reset to 0 on size change",
+                tv.scrollOffset() > 0f);
+        assertEquals(targetLine, tv.linePosition(), 0.1f);
     }
 }

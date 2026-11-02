@@ -175,12 +175,12 @@ public class TeleprompterView extends View {
     }
 
     /** Current scroll position measured in lines, independent of text size. */
-    private float linePosition() {
+    public float linePosition() {
         float lh = lineHeight();
         return lh > 0f ? scrollOffset / lh : 0f;
     }
 
-    private void restoreLinePosition(float linePosition) {
+    public void restoreLinePosition(float linePosition) {
         setScrollOffset(linePosition * lineHeight());
     }
 
@@ -230,11 +230,16 @@ public class TeleprompterView extends View {
 
     @Override
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
+        float preservedLine = (oldw > 0 && oldh > 0 && scrollOffset > 0f)
+                ? linePosition() : -1f;
         super.onSizeChanged(w, h, oldw, oldh);
         fadePx = h * 0.44f;
         // Height feeds the scroll bounds, so the cached split is only reusable
         // when the height is unchanged too.
         rewrap();
+        if (preservedLine > 0f) {
+            restoreLinePosition(preservedLine);
+        }
     }
 
     /**

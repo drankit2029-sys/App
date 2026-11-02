@@ -713,7 +713,29 @@ public class StudioFragment extends Fragment {
         // edit can skip the save nag, and park the prompter unless capture
         // is actively running.
         initialSessionBytes = engine.hasSession() ? engine.dataBytes : 0L;
-        setTelePaused(engine.state != RecordingEngine.State.RECORDING);
+        if (savedInstanceState != null
+                && savedInstanceState.containsKey("telePausedState")) {
+            setTelePaused(savedInstanceState.getBoolean(
+                    "telePausedState",
+                    engine.state != RecordingEngine.State.RECORDING));
+        } else {
+            setTelePaused(engine.state != RecordingEngine.State.RECORDING);
+        }
+        if (savedInstanceState != null && teleView != null) {
+            final float savedLine = savedInstanceState.getFloat("teleLinePosition", 0f);
+            final float savedOffset = savedInstanceState.getFloat("teleScrollOffset", 0f);
+            if (savedLine > 0f || savedOffset > 0f) {
+                teleView.post(() -> {
+                    if (teleView == null) return;
+                    if (savedLine > 0f) {
+                        teleView.restoreLinePosition(savedLine);
+                    } else {
+                        teleView.setScrollOffset(savedOffset);
+                    }
+                });
+            }
+        }
+        AdMobManager.get(requireContext()).preloadInterstitial();
 
         if (editorStrip != null) {
             editorStrip.setVisibility(View.VISIBLE);
@@ -788,6 +810,11 @@ public class StudioFragment extends Fragment {
                 outState.putFloat("selEnd", waveform.selectionEndFraction());
             }
             waveform.saveSubEditorState(outState);
+        }
+        if (teleView != null) {
+            outState.putFloat("teleScrollOffset", teleView.scrollOffset());
+            outState.putFloat("teleLinePosition", teleView.linePosition());
+            outState.putBoolean("telePausedState", telePaused);
         }
     }
 

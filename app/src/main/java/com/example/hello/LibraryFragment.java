@@ -2031,7 +2031,23 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             }
             intent.setType("audio/*");
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            startActivity(Intent.createChooser(intent, getString(R.string.action_export)));
+            final Intent chooser = Intent.createChooser(
+                    intent, getString(R.string.action_export));
+            if (getActivity() != null) {
+                AdMobManager.get(requireContext()).onShareRequested(
+                        getActivity(),
+                        () -> {
+                            if (!isAdded()) return;
+                            try {
+                                startActivity(chooser);
+                            } catch (Exception e) {
+                                OptionsSheet.showResult(requireContext(), false,
+                                        "Export failed", null);
+                            }
+                        });
+            } else {
+                startActivity(chooser);
+            }
         } catch (Exception e) {
             OptionsSheet.showResult(requireContext(), false,
                     "Export failed", null);
