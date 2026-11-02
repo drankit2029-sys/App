@@ -111,7 +111,10 @@ public class MainActivity extends AppCompatActivity {
         // Library loads async (Room + disk reconcile). Recovery + first paint
         // wait for it so prompts see adopted orphans and pruned rows.
         TakesRepository.init(this);
-        TrialAndBillingManager.get(this).connectAndSync();
+        AdMobManager.get(this).init(this);
+        if (TrialAndBillingManager.isPaywallEnabled()) {
+            TrialAndBillingManager.get(this).connectAndSync();
+        }
         TakesRepository.onReady(() -> {
             if (!recoveryChecked) {
                 recoveryChecked = true;
@@ -238,9 +241,12 @@ public class MainActivity extends AppCompatActivity {
     protected void onResume() {
         super.onResume();
         if (backCallback != null) backCallback.setEnabled(true);
-        // Re-read entitlement so a lapsed or cancelled free trial re-locks the
-        // editing tools, and a purchase made on another device is restored.
-        TrialAndBillingManager.get(this).refreshPurchasesAsync();
+        if (TrialAndBillingManager.isPaywallEnabled()) {
+            // Re-read entitlement so a lapsed or cancelled free trial re-locks the
+            // editing tools, and a purchase made on another device is restored.
+            TrialAndBillingManager.get(this).refreshPurchasesAsync();
+        }
+        AdMobManager.get(this).onMainActivityResumed(this, inStudio);
         syncFabWithEngine();
         for (ConversionJob j : ConversionJobs.active()) {
             if (ConversionJob.QUEUED.equals(j.state)) {

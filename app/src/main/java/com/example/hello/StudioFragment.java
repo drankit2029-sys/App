@@ -2425,6 +2425,7 @@ public class StudioFragment extends Fragment {
             act.exitStudio();
             OptionsSheet.showTopPopup(act,
                     replacing ? "Take replaced" : "Take saved");
+            AdMobManager.get(act).onTakeSaved(act);
         }
     }
 

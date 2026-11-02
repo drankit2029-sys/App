@@ -167,6 +167,7 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
     private ImageView searchClear;
     private LinearLayout normalHeader;
     private LinearLayout selectionBar;
+    private android.widget.FrameLayout libraryAdContainer;
     private TextView selCount;
     private TextView selAll;
     private ImageView selExport;
@@ -246,6 +247,7 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         searchClear = v.findViewById(R.id.searchClear);
         normalHeader = v.findViewById(R.id.normalHeader);
         selectionBar = v.findViewById(R.id.selectionBar);
+        libraryAdContainer = v.findViewById(R.id.libraryAdContainer);
         selCount = v.findViewById(R.id.selCount);
         selAll = v.findViewById(R.id.selAll);
         selExport = v.findViewById(R.id.selExport);
@@ -332,6 +334,11 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
 
         paintChips();
         refresh();
+        if (getActivity() != null && libraryAdContainer != null) {
+            AdMobManager.get(requireContext()).bindLibraryAd(
+                    requireActivity(), libraryAdContainer,
+                    selectionMode || isSearchOpen());
+        }
 
         // Registered LAST, on purpose. TakesRepository.onReady runs its
         // callback SYNCHRONOUSLY when the library is already loaded, and this
@@ -360,6 +367,7 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         TakesRepository.addListener(repoListener);
         ConversionJobs.addListener(jobsListener);
         registerConvReceiver();
+        AdMobManager.get(requireContext()).onLibraryResumed();
         refresh();
     }
 
@@ -367,6 +375,7 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
     public void onPause() {
         super.onPause();
         pauseForBackground();
+        AdMobManager.get(requireContext()).onLibraryPaused();
         TakesRepository.removeListener(repoListener);
         ConversionJobs.removeListener(jobsListener);
         unregisterConvReceiver();
@@ -521,6 +530,10 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
     @Override
     public void onDestroyView() {
         stopPlayback();
+        if (getContext() != null) {
+            AdMobManager.get(getContext()).onLibraryDestroyed();
+        }
+        libraryAdContainer = null;
         super.onDestroyView();
     }
 
@@ -798,6 +811,10 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             }
         }
         paintSelectionBar();
+        if (getContext() != null && libraryAdContainer != null) {
+            AdMobManager.get(getContext()).updateLibraryAdVisibility(
+                    libraryAdContainer, selectionMode || isSearchOpen());
+        }
     }
 
     /**
@@ -1094,6 +1111,7 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         adapter.expandDirectIfNeeded(list, take.id);
         adapter.paintPlayState(list, playingId, false);
         rawPlayer.play();
+        AdMobManager.get(requireContext()).setAudioPlaybackActive(true);
         handler.post(progressTick);
         snackText(getString(R.string.conv_preview_hint, take.convFormat));
     }
@@ -1153,6 +1171,7 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         adapter.setProgress(list, take.id, startPos);
         adapter.expandDirectIfNeeded(list, take.id);
         adapter.paintPlayState(list, playingId, false);
+        AdMobManager.get(requireContext()).setAudioPlaybackActive(true);
         handler.post(progressTick);
     }
 
@@ -1171,6 +1190,9 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             simBase = simPosition();
         }
         playPaused = true;
+        if (getContext() != null) {
+            AdMobManager.get(getContext()).setAudioPlaybackActive(false);
+        }
         adapter.paintPlayState(list, playingId, true);
         handler.removeCallbacks(progressTick);
     }
@@ -1193,6 +1215,9 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             simStartedAt = SystemClock.elapsedRealtime();
         }
         playPaused = false;
+        if (getContext() != null) {
+            AdMobManager.get(getContext()).setAudioPlaybackActive(true);
+        }
         adapter.paintPlayState(list, playingId, false);
         handler.post(progressTick);
     }
@@ -1218,6 +1243,9 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         playingId = -1;
         playPaused = false;
         rawMode = false;
+        if (getContext() != null) {
+            AdMobManager.get(getContext()).setAudioPlaybackActive(false);
+        }
         if (rawPlayer != null) {
             try {
                 rawPlayer.stop();
@@ -2051,6 +2079,10 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                 if (getView() == null || !isAdded()) return;
                 if (n == total) {
                     OptionsSheet.showTopPopup(requireContext(), "Export complete");
+                    if (getActivity() != null) {
+                        AdMobManager.get(requireContext())
+                                .onExportCompleted(getActivity());
+                    }
                 } else if (n > 0) {
                     OptionsSheet.showResult(requireContext(), false,
                             "Export partial", null);

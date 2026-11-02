@@ -362,6 +362,18 @@
         </LinearLayout>
     </HorizontalScrollView>
 
+    <!-- Non-intrusive AdMob slot (Native Advanced card with Adaptive Banner fallback).
+         Positioned below filter chips and far above the bottom Record FAB. -->
+    <FrameLayout
+        android:id="@+id/libraryAdContainer"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginLeft="16dp"
+        android:layout_marginTop="4dp"
+        android:layout_marginRight="16dp"
+        android:layout_marginBottom="2dp"
+        android:visibility="gone" />
+
     <!-- List -->
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/takesList"

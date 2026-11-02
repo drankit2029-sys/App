@@ -38,3 +38,7 @@
 # 5. Google Play Billing Library
 -keep class com.android.vending.billing.** { *; }
 -keep class com.android.billingclient.api.** { *; }
+
+# 6. Google Mobile Ads SDK (AdMob)
+-keep class com.google.android.gms.ads.** { *; }
+-dontwarn com.google.android.gms.ads.**

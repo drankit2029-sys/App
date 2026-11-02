@@ -71,12 +71,20 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
     private static final String KEY_ENTITLED_PLAN       = "entitled_pro_plan";
 
     /**
-     * DEBUG SWITCH: while true, every Studio tool behaves as if Pro is owned
-     * and the paywall is never shown. Flip to {@code false} to restore the
-     * real Google Play entitlement checks. Explicit test overrides still win,
-     * so paywall unit tests keep exercising the locked path.
+     * ADS-SUPPORTED FREE RELEASE SWITCH: while {@code false}, the Google Play
+     * Billing paywall is disabled across the app and all currently implemented
+     * Studio editing and DSP tools are unlocked for free (monetized via
+     * {@link AdMobManager}). Flip {@link #PAYWALL_ENABLED} to {@code true} and
+     * {@link #DEBUG_FORCE_PRO} to {@code false} in future releases to gate
+     * upcoming Pro features (hardware mic switching, multi-channel editing).
      */
+    public static final boolean PAYWALL_ENABLED = false;
+
     private static final boolean DEBUG_FORCE_PRO = true;
+
+    public static boolean isPaywallEnabled() {
+        return PAYWALL_ENABLED;
+    }
 
     private static volatile TrialAndBillingManager instance;
     private static volatile Boolean testOverridePro = null;
@@ -137,7 +145,7 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
      */
     public boolean hasProAccess() {
         if (testOverridePro != null) return testOverridePro;
-        if (DEBUG_FORCE_PRO) return true;
+        if (!PAYWALL_ENABLED || DEBUG_FORCE_PRO) return true;
         if (isRunningUnderUnitTest()) return true;
         return isPaidPro();
     }

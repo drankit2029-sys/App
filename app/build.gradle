@@ -89,6 +89,7 @@ android {
 
 def roomVersion = '2.6.1'
 def billingVersion = '7.1.1'
+def admobVersion = '23.3.0'
 
 dependencies {
     implementation 'androidx.appcompat:appcompat:1.6.1'
@@ -101,7 +102,15 @@ dependencies {
     implementation "androidx.room:room-runtime:$roomVersion"
     annotationProcessor "androidx.room:room-compiler:$roomVersion"
 
-    // Google Play Billing v7 for 14-day trial & Pro subscription / lifetime unlock.
+    // Google Mobile Ads SDK (AdMob) for ad-supported free release.
+    implementation "com.google.android.gms:play-services-ads:$admobVersion"
+    // play-services-ads constrains com.google.guava:listenablefuture to the
+    // empty 9999.0 artifact (it assumes apps bring Guava), which otherwise
+    // strips ListenableFuture off the classpath and breaks WorkManager's
+    // ListenableWorker signatures. Real Guava restores it.
+    implementation 'com.google.guava:guava:32.1.3-android'
+
+    // Google Play Billing v7 kept dormant for future Pro tier releases.
     implementation "com.android.billingclient:billing:$billingVersion"
 
     testImplementation 'junit:junit:4.13.2'
