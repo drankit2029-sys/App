@@ -107,7 +107,9 @@ listed as disabled and are also verified for bit-identical invariance.
 The first profile is `truncsil`: 14 individual cases, 4 disabled-invariance
 cases and all 162 permutations (54 active, 108 disabled) of
 Truncate/Compress × threshold × minimum silence × target at the three
-intensities. In the FX workflow:
+intensities. Latest run (commit `81c2a21`, run 41673454063): 180 cases,
+72 renders, **0 failures**, 4/4 disabled-parameter invariance checks passed;
+the committed report is `fx-exhaustive/truncsil/report.md`. In the FX workflow:
 
 ```bash
 gh workflow run fx-verify.yml --ref <branch> -f exhaustive_effect=truncsil

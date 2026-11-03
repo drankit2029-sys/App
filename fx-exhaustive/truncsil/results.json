@@ -1,0 +1,727 @@
+{
+  "effect": "truncsil",
+  "rendered": 72,
+  "cases": [
+    {
+      "id": "ind_ts_thresh_-8000",
+      "kind": "individual",
+      "output": "Output_truncsil_ts_thresh_-80dB.wav",
+      "frames": 286080,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "ind_ts_thresh_-4000",
+      "kind": "individual",
+      "output": "Output_truncsil_ts_thresh_-40dB.wav",
+      "frames": 211200,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "ind_ts_thresh_-2000",
+      "kind": "individual",
+      "output": "Output_truncsil_ts_thresh_-20dB.wav",
+      "frames": 96000,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "ind_ts_min_50",
+      "kind": "individual",
+      "output": "Output_truncsil_ts_min_50ms.wav",
+      "frames": 211200,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "ind_ts_min_400",
+      "kind": "individual",
+      "output": "Output_truncsil_ts_min_400ms.wav",
+      "frames": 211200,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "ind_ts_min_5000",
+      "kind": "individual",
+      "output": "Output_truncsil_ts_min_5000ms.wav",
+      "frames": 409920,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "ind_ts_action_0",
+      "kind": "individual",
+      "output": "Output_truncsil_ts_action_Truncate_Detected_Silence.wav",
+      "frames": 211200,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "ind_ts_action_1",
+      "kind": "individual",
+      "output": "Output_truncsil_ts_action_Compress_Excess_Silence.wav",
+      "frames": 360480,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "ind_ts_trunc_10",
+      "kind": "individual",
+      "output": "Output_truncsil_ts_trunc_10ms.wav",
+      "frames": 184320,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "ind_ts_trunc_150",
+      "kind": "individual",
+      "output": "Output_truncsil_ts_trunc_150ms.wav",
+      "frames": 211200,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "ind_ts_trunc_2000",
+      "kind": "individual",
+      "output": "Output_truncsil_ts_trunc_2000ms.wav",
+      "frames": 491040,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "ind_ts_compress_5",
+      "kind": "individual",
+      "output": "Output_truncsil_ts_compress_5pct.wav",
+      "frames": 207840,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "ind_ts_compress_35",
+      "kind": "individual",
+      "output": "Output_truncsil_ts_compress_35pct.wav",
+      "frames": 360480,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "ind_ts_compress_90",
+      "kind": "individual",
+      "output": "Output_truncsil_ts_compress_90pct.wav",
+      "frames": 640320,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "dis_ts_trunc_1_10",
+      "kind": "disabled",
+      "output": "Output_truncsil_disabled_ts_trunc_in_Compress_Excess_Silence_10ms.wav",
+      "frames": 360480,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "dis_ts_trunc_1_2000",
+      "kind": "disabled",
+      "output": "Output_truncsil_disabled_ts_trunc_in_Compress_Excess_Silence_2000ms.wav",
+      "frames": 360480,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "dis_ts_compress_0_5",
+      "kind": "disabled",
+      "output": "Output_truncsil_disabled_ts_compress_in_Truncate_Detected_Silence_5pct.wav",
+      "frames": 211200,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "dis_ts_compress_0_90",
+      "kind": "disabled",
+      "output": "Output_truncsil_disabled_ts_compress_in_Truncate_Detected_Silence_90pct.wav",
+      "frames": 211200,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0002",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0002_Truncate_Detected_Silence_ts_thresh_-80dB_ts_min_50ms_ts_trunc_10ms.wav",
+      "frames": 265920,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0005",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0005_Truncate_Detected_Silence_ts_thresh_-80dB_ts_min_50ms_ts_trunc_150ms.wav",
+      "frames": 286080,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0008",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0008_Truncate_Detected_Silence_ts_thresh_-80dB_ts_min_50ms_ts_trunc_2000ms.wav",
+      "frames": 498720,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0013",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0013_Compress_Excess_Silence_ts_thresh_-80dB_ts_min_50ms_ts_compress_5pct.wav",
+      "frames": 285816,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0014",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0014_Compress_Excess_Silence_ts_thresh_-80dB_ts_min_50ms_ts_compress_35pct.wav",
+      "frames": 413832,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0015",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0015_Compress_Excess_Silence_ts_thresh_-80dB_ts_min_50ms_ts_compress_90pct.wav",
+      "frames": 648528,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0020",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0020_Truncate_Detected_Silence_ts_thresh_-80dB_ts_min_400ms_ts_trunc_10ms.wav",
+      "frames": 265920,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0023",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0023_Truncate_Detected_Silence_ts_thresh_-80dB_ts_min_400ms_ts_trunc_150ms.wav",
+      "frames": 286080,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0026",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0026_Truncate_Detected_Silence_ts_thresh_-80dB_ts_min_400ms_ts_trunc_2000ms.wav",
+      "frames": 498720,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0031",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0031_Compress_Excess_Silence_ts_thresh_-80dB_ts_min_400ms_ts_compress_5pct.wav",
+      "frames": 285816,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0032",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0032_Compress_Excess_Silence_ts_thresh_-80dB_ts_min_400ms_ts_compress_35pct.wav",
+      "frames": 413832,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0033",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0033_Compress_Excess_Silence_ts_thresh_-80dB_ts_min_400ms_ts_compress_90pct.wav",
+      "frames": 648528,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0038",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0038_Truncate_Detected_Silence_ts_thresh_-80dB_ts_min_5000ms_ts_trunc_10ms.wav",
+      "frames": 403200,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0041",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0041_Truncate_Detected_Silence_ts_thresh_-80dB_ts_min_5000ms_ts_trunc_150ms.wav",
+      "frames": 409920,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0044",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0044_Truncate_Detected_Silence_ts_thresh_-80dB_ts_min_5000ms_ts_trunc_2000ms.wav",
+      "frames": 498720,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0049",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0049_Compress_Excess_Silence_ts_thresh_-80dB_ts_min_5000ms_ts_compress_5pct.wav",
+      "frames": 417144,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0050",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0050_Compress_Excess_Silence_ts_thresh_-80dB_ts_min_5000ms_ts_compress_35pct.wav",
+      "frames": 503688,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0051",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0051_Compress_Excess_Silence_ts_thresh_-80dB_ts_min_5000ms_ts_compress_90pct.wav",
+      "frames": 662352,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0056",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0056_Truncate_Detected_Silence_ts_thresh_-40dB_ts_min_50ms_ts_trunc_10ms.wav",
+      "frames": 160320,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0059",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0059_Truncate_Detected_Silence_ts_thresh_-40dB_ts_min_50ms_ts_trunc_150ms.wav",
+      "frames": 211200,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0062",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0062_Truncate_Detected_Silence_ts_thresh_-40dB_ts_min_50ms_ts_trunc_2000ms.wav",
+      "frames": 491040,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0067",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0067_Compress_Excess_Silence_ts_thresh_-40dB_ts_min_50ms_ts_compress_5pct.wav",
+      "frames": 181392,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0068",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0068_Compress_Excess_Silence_ts_thresh_-40dB_ts_min_50ms_ts_compress_35pct.wav",
+      "frames": 342384,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0069",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0069_Compress_Excess_Silence_ts_thresh_-40dB_ts_min_50ms_ts_compress_90pct.wav",
+      "frames": 637536,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0074",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0074_Truncate_Detected_Silence_ts_thresh_-40dB_ts_min_400ms_ts_trunc_10ms.wav",
+      "frames": 184320,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0077",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0077_Truncate_Detected_Silence_ts_thresh_-40dB_ts_min_400ms_ts_trunc_150ms.wav",
+      "frames": 211200,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0080",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0080_Truncate_Detected_Silence_ts_thresh_-40dB_ts_min_400ms_ts_trunc_2000ms.wav",
+      "frames": 491040,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0085",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0085_Compress_Excess_Silence_ts_thresh_-40dB_ts_min_400ms_ts_compress_5pct.wav",
+      "frames": 207840,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0086",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0086_Compress_Excess_Silence_ts_thresh_-40dB_ts_min_400ms_ts_compress_35pct.wav",
+      "frames": 360480,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0087",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0087_Compress_Excess_Silence_ts_thresh_-40dB_ts_min_400ms_ts_compress_90pct.wav",
+      "frames": 640320,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0092",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0092_Truncate_Detected_Silence_ts_thresh_-40dB_ts_min_5000ms_ts_trunc_10ms.wav",
+      "frames": 403200,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0095",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0095_Truncate_Detected_Silence_ts_thresh_-40dB_ts_min_5000ms_ts_trunc_150ms.wav",
+      "frames": 409920,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0098",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0098_Truncate_Detected_Silence_ts_thresh_-40dB_ts_min_5000ms_ts_trunc_2000ms.wav",
+      "frames": 498720,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0103",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0103_Compress_Excess_Silence_ts_thresh_-40dB_ts_min_5000ms_ts_compress_5pct.wav",
+      "frames": 417144,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0104",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0104_Compress_Excess_Silence_ts_thresh_-40dB_ts_min_5000ms_ts_compress_35pct.wav",
+      "frames": 503688,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0105",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0105_Compress_Excess_Silence_ts_thresh_-40dB_ts_min_5000ms_ts_compress_90pct.wav",
+      "frames": 662352,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0110",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0110_Truncate_Detected_Silence_ts_thresh_-20dB_ts_min_50ms_ts_trunc_10ms.wav",
+      "frames": 17280,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0113",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0113_Truncate_Detected_Silence_ts_thresh_-20dB_ts_min_50ms_ts_trunc_150ms.wav",
+      "frames": 76800,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0116",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0116_Truncate_Detected_Silence_ts_thresh_-20dB_ts_min_50ms_ts_trunc_2000ms.wav",
+      "frames": 392640,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0121",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0121_Compress_Excess_Silence_ts_thresh_-20dB_ts_min_50ms_ts_compress_5pct.wav",
+      "frames": 46872,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0122",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0122_Compress_Excess_Silence_ts_thresh_-20dB_ts_min_50ms_ts_compress_35pct.wav",
+      "frames": 250344,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0123",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0123_Compress_Excess_Silence_ts_thresh_-20dB_ts_min_50ms_ts_compress_90pct.wav",
+      "frames": 623376,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0128",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0128_Truncate_Detected_Silence_ts_thresh_-20dB_ts_min_400ms_ts_trunc_10ms.wav",
+      "frames": 62400,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0131",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0131_Truncate_Detected_Silence_ts_thresh_-20dB_ts_min_400ms_ts_trunc_150ms.wav",
+      "frames": 96000,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0134",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0134_Truncate_Detected_Silence_ts_thresh_-20dB_ts_min_400ms_ts_trunc_2000ms.wav",
+      "frames": 392640,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0139",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0139_Compress_Excess_Silence_ts_thresh_-20dB_ts_min_400ms_ts_compress_5pct.wav",
+      "frames": 91560,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0140",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0140_Compress_Excess_Silence_ts_thresh_-20dB_ts_min_400ms_ts_compress_35pct.wav",
+      "frames": 280920,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0141",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0141_Compress_Excess_Silence_ts_thresh_-20dB_ts_min_400ms_ts_compress_90pct.wav",
+      "frames": 628080,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0146",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0146_Truncate_Detected_Silence_ts_thresh_-20dB_ts_min_5000ms_ts_trunc_10ms.wav",
+      "frames": 384480,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0149",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0149_Truncate_Detected_Silence_ts_thresh_-20dB_ts_min_5000ms_ts_trunc_150ms.wav",
+      "frames": 391200,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0152",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0152_Truncate_Detected_Silence_ts_thresh_-20dB_ts_min_5000ms_ts_trunc_2000ms.wav",
+      "frames": 480000,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0157",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0157_Compress_Excess_Silence_ts_thresh_-20dB_ts_min_5000ms_ts_compress_5pct.wav",
+      "frames": 399360,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0158",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0158_Compress_Excess_Silence_ts_thresh_-20dB_ts_min_5000ms_ts_compress_35pct.wav",
+      "frames": 491520,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    },
+    {
+      "id": "combo_0159",
+      "kind": "combination",
+      "output": "Output_truncsil_combo_0159_Compress_Excess_Silence_ts_thresh_-20dB_ts_min_5000ms_ts_compress_90pct.wav",
+      "frames": 660480,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.44185778498649597,
+      "finite": true
+    }
+  ],
+  "errors": []
+}

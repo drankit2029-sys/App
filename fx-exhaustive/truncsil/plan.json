@@ -1,0 +1,5198 @@
+{
+  "effect": "truncsil",
+  "title": "Truncate Silence",
+  "sample_rate": 48000,
+  "input": "Input_truncsil.wav",
+  "input_meta": {
+    "file": "Input_truncsil.wav",
+    "sample_rate": 48000,
+    "frames": 691200,
+    "duration_ms": 14400.0,
+    "source": "tools/fxverify/fixtures/kokoro_speech_48k_f32.wav",
+    "spans_ms": [
+      2000,
+      1200,
+      2000,
+      6000,
+      2000,
+      1200
+    ],
+    "gaps": [
+      {
+        "index": 0,
+        "start_frame": 96000,
+        "end_frame": 153600,
+        "length_ms": 1200,
+        "noise_db": -55.0
+      },
+      {
+        "index": 1,
+        "start_frame": 249600,
+        "end_frame": 537600,
+        "length_ms": 6000,
+        "noise_db": -120.0
+      },
+      {
+        "index": 2,
+        "start_frame": 633600,
+        "end_frame": 691200,
+        "length_ms": 1200,
+        "noise_db": -120.0
+      }
+    ],
+    "peak": 0.44185778498649597,
+    "rms": 0.028517039492726326
+  },
+  "output_format": "pcm16",
+  "params": [
+    {
+      "id": "ts_thresh",
+      "name": "Threshold",
+      "unit": " dB",
+      "type": "FLOAT",
+      "scale": "DECIBEL",
+      "min": -8000,
+      "max": -2000,
+      "step": 1,
+      "def": -4000,
+      "div": 100,
+      "cur": -4000,
+      "primary": true,
+      "display": "-40.0 dB"
+    },
+    {
+      "id": "ts_min",
+      "name": "Minimum Silence",
+      "unit": " ms",
+      "type": "INT",
+      "scale": "LINEAR",
+      "min": 50,
+      "max": 5000,
+      "step": 50,
+      "def": 400,
+      "div": 1,
+      "cur": 400,
+      "primary": false,
+      "display": "400 ms"
+    },
+    {
+      "id": "ts_action",
+      "name": "Action",
+      "unit": "",
+      "type": "ENUM",
+      "scale": "LINEAR",
+      "min": 0,
+      "max": 1,
+      "step": 1,
+      "def": 0,
+      "div": 1,
+      "cur": 0,
+      "enums": [
+        "Truncate Detected Silence",
+        "Compress Excess Silence"
+      ],
+      "primary": false,
+      "display": "Truncate Detected Silence"
+    },
+    {
+      "id": "ts_trunc",
+      "name": "Truncate To",
+      "unit": " ms",
+      "type": "INT",
+      "scale": "LINEAR",
+      "min": 10,
+      "max": 2000,
+      "step": 10,
+      "def": 150,
+      "div": 1,
+      "cur": 150,
+      "primary": false,
+      "display": "150 ms"
+    },
+    {
+      "id": "ts_compress",
+      "name": "Compress To",
+      "unit": "%",
+      "type": "INT",
+      "scale": "LINEAR",
+      "min": 5,
+      "max": 90,
+      "step": 5,
+      "def": 35,
+      "div": 1,
+      "cur": 35,
+      "primary": false,
+      "display": "35%"
+    }
+  ],
+  "defaults": {
+    "ts_thresh": -4000,
+    "ts_min": 400,
+    "ts_action": 0,
+    "ts_trunc": 150,
+    "ts_compress": 35
+  },
+  "mode_param": "ts_action",
+  "targets": {
+    "0": "ts_trunc",
+    "1": "ts_compress"
+  },
+  "cases": [
+    {
+      "id": "ind_ts_thresh_-8000",
+      "kind": "individual",
+      "param": "ts_thresh",
+      "value": -8000,
+      "value_display": "-80dB",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 400,
+        "ts_action": 0,
+        "ts_trunc": 150,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "400ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_ts_thresh_-80dB.wav"
+    },
+    {
+      "id": "ind_ts_thresh_-4000",
+      "kind": "individual",
+      "param": "ts_thresh",
+      "value": -4000,
+      "value_display": "-40dB",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 400,
+        "ts_action": 0,
+        "ts_trunc": 150,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "400ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_ts_thresh_-40dB.wav"
+    },
+    {
+      "id": "ind_ts_thresh_-2000",
+      "kind": "individual",
+      "param": "ts_thresh",
+      "value": -2000,
+      "value_display": "-20dB",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 400,
+        "ts_action": 0,
+        "ts_trunc": 150,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "400ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_ts_thresh_-20dB.wav"
+    },
+    {
+      "id": "ind_ts_min_50",
+      "kind": "individual",
+      "param": "ts_min",
+      "value": 50,
+      "value_display": "50ms",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 50,
+        "ts_action": 0,
+        "ts_trunc": 150,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "50ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_ts_min_50ms.wav"
+    },
+    {
+      "id": "ind_ts_min_400",
+      "kind": "individual",
+      "param": "ts_min",
+      "value": 400,
+      "value_display": "400ms",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 400,
+        "ts_action": 0,
+        "ts_trunc": 150,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "400ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_ts_min_400ms.wav"
+    },
+    {
+      "id": "ind_ts_min_5000",
+      "kind": "individual",
+      "param": "ts_min",
+      "value": 5000,
+      "value_display": "5000ms",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 5000,
+        "ts_action": 0,
+        "ts_trunc": 150,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "5000ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_ts_min_5000ms.wav"
+    },
+    {
+      "id": "ind_ts_action_0",
+      "kind": "individual",
+      "param": "ts_action",
+      "value": 0,
+      "value_display": "Truncate Detected Silence",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 400,
+        "ts_action": 0,
+        "ts_trunc": 150,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "400ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_ts_action_Truncate_Detected_Silence.wav"
+    },
+    {
+      "id": "ind_ts_action_1",
+      "kind": "individual",
+      "param": "ts_action",
+      "value": 1,
+      "value_display": "Compress Excess Silence",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 400,
+        "ts_action": 1,
+        "ts_trunc": 150,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "400ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_ts_action_Compress_Excess_Silence.wav"
+    },
+    {
+      "id": "ind_ts_trunc_10",
+      "kind": "individual",
+      "param": "ts_trunc",
+      "value": 10,
+      "value_display": "10ms",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 400,
+        "ts_action": 0,
+        "ts_trunc": 10,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "400ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_ts_trunc_10ms.wav"
+    },
+    {
+      "id": "ind_ts_trunc_150",
+      "kind": "individual",
+      "param": "ts_trunc",
+      "value": 150,
+      "value_display": "150ms",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 400,
+        "ts_action": 0,
+        "ts_trunc": 150,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "400ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_ts_trunc_150ms.wav"
+    },
+    {
+      "id": "ind_ts_trunc_2000",
+      "kind": "individual",
+      "param": "ts_trunc",
+      "value": 2000,
+      "value_display": "2000ms",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 400,
+        "ts_action": 0,
+        "ts_trunc": 2000,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "400ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_ts_trunc_2000ms.wav"
+    },
+    {
+      "id": "ind_ts_compress_5",
+      "kind": "individual",
+      "param": "ts_compress",
+      "value": 5,
+      "value_display": "5%",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 400,
+        "ts_action": 1,
+        "ts_trunc": 150,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "400ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "5%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_ts_compress_5pct.wav"
+    },
+    {
+      "id": "ind_ts_compress_35",
+      "kind": "individual",
+      "param": "ts_compress",
+      "value": 35,
+      "value_display": "35%",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 400,
+        "ts_action": 1,
+        "ts_trunc": 150,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "400ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_ts_compress_35pct.wav"
+    },
+    {
+      "id": "ind_ts_compress_90",
+      "kind": "individual",
+      "param": "ts_compress",
+      "value": 90,
+      "value_display": "90%",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 400,
+        "ts_action": 1,
+        "ts_trunc": 150,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "400ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "90%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_ts_compress_90pct.wav"
+    },
+    {
+      "id": "dis_ts_trunc_1_10",
+      "kind": "disabled",
+      "param": "ts_trunc",
+      "value": 10,
+      "value_display": "10ms",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 400,
+        "ts_action": 1,
+        "ts_trunc": 10,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "400ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "35%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": true,
+      "allow_inactive": true,
+      "compare_to": "ind_ts_action_1",
+      "output": "Output_truncsil_disabled_ts_trunc_in_Compress_Excess_Silence_10ms.wav"
+    },
+    {
+      "id": "dis_ts_trunc_1_2000",
+      "kind": "disabled",
+      "param": "ts_trunc",
+      "value": 2000,
+      "value_display": "2000ms",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 400,
+        "ts_action": 1,
+        "ts_trunc": 2000,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "400ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "35%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": true,
+      "allow_inactive": true,
+      "compare_to": "ind_ts_action_1",
+      "output": "Output_truncsil_disabled_ts_trunc_in_Compress_Excess_Silence_2000ms.wav"
+    },
+    {
+      "id": "dis_ts_compress_0_5",
+      "kind": "disabled",
+      "param": "ts_compress",
+      "value": 5,
+      "value_display": "5%",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 400,
+        "ts_action": 0,
+        "ts_trunc": 150,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "400ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": true,
+      "allow_inactive": true,
+      "compare_to": "ind_ts_action_0",
+      "output": "Output_truncsil_disabled_ts_compress_in_Truncate_Detected_Silence_5pct.wav"
+    },
+    {
+      "id": "dis_ts_compress_0_90",
+      "kind": "disabled",
+      "param": "ts_compress",
+      "value": 90,
+      "value_display": "90%",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 400,
+        "ts_action": 0,
+        "ts_trunc": 150,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "400ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": true,
+      "allow_inactive": true,
+      "compare_to": "ind_ts_action_0",
+      "output": "Output_truncsil_disabled_ts_compress_in_Truncate_Detected_Silence_90pct.wav"
+    },
+    {
+      "id": "combo_0001",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 50,
+        "ts_action": 0,
+        "ts_trunc": 10,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "50ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 5%, default 35%)"
+    },
+    {
+      "id": "combo_0002",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 50,
+        "ts_action": 0,
+        "ts_trunc": 10,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "50ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0002_Truncate_Detected_Silence_ts_thresh_-80dB_ts_min_50ms_ts_trunc_10ms.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0003",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 50,
+        "ts_action": 0,
+        "ts_trunc": 10,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "50ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 90%, default 35%)"
+    },
+    {
+      "id": "combo_0004",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 50,
+        "ts_action": 0,
+        "ts_trunc": 150,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "50ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 5%, default 35%)"
+    },
+    {
+      "id": "combo_0005",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 50,
+        "ts_action": 0,
+        "ts_trunc": 150,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "50ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0005_Truncate_Detected_Silence_ts_thresh_-80dB_ts_min_50ms_ts_trunc_150ms.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0006",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 50,
+        "ts_action": 0,
+        "ts_trunc": 150,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "50ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 90%, default 35%)"
+    },
+    {
+      "id": "combo_0007",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 50,
+        "ts_action": 0,
+        "ts_trunc": 2000,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "50ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 5%, default 35%)"
+    },
+    {
+      "id": "combo_0008",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 50,
+        "ts_action": 0,
+        "ts_trunc": 2000,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "50ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0008_Truncate_Detected_Silence_ts_thresh_-80dB_ts_min_50ms_ts_trunc_2000ms.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0009",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 50,
+        "ts_action": 0,
+        "ts_trunc": 2000,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "50ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 90%, default 35%)"
+    },
+    {
+      "id": "combo_0010",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 50,
+        "ts_action": 1,
+        "ts_trunc": 10,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "50ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 10ms, default 150ms)"
+    },
+    {
+      "id": "combo_0011",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 50,
+        "ts_action": 1,
+        "ts_trunc": 10,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "50ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "35%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 10ms, default 150ms)"
+    },
+    {
+      "id": "combo_0012",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 50,
+        "ts_action": 1,
+        "ts_trunc": 10,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "50ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 10ms, default 150ms)"
+    },
+    {
+      "id": "combo_0013",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 50,
+        "ts_action": 1,
+        "ts_trunc": 150,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "50ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "5%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0013_Compress_Excess_Silence_ts_thresh_-80dB_ts_min_50ms_ts_compress_5pct.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0014",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 50,
+        "ts_action": 1,
+        "ts_trunc": 150,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "50ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0014_Compress_Excess_Silence_ts_thresh_-80dB_ts_min_50ms_ts_compress_35pct.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0015",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 50,
+        "ts_action": 1,
+        "ts_trunc": 150,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "50ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "90%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0015_Compress_Excess_Silence_ts_thresh_-80dB_ts_min_50ms_ts_compress_90pct.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0016",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 50,
+        "ts_action": 1,
+        "ts_trunc": 2000,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "50ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 2000ms, default 150ms)"
+    },
+    {
+      "id": "combo_0017",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 50,
+        "ts_action": 1,
+        "ts_trunc": 2000,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "50ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "35%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 2000ms, default 150ms)"
+    },
+    {
+      "id": "combo_0018",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 50,
+        "ts_action": 1,
+        "ts_trunc": 2000,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "50ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 2000ms, default 150ms)"
+    },
+    {
+      "id": "combo_0019",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 400,
+        "ts_action": 0,
+        "ts_trunc": 10,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "400ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 5%, default 35%)"
+    },
+    {
+      "id": "combo_0020",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 400,
+        "ts_action": 0,
+        "ts_trunc": 10,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "400ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0020_Truncate_Detected_Silence_ts_thresh_-80dB_ts_min_400ms_ts_trunc_10ms.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0021",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 400,
+        "ts_action": 0,
+        "ts_trunc": 10,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "400ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 90%, default 35%)"
+    },
+    {
+      "id": "combo_0022",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 400,
+        "ts_action": 0,
+        "ts_trunc": 150,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "400ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 5%, default 35%)"
+    },
+    {
+      "id": "combo_0023",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 400,
+        "ts_action": 0,
+        "ts_trunc": 150,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "400ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0023_Truncate_Detected_Silence_ts_thresh_-80dB_ts_min_400ms_ts_trunc_150ms.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0024",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 400,
+        "ts_action": 0,
+        "ts_trunc": 150,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "400ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 90%, default 35%)"
+    },
+    {
+      "id": "combo_0025",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 400,
+        "ts_action": 0,
+        "ts_trunc": 2000,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "400ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 5%, default 35%)"
+    },
+    {
+      "id": "combo_0026",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 400,
+        "ts_action": 0,
+        "ts_trunc": 2000,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "400ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0026_Truncate_Detected_Silence_ts_thresh_-80dB_ts_min_400ms_ts_trunc_2000ms.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0027",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 400,
+        "ts_action": 0,
+        "ts_trunc": 2000,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "400ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 90%, default 35%)"
+    },
+    {
+      "id": "combo_0028",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 400,
+        "ts_action": 1,
+        "ts_trunc": 10,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "400ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 10ms, default 150ms)"
+    },
+    {
+      "id": "combo_0029",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 400,
+        "ts_action": 1,
+        "ts_trunc": 10,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "400ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "35%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 10ms, default 150ms)"
+    },
+    {
+      "id": "combo_0030",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 400,
+        "ts_action": 1,
+        "ts_trunc": 10,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "400ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 10ms, default 150ms)"
+    },
+    {
+      "id": "combo_0031",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 400,
+        "ts_action": 1,
+        "ts_trunc": 150,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "400ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "5%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0031_Compress_Excess_Silence_ts_thresh_-80dB_ts_min_400ms_ts_compress_5pct.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0032",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 400,
+        "ts_action": 1,
+        "ts_trunc": 150,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "400ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0032_Compress_Excess_Silence_ts_thresh_-80dB_ts_min_400ms_ts_compress_35pct.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0033",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 400,
+        "ts_action": 1,
+        "ts_trunc": 150,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "400ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "90%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0033_Compress_Excess_Silence_ts_thresh_-80dB_ts_min_400ms_ts_compress_90pct.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0034",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 400,
+        "ts_action": 1,
+        "ts_trunc": 2000,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "400ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 2000ms, default 150ms)"
+    },
+    {
+      "id": "combo_0035",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 400,
+        "ts_action": 1,
+        "ts_trunc": 2000,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "400ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "35%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 2000ms, default 150ms)"
+    },
+    {
+      "id": "combo_0036",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 400,
+        "ts_action": 1,
+        "ts_trunc": 2000,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "400ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 2000ms, default 150ms)"
+    },
+    {
+      "id": "combo_0037",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 5000,
+        "ts_action": 0,
+        "ts_trunc": 10,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "5000ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 5%, default 35%)"
+    },
+    {
+      "id": "combo_0038",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 5000,
+        "ts_action": 0,
+        "ts_trunc": 10,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "5000ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0038_Truncate_Detected_Silence_ts_thresh_-80dB_ts_min_5000ms_ts_trunc_10ms.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0039",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 5000,
+        "ts_action": 0,
+        "ts_trunc": 10,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "5000ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 90%, default 35%)"
+    },
+    {
+      "id": "combo_0040",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 5000,
+        "ts_action": 0,
+        "ts_trunc": 150,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "5000ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 5%, default 35%)"
+    },
+    {
+      "id": "combo_0041",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 5000,
+        "ts_action": 0,
+        "ts_trunc": 150,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "5000ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0041_Truncate_Detected_Silence_ts_thresh_-80dB_ts_min_5000ms_ts_trunc_150ms.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0042",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 5000,
+        "ts_action": 0,
+        "ts_trunc": 150,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "5000ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 90%, default 35%)"
+    },
+    {
+      "id": "combo_0043",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 5000,
+        "ts_action": 0,
+        "ts_trunc": 2000,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "5000ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 5%, default 35%)"
+    },
+    {
+      "id": "combo_0044",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 5000,
+        "ts_action": 0,
+        "ts_trunc": 2000,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "5000ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0044_Truncate_Detected_Silence_ts_thresh_-80dB_ts_min_5000ms_ts_trunc_2000ms.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0045",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 5000,
+        "ts_action": 0,
+        "ts_trunc": 2000,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "5000ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 90%, default 35%)"
+    },
+    {
+      "id": "combo_0046",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 5000,
+        "ts_action": 1,
+        "ts_trunc": 10,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "5000ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 10ms, default 150ms)"
+    },
+    {
+      "id": "combo_0047",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 5000,
+        "ts_action": 1,
+        "ts_trunc": 10,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "5000ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "35%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 10ms, default 150ms)"
+    },
+    {
+      "id": "combo_0048",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 5000,
+        "ts_action": 1,
+        "ts_trunc": 10,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "5000ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 10ms, default 150ms)"
+    },
+    {
+      "id": "combo_0049",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 5000,
+        "ts_action": 1,
+        "ts_trunc": 150,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "5000ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "5%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0049_Compress_Excess_Silence_ts_thresh_-80dB_ts_min_5000ms_ts_compress_5pct.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0050",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 5000,
+        "ts_action": 1,
+        "ts_trunc": 150,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "5000ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0050_Compress_Excess_Silence_ts_thresh_-80dB_ts_min_5000ms_ts_compress_35pct.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0051",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 5000,
+        "ts_action": 1,
+        "ts_trunc": 150,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "5000ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "90%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0051_Compress_Excess_Silence_ts_thresh_-80dB_ts_min_5000ms_ts_compress_90pct.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0052",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 5000,
+        "ts_action": 1,
+        "ts_trunc": 2000,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "5000ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 2000ms, default 150ms)"
+    },
+    {
+      "id": "combo_0053",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 5000,
+        "ts_action": 1,
+        "ts_trunc": 2000,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "5000ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "35%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 2000ms, default 150ms)"
+    },
+    {
+      "id": "combo_0054",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -8000,
+        "ts_min": 5000,
+        "ts_action": 1,
+        "ts_trunc": 2000,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-80dB",
+        "ts_min": "5000ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 2000ms, default 150ms)"
+    },
+    {
+      "id": "combo_0055",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 50,
+        "ts_action": 0,
+        "ts_trunc": 10,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "50ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 5%, default 35%)"
+    },
+    {
+      "id": "combo_0056",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 50,
+        "ts_action": 0,
+        "ts_trunc": 10,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "50ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0056_Truncate_Detected_Silence_ts_thresh_-40dB_ts_min_50ms_ts_trunc_10ms.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0057",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 50,
+        "ts_action": 0,
+        "ts_trunc": 10,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "50ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 90%, default 35%)"
+    },
+    {
+      "id": "combo_0058",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 50,
+        "ts_action": 0,
+        "ts_trunc": 150,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "50ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 5%, default 35%)"
+    },
+    {
+      "id": "combo_0059",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 50,
+        "ts_action": 0,
+        "ts_trunc": 150,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "50ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0059_Truncate_Detected_Silence_ts_thresh_-40dB_ts_min_50ms_ts_trunc_150ms.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0060",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 50,
+        "ts_action": 0,
+        "ts_trunc": 150,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "50ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 90%, default 35%)"
+    },
+    {
+      "id": "combo_0061",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 50,
+        "ts_action": 0,
+        "ts_trunc": 2000,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "50ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 5%, default 35%)"
+    },
+    {
+      "id": "combo_0062",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 50,
+        "ts_action": 0,
+        "ts_trunc": 2000,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "50ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0062_Truncate_Detected_Silence_ts_thresh_-40dB_ts_min_50ms_ts_trunc_2000ms.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0063",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 50,
+        "ts_action": 0,
+        "ts_trunc": 2000,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "50ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 90%, default 35%)"
+    },
+    {
+      "id": "combo_0064",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 50,
+        "ts_action": 1,
+        "ts_trunc": 10,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "50ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 10ms, default 150ms)"
+    },
+    {
+      "id": "combo_0065",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 50,
+        "ts_action": 1,
+        "ts_trunc": 10,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "50ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "35%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 10ms, default 150ms)"
+    },
+    {
+      "id": "combo_0066",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 50,
+        "ts_action": 1,
+        "ts_trunc": 10,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "50ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 10ms, default 150ms)"
+    },
+    {
+      "id": "combo_0067",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 50,
+        "ts_action": 1,
+        "ts_trunc": 150,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "50ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "5%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0067_Compress_Excess_Silence_ts_thresh_-40dB_ts_min_50ms_ts_compress_5pct.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0068",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 50,
+        "ts_action": 1,
+        "ts_trunc": 150,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "50ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0068_Compress_Excess_Silence_ts_thresh_-40dB_ts_min_50ms_ts_compress_35pct.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0069",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 50,
+        "ts_action": 1,
+        "ts_trunc": 150,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "50ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "90%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0069_Compress_Excess_Silence_ts_thresh_-40dB_ts_min_50ms_ts_compress_90pct.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0070",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 50,
+        "ts_action": 1,
+        "ts_trunc": 2000,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "50ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 2000ms, default 150ms)"
+    },
+    {
+      "id": "combo_0071",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 50,
+        "ts_action": 1,
+        "ts_trunc": 2000,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "50ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "35%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 2000ms, default 150ms)"
+    },
+    {
+      "id": "combo_0072",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 50,
+        "ts_action": 1,
+        "ts_trunc": 2000,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "50ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 2000ms, default 150ms)"
+    },
+    {
+      "id": "combo_0073",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 400,
+        "ts_action": 0,
+        "ts_trunc": 10,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "400ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 5%, default 35%)"
+    },
+    {
+      "id": "combo_0074",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 400,
+        "ts_action": 0,
+        "ts_trunc": 10,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "400ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0074_Truncate_Detected_Silence_ts_thresh_-40dB_ts_min_400ms_ts_trunc_10ms.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0075",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 400,
+        "ts_action": 0,
+        "ts_trunc": 10,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "400ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 90%, default 35%)"
+    },
+    {
+      "id": "combo_0076",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 400,
+        "ts_action": 0,
+        "ts_trunc": 150,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "400ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 5%, default 35%)"
+    },
+    {
+      "id": "combo_0077",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 400,
+        "ts_action": 0,
+        "ts_trunc": 150,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "400ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0077_Truncate_Detected_Silence_ts_thresh_-40dB_ts_min_400ms_ts_trunc_150ms.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0078",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 400,
+        "ts_action": 0,
+        "ts_trunc": 150,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "400ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 90%, default 35%)"
+    },
+    {
+      "id": "combo_0079",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 400,
+        "ts_action": 0,
+        "ts_trunc": 2000,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "400ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 5%, default 35%)"
+    },
+    {
+      "id": "combo_0080",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 400,
+        "ts_action": 0,
+        "ts_trunc": 2000,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "400ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0080_Truncate_Detected_Silence_ts_thresh_-40dB_ts_min_400ms_ts_trunc_2000ms.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0081",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 400,
+        "ts_action": 0,
+        "ts_trunc": 2000,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "400ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 90%, default 35%)"
+    },
+    {
+      "id": "combo_0082",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 400,
+        "ts_action": 1,
+        "ts_trunc": 10,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "400ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 10ms, default 150ms)"
+    },
+    {
+      "id": "combo_0083",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 400,
+        "ts_action": 1,
+        "ts_trunc": 10,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "400ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "35%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 10ms, default 150ms)"
+    },
+    {
+      "id": "combo_0084",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 400,
+        "ts_action": 1,
+        "ts_trunc": 10,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "400ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 10ms, default 150ms)"
+    },
+    {
+      "id": "combo_0085",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 400,
+        "ts_action": 1,
+        "ts_trunc": 150,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "400ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "5%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0085_Compress_Excess_Silence_ts_thresh_-40dB_ts_min_400ms_ts_compress_5pct.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0086",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 400,
+        "ts_action": 1,
+        "ts_trunc": 150,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "400ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0086_Compress_Excess_Silence_ts_thresh_-40dB_ts_min_400ms_ts_compress_35pct.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0087",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 400,
+        "ts_action": 1,
+        "ts_trunc": 150,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "400ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "90%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0087_Compress_Excess_Silence_ts_thresh_-40dB_ts_min_400ms_ts_compress_90pct.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0088",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 400,
+        "ts_action": 1,
+        "ts_trunc": 2000,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "400ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 2000ms, default 150ms)"
+    },
+    {
+      "id": "combo_0089",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 400,
+        "ts_action": 1,
+        "ts_trunc": 2000,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "400ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "35%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 2000ms, default 150ms)"
+    },
+    {
+      "id": "combo_0090",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 400,
+        "ts_action": 1,
+        "ts_trunc": 2000,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "400ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 2000ms, default 150ms)"
+    },
+    {
+      "id": "combo_0091",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 5000,
+        "ts_action": 0,
+        "ts_trunc": 10,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "5000ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 5%, default 35%)"
+    },
+    {
+      "id": "combo_0092",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 5000,
+        "ts_action": 0,
+        "ts_trunc": 10,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "5000ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0092_Truncate_Detected_Silence_ts_thresh_-40dB_ts_min_5000ms_ts_trunc_10ms.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0093",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 5000,
+        "ts_action": 0,
+        "ts_trunc": 10,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "5000ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 90%, default 35%)"
+    },
+    {
+      "id": "combo_0094",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 5000,
+        "ts_action": 0,
+        "ts_trunc": 150,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "5000ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 5%, default 35%)"
+    },
+    {
+      "id": "combo_0095",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 5000,
+        "ts_action": 0,
+        "ts_trunc": 150,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "5000ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0095_Truncate_Detected_Silence_ts_thresh_-40dB_ts_min_5000ms_ts_trunc_150ms.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0096",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 5000,
+        "ts_action": 0,
+        "ts_trunc": 150,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "5000ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 90%, default 35%)"
+    },
+    {
+      "id": "combo_0097",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 5000,
+        "ts_action": 0,
+        "ts_trunc": 2000,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "5000ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 5%, default 35%)"
+    },
+    {
+      "id": "combo_0098",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 5000,
+        "ts_action": 0,
+        "ts_trunc": 2000,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "5000ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0098_Truncate_Detected_Silence_ts_thresh_-40dB_ts_min_5000ms_ts_trunc_2000ms.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0099",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 5000,
+        "ts_action": 0,
+        "ts_trunc": 2000,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "5000ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 90%, default 35%)"
+    },
+    {
+      "id": "combo_0100",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 5000,
+        "ts_action": 1,
+        "ts_trunc": 10,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "5000ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 10ms, default 150ms)"
+    },
+    {
+      "id": "combo_0101",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 5000,
+        "ts_action": 1,
+        "ts_trunc": 10,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "5000ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "35%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 10ms, default 150ms)"
+    },
+    {
+      "id": "combo_0102",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 5000,
+        "ts_action": 1,
+        "ts_trunc": 10,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "5000ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 10ms, default 150ms)"
+    },
+    {
+      "id": "combo_0103",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 5000,
+        "ts_action": 1,
+        "ts_trunc": 150,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "5000ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "5%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0103_Compress_Excess_Silence_ts_thresh_-40dB_ts_min_5000ms_ts_compress_5pct.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0104",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 5000,
+        "ts_action": 1,
+        "ts_trunc": 150,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "5000ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0104_Compress_Excess_Silence_ts_thresh_-40dB_ts_min_5000ms_ts_compress_35pct.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0105",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 5000,
+        "ts_action": 1,
+        "ts_trunc": 150,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "5000ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "90%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0105_Compress_Excess_Silence_ts_thresh_-40dB_ts_min_5000ms_ts_compress_90pct.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0106",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 5000,
+        "ts_action": 1,
+        "ts_trunc": 2000,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "5000ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 2000ms, default 150ms)"
+    },
+    {
+      "id": "combo_0107",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 5000,
+        "ts_action": 1,
+        "ts_trunc": 2000,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "5000ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "35%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 2000ms, default 150ms)"
+    },
+    {
+      "id": "combo_0108",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -4000,
+        "ts_min": 5000,
+        "ts_action": 1,
+        "ts_trunc": 2000,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-40dB",
+        "ts_min": "5000ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 2000ms, default 150ms)"
+    },
+    {
+      "id": "combo_0109",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 50,
+        "ts_action": 0,
+        "ts_trunc": 10,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "50ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 5%, default 35%)"
+    },
+    {
+      "id": "combo_0110",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 50,
+        "ts_action": 0,
+        "ts_trunc": 10,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "50ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0110_Truncate_Detected_Silence_ts_thresh_-20dB_ts_min_50ms_ts_trunc_10ms.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0111",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 50,
+        "ts_action": 0,
+        "ts_trunc": 10,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "50ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 90%, default 35%)"
+    },
+    {
+      "id": "combo_0112",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 50,
+        "ts_action": 0,
+        "ts_trunc": 150,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "50ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 5%, default 35%)"
+    },
+    {
+      "id": "combo_0113",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 50,
+        "ts_action": 0,
+        "ts_trunc": 150,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "50ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0113_Truncate_Detected_Silence_ts_thresh_-20dB_ts_min_50ms_ts_trunc_150ms.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0114",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 50,
+        "ts_action": 0,
+        "ts_trunc": 150,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "50ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 90%, default 35%)"
+    },
+    {
+      "id": "combo_0115",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 50,
+        "ts_action": 0,
+        "ts_trunc": 2000,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "50ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 5%, default 35%)"
+    },
+    {
+      "id": "combo_0116",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 50,
+        "ts_action": 0,
+        "ts_trunc": 2000,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "50ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0116_Truncate_Detected_Silence_ts_thresh_-20dB_ts_min_50ms_ts_trunc_2000ms.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0117",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 50,
+        "ts_action": 0,
+        "ts_trunc": 2000,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "50ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 90%, default 35%)"
+    },
+    {
+      "id": "combo_0118",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 50,
+        "ts_action": 1,
+        "ts_trunc": 10,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "50ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 10ms, default 150ms)"
+    },
+    {
+      "id": "combo_0119",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 50,
+        "ts_action": 1,
+        "ts_trunc": 10,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "50ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "35%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 10ms, default 150ms)"
+    },
+    {
+      "id": "combo_0120",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 50,
+        "ts_action": 1,
+        "ts_trunc": 10,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "50ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 10ms, default 150ms)"
+    },
+    {
+      "id": "combo_0121",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 50,
+        "ts_action": 1,
+        "ts_trunc": 150,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "50ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "5%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0121_Compress_Excess_Silence_ts_thresh_-20dB_ts_min_50ms_ts_compress_5pct.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0122",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 50,
+        "ts_action": 1,
+        "ts_trunc": 150,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "50ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0122_Compress_Excess_Silence_ts_thresh_-20dB_ts_min_50ms_ts_compress_35pct.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0123",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 50,
+        "ts_action": 1,
+        "ts_trunc": 150,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "50ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "90%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0123_Compress_Excess_Silence_ts_thresh_-20dB_ts_min_50ms_ts_compress_90pct.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0124",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 50,
+        "ts_action": 1,
+        "ts_trunc": 2000,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "50ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 2000ms, default 150ms)"
+    },
+    {
+      "id": "combo_0125",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 50,
+        "ts_action": 1,
+        "ts_trunc": 2000,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "50ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "35%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 2000ms, default 150ms)"
+    },
+    {
+      "id": "combo_0126",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 50,
+        "ts_action": 1,
+        "ts_trunc": 2000,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "50ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 2000ms, default 150ms)"
+    },
+    {
+      "id": "combo_0127",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 400,
+        "ts_action": 0,
+        "ts_trunc": 10,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "400ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 5%, default 35%)"
+    },
+    {
+      "id": "combo_0128",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 400,
+        "ts_action": 0,
+        "ts_trunc": 10,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "400ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0128_Truncate_Detected_Silence_ts_thresh_-20dB_ts_min_400ms_ts_trunc_10ms.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0129",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 400,
+        "ts_action": 0,
+        "ts_trunc": 10,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "400ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 90%, default 35%)"
+    },
+    {
+      "id": "combo_0130",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 400,
+        "ts_action": 0,
+        "ts_trunc": 150,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "400ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 5%, default 35%)"
+    },
+    {
+      "id": "combo_0131",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 400,
+        "ts_action": 0,
+        "ts_trunc": 150,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "400ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0131_Truncate_Detected_Silence_ts_thresh_-20dB_ts_min_400ms_ts_trunc_150ms.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0132",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 400,
+        "ts_action": 0,
+        "ts_trunc": 150,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "400ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 90%, default 35%)"
+    },
+    {
+      "id": "combo_0133",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 400,
+        "ts_action": 0,
+        "ts_trunc": 2000,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "400ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 5%, default 35%)"
+    },
+    {
+      "id": "combo_0134",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 400,
+        "ts_action": 0,
+        "ts_trunc": 2000,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "400ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0134_Truncate_Detected_Silence_ts_thresh_-20dB_ts_min_400ms_ts_trunc_2000ms.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0135",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 400,
+        "ts_action": 0,
+        "ts_trunc": 2000,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "400ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 90%, default 35%)"
+    },
+    {
+      "id": "combo_0136",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 400,
+        "ts_action": 1,
+        "ts_trunc": 10,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "400ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 10ms, default 150ms)"
+    },
+    {
+      "id": "combo_0137",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 400,
+        "ts_action": 1,
+        "ts_trunc": 10,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "400ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "35%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 10ms, default 150ms)"
+    },
+    {
+      "id": "combo_0138",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 400,
+        "ts_action": 1,
+        "ts_trunc": 10,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "400ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 10ms, default 150ms)"
+    },
+    {
+      "id": "combo_0139",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 400,
+        "ts_action": 1,
+        "ts_trunc": 150,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "400ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "5%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0139_Compress_Excess_Silence_ts_thresh_-20dB_ts_min_400ms_ts_compress_5pct.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0140",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 400,
+        "ts_action": 1,
+        "ts_trunc": 150,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "400ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0140_Compress_Excess_Silence_ts_thresh_-20dB_ts_min_400ms_ts_compress_35pct.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0141",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 400,
+        "ts_action": 1,
+        "ts_trunc": 150,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "400ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "90%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0141_Compress_Excess_Silence_ts_thresh_-20dB_ts_min_400ms_ts_compress_90pct.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0142",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 400,
+        "ts_action": 1,
+        "ts_trunc": 2000,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "400ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 2000ms, default 150ms)"
+    },
+    {
+      "id": "combo_0143",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 400,
+        "ts_action": 1,
+        "ts_trunc": 2000,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "400ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "35%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 2000ms, default 150ms)"
+    },
+    {
+      "id": "combo_0144",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 400,
+        "ts_action": 1,
+        "ts_trunc": 2000,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "400ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 2000ms, default 150ms)"
+    },
+    {
+      "id": "combo_0145",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 5000,
+        "ts_action": 0,
+        "ts_trunc": 10,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "5000ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 5%, default 35%)"
+    },
+    {
+      "id": "combo_0146",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 5000,
+        "ts_action": 0,
+        "ts_trunc": 10,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "5000ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0146_Truncate_Detected_Silence_ts_thresh_-20dB_ts_min_5000ms_ts_trunc_10ms.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0147",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 5000,
+        "ts_action": 0,
+        "ts_trunc": 10,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "5000ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 90%, default 35%)"
+    },
+    {
+      "id": "combo_0148",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 5000,
+        "ts_action": 0,
+        "ts_trunc": 150,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "5000ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 5%, default 35%)"
+    },
+    {
+      "id": "combo_0149",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 5000,
+        "ts_action": 0,
+        "ts_trunc": 150,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "5000ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0149_Truncate_Detected_Silence_ts_thresh_-20dB_ts_min_5000ms_ts_trunc_150ms.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0150",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 5000,
+        "ts_action": 0,
+        "ts_trunc": 150,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "5000ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 90%, default 35%)"
+    },
+    {
+      "id": "combo_0151",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 5000,
+        "ts_action": 0,
+        "ts_trunc": 2000,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "5000ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 5%, default 35%)"
+    },
+    {
+      "id": "combo_0152",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 5000,
+        "ts_action": 0,
+        "ts_trunc": 2000,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "5000ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0152_Truncate_Detected_Silence_ts_thresh_-20dB_ts_min_5000ms_ts_trunc_2000ms.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0153",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 5000,
+        "ts_action": 0,
+        "ts_trunc": 2000,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "5000ms",
+        "ts_action": "Truncate Detected Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_compress"
+      ],
+      "reason": "ts_compress is inactive when ts_action=Truncate Detected Silence (value 90%, default 35%)"
+    },
+    {
+      "id": "combo_0154",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 5000,
+        "ts_action": 1,
+        "ts_trunc": 10,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "5000ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 10ms, default 150ms)"
+    },
+    {
+      "id": "combo_0155",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 5000,
+        "ts_action": 1,
+        "ts_trunc": 10,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "5000ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "35%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 10ms, default 150ms)"
+    },
+    {
+      "id": "combo_0156",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 5000,
+        "ts_action": 1,
+        "ts_trunc": 10,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "5000ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "10ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 10ms, default 150ms)"
+    },
+    {
+      "id": "combo_0157",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 5000,
+        "ts_action": 1,
+        "ts_trunc": 150,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "5000ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "5%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0157_Compress_Excess_Silence_ts_thresh_-20dB_ts_min_5000ms_ts_compress_5pct.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0158",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 5000,
+        "ts_action": 1,
+        "ts_trunc": 150,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "5000ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "35%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0158_Compress_Excess_Silence_ts_thresh_-20dB_ts_min_5000ms_ts_compress_35pct.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0159",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 5000,
+        "ts_action": 1,
+        "ts_trunc": 150,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "5000ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "150ms",
+        "ts_compress": "90%"
+      },
+      "active": true,
+      "target_active": true,
+      "render": true,
+      "output": "Output_truncsil_combo_0159_Compress_Excess_Silence_ts_thresh_-20dB_ts_min_5000ms_ts_compress_90pct.wav",
+      "disabled": [],
+      "reason": ""
+    },
+    {
+      "id": "combo_0160",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 5000,
+        "ts_action": 1,
+        "ts_trunc": 2000,
+        "ts_compress": 5
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "5000ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "5%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 2000ms, default 150ms)"
+    },
+    {
+      "id": "combo_0161",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 5000,
+        "ts_action": 1,
+        "ts_trunc": 2000,
+        "ts_compress": 35
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "5000ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "35%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 2000ms, default 150ms)"
+    },
+    {
+      "id": "combo_0162",
+      "kind": "combination",
+      "param": "",
+      "value": null,
+      "value_display": "",
+      "values": {
+        "ts_thresh": -2000,
+        "ts_min": 5000,
+        "ts_action": 1,
+        "ts_trunc": 2000,
+        "ts_compress": 90
+      },
+      "values_display": {
+        "ts_thresh": "-20dB",
+        "ts_min": "5000ms",
+        "ts_action": "Compress Excess Silence",
+        "ts_trunc": "2000ms",
+        "ts_compress": "90%"
+      },
+      "active": false,
+      "target_active": false,
+      "render": false,
+      "output": null,
+      "disabled": [
+        "ts_trunc"
+      ],
+      "reason": "ts_trunc is inactive when ts_action=Compress Excess Silence (value 2000ms, default 150ms)"
+    }
+  ],
+  "counts": {
+    "individual": 14,
+    "disabled_invariance": 4,
+    "combinations": 162,
+    "active_combinations": 54,
+    "disabled_combinations": 108,
+    "rendered": 72
+  }
+}

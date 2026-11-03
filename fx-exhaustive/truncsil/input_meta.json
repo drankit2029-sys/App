@@ -1,0 +1,40 @@
+{
+  "file": "Input_truncsil.wav",
+  "sample_rate": 48000,
+  "frames": 691200,
+  "duration_ms": 14400.0,
+  "source": "tools/fxverify/fixtures/kokoro_speech_48k_f32.wav",
+  "spans_ms": [
+    2000,
+    1200,
+    2000,
+    6000,
+    2000,
+    1200
+  ],
+  "gaps": [
+    {
+      "index": 0,
+      "start_frame": 96000,
+      "end_frame": 153600,
+      "length_ms": 1200,
+      "noise_db": -55.0
+    },
+    {
+      "index": 1,
+      "start_frame": 249600,
+      "end_frame": 537600,
+      "length_ms": 6000,
+      "noise_db": -120.0
+    },
+    {
+      "index": 2,
+      "start_frame": 633600,
+      "end_frame": 691200,
+      "length_ms": 1200,
+      "noise_db": -120.0
+    }
+  ],
+  "peak": 0.44185778498649597,
+  "rms": 0.028517039492726326
+}
