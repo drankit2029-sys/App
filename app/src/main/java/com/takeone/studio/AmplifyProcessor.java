@@ -70,7 +70,8 @@ final class AmplifyProcessor extends AudioProcessor {
     @Override
     public boolean isAudible() {
         return isEnabled() && (Math.abs(gain.getFloat()) > 0.01f
-                || Math.abs(newPeak.getFloat()) > 0.01f
+                || (!allowClip.getBoolean()
+                && Math.abs(newPeak.getFloat()) > 0.01f)
                 || allowClip.getBoolean());
     }
 

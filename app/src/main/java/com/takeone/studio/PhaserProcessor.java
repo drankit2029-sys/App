@@ -66,13 +66,7 @@ final class PhaserProcessor extends AudioProcessor {
 
     @Override
     public boolean isAudible() {
-        return isEnabled() && (mix.getCurrentRaw() > 0
-                || stages.getCurrentRaw() != stages.defaultRaw
-                || rate.getCurrentRaw() != rate.defaultRaw
-                || phase.getCurrentRaw() != phase.defaultRaw
-                || depth.getCurrentRaw() != depth.defaultRaw
-                || feedback.getCurrentRaw() != feedback.defaultRaw
-                || centerFreq.getCurrentRaw() != centerFreq.defaultRaw);
+        return isEnabled() && mix.getCurrentRaw() > 0;
     }
 
     @Override
