@@ -21,10 +21,12 @@ public final class FxVerifySupport {
     public static final String[] PROBES = {
             "clip", "tone", "sweep", "noise", "impulse", "clicks",
             "hum", "clipped", "gaps", "plosive", "stereo", "silence",
-            "sibilant"};
+            "sibilant", "speech", "speech_noise", "speech_hum",
+            "speech_clipped", "speech_clicks", "speech_gaps",
+            "speech_stereo"};
 
     public static int probeChannels(String name) {
-        return "stereo".equals(name) ? 2 : 1;
+        return "stereo".equals(name) || "speech_stereo".equals(name) ? 2 : 1;
     }
 
     /** Repo root, found by walking up from the test working directory. */
@@ -55,6 +57,30 @@ public final class FxVerifySupport {
             throw new IllegalStateException("Fixture clip missing: " + f);
         }
         return f;
+    }
+
+    /** Kokoro-generated speech fixture used by the speech probe family. */
+    public static File speechFixture() {
+        File f = new File(repoRoot(),
+                "tools/fxverify/fixtures/kokoro_speech_48k_f32.wav");
+        if (!f.isFile()) {
+            throw new IllegalStateException("Kokoro speech fixture missing: " + f
+                    + " (run the FX Speech Verification workflow)");
+        }
+        return f;
+    }
+
+    private static WavData speechCache;
+
+    private static synchronized WavData speechData() {
+        if (speechCache == null) {
+            speechCache = readFloatWav(speechFixture());
+            if (speechCache.sampleRate != 48000) {
+                throw new IllegalStateException("Kokoro speech fixture must be "
+                        + "48 kHz, got " + speechCache.sampleRate);
+            }
+        }
+        return speechCache;
     }
 
     /** The dial the FX card drives for an effect (null when it has none). */
@@ -154,6 +180,51 @@ public final class FxVerifySupport {
     }
 
     // ------------------------------------------------------------ probe signal
+
+    /**
+     * Kokoro speech base, peak-normalised to -6 dBFS and tiled to the requested
+     * length. The fixture is a 48 kHz mono float WAV.
+     */
+    private static float[] speechBase(int frames, int channels) {
+        WavData clip = speechData();
+        float peak = 0f;
+        for (float v : clip.samples) {
+            float a = Math.abs(v);
+            if (a > peak) peak = a;
+        }
+        float gain = peak > 1e-6f ? 0.5f / peak : 1f;
+        int srcCh = Math.max(1, clip.channels);
+        float[] out = new float[frames * channels];
+        for (int f = 0; f < frames; f++) {
+            float v = clip.samples[(f % clip.frames) * srcCh] * gain;
+            for (int c = 0; c < channels; c++) {
+                out[f * channels + c] = v;
+            }
+        }
+        return out;
+    }
+
+    /** Speech on the left, a 7 ms-delayed, slightly quieter copy on the right. */
+    private static float[] speechStereo(int frames) {
+        float[] mono = speechBase(frames, 1);
+        float[] out = new float[frames * 2];
+        int delay = 336;
+        for (int f = 0; f < frames; f++) {
+            out[f * 2] = mono[f];
+            out[f * 2 + 1] = f >= delay ? mono[f - delay] * 0.9f : 0f;
+        }
+        return out;
+    }
+
+    /** Room-noise component used by the speech_noise probe and profile learning. */
+    public static float[] speechNoiseFloor(int frames) {
+        float[] out = new float[frames];
+        Random rnd = new Random(42);
+        for (int f = 0; f < frames; f++) {
+            out[f] = (rnd.nextFloat() * 2f - 1f) * 0.02f;
+        }
+        return out;
+    }
 
     /**
      * Deterministic probe synthesis. The same recipe is used for every shard, so
@@ -290,6 +361,56 @@ public final class FxVerifySupport {
                 }
                 return out;
             }
+            case "speech": {
+                return speechBase(frames, channels);
+            }
+            case "speech_stereo": {
+                return speechStereo(frames);
+            }
+            case "speech_noise": {
+                float[] out = speechBase(frames, 1);
+                float[] noise = speechNoiseFloor(frames);
+                for (int f = 0; f < frames; f++) {
+                    out[f] += noise[f];
+                }
+                return out;
+            }
+            case "speech_hum": {
+                float[] out = speechBase(frames, 1);
+                for (int f = 0; f < frames; f++) {
+                    double t = f / 48000.0;
+                    out[f] += (float) (Math.sin(2 * Math.PI * 50.0 * t) * 0.08
+                            + Math.sin(2 * Math.PI * 100.0 * t) * 0.03
+                            + Math.sin(2 * Math.PI * 150.0 * t) * 0.015);
+                }
+                return out;
+            }
+            case "speech_clipped": {
+                float[] out = speechBase(frames, 1);
+                for (int f = 0; f < frames; f++) {
+                    out[f] = Math.max(-0.95f, Math.min(0.95f, out[f] * 3f));
+                }
+                return out;
+            }
+            case "speech_clicks": {
+                float[] out = speechBase(frames, 1);
+                for (int hit = 0; hit < frames / 24000; hit++) {
+                    int at = hit * 24000 + 12000;
+                    if (at >= frames) break;
+                    out[at] += (hit % 2 == 0) ? 0.45f : -0.45f;
+                }
+                return out;
+            }
+            case "speech_gaps": {
+                float[] out = speechBase(frames, 1);
+                double[][] windows = {{3.0, 3.7}, {7.0, 8.2}, {10.5, 11.2}};
+                for (double[] w : windows) {
+                    int a = (int) (w[0] * 48000);
+                    int b = Math.min(frames, (int) (w[1] * 48000));
+                    for (int f = a; f < b; f++) out[f] = 0f;
+                }
+                return out;
+            }
             case "silence":
             default:
                 return out;
@@ -312,6 +433,15 @@ public final class FxVerifySupport {
             case "sibilant": return "7 kHz and 8.4 kHz sibilance over a 1 kHz body tone";
             case "stereo": return "440 Hz left, 660 Hz right";
             case "silence": return "digital silence";
+            case "speech": return "Kokoro TTS speech at -6 dBFS "
+                    + "(plosives, sibilants, natural pauses)";
+            case "speech_noise": return "Kokoro speech with -34 dBFS room noise";
+            case "speech_hum": return "Kokoro speech with 50 Hz mains hum";
+            case "speech_clipped": return "Kokoro speech driven 3x into a 0.95 clip";
+            case "speech_clicks": return "Kokoro speech with periodic clicks";
+            case "speech_gaps": return "Kokoro speech with 0.7 s, 1.2 s and 0.7 s "
+                    + "silent gaps";
+            case "speech_stereo": return "Kokoro speech, left plus 7 ms delayed right";
             default: return name;
         }
     }

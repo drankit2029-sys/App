@@ -260,6 +260,25 @@ def probe_metrics(x: np.ndarray, sr: int, probe: str) -> dict:
             if a < b:
                 vals.append(_db(float(np.mean(x[a:b] ** 2))))
         out["plosive_energy_db"] = float(np.mean(vals)) if vals else -240.0
+    elif probe == "speech_hum":
+        out["hum_energy_db"] = _db(
+            sum(10 ** (_band_energy_db(x, sr, f - 3, f + 3) / 10.0)
+                for f in (50.0, 100.0, 150.0, 200.0)))
+    elif probe == "speech_gaps":
+        windows = [(3.05, 3.65), (7.05, 8.15), (10.55, 11.15)]
+        vals = []
+        for lo, hi in windows:
+            a, b = int(lo * sr), min(n, int(hi * sr))
+            if a < b:
+                vals.append(_db(float(np.mean(x[a:b] ** 2))))
+        out["gap_floor_db"] = float(np.mean(vals)) if vals else -240.0
+    elif probe == "speech_stereo":
+        out.update(stereo_metrics(x))
+    elif probe == "speech_clipped":
+        out["clip_ratio"] = float(np.mean(np.abs(x) >= 0.95))
+    elif probe in ("speech", "speech_noise", "speech_clicks"):
+        out["sibilance_db"] = _band_energy_db(x, sr, 5500, 9500)
+        out["body_db"] = _band_energy_db(x, sr, 700, 1400)
     return out
 
 

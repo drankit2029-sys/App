@@ -404,7 +404,8 @@ def run_bespoke_anchors(expectations: dict, case_dir: Path,
 
 # ------------------------------------------------------------------------ main
 
-def analyse_dir(case_dir: Path, expectations: dict, keep_anomalies: bool) -> dict:
+def analyse_dir(case_dir: Path, expectations: dict, keep_anomalies: bool,
+                skip_anchors: bool = False) -> dict:
     manifest = load_json(case_dir / "cases.json")
     effect = manifest["effect"]
     cases = manifest["cases"]
@@ -443,8 +444,10 @@ def analyse_dir(case_dir: Path, expectations: dict, keep_anomalies: bool) -> dic
                 and "verdict" in records[c["id"]]]
     series = evaluate_series(cases, {k: v for k, v in records.items() if "wet" in v})
     by_id = {c["id"]: dict(c, effect=effect) for c in cases}
-    anchors = run_series_anchors(expectations, series, effect)
-    anchors += run_bespoke_anchors(expectations, case_dir, by_id, records)
+    anchors = []
+    if not skip_anchors:
+        anchors = run_series_anchors(expectations, series, effect)
+        anchors += run_bespoke_anchors(expectations, case_dir, by_id, records)
 
     summary = {
         "effect": effect,
@@ -557,6 +560,9 @@ def main() -> int:
                     help="analyse every shard directory under --root")
     ap.add_argument("--compact", action="store_true",
                     help="copy anomalies and delete the wet renders afterwards")
+    ap.add_argument("--skip-anchors", action="store_true",
+                    help="omit the authored tone/sweep/impulse anchors "
+                         "(for probe overrides such as speech)")
     ap.add_argument("--expectations", default=str(DEFAULT_EXPECTATIONS))
     ap.add_argument("--report", default=None)
     args = ap.parse_args()
@@ -576,7 +582,8 @@ def main() -> int:
         if not (case_dir / "cases.json").is_file():
             print(f"skipping {case_dir}: no cases.json", file=sys.stderr)
             continue
-        out = analyse_dir(case_dir, expectations, keep_anomalies=True)
+        out = analyse_dir(case_dir, expectations, keep_anomalies=True,
+                          skip_anchors=args.skip_anchors)
         summaries.append(out["summary"])
         if args.compact:
             wet_dir = case_dir / "wet"

@@ -323,7 +323,10 @@ public class FxParamMatrixDumpTest {
     /** Installs a learned noise profile; returns the note, or null when absent. */
     private static String installProfile(AudioProcessor p, int frames,
                                          FxVerifySupport.WavData clip) {
-        float[] noise = FxVerifySupport.buildProbe("noise", frames, 1, clip);
+        boolean speech = "speech".equalsIgnoreCase(arg("FX_PROBE_OVERRIDE"));
+        float[] noise = speech
+                ? FxVerifySupport.speechNoiseFloor(frames)
+                : FxVerifySupport.buildProbe("noise", frames, 1, clip);
         if (p instanceof NoiseSuppressionProcessor) {
             float[] prof = NoiseSuppressionProcessor.learnProfile(noise, 1);
             if (prof == null) return null;
@@ -341,6 +344,12 @@ public class FxParamMatrixDumpTest {
 
     private static String[] probesFor(String effectId, String paramId,
                                       String primary) {
+        String forced = arg("FX_PROBE_OVERRIDE");
+        if (forced != null && !forced.isEmpty()) {
+            String probe = "speech".equalsIgnoreCase(forced)
+                    ? speechProbeFor(effectId) : forced;
+            return new String[]{probe};
+        }
         String[] override = PARAM_PROBES.get(effectId + "." + paramId);
         String[] base = override != null ? override
                 : EFFECT_PROBES.getOrDefault(effectId, DEFAULT_PROBES);
@@ -351,6 +360,33 @@ public class FxParamMatrixDumpTest {
         List<String> merged = new ArrayList<>(Arrays.asList(base));
         merged.add("clip");
         return merged.toArray(new String[0]);
+    }
+
+    /** The speech probe that can actually show each effect's behaviour. */
+    private static String speechProbeFor(String effectId) {
+        switch (effectId) {
+            case "noise":
+            case "specnr":
+                return "speech_noise";
+            case "gate":
+            case "gateexp":
+            case "autoduck":
+            case "truncsil":
+                return "speech_gaps";
+            case "declick":
+            case "repair":
+                return "speech_clicks";
+            case "clipfix":
+                return "speech_clipped";
+            case "dehum":
+            case "notch":
+                return "speech_hum";
+            case "stereoimg":
+            case "vocoder":
+                return "speech_stereo";
+            default:
+                return "speech";
+        }
     }
 
     /** Candidate values for one parameter: bounds, plus every enum state. */
