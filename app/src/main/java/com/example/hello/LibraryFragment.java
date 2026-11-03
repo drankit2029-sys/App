@@ -110,7 +110,9 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                     playAudioManager, playFocusListener(), handler,
                     PLAY_FOCUS,
                     android.media.AudioAttributes.CONTENT_TYPE_SPEECH);
-            if (token instanceof android.media.AudioFocusRequest) {
+            if (android.os.Build.VERSION.SDK_INT
+                    >= android.os.Build.VERSION_CODES.O
+                    && token instanceof android.media.AudioFocusRequest) {
                 playFocusRequest = (android.media.AudioFocusRequest) token;
             }
             return token != null;

@@ -1,6 +1,7 @@
 package com.example.hello;
 
 import android.Manifest;
+import android.annotation.SuppressLint;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -279,7 +280,18 @@ public final class HardwareApiManager {
                 || tier == GpuComputeTier.GLES30_FLOAT_FBO;
     }
 
+    /** True under Robolectric/headless JVM tests, where EGL and GLES are stubs. */
+    private static boolean isRobolectricRuntime() {
+        String fp = Build.FINGERPRINT;
+        return fp != null && fp.toLowerCase(java.util.Locale.US)
+                .startsWith("robolectric");
+    }
+
     private void probeAndInitGpu() {
+        if (isRobolectricRuntime()) {
+            activeTier = GpuComputeTier.CPU_VECTOR_MULTICORE;
+            return;
+        }
         if (sdkInt() < Build.VERSION_CODES.LOLLIPOP) {
             activeTier = GpuComputeTier.CPU_VECTOR_MULTICORE;
             return;
@@ -753,6 +765,7 @@ public final class HardwareApiManager {
      * with {@code PERFORMANCE_MODE_LOW_LATENCY} on API 26+ and the legacy
      * constructor on API 24–25.
      */
+    @SuppressLint("NewApi")
     public AudioTrack createLowLatencyAudioTrack(int sampleRate, int channels,
                                                  int desiredBytes) {
         int mask = channels == 2 ? AudioFormat.CHANNEL_OUT_STEREO
@@ -790,6 +803,7 @@ public final class HardwareApiManager {
      *
      * @return an opaque focus handle (non-null when granted), or null when denied.
      */
+    @SuppressLint("NewApi")
     public Object requestAudioFocus(AudioManager am,
                                     AudioManager.OnAudioFocusChangeListener listener,
                                     Handler handler,
@@ -821,6 +835,7 @@ public final class HardwareApiManager {
     /**
      * Abandons audio focus previously acquired via {@link #requestAudioFocus}.
      */
+    @SuppressLint("NewApi")
     public void abandonAudioFocus(AudioManager am, Object focusToken,
                                   AudioManager.OnAudioFocusChangeListener listener) {
         if (am == null) return;
@@ -838,6 +853,7 @@ public final class HardwareApiManager {
      * Starts a foreground service using {@link Context#startForegroundService}
      * on API 26+ with fallback to {@link Context#startService} on API 24–25.
      */
+    @SuppressLint("NewApi")
     public boolean startForegroundServiceCompat(Context ctx, Intent intent) {
         if (ctx == null || intent == null) return false;
         try {
@@ -864,6 +880,7 @@ public final class HardwareApiManager {
      * {@link ServiceInfo} foreground service type on API 29+ (and untyped
      * fallback on API 24–28).
      */
+    @SuppressLint("NewApi")
     public boolean promoteServiceToForeground(Service service, int notifId,
                                               Notification notif,
                                               boolean isMicrophone) {
@@ -908,6 +925,7 @@ public final class HardwareApiManager {
     /**
      * Creates a {@link NotificationChannel} on API 26+ (no-op on API 24–25).
      */
+    @SuppressLint("NewApi")
     public void ensureNotificationChannel(Context ctx, String channelId,
                                           String name, String description,
                                           int importance) {
@@ -962,6 +980,7 @@ public final class HardwareApiManager {
      * Counts physical microphones on API 28+ via {@link AudioManager#getMicrophones()},
      * returning -1 on API 24–27 or when unavailable.
      */
+    @SuppressLint("NewApi")
     public int getPhysicalMicrophoneCount(AudioManager am) {
         if (am == null || sdkInt() < Build.VERSION_CODES.P) return -1;
         try {

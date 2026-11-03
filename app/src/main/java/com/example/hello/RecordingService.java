@@ -248,7 +248,9 @@ public class RecordingService extends Service {
                     audioManager, focusListener, handler,
                     AudioManager.AUDIOFOCUS_GAIN,
                     android.media.AudioAttributes.CONTENT_TYPE_SPEECH);
-            if (token instanceof android.media.AudioFocusRequest) {
+            if (android.os.Build.VERSION.SDK_INT
+                    >= android.os.Build.VERSION_CODES.O
+                    && token instanceof android.media.AudioFocusRequest) {
                 focusReq26 = (android.media.AudioFocusRequest) token;
             }
             return token != null;
