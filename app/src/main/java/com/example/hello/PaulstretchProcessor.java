@@ -147,11 +147,6 @@ final class PaulstretchProcessor extends AudioProcessor {
                                           int sampleRate, int channels)
             throws Exception {
         if (sampleRate > 0) this.sampleRate = sampleRate;
-        long selFrames = endFrame - startFrame;
-        if (selFrames <= MAX_IN_MEMORY_OFFLINE_FRAMES / 2) {
-            return super.processOfflineRangeToFile(
-                    srcWav, startFrame, endFrame, dstWav, this.sampleRate, channels);
-        }
 
         FormatConverter.WavInfo info = FormatConverter.readFloatWav(srcWav);
         int ch = Math.max(1, channels > 0 ? channels : info.channels);

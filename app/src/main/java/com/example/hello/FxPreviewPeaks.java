@@ -262,150 +262,71 @@ final class FxPreviewPeaks {
                     }
                 }
 
-                // For large regions (> 32,768 frames), render offline effects
-                // file-to-file in bounded chunks so we never OOM on long takes.
-                if (dryFrames > AudioProcessor.MAX_IN_MEMORY_OFFLINE_FRAMES) {
-                    float[] dryEnv = computePerceptualBucketsStreaming(
-                            raf, h.dataStart, start, dryFrames, ch,
-                            origRegionBuckets, null, 0);
-                    File regionTmp = new File(raw.getParentFile(),
-                            raw.getName() + ".fxprev_reg_tmp");
-                    try {
-                        long rFrames = chain.renderRegionToFile(
-                                raw, start, end, effSampleRate, regionTmp);
-                        if (rFrames <= 0 || !regionTmp.exists()) return null;
-                        long tailFrames = Math.max(0L, totalFrames - end);
-                        long newTotalFrames = start + rFrames + tailFrames;
+                // Always render offline effects file-to-file in bounded chunks
+                // so high-expansion effects (e.g. 100x Paulstretch, 50x Repeat,
+                // or 600s Audio Generator) never allocate large arrays in RAM.
+                float[] dryEnv = computePerceptualBucketsStreaming(
+                        raf, h.dataStart, start, dryFrames, ch,
+                        origRegionBuckets, null, 0);
+                File regionTmp = new File(raw.getParentFile(),
+                        raw.getName() + ".fxprev_reg_tmp");
+                try {
+                    long rFrames = chain.renderRegionToFile(
+                            raw, start, end, effSampleRate, regionTmp);
+                    if (rFrames <= 0 || !regionTmp.exists()) return null;
+                    long tailFrames = Math.max(0L, totalFrames - end);
+                    long newTotalFrames = start + rFrames + tailFrames;
 
-                        try (RandomAccessFile rRaf = new RandomAccessFile(regionTmp, "r")) {
-                            Dsp.WavHeader rh = Dsp.parseWavHeader(rRaf);
-                            if (!isLiveTimeline) {
-                                float[] peaks = new float[buckets];
-                                float[] wetEnv = computePerceptualBucketsStreaming(
-                                        rRaf, rh.dataStart, 0L, rFrames, ch,
-                                        origRegionBuckets, peaks, bStart);
-                                if (!hasGenerator && !hasReverse) {
-                                    for (int i = 0; i < origRegionBuckets; i++) {
-                                        int b = bStart + i;
-                                        if (b < buckets && dryEnv[i] > 1e-4f) {
-                                            float ratio = wetEnv[i] / dryEnv[i];
-                                            peaks[b] = 0.5f * peaks[b] + 0.5f * (peaks[b] * ratio);
-                                        }
-                                    }
-                                }
-                                return new LiveRegionResult(peaks, null, false,
-                                        newTotalFrames, start, start + rFrames, null);
-                            }
-
-                            int newRegionBuckets = (rFrames == dryFrames)
-                                    ? origRegionBuckets
-                                    : Math.max(1, Math.min(8192,
-                                            Math.round((float) rFrames * buckets
-                                                    / Math.max(1L, totalFrames))));
-                            float[] regionPeaks = new float[newRegionBuckets];
+                    try (RandomAccessFile rRaf = new RandomAccessFile(regionTmp, "r")) {
+                        Dsp.WavHeader rh = Dsp.parseWavHeader(rRaf);
+                        if (!isLiveTimeline) {
+                            float[] peaks = new float[buckets];
                             float[] wetEnv = computePerceptualBucketsStreaming(
                                     rRaf, rh.dataStart, 0L, rFrames, ch,
-                                    newRegionBuckets, regionPeaks, 0);
-                            float[] gainRatios = computeOfflineGainRatios(
-                                    dryEnv, wetEnv, regionPeaks, origRegionBuckets,
-                                    newRegionBuckets, rFrames == dryFrames,
-                                    hasGenerator, hasReverse);
-                            File outWav = null;
-                            if (previewOutFile != null) {
-                                writeSplicedPreviewWavFromFile(
-                                        raf, h, start, end, totalFrames,
-                                        rRaf, rh.dataStart, rFrames, previewOutFile);
-                                outWav = previewOutFile;
+                                    origRegionBuckets, peaks, bStart);
+                            if (!hasGenerator && !hasReverse) {
+                                for (int i = 0; i < origRegionBuckets; i++) {
+                                    int b = bStart + i;
+                                    if (b < buckets && dryEnv[i] > 1e-4f) {
+                                        float ratio = wetEnv[i] / dryEnv[i];
+                                        peaks[b] = 0.5f * peaks[b] + 0.5f * (peaks[b] * ratio);
+                                    }
+                                }
                             }
-                            return new LiveRegionResult(regionPeaks, gainRatios,
-                                    rFrames != dryFrames, newTotalFrames,
-                                    start, start + rFrames, outWav);
+                            return new LiveRegionResult(peaks, null, false,
+                                    newTotalFrames, start, start + rFrames, null);
                         }
-                    } finally {
-                        if (regionTmp.exists()) {
-                            // noinspection ResultOfMethodCallIgnored
-                            regionTmp.delete();
+
+                        int newRegionBuckets = (rFrames == dryFrames)
+                                ? origRegionBuckets
+                                : Math.max(1, Math.min(8192,
+                                        Math.round((float) rFrames * buckets
+                                                / Math.max(1L, totalFrames))));
+                        float[] regionPeaks = new float[newRegionBuckets];
+                        float[] wetEnv = computePerceptualBucketsStreaming(
+                                rRaf, rh.dataStart, 0L, rFrames, ch,
+                                newRegionBuckets, regionPeaks, 0);
+                        float[] gainRatios = computeOfflineGainRatios(
+                                dryEnv, wetEnv, regionPeaks, origRegionBuckets,
+                                newRegionBuckets, rFrames == dryFrames,
+                                hasGenerator, hasReverse);
+                        File outWav = null;
+                        if (previewOutFile != null) {
+                            writeSplicedPreviewWavFromFile(
+                                    raf, h, start, end, totalFrames,
+                                    rRaf, rh.dataStart, rFrames, previewOutFile);
+                            outWav = previewOutFile;
                         }
+                        return new LiveRegionResult(regionPeaks, gainRatios,
+                                rFrames != dryFrames, newTotalFrames,
+                                start, start + rFrames, outWav);
+                    }
+                } finally {
+                    if (regionTmp.exists()) {
+                        // noinspection ResultOfMethodCallIgnored
+                        regionTmp.delete();
                     }
                 }
-
-                float[] drySel = EditEngine.readFloatSelection(raw, start, end);
-                int dryF = drySel != null ? drySel.length / ch : 0;
-                float[] dryEnv = computePerceptualBuckets(
-                        drySel, dryF, ch, origRegionBuckets);
-
-                float[] rendered = chain.renderRegionOfflineAndInPlace(
-                        raw, start, end, effSampleRate);
-                if (rendered == null || rendered.length == 0) return null;
-                int rFrames = rendered.length / ch;
-                if (rFrames <= 0) return null;
-                long tailFrames = Math.max(0L, totalFrames - end);
-                long newTotalFrames = start + rFrames + tailFrames;
-
-                if (!isLiveTimeline) {
-                    float[] peaks = new float[buckets];
-                    float[] wetEnv = computePerceptualBuckets(
-                            rendered, rFrames, ch, origRegionBuckets);
-                    for (int f = 0; f < rFrames; f++) {
-                        float peak = 0f;
-                        for (int c = 0; c < ch; c++) {
-                            float a = Math.abs(rendered[f * ch + c]);
-                            if (a > peak) peak = a;
-                        }
-                        int b = bStart + (int) ((long) f * origRegionBuckets
-                                / Math.max(1, rFrames));
-                        if (b < 0) b = 0;
-                        if (b >= buckets) b = buckets - 1;
-                        if (peak > peaks[b]) peaks[b] = peak;
-                    }
-                    if (!hasGenerator && !hasReverse) {
-                        for (int i = 0; i < origRegionBuckets; i++) {
-                            int b = bStart + i;
-                            if (b < buckets && dryEnv[i] > 1e-4f) {
-                                float ratio = wetEnv[i] / dryEnv[i];
-                                peaks[b] = 0.5f * peaks[b] + 0.5f * (peaks[b] * ratio);
-                            }
-                        }
-                    }
-                    return new LiveRegionResult(peaks, null, false,
-                            newTotalFrames, start, start + rFrames, null);
-                }
-
-                int newRegionBuckets = (rFrames == dryF)
-                        ? origRegionBuckets
-                        : Math.max(1, Math.min(8192,
-                                Math.round((float) rFrames * buckets
-                                        / Math.max(1L, totalFrames))));
-                float[] regionPeaks = new float[newRegionBuckets];
-                for (int f = 0; f < rFrames; f++) {
-                    float peak = 0f;
-                    for (int c = 0; c < ch; c++) {
-                        float a = Math.abs(rendered[f * ch + c]);
-                        if (a > peak) peak = a;
-                    }
-                    int b = (int) ((long) f * newRegionBuckets
-                            / Math.max(1, rFrames));
-                    if (b < 0) b = 0;
-                    if (b >= newRegionBuckets) b = newRegionBuckets - 1;
-                    if (peak > regionPeaks[b]) regionPeaks[b] = peak;
-                }
-
-                float[] wetEnv = computePerceptualBuckets(
-                        rendered, rFrames, ch, newRegionBuckets);
-                float[] gainRatios = computeOfflineGainRatios(
-                        dryEnv, wetEnv, regionPeaks, origRegionBuckets,
-                        newRegionBuckets, rFrames == dryF,
-                        hasGenerator, hasReverse);
-
-                File outWav = null;
-                if (previewOutFile != null) {
-                    writeSplicedPreviewWav(raf, h, start, end, totalFrames,
-                            rendered, rFrames, previewOutFile);
-                    outWav = previewOutFile;
-                }
-                return new LiveRegionResult(regionPeaks, gainRatios,
-                        rFrames != dryF,
-                        newTotalFrames, start, start + rFrames, outWav);
             }
 
             chain.reset();

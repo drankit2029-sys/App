@@ -91,10 +91,6 @@ final class ChangePitchProcessor extends AudioProcessor {
                                           int sampleRate, int channels)
             throws Exception {
         if (sampleRate > 0) this.sampleRate = sampleRate;
-        if (endFrame - startFrame <= MAX_IN_MEMORY_OFFLINE_FRAMES) {
-            return super.processOfflineRangeToFile(
-                    srcWav, startFrame, endFrame, dstWav, this.sampleRate, channels);
-        }
         WsolaTimePitchProcessor wsola = new WsolaTimePitchProcessor(this.sampleRate);
         return wsola.pitchShiftToFile(srcWav, startFrame, endFrame, dstWav,
                 channels, totalSemitones(), preserveFormant.getBoolean(), getWetDryMix());

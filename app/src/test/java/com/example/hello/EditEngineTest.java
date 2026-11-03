@@ -37,9 +37,15 @@ public class EditEngineTest {
         try {
             w.setLength(0);
             w.write(Dsp.wavFloatHeader(1, 48000, (long) frames * 4));
-            float[] buf = new float[frames];
+            int chunk = 4096;
+            float[] buf = new float[Math.min(frames, chunk)];
             java.util.Arrays.fill(buf, 0.5f);
-            Dsp.writeFloatsLE(w, buf, 0, buf.length);
+            int rem = frames;
+            while (rem > 0) {
+                int step = Math.min(rem, buf.length);
+                Dsp.writeFloatsLE(w, buf, 0, step);
+                rem -= step;
+            }
         } finally {
             w.close();
         }
@@ -319,5 +325,59 @@ public class EditEngineTest {
         for (int i = 44 + 4800 * 4; i < after.length; i++) {
             if (before[i] != after[i]) fail("touched outside range at " + i);
         }
+    }
+
+    @Test
+    public void spliceAwareRangeDeltaUndoRedoHandlesShrinkAndGrowEditsWithoutFullCopy()
+            throws Exception {
+        File raw = dcRaw("splice_delta.wav", 96000);
+        // Put distinct markers in prefix (frame 1000), middle (frame 20000), and tail (frame 80000)
+        try (RandomAccessFile raf = new RandomAccessFile(raw, "rw")) {
+            raf.seek(44L + 1000L * 4L);
+            Dsp.writeFloatsLE(raf, new float[]{0.125f}, 0, 1);
+            raf.seek(44L + 20000L * 4L);
+            Dsp.writeFloatsLE(raf, new float[]{0.875f}, 0, 1);
+            raf.seek(44L + 80000L * 4L);
+            Dsp.writeFloatsLE(raf, new float[]{-0.375f}, 0, 1);
+        }
+        long origLen = raw.length();
+        EditEngine.UndoJournal undo = new EditEngine.UndoJournal(tmp.getRoot());
+
+        // 1) Shrinking edit: deleteSelection [15000, 25000) (10,000 frames)
+        EditEngine.deleteSelection(raw, 15000, 25000, undo);
+        long afterDeleteLen = raw.length();
+        assertTrue(afterDeleteLen < origLen);
+        assertEquals(0.125f, sampleAt(raw, 1000), 1e-5f);
+        // Tail marker shifted forward by (10000 + CROSSFADE_FRAMES) frames:
+        int shiftedTailFrame = 80000 - 10000 - Dsp.CROSSFADE_FRAMES;
+        assertEquals(-0.375f, sampleAt(raw, shiftedTailFrame), 1e-5f);
+
+        // 2) Growing edit: splice a 20,000-frame replacement into [30000, 35000)
+        File rep = dcRaw("rep_20k.wav", 20000);
+        EditEngine.spliceReplacementFile(raw, 30000, 35000, rep, undo);
+        long afterGrowLen = raw.length();
+        assertTrue(afterGrowLen > afterDeleteLen);
+        assertEquals(2, undo.undoDepth());
+
+        // Undo step 2 (growing splice) -> back to afterDeleteLen
+        assertTrue(undo.undo(raw));
+        assertEquals(afterDeleteLen, raw.length());
+        assertEquals(-0.375f, sampleAt(raw, shiftedTailFrame), 1e-5f);
+
+        // Undo step 1 (shrinking delete) -> back to origLen with original middle & tail markers
+        assertTrue(undo.undo(raw));
+        assertEquals(origLen, raw.length());
+        assertEquals(0.125f, sampleAt(raw, 1000), 1e-5f);
+        assertEquals(0.875f, sampleAt(raw, 20000), 1e-5f);
+        assertEquals(-0.375f, sampleAt(raw, 80000), 1e-5f);
+
+        // Redo step 1 -> back to afterDeleteLen
+        assertTrue(undo.redo(raw));
+        assertEquals(afterDeleteLen, raw.length());
+        assertEquals(-0.375f, sampleAt(raw, shiftedTailFrame), 1e-5f);
+
+        // Redo step 2 -> back to afterGrowLen
+        assertTrue(undo.redo(raw));
+        assertEquals(afterGrowLen, raw.length());
     }
 }

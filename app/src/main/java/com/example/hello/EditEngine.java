@@ -86,9 +86,18 @@ public final class EditEngine {
      * length across all 5 undo/redo steps.
      */
     public static final class UndoJournal {
+        private static final int IO_BUF_BYTES = 16384;
+        private static final int MAX_HEADER_BYTES = 64;
+
         private final File undoDir;
         private final Deque<File> stack = new ArrayDeque<>();
         private final Deque<File> redoStack = new ArrayDeque<>();
+        private final byte[] ioBuf = new byte[IO_BUF_BYTES];
+        private final byte[] zBuf = new byte[IO_BUF_BYTES];
+        private final byte[] shiftBuf = new byte[IO_BUF_BYTES];
+        private final byte[] hdrBuf = new byte[MAX_HEADER_BYTES];
+        private final Deflater deflater = new Deflater(Deflater.BEST_SPEED);
+        private final Inflater inflater = new Inflater();
         private int seq = 0;
 
         public UndoJournal(File takesDir) {
@@ -127,7 +136,7 @@ public final class EditEngine {
 
         /**
          * True when {@link #recordSnapshot(File)} will accept {@code raw}.
-         * Works on entire takes of any duration (no 30 MB cap).
+         * Works on entire takes of any duration without limiting footage length.
          */
         public synchronized boolean wouldRecord(File raw) {
             return raw != null && raw.exists() && raw.length() > 0L;
@@ -143,39 +152,72 @@ public final class EditEngine {
             }
         }
 
+        private void evictOldestForSpaceLocked() {
+            if (!redoStack.isEmpty()) {
+                File oldRedo = redoStack.removeLast();
+                if (oldRedo != null) {
+                    // noinspection ResultOfMethodCallIgnored
+                    oldRedo.delete();
+                }
+            } else if (!stack.isEmpty()) {
+                File oldUndo = stack.removeLast();
+                if (oldUndo != null) {
+                    // noinspection ResultOfMethodCallIgnored
+                    oldUndo.delete();
+                }
+            }
+        }
+
         /**
-         * Saves a streaming compressed snapshot of {@code raw} before a
-         * mutating edit.
+         * Saves a zero-allocation streaming compressed snapshot of {@code raw}
+         * before a mutating edit.
          */
         public synchronized boolean recordSnapshot(File raw) {
             if (!wouldRecord(raw)) {
                 return false;
             }
-            // noinspection ResultOfMethodCallIgnored
-            undoDir.mkdirs();
-            while (stack.size() >= MAX_UNDO_STEPS) {
-                File old = stack.removeLast();
+            try {
                 // noinspection ResultOfMethodCallIgnored
-                old.delete();
-            }
-            File snap = new File(undoDir,
-                    raw.getName() + "." + (++seq) + ".undo");
-            if (writeFullCompressedSnapshot(raw, snap)) {
-                stack.addFirst(snap);
+                undoDir.mkdirs();
                 clearRedo();
-                return true;
+                while (stack.size() >= MAX_UNDO_STEPS) {
+                    File old = stack.removeLast();
+                    // noinspection ResultOfMethodCallIgnored
+                    old.delete();
+                }
+                File snap = new File(undoDir,
+                        raw.getName() + "." + (++seq) + ".undo");
+                if (writeFullCompressedSnapshot(raw, snap)) {
+                    stack.addFirst(snap);
+                    return true;
+                }
+                // Retry once after evicting the oldest snapshot if disk space was low:
+                // noinspection ResultOfMethodCallIgnored
+                snap.delete();
+                evictOldestForSpaceLocked();
+                if (writeFullCompressedSnapshot(raw, snap)) {
+                    stack.addFirst(snap);
+                    return true;
+                }
+                // noinspection ResultOfMethodCallIgnored
+                snap.delete();
+                return false;
+            } catch (OutOfMemoryError oom) {
+                evictOldestForSpaceLocked();
+                return false;
             }
-            // noinspection ResultOfMethodCallIgnored
-            snap.delete();
-            return false;
         }
 
         /**
-         * Saves a range-delta compressed snapshot of {@code [byteOffset,
-         * byteOffset + byteLength)} (plus the WAV header) before an in-place
-         * edit that does not alter total file length outside that range.
-         * Falls back to {@link #recordSnapshot(File)} if the delta covers the
-         * entire file.
+         * Saves a splice-aware range-delta compressed snapshot of
+         * {@code [byteOffset, byteOffset + byteLength)} (plus the WAV header)
+         * before an in-place or duration-changing sub-range edit.
+         *
+         * <p>Works for both equal-length DSP edits and variable-length splices
+         * (Delete Selection, Select &amp; Replace, Time Stretch, Repeat, Silence
+         * Truncation), shifting the untouched post-selection tail in-place on
+         * Undo/Redo with zero heap allocations. Falls back to
+         * {@link #recordSnapshot(File)} if the range covers the entire file.
          */
         public synchronized boolean recordRangeSnapshot(File raw,
                                                         long byteOffset,
@@ -183,30 +225,43 @@ public final class EditEngine {
             if (!wouldRecord(raw)) {
                 return false;
             }
-            long fileLen = raw.length();
-            long clampedOff = Math.max(0L, Math.min(fileLen, byteOffset));
-            long clampedLen = Math.max(0L,
-                    Math.min(fileLen - clampedOff, byteLength));
-            if (clampedOff <= 64L && clampedLen >= fileLen - 64L) {
-                return recordSnapshot(raw);
-            }
-            // noinspection ResultOfMethodCallIgnored
-            undoDir.mkdirs();
-            while (stack.size() >= MAX_UNDO_STEPS) {
-                File old = stack.removeLast();
+            try {
+                long fileLen = raw.length();
+                long clampedOff = Math.max(0L, Math.min(fileLen, byteOffset));
+                long clampedLen = Math.max(0L,
+                        Math.min(fileLen - clampedOff, byteLength));
+                if (clampedOff <= MAX_HEADER_BYTES
+                        && clampedLen >= fileLen - MAX_HEADER_BYTES) {
+                    return recordSnapshot(raw);
+                }
                 // noinspection ResultOfMethodCallIgnored
-                old.delete();
-            }
-            File snap = new File(undoDir,
-                    raw.getName() + "." + (++seq) + ".undo");
-            if (writeRangeDeltaSnapshot(raw, clampedOff, clampedLen, snap)) {
-                stack.addFirst(snap);
+                undoDir.mkdirs();
                 clearRedo();
-                return true;
+                while (stack.size() >= MAX_UNDO_STEPS) {
+                    File old = stack.removeLast();
+                    // noinspection ResultOfMethodCallIgnored
+                    old.delete();
+                }
+                File snap = new File(undoDir,
+                        raw.getName() + "." + (++seq) + ".undo");
+                if (writeRangeDeltaSnapshot(raw, clampedOff, clampedLen, snap)) {
+                    stack.addFirst(snap);
+                    return true;
+                }
+                // noinspection ResultOfMethodCallIgnored
+                snap.delete();
+                evictOldestForSpaceLocked();
+                if (writeRangeDeltaSnapshot(raw, clampedOff, clampedLen, snap)) {
+                    stack.addFirst(snap);
+                    return true;
+                }
+                // noinspection ResultOfMethodCallIgnored
+                snap.delete();
+                return false;
+            } catch (OutOfMemoryError oom) {
+                evictOldestForSpaceLocked();
+                return false;
             }
-            // noinspection ResultOfMethodCallIgnored
-            snap.delete();
-            return false;
         }
 
         /** Restores the most recent snapshot over `raw` and pushes current state to redo. */
@@ -216,24 +271,24 @@ public final class EditEngine {
             if (snap == null || !snap.exists()) return false;
 
             File redoSnap = null;
-            if (wouldRecord(raw)) {
-                // noinspection ResultOfMethodCallIgnored
-                undoDir.mkdirs();
-                while (redoStack.size() >= MAX_UNDO_STEPS) {
-                    File oldRedo = redoStack.removeLast();
-                    // noinspection ResultOfMethodCallIgnored
-                    oldRedo.delete();
-                }
-                redoSnap = new File(undoDir,
-                        raw.getName() + "." + (++seq) + ".redo");
-                if (!createOppositeSnapshot(raw, snap, redoSnap)) {
-                    // noinspection ResultOfMethodCallIgnored
-                    redoSnap.delete();
-                    redoSnap = null;
-                }
-            }
-
             try {
+                if (wouldRecord(raw)) {
+                    // noinspection ResultOfMethodCallIgnored
+                    undoDir.mkdirs();
+                    while (redoStack.size() >= MAX_UNDO_STEPS) {
+                        File oldRedo = redoStack.removeLast();
+                        // noinspection ResultOfMethodCallIgnored
+                        oldRedo.delete();
+                    }
+                    redoSnap = new File(undoDir,
+                            raw.getName() + "." + (++seq) + ".redo");
+                    if (!createOppositeSnapshot(raw, snap, redoSnap)) {
+                        // noinspection ResultOfMethodCallIgnored
+                        redoSnap.delete();
+                        redoSnap = null;
+                    }
+                }
+
                 if (!restoreSnapshotToFile(snap, raw)) {
                     if (redoSnap != null) {
                         // noinspection ResultOfMethodCallIgnored
@@ -245,7 +300,7 @@ public final class EditEngine {
                     redoStack.addFirst(redoSnap);
                 }
                 return true;
-            } catch (Exception e) {
+            } catch (Throwable t) {
                 if (redoSnap != null) {
                     // noinspection ResultOfMethodCallIgnored
                     redoSnap.delete();
@@ -264,24 +319,24 @@ public final class EditEngine {
             if (redoSnap == null || !redoSnap.exists()) return false;
 
             File undoSnap = null;
-            if (wouldRecord(raw)) {
-                // noinspection ResultOfMethodCallIgnored
-                undoDir.mkdirs();
-                while (stack.size() >= MAX_UNDO_STEPS) {
-                    File oldUndo = stack.removeLast();
-                    // noinspection ResultOfMethodCallIgnored
-                    oldUndo.delete();
-                }
-                undoSnap = new File(undoDir,
-                        raw.getName() + "." + (++seq) + ".undo");
-                if (!createOppositeSnapshot(raw, redoSnap, undoSnap)) {
-                    // noinspection ResultOfMethodCallIgnored
-                    undoSnap.delete();
-                    undoSnap = null;
-                }
-            }
-
             try {
+                if (wouldRecord(raw)) {
+                    // noinspection ResultOfMethodCallIgnored
+                    undoDir.mkdirs();
+                    while (stack.size() >= MAX_UNDO_STEPS) {
+                        File oldUndo = stack.removeLast();
+                        // noinspection ResultOfMethodCallIgnored
+                        oldUndo.delete();
+                    }
+                    undoSnap = new File(undoDir,
+                            raw.getName() + "." + (++seq) + ".undo");
+                    if (!createOppositeSnapshot(raw, redoSnap, undoSnap)) {
+                        // noinspection ResultOfMethodCallIgnored
+                        undoSnap.delete();
+                        undoSnap = null;
+                    }
+                }
+
                 if (!restoreSnapshotToFile(redoSnap, raw)) {
                     if (undoSnap != null) {
                         // noinspection ResultOfMethodCallIgnored
@@ -293,7 +348,7 @@ public final class EditEngine {
                     stack.addFirst(undoSnap);
                 }
                 return true;
-            } catch (Exception e) {
+            } catch (Throwable t) {
                 if (undoSnap != null) {
                     // noinspection ResultOfMethodCallIgnored
                     undoSnap.delete();
@@ -313,121 +368,67 @@ public final class EditEngine {
             clearRedo();
         }
 
-        private static boolean createOppositeSnapshot(File currentRaw,
-                                                      File incomingSnap,
-                                                      File outOppositeSnap) {
-            try (DataInputStream in = new DataInputStream(
-                    new BufferedInputStream(new FileInputStream(incomingSnap), 128))) {
-                byte b0 = in.readByte();
-                byte b1 = in.readByte();
-                byte b2 = in.readByte();
-                byte b3 = in.readByte();
-                if (b0 == SNAP_MAGIC_0 && b1 == SNAP_MAGIC_1
-                        && b2 == SNAP_MAGIC_2 && b3 == SNAP_MAGIC_3) {
-                    byte mode = in.readByte();
-                    long origLen = in.readLong();
-                    if (mode == SNAP_MODE_DELTA && currentRaw.length() == origLen) {
-                        int hdrLen = in.readInt();
-                        if (hdrLen > 0 && hdrLen <= 4096) {
-                            int skipped = 0;
-                            while (skipped < hdrLen) {
-                                int s = in.skipBytes(hdrLen - skipped);
-                                if (s <= 0) break;
-                                skipped += s;
-                            }
-                            long deltaOff = in.readLong();
-                            long deltaLen = in.readLong();
-                            return writeRangeDeltaSnapshot(
-                                    currentRaw, deltaOff, deltaLen, outOppositeSnap);
-                        }
-                    }
-                }
-            } catch (Exception ignored) {}
-            return writeFullCompressedSnapshot(currentRaw, outOppositeSnap);
-        }
-
-        private static boolean writeFullCompressedSnapshot(File raw, File snap) {
-            long origLen = raw.length();
-            Deflater deflater = new Deflater(Deflater.BEST_SPEED);
-            try (FileInputStream in = new FileInputStream(raw);
-                 DataOutputStream out = new DataOutputStream(
-                         new BufferedOutputStream(new FileOutputStream(snap), CHUNK_BYTES))) {
-                out.writeByte(SNAP_MAGIC_0);
-                out.writeByte(SNAP_MAGIC_1);
-                out.writeByte(SNAP_MAGIC_2);
-                out.writeByte(SNAP_MAGIC_3);
-                out.writeByte(SNAP_MODE_FULL);
-                out.writeLong(origLen);
-                try (DeflaterOutputStream defOut =
-                             new DeflaterOutputStream(out, deflater, CHUNK_BYTES)) {
-                    byte[] buf = new byte[CHUNK_BYTES];
-                    int n;
-                    while ((n = in.read(buf)) > 0) {
-                        defOut.write(buf, 0, n);
-                    }
-                    defOut.finish();
-                }
-                return true;
-            } catch (Exception e) {
-                return false;
-            } finally {
-                deflater.end();
-            }
-        }
-
-        private static boolean writeRangeDeltaSnapshot(File raw, long deltaOff,
-                                                       long deltaLen, File snap) {
-            long origLen = raw.length();
-            int hdrLen = (int) Math.min(64L, origLen);
-            Deflater deflater = new Deflater(Deflater.BEST_SPEED);
-            try (RandomAccessFile raf = new RandomAccessFile(raw, "r");
-                 DataOutputStream out = new DataOutputStream(
-                         new BufferedOutputStream(new FileOutputStream(snap), CHUNK_BYTES))) {
-                byte[] hdr = new byte[hdrLen];
-                raf.seek(0L);
-                raf.readFully(hdr);
-
-                out.writeByte(SNAP_MAGIC_0);
-                out.writeByte(SNAP_MAGIC_1);
-                out.writeByte(SNAP_MAGIC_2);
-                out.writeByte(SNAP_MAGIC_3);
-                out.writeByte(SNAP_MODE_DELTA);
-                out.writeLong(origLen);
-                out.writeInt(hdrLen);
-                out.write(hdr);
-                out.writeLong(deltaOff);
-                out.writeLong(deltaLen);
-
-                try (DeflaterOutputStream defOut =
-                             new DeflaterOutputStream(out, deflater, CHUNK_BYTES)) {
-                    raf.seek(deltaOff);
-                    byte[] buf = new byte[CHUNK_BYTES];
-                    long left = deltaLen;
-                    while (left > 0) {
-                        int want = (int) Math.min((long) buf.length, left);
-                        int n = raf.read(buf, 0, want);
-                        if (n <= 0) break;
-                        defOut.write(buf, 0, n);
-                        left -= n;
-                    }
-                    defOut.finish();
-                }
-                return true;
-            } catch (Exception e) {
-                return false;
-            } finally {
-                deflater.end();
-            }
-        }
-
-        private static boolean restoreSnapshotToFile(File snap, File raw)
+        private void deflateStream(RandomAccessFile src, long startPos,
+                                   long byteCount, RandomAccessFile dst)
                 throws Exception {
-            Inflater inflater = new Inflater();
-            try (DataInputStream in = new DataInputStream(
-                    new BufferedInputStream(new FileInputStream(snap), CHUNK_BYTES));
-                 RandomAccessFile out = new RandomAccessFile(raw, "rw")) {
-                if (snap.length() >= 13L) {
-                    in.mark(16);
+            deflater.reset();
+            src.seek(startPos);
+            long remaining = byteCount;
+            while (remaining > 0L) {
+                int want = (int) Math.min((long) ioBuf.length, remaining);
+                int n = src.read(ioBuf, 0, want);
+                if (n <= 0) break;
+                remaining -= n;
+                deflater.setInput(ioBuf, 0, n);
+                while (!deflater.needsInput()) {
+                    int c = deflater.deflate(zBuf, 0, zBuf.length);
+                    if (c > 0) {
+                        dst.write(zBuf, 0, c);
+                    }
+                }
+            }
+            deflater.finish();
+            while (!deflater.finished()) {
+                int c = deflater.deflate(zBuf, 0, zBuf.length);
+                if (c > 0) {
+                    dst.write(zBuf, 0, c);
+                } else {
+                    break;
+                }
+            }
+        }
+
+        private void inflateStream(RandomAccessFile srcSnap,
+                                   RandomAccessFile dstRaw,
+                                   long dstStartPos,
+                                   long expectedBytes) throws Exception {
+            inflater.reset();
+            dstRaw.seek(dstStartPos);
+            long written = 0L;
+            while (written < expectedBytes && !inflater.finished()) {
+                if (inflater.needsInput()) {
+                    int n = srcSnap.read(zBuf, 0, zBuf.length);
+                    if (n <= 0) break;
+                    inflater.setInput(zBuf, 0, n);
+                }
+                int maxOut = (int) Math.min(
+                        (long) ioBuf.length, expectedBytes - written);
+                int dc = inflater.inflate(ioBuf, 0, maxOut);
+                if (dc > 0) {
+                    dstRaw.write(ioBuf, 0, dc);
+                    written += dc;
+                } else if (inflater.needsDictionary()
+                        || (dc == 0 && !inflater.needsInput())) {
+                    break;
+                }
+            }
+        }
+
+        private boolean createOppositeSnapshot(File currentRaw,
+                                               File incomingSnap,
+                                               File outOppositeSnap) {
+            try (RandomAccessFile in = new RandomAccessFile(incomingSnap, "r")) {
+                if (in.length() >= 13L) {
                     byte b0 = in.readByte();
                     byte b1 = in.readByte();
                     byte b2 = in.readByte();
@@ -436,54 +437,165 @@ public final class EditEngine {
                             && b2 == SNAP_MAGIC_2 && b3 == SNAP_MAGIC_3) {
                         byte mode = in.readByte();
                         long origLen = in.readLong();
-                        byte[] buf = new byte[CHUNK_BYTES];
-                        if (mode == SNAP_MODE_FULL) {
-                            out.setLength(0L);
-                            try (InflaterInputStream infIn =
-                                         new InflaterInputStream(in, inflater, CHUNK_BYTES)) {
-                                int n;
-                                while ((n = infIn.read(buf)) > 0) {
-                                    out.write(buf, 0, n);
+                        if (mode == SNAP_MODE_DELTA) {
+                            int hdrLen = in.readInt();
+                            if (hdrLen > 0 && hdrLen <= MAX_HEADER_BYTES) {
+                                in.seek(in.getFilePointer() + hdrLen);
+                                long deltaOff = in.readLong();
+                                long origDeltaLen = in.readLong();
+                                long tailLen = Math.max(0L,
+                                        origLen - (deltaOff + origDeltaLen));
+                                long curLen = currentRaw.length();
+                                long curDeltaLen = curLen - deltaOff - tailLen;
+                                if (deltaOff >= 0L && curDeltaLen >= 0L
+                                        && deltaOff + curDeltaLen <= curLen) {
+                                    return writeRangeDeltaSnapshot(
+                                            currentRaw, deltaOff, curDeltaLen,
+                                            outOppositeSnap);
                                 }
                             }
+                        }
+                    }
+                }
+            } catch (Throwable ignored) {}
+            return writeFullCompressedSnapshot(currentRaw, outOppositeSnap);
+        }
+
+        private boolean writeFullCompressedSnapshot(File raw, File snap) {
+            long origLen = raw.length();
+            try (RandomAccessFile in = new RandomAccessFile(raw, "r");
+                 RandomAccessFile out = new RandomAccessFile(snap, "rw")) {
+                out.setLength(0L);
+                out.writeByte(SNAP_MAGIC_0);
+                out.writeByte(SNAP_MAGIC_1);
+                out.writeByte(SNAP_MAGIC_2);
+                out.writeByte(SNAP_MAGIC_3);
+                out.writeByte(SNAP_MODE_FULL);
+                out.writeLong(origLen);
+                deflateStream(in, 0L, origLen, out);
+                return true;
+            } catch (Throwable t) {
+                return false;
+            }
+        }
+
+        private boolean writeRangeDeltaSnapshot(File raw, long deltaOff,
+                                                long deltaLen, File snap) {
+            long origLen = raw.length();
+            int hdrLen = (int) Math.min((long) MAX_HEADER_BYTES, origLen);
+            try (RandomAccessFile raf = new RandomAccessFile(raw, "r");
+                 RandomAccessFile out = new RandomAccessFile(snap, "rw")) {
+                out.setLength(0L);
+                raf.seek(0L);
+                raf.readFully(hdrBuf, 0, hdrLen);
+
+                out.writeByte(SNAP_MAGIC_0);
+                out.writeByte(SNAP_MAGIC_1);
+                out.writeByte(SNAP_MAGIC_2);
+                out.writeByte(SNAP_MAGIC_3);
+                out.writeByte(SNAP_MODE_DELTA);
+                out.writeLong(origLen);
+                out.writeInt(hdrLen);
+                out.write(hdrBuf, 0, hdrLen);
+                out.writeLong(deltaOff);
+                out.writeLong(deltaLen);
+
+                if (deltaLen > 0L) {
+                    deflateStream(raf, deltaOff, deltaLen, out);
+                }
+                return true;
+            } catch (Throwable t) {
+                return false;
+            }
+        }
+
+        private boolean restoreSnapshotToFile(File snap, File raw)
+                throws Exception {
+            try (RandomAccessFile in = new RandomAccessFile(snap, "r");
+                 RandomAccessFile out = new RandomAccessFile(raw, "rw")) {
+                long snapLen = in.length();
+                if (snapLen >= 13L) {
+                    byte b0 = in.readByte();
+                    byte b1 = in.readByte();
+                    byte b2 = in.readByte();
+                    byte b3 = in.readByte();
+                    if (b0 == SNAP_MAGIC_0 && b1 == SNAP_MAGIC_1
+                            && b2 == SNAP_MAGIC_2 && b3 == SNAP_MAGIC_3) {
+                        byte mode = in.readByte();
+                        long origLen = in.readLong();
+                        if (mode == SNAP_MODE_FULL) {
+                            out.setLength(0L);
+                            inflateStream(in, out, 0L, origLen);
                             out.setLength(origLen);
                             return true;
                         } else if (mode == SNAP_MODE_DELTA) {
                             int hdrLen = in.readInt();
-                            byte[] hdr = new byte[hdrLen];
-                            in.readFully(hdr);
+                            if (hdrLen < 0 || hdrLen > MAX_HEADER_BYTES) {
+                                return false;
+                            }
+                            in.readFully(hdrBuf, 0, hdrLen);
                             long deltaOff = in.readLong();
-                            long deltaLen = in.readLong();
-                            out.seek(0L);
-                            out.write(hdr);
-                            out.seek(deltaOff);
-                            long remaining = deltaLen;
-                            try (InflaterInputStream infIn =
-                                         new InflaterInputStream(in, inflater, CHUNK_BYTES)) {
-                                while (remaining > 0) {
-                                    int want = (int) Math.min((long) buf.length, remaining);
-                                    int n = infIn.read(buf, 0, want);
-                                    if (n <= 0) break;
-                                    out.write(buf, 0, n);
-                                    remaining -= n;
+                            long origDeltaLen = in.readLong();
+                            long snapDataPos = in.getFilePointer();
+
+                            long curLen = out.length();
+                            long tailLen = Math.max(0L,
+                                    origLen - (deltaOff + origDeltaLen));
+                            long curDeltaLen = curLen - deltaOff - tailLen;
+
+                            if (tailLen > 0L && origDeltaLen != curDeltaLen
+                                    && curDeltaLen >= 0L) {
+                                long srcTailOff = deltaOff + curDeltaLen;
+                                long dstTailOff = deltaOff + origDeltaLen;
+                                if (dstTailOff < srcTailOff) {
+                                    // Shrinking splice: shift untouched tail forward in 16 KB chunks
+                                    long moved = 0L;
+                                    while (moved < tailLen) {
+                                        int step = (int) Math.min(
+                                                (long) shiftBuf.length,
+                                                tailLen - moved);
+                                        out.seek(srcTailOff + moved);
+                                        out.readFully(shiftBuf, 0, step);
+                                        out.seek(dstTailOff + moved);
+                                        out.write(shiftBuf, 0, step);
+                                        moved += step;
+                                    }
+                                } else {
+                                    // Growing splice: extend file and shift untouched tail backward from EOF
+                                    out.setLength(origLen);
+                                    long rem = tailLen;
+                                    while (rem > 0L) {
+                                        int step = (int) Math.min(
+                                                (long) shiftBuf.length, rem);
+                                        long off = rem - step;
+                                        out.seek(srcTailOff + off);
+                                        out.readFully(shiftBuf, 0, step);
+                                        out.seek(dstTailOff + off);
+                                        out.write(shiftBuf, 0, step);
+                                        rem -= step;
+                                    }
                                 }
+                            }
+
+                            out.seek(0L);
+                            out.write(hdrBuf, 0, hdrLen);
+                            if (origDeltaLen > 0L) {
+                                in.seek(snapDataPos);
+                                inflateStream(in, out, deltaOff, origDeltaLen);
                             }
                             out.setLength(origLen);
                             return true;
                         }
                     }
-                    in.reset();
                 }
                 // Fallback for legacy uncompressed snapshots:
+                in.seek(0L);
                 out.setLength(0L);
-                byte[] buf = new byte[CHUNK_BYTES];
                 int n;
-                while ((n = in.read(buf)) > 0) {
-                    out.write(buf, 0, n);
+                while ((n = in.read(ioBuf)) > 0) {
+                    out.write(ioBuf, 0, n);
                 }
                 return true;
-            } finally {
-                inflater.end();
             }
         }
     }
@@ -624,7 +736,14 @@ public final class EditEngine {
         selStartFrame = Math.max(0, Math.min(pTotalFrames, selStartFrame));
         selEndFrame = Math.max(selStartFrame, Math.min(pTotalFrames, selEndFrame));
 
-        if (undo != null) undo.recordSnapshot(parentRaw);
+        if (undo != null) {
+            long touchStart = Math.max(0L, selStartFrame - Dsp.CROSSFADE_FRAMES);
+            long touchEnd = Math.min(pTotalFrames,
+                    selEndFrame + 2L * Dsp.CROSSFADE_FRAMES);
+            undo.recordRangeSnapshot(parentRaw,
+                    pInfo.dataStart + touchStart * frameBytes,
+                    Math.max(0L, (touchEnd - touchStart) * frameBytes));
+        }
 
         File tailTmp = new File(parentRaw.getParentFile(),
                 parentRaw.getName() + ".subtail");
@@ -766,6 +885,7 @@ public final class EditEngine {
     public static long deleteSelection(File raw, long startFrame,
                                        long endFrame, UndoJournal undo)
             throws Exception {
+        normalizeFloatDataStart(raw);
         FormatConverter.WavInfo info = FormatConverter.readFloatWav(raw);
         int ch = info.channels;
         long totalFrames = info.dataBytes / 4 / ch;
@@ -776,12 +896,13 @@ public final class EditEngine {
         if (delFrames >= totalFrames - 480) {
             throw new IllegalArgumentException("cannot delete entire take");
         }
-        if (undo != null) undo.recordSnapshot(raw);
 
-        try (RandomAccessFile raf = new RandomAccessFile(raw, "rw")) {
-            long snappedStart = Dsp.snapToZeroCrossing(raf, info.dataStart, ch,
+        long frameBytes = ch * 4L;
+        int fade;
+        try (RandomAccessFile r = new RandomAccessFile(raw, "r")) {
+            long snappedStart = Dsp.snapToZeroCrossing(r, info.dataStart, ch,
                     startFrame, totalFrames, Dsp.CROSSFADE_FRAMES);
-            long snappedEnd = Dsp.snapToZeroCrossing(raf, info.dataStart, ch,
+            long snappedEnd = Dsp.snapToZeroCrossing(r, info.dataStart, ch,
                     endFrame, totalFrames, Dsp.CROSSFADE_FRAMES);
             if (snappedStart < snappedEnd) {
                 startFrame = snappedStart;
@@ -791,9 +912,17 @@ public final class EditEngine {
             if (delFrames >= totalFrames - 480) {
                 throw new IllegalArgumentException("cannot delete entire take");
             }
-            long frameBytes = ch * 4L;
-            int fade = (int) Math.min(Dsp.CROSSFADE_FRAMES,
+            fade = (int) Math.min(Dsp.CROSSFADE_FRAMES,
                     Math.min(startFrame, totalFrames - endFrame));
+        }
+
+        if (undo != null) {
+            long deltaOff = info.dataStart + (startFrame - fade) * frameBytes;
+            long deltaLen = (delFrames + 2L * fade) * frameBytes;
+            undo.recordRangeSnapshot(raw, deltaOff, deltaLen);
+        }
+
+        try (RandomAccessFile raf = new RandomAccessFile(raw, "rw")) {
 
             float[] crossfaded = null;
             if (fade > 0) {
@@ -868,6 +997,7 @@ public final class EditEngine {
             File raw, long startFrame, long endFrame,
             AudioProcessor processor, UndoJournal undo) throws Exception {
         if (raw == null || processor == null) return -1;
+        normalizeFloatDataStart(raw);
         FormatConverter.WavInfo info = FormatConverter.readFloatWav(raw);
         int ch = info.channels;
         long totalFrames = info.dataBytes / 4 / ch;
@@ -888,7 +1018,14 @@ public final class EditEngine {
                     raw, startFrame, endFrame, renderTmp, info.sampleRate, ch);
             if (newFrames <= 0 || !renderTmp.exists()) return -1;
 
-            if (undo != null) undo.recordSnapshot(raw);
+            if (undo != null) {
+                long frameBytes = ch * 4L;
+                long touchStart = Math.max(0L, startFrame - Dsp.CROSSFADE_FRAMES);
+                long touchEnd = Math.min(totalFrames, endFrame + Dsp.CROSSFADE_FRAMES);
+                undo.recordRangeSnapshot(raw,
+                        info.dataStart + touchStart * frameBytes,
+                        Math.max(0L, (touchEnd - touchStart) * frameBytes));
+            }
 
             long tailFrames = saveTailFrom(raw, endFrame, tailTmp, false);
             long frameBytes = ch * 4L;
@@ -1241,13 +1378,14 @@ public final class EditEngine {
     static float[] readFloatSelection(File raw, long startFrame, long endFrame)
             throws Exception {
         FormatConverter.WavInfo info = FormatConverter.readFloatWav(raw);
-        int ch = info.channels;
-        long totalFrames = info.dataBytes / 4 / Math.max(1, ch);
+        int ch = Math.max(1, info.channels);
+        long totalFrames = info.dataBytes / 4 / ch;
         startFrame = Math.max(0L, Math.min(totalFrames, startFrame));
         endFrame = Math.max(startFrame, Math.min(totalFrames, endFrame));
         long count = endFrame - startFrame;
         if (count <= 0) return new float[0];
-        int frames = (int) Math.min(count, Integer.MAX_VALUE / Math.max(1, ch));
+        int maxSafeFrames = (Integer.MAX_VALUE / 4) / ch;
+        int frames = (int) Math.min(count, (long) maxSafeFrames);
         try (RandomAccessFile raf = new RandomAccessFile(raw, "r")) {
             return readFloatFrames(raf,
                     info.dataStart + startFrame * ch * 4L, frames, ch);
@@ -1256,12 +1394,23 @@ public final class EditEngine {
 
     private static float[] readFloatFrames(RandomAccessFile raf, long bytePos,
                                            int frames, int ch) throws Exception {
-        byte[] raw = new byte[frames * ch * 4];
+        int cCount = Math.max(1, ch);
+        int totalSamples = frames * cCount;
+        if (totalSamples <= 0) return new float[0];
+        float[] out = new float[totalSamples];
+        int chunkSamples = Math.min(totalSamples, CHUNK_BYTES / 4);
+        byte[] raw = new byte[chunkSamples * 4];
+        ByteBuffer bb = ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN);
         raf.seek(bytePos);
-        raf.readFully(raw);
-        float[] out = new float[frames * ch];
-        ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN)
-                .asFloatBuffer().get(out);
+        int readSamples = 0;
+        while (readSamples < totalSamples) {
+            int wantSamples = Math.min(chunkSamples, totalSamples - readSamples);
+            raf.readFully(raw, 0, wantSamples * 4);
+            bb.clear();
+            bb.limit(wantSamples * 4);
+            bb.asFloatBuffer().get(out, readSamples, wantSamples);
+            readSamples += wantSamples;
+        }
         return out;
     }
 

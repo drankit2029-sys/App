@@ -1954,11 +1954,14 @@ public class StudioFragment extends Fragment {
             long endF = Math.round(eFrac * totalFrames);
             if (endF <= startF) return;
 
-            // Only mirror the audio snapshot into the waveform peak stack when
-            // the snapshot actually landed: recordSnapshot() refuses takes
-            // over 30 MB, and an unconditional peaks push would desynchronise
-            // the two undo stacks on long takes.
-            if (undoJournal != null && undoJournal.recordSnapshot(raw)) {
+            FormatConverter.WavInfo rInfo = FormatConverter.readFloatWav(raw);
+            long frameBytes = Math.max(1, rInfo.channels) * 4L;
+            long touchStart = Math.max(0L, startF - Dsp.CROSSFADE_FRAMES);
+            long touchEnd = Math.min(totalFrames, endF + 2L * Dsp.CROSSFADE_FRAMES);
+            long touchByteOff = rInfo.dataStart + touchStart * frameBytes;
+            long touchByteLen = Math.max(0L, (touchEnd - touchStart) * frameBytes);
+            if (undoJournal != null
+                    && undoJournal.recordRangeSnapshot(raw, touchByteOff, touchByteLen)) {
                 // Snapshot & stash post-selection waveform peaks so the red
                 // waveform stays at 20 bars/sec without reloading 400 bars/sec
                 // from disk!
@@ -2079,9 +2082,6 @@ public class StudioFragment extends Fragment {
             boolean hasReplacementAudio = commit
                     && engine.rawFile != null
                     && RecordingEngine.payloadBytesOf(engine.rawFile) > 0;
-            if (hasReplacementAudio && waveform != null) {
-                waveform.recordUndoPeaks();
-            }
             engine.exitSelectAndReplaceSubSession(hasReplacementAudio, undoJournal);
             inSelectAndReplaceEditor = false;
             if (hasReplacementAudio) {
@@ -2141,7 +2141,15 @@ public class StudioFragment extends Fragment {
                     // the waveform bars as new audio is recorded!
                     replacePassStartFrame = curFrames;
                     replaceTargetEndFrame = totalFrames;
-                    if (activeUndoJournal().recordSnapshot(engine.rawFile)) {
+                    FormatConverter.WavInfo repInfo =
+                            FormatConverter.readFloatWav(engine.rawFile);
+                    long repFrameBytes = Math.max(1, repInfo.channels) * 4L;
+                    long repTouchStart = Math.max(0L, curFrames - Dsp.CROSSFADE_FRAMES);
+                    long repByteOff = repInfo.dataStart + repTouchStart * repFrameBytes;
+                    long repByteLen = Math.max(0L,
+                            (totalFrames - repTouchStart) * repFrameBytes);
+                    if (activeUndoJournal().recordRangeSnapshot(
+                            engine.rawFile, repByteOff, repByteLen)) {
                         waveform.recordUndoPeaks();
                     }
                     dspBakedToRaw = false;
@@ -4064,39 +4072,78 @@ public class StudioFragment extends Fragment {
             long maxFrames = 8L * Math.max(8000, info.sampleRate);
             if (end - start > maxFrames) end = start + maxFrames;
             int ch = Math.max(1, info.channels);
-            int totalLearnFrames = (int) Math.max(0L, end - start);
-            final float[] samples = new float[totalLearnFrames * ch];
+            final boolean isSpectral = slot.type
+                    == DspChain.EffectType.SPECTRAL_NOISE_REDUCTION;
+            final int fftSize = isSpectral
+                    ? SpectralNoiseReductionProcessor.FFT_SIZE
+                    : NoiseSuppressionProcessor.FFT_SIZE;
+            final int bins = isSpectral
+                    ? SpectralNoiseReductionProcessor.BINS
+                    : NoiseSuppressionProcessor.BINS;
+            if (end - start < fftSize) {
+                Toast.makeText(requireContext(),
+                        "Select at least 0.1 s of steady noise",
+                        Toast.LENGTH_SHORT).show();
+                return;
+            }
 
-            // Stream the noise selection in bounded chunks through every effect
-            // ABOVE this one so the profiler learns the exact signal it receives
-            // without reading an unchunked whole-take slice.
+            // Stream the noise selection in bounded 4096-frame chunks through
+            // every effect ABOVE this one and accumulate the learned spectrum
+            // incrementally with a small rolling overlap buffer (~16 KB RAM).
             final DspChain prefix = new DspChain(ch, prefixConfigFor(dspConfig, slot));
             final boolean prefixActive = prefix.isActive();
             if (prefixActive) {
                 prefix.prepareOffline(rawFile, start, end, info.sampleRate, ch);
                 prefix.reset();
             }
-            final long baseStart = start;
+            final double[] accumProfile = new double[bins];
+            final int[] chunkCount = {0};
+            final int overlapFrames = fftSize / 2;
+            final float[] carry = new float[overlapFrames * ch];
+            final int[] carryValid = {0};
+            final float[] windowBuf = new float[(AudioProcessor.DEFAULT_DSP_CHUNK_FRAMES
+                    + overlapFrames) * ch];
+
             EditEngine.forEachFloatChunk(rawFile, start, end,
                     AudioProcessor.DEFAULT_DSP_CHUNK_FRAMES,
                     (chunk, frames, chunkCh, frameOffset) -> {
                         if (prefixActive) {
                             prefix.processInPlace(chunk, frames);
                         }
-                        int dstOff = (int) ((frameOffset - baseStart) * ch);
-                        int copyLen = Math.min(frames * ch,
-                                Math.max(0, samples.length - dstOff));
-                        if (copyLen > 0) {
-                            System.arraycopy(chunk, 0, samples, dstOff, copyLen);
+                        int prevF = carryValid[0];
+                        int totalF = prevF + frames;
+                        if (prevF > 0) {
+                            System.arraycopy(carry, 0, windowBuf, 0, prevF * ch);
                         }
+                        System.arraycopy(chunk, 0, windowBuf, prevF * ch, frames * ch);
+                        if (totalF >= fftSize) {
+                            float[] slice = (totalF * ch == windowBuf.length)
+                                    ? windowBuf
+                                    : java.util.Arrays.copyOf(windowBuf, totalF * ch);
+                            float[] chunkProf = isSpectral
+                                    ? SpectralNoiseReductionProcessor.learnProfile(slice, ch)
+                                    : NoiseSuppressionProcessor.learnProfile(slice, ch);
+                            if (chunkProf != null && chunkProf.length == bins) {
+                                for (int b = 0; b < bins; b++) {
+                                    accumProfile[b] += chunkProf[b];
+                                }
+                                chunkCount[0]++;
+                            }
+                        }
+                        int nextCarry = Math.min(overlapFrames, totalF);
+                        System.arraycopy(windowBuf, (totalF - nextCarry) * ch,
+                                carry, 0, nextCarry * ch);
+                        carryValid[0] = nextCarry;
                     });
 
-            float[] profile = slot.type
-                    == DspChain.EffectType.SPECTRAL_NOISE_REDUCTION
-                    ? SpectralNoiseReductionProcessor.learnProfile(
-                            samples, ch)
-                    : NoiseSuppressionProcessor.learnProfile(
-                            samples, ch);
+            float[] profile = null;
+            if (chunkCount[0] > 0) {
+                profile = new float[bins];
+                float inv = 1.0f / chunkCount[0];
+                for (int b = 0; b < bins; b++) {
+                    profile[b] = (float) (accumProfile[b] * inv);
+                }
+            }
             if (profile == null) {
                 Toast.makeText(requireContext(),
                         "Select at least 0.1 s of steady noise",
