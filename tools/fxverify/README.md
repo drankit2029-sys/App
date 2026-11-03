@@ -80,7 +80,7 @@ generates the fixture (unless the committed one is reused), runs the same
 `speech_summary.py`. The authored tone/sweep/impulse anchors are omitted with
 `--skip-anchors` because those probes are not rendered in this mode.
 
-Latest run (commit `660131a`, run 41600331046): **52 effects, 2,424 cases,
+Latest run (commit `2a62a50`, run 41614185094): **52 effects, 2,424 cases,
 0 hard failures** (no non-finite samples, length changes or blow-ups). 1,176
 cases passed their inferred directional expectation, 327 were "changed but no
 directional claim", and 256 were threshold misses on the heuristic expectation
