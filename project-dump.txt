@@ -1,8 +1,8 @@
 PROJECT DUMP — TakeOne
-Generated: 2026-11-03T15:28:57
+Generated: 2026-11-03T16:47:22
 Root: /mnt/sdcard/Download/App
-APK md5: 8c3bef8b3e857587f018a409070cd393
-HEAD: 4e659c6 Refresh the speech matrix run reference
+APK md5: f6221a7b61aecdd780e281b6981a43d4
+HEAD: 00ee468 Move app to the com.takeone.studio namespace and add Bluetooth mic routing
 Branch: ut/fx-gpu-undo
 Files: 349 source files
 =================================================================================
@@ -542,7 +542,7 @@ jobs:
             adb install -r -t "$(find apks -name 'app-debug.apk' | head -1)"
             adb install -r -t "$(find apks -name 'app-debug-androidTest.apk' | head -1)"
             mkdir -p fx-out
-            for attempt in 1 2 3; do adb wait-for-device; timeout 1200 adb shell am instrument -w -e class com.example.hello.FxPanelDialDeviceTest -e fxEffect "${{ matrix.effect }}" "$(adb shell pm list instrumentation | grep AndroidJUnitRunner | head -1 | sed 's/.*instrumentation://; s/ .*//' | tr -d '\r')" > fx-out/instrumentation.txt 2>&1; grep -q "OK (" fx-out/instrumentation.txt && break; echo "attempt $attempt did not report OK"; sleep 15; done
+            for attempt in 1 2 3; do adb wait-for-device; timeout 1200 adb shell am instrument -w -e class com.takeone.studio.FxPanelDialDeviceTest -e fxEffect "${{ matrix.effect }}" "$(adb shell pm list instrumentation | grep AndroidJUnitRunner | head -1 | sed 's/.*instrumentation://; s/ .*//' | tr -d '\r')" > fx-out/instrumentation.txt 2>&1; grep -q "OK (" fx-out/instrumentation.txt && break; echo "attempt $attempt did not report OK"; sleep 15; done
             cat fx-out/instrumentation.txt
             adb pull "/sdcard/Android/data/$APP_ID/files/takes/fxverify-${{ matrix.effect }}" fx-out/ || true
             adb shell logcat -d -v brief > fx-out/logcat-full.txt || true
@@ -600,7 +600,7 @@ jobs:
             adb install -r -t "$(find apks -name 'app-debug.apk' | head -1)"
             adb install -r -t "$(find apks -name 'app-debug-androidTest.apk' | head -1)"
             mkdir -p fx-formats
-            for attempt in 1 2 3; do adb wait-for-device; adb shell am instrument -w -e class com.example.hello.FormatMatrixDeviceTest "$(adb shell pm list instrumentation | grep AndroidJUnitRunner | head -1 | sed 's/.*instrumentation://; s/ .*//' | tr -d '\r')" > fx-formats/instrumentation.txt 2>&1; grep -q "OK (" fx-formats/instrumentation.txt && break; echo "attempt $attempt did not report OK"; sleep 15; done
+            for attempt in 1 2 3; do adb wait-for-device; adb shell am instrument -w -e class com.takeone.studio.FormatMatrixDeviceTest "$(adb shell pm list instrumentation | grep AndroidJUnitRunner | head -1 | sed 's/.*instrumentation://; s/ .*//' | tr -d '\r')" > fx-formats/instrumentation.txt 2>&1; grep -q "OK (" fx-formats/instrumentation.txt && break; echo "attempt $attempt did not report OK"; sleep 15; done
             cat fx-formats/instrumentation.txt
             adb pull "/sdcard/Android/data/$APP_ID/files/takes/fxverify-formats" fx-formats/ || true
             grep -q "OK (" fx-formats/instrumentation.txt || { echo "instrumentation did not report OK"; exit 1; }
@@ -662,7 +662,7 @@ jobs:
             adb install -r -t "$(find apks -name 'app-debug.apk' | head -1)"
             adb install -r -t "$(find apks -name 'app-debug-androidTest.apk' | head -1)"
             mkdir -p smoke
-            for attempt in 1 2 3; do adb wait-for-device; timeout 1200 adb shell am instrument -w -e class com.example.hello.FxPanelDialDeviceTest -e fxEffect hpf "$(adb shell pm list instrumentation | grep AndroidJUnitRunner | head -1 | sed 's/.*instrumentation://; s/ .*//' | tr -d '\r')" > smoke/instrumentation.txt 2>&1; grep -q "OK (" smoke/instrumentation.txt && break; echo "attempt $attempt did not report OK"; sleep 15; done
+            for attempt in 1 2 3; do adb wait-for-device; timeout 1200 adb shell am instrument -w -e class com.takeone.studio.FxPanelDialDeviceTest -e fxEffect hpf "$(adb shell pm list instrumentation | grep AndroidJUnitRunner | head -1 | sed 's/.*instrumentation://; s/ .*//' | tr -d '\r')" > smoke/instrumentation.txt 2>&1; grep -q "OK (" smoke/instrumentation.txt && break; echo "attempt $attempt did not report OK"; sleep 15; done
             cat smoke/instrumentation.txt
             adb pull "/sdcard/Android/data/$APP_ID/files/takes/fxverify-hpf" smoke/ || true
             adb shell ls -l "/sdcard/Android/data/$APP_ID/files/takes/fxverify-hpf" > smoke/files.txt 2>&1 || true
@@ -791,14 +791,14 @@ jobs:
           shard = int(os.environ['SHARD'])
           shards = int(os.environ['SHARDS'])
           classes = []
-          for path in sorted(glob.glob('app/src/test/java/com/example/hello/*Test.java')):
-              cls = 'com.example.hello.' + os.path.basename(path)[:-5]
+          for path in sorted(glob.glob('app/src/test/java/com/takeone/studio/*Test.java')):
+              cls = 'com.takeone.studio.' + os.path.basename(path)[:-5]
               if int(hashlib.md5(cls.encode()).hexdigest(), 16) % shards == shard:
                   classes.append(cls)
           print(' '.join('--tests ' + c for c in classes))
           EOF
           )
-          if [ -z "$FILTERS" ]; then FILTERS="--tests com.example.hello.DspTest"; fi
+          if [ -z "$FILTERS" ]; then FILTERS="--tests com.takeone.studio.DspTest"; fi
           for i in 1 2 3; do
             if eval ./gradlew testDebugUnitTest $FILTERS --stacktrace; then
               echo "shard $SHARD passed on attempt $i"; exit 0
@@ -942,13 +942,13 @@ This file gives coding agents the context needed to work on this repository.
 
 ## Project overview
 - Android app (TakeOne studio): audio recording/editing, DSP/FX pipeline, teleprompter, conversion/export.
-- Single Gradle module `:app`. Package `com.example.hello`. applicationId `com.takeone.studio`.
+- Single Gradle module `:app`. Package `com.takeone.studio`. applicationId `com.takeone.studio`.
 - Min SDK 24, target/compile SDK 35. Java 17. Gradle 8.7, AGP 8.6.1.
 
 ## Layout
-- `app/src/main/java/com/example/hello/` — 100+ Java sources (DSP processors, EditEngine, DspChain, Recording/Conversion services, UI).
-- `app/src/test/java/com/example/hello/` — 66+ Robolectric/JUnit unit tests.
-- `app/src/androidTest/java/com/example/hello/` — 28 instrumentation tests.
+- `app/src/main/java/com/takeone/studio/` — 100+ Java sources (DSP processors, EditEngine, DspChain, Recording/Conversion services, UI).
+- `app/src/test/java/com/takeone/studio/` — 66+ Robolectric/JUnit unit tests.
+- `app/src/androidTest/java/com/takeone/studio/` — 28 instrumentation tests.
 - `app/schemas/` — exported Room schema.
 - Workflows: `.github/workflows/{verify,build-apk,fx-verify}.yml`.
 
@@ -2948,7 +2948,7 @@ writing down with: effect id, control, value, source, and expected vs actual.
 ---
 
 *Generated from the processor parameter definitions in
-`app/src/main/java/com/example/hello/*Processor.java`; ranges and defaults match
+`app/src/main/java/com/takeone/studio/*Processor.java`; ranges and defaults match
 the code. If you add or change a parameter, update the corresponding table and
 the `tools/fxverify` matrix.*
 
@@ -16944,7 +16944,7 @@ def kPass  = keystoreProps.getProperty("keyPassword") ?: System.getenv("TAKEONE_
 def hasReleaseKeystore = ksFile != null && !ksFile.isEmpty() && rootProject.file(ksFile).exists()
 
 android {
-    namespace 'com.example.hello'
+    namespace 'com.takeone.studio'
     compileSdk 35
 
     defaultConfig {
@@ -17093,16 +17093,16 @@ FILE: app/proguard-rules.pro
 -keep class * extends androidx.room.RoomDatabase { *; }
 -keep @androidx.room.Entity class * { *; }
 -keep @androidx.room.Dao class * { *; }
--keep class com.example.hello.TakeEntity { *; }
--keep class com.example.hello.TakeDao { *; }
--keep class com.example.hello.TakeDatabase { *; }
--keep class com.example.hello.TakeDatabase_Impl { *; }
+-keep class com.takeone.studio.TakeEntity { *; }
+-keep class com.takeone.studio.TakeDao { *; }
+-keep class com.takeone.studio.TakeDatabase { *; }
+-keep class com.takeone.studio.TakeDatabase_Impl { *; }
 
 # 2. WorkManager Workers (instantiated via reflection with (Context, WorkerParameters))
 -keep class * extends androidx.work.ListenableWorker {
     public <init>(android.content.Context, androidx.work.WorkerParameters);
 }
--keep class com.example.hello.ConversionWatchdogWorker {
+-keep class com.takeone.studio.ConversionWatchdogWorker {
     public <init>(android.content.Context, androidx.work.WorkerParameters);
 }
 
@@ -17115,8 +17115,8 @@ FILE: app/proguard-rules.pro
 }
 
 # 4. DSP Processors & Serialization models
--keep class com.example.hello.DspChain$* { *; }
--keep class * extends com.example.hello.AudioProcessor { *; }
+-keep class com.takeone.studio.DspChain$* { *; }
+-keep class * extends com.takeone.studio.AudioProcessor { *; }
 
 # 5. Google Play Billing Library
 -keep class com.android.vending.billing.** { *; }
@@ -17127,7 +17127,7 @@ FILE: app/proguard-rules.pro
 -dontwarn com.google.android.gms.ads.**
 
 =================================================================================
-FILE: app/schemas/com.example.hello.TakeDatabase/1.json
+FILE: app/schemas/com.takeone.studio.TakeDatabase/1.json
 =================================================================================
 {
   "formatVersion": 1,
@@ -17232,9 +17232,9 @@ FILE: app/schemas/com.example.hello.TakeDatabase/1.json
 }
 
 =================================================================================
-FILE: app/src/androidTest/java/com/example/hello/AudioEditorDeviceTest.java
+FILE: app/src/androidTest/java/com/takeone/studio/AudioEditorDeviceTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertTrue;
 
@@ -17337,9 +17337,9 @@ public class AudioEditorDeviceTest {
 }
 
 =================================================================================
-FILE: app/src/androidTest/java/com/example/hello/AudioImportResampleTest.java
+FILE: app/src/androidTest/java/com/takeone/studio/AudioImportResampleTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -17488,9 +17488,9 @@ public class AudioImportResampleTest {
 }
 
 =================================================================================
-FILE: app/src/androidTest/java/com/example/hello/AudioImportTest.java
+FILE: app/src/androidTest/java/com/takeone/studio/AudioImportTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -17638,9 +17638,9 @@ public class AudioImportTest {
 }
 
 =================================================================================
-FILE: app/src/androidTest/java/com/example/hello/BackgroundConversionResilienceTest.java
+FILE: app/src/androidTest/java/com/takeone/studio/BackgroundConversionResilienceTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
@@ -17763,9 +17763,9 @@ public class BackgroundConversionResilienceTest {
 }
 
 =================================================================================
-FILE: app/src/androidTest/java/com/example/hello/ConversionBenchTest.java
+FILE: app/src/androidTest/java/com/takeone/studio/ConversionBenchTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertTrue;
 
@@ -17872,9 +17872,9 @@ public class ConversionBenchTest {
 }
 
 =================================================================================
-FILE: app/src/androidTest/java/com/example/hello/ConversionConcurrencyTest.java
+FILE: app/src/androidTest/java/com/takeone/studio/ConversionConcurrencyTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -18270,9 +18270,9 @@ public class ConversionConcurrencyTest {
 }
 
 =================================================================================
-FILE: app/src/androidTest/java/com/example/hello/ConversionWorkerTest.java
+FILE: app/src/androidTest/java/com/takeone/studio/ConversionWorkerTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
@@ -18374,9 +18374,9 @@ public class ConversionWorkerTest {
 }
 
 =================================================================================
-FILE: app/src/androidTest/java/com/example/hello/EditReplaceWorkerTest.java
+FILE: app/src/androidTest/java/com/takeone/studio/EditReplaceWorkerTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
@@ -18495,9 +18495,9 @@ public class EditReplaceWorkerTest {
 }
 
 =================================================================================
-FILE: app/src/androidTest/java/com/example/hello/EncodeFormatsTest.java
+FILE: app/src/androidTest/java/com/takeone/studio/EncodeFormatsTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
@@ -18734,9 +18734,9 @@ public class EncodeFormatsTest {
 }
 
 =================================================================================
-FILE: app/src/androidTest/java/com/example/hello/FormatMatrixDeviceTest.java
+FILE: app/src/androidTest/java/com/takeone/studio/FormatMatrixDeviceTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertNotNull;
 
@@ -18882,9 +18882,9 @@ public class FormatMatrixDeviceTest {
 }
 
 =================================================================================
-FILE: app/src/androidTest/java/com/example/hello/FormatRoundTripTest.java
+FILE: app/src/androidTest/java/com/takeone/studio/FormatRoundTripTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
@@ -19067,9 +19067,9 @@ public class FormatRoundTripTest {
 }
 
 =================================================================================
-FILE: app/src/androidTest/java/com/example/hello/FormatSpeedAuditTest.java
+FILE: app/src/androidTest/java/com/takeone/studio/FormatSpeedAuditTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -19303,9 +19303,9 @@ public class FormatSpeedAuditTest {
 }
 
 =================================================================================
-FILE: app/src/androidTest/java/com/example/hello/FxPanelDialDeviceTest.java
+FILE: app/src/androidTest/java/com/takeone/studio/FxPanelDialDeviceTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assume.assumeNotNull;
@@ -20422,9 +20422,9 @@ public class FxPanelDialDeviceTest {
 }
 
 =================================================================================
-FILE: app/src/androidTest/java/com/example/hello/FxUiSweepDeviceTest.java
+FILE: app/src/androidTest/java/com/takeone/studio/FxUiSweepDeviceTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assume.assumeNotNull;
@@ -21291,9 +21291,9 @@ public class FxUiSweepDeviceTest {
 }
 
 =================================================================================
-FILE: app/src/androidTest/java/com/example/hello/FxVerifySupportDevice.java
+FILE: app/src/androidTest/java/com/takeone/studio/FxVerifySupportDevice.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import java.io.File;
 import java.io.RandomAccessFile;
@@ -21375,9 +21375,9 @@ public final class FxVerifySupportDevice {
 }
 
 =================================================================================
-FILE: app/src/androidTest/java/com/example/hello/LibraryFlowTest.java
+FILE: app/src/androidTest/java/com/takeone/studio/LibraryFlowTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
@@ -21827,9 +21827,9 @@ public class LibraryFlowTest {
 }
 
 =================================================================================
-FILE: app/src/androidTest/java/com/example/hello/LibraryRenderTest.java
+FILE: app/src/androidTest/java/com/takeone/studio/LibraryRenderTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
@@ -22041,9 +22041,9 @@ public class LibraryRenderTest {
 }
 
 =================================================================================
-FILE: app/src/androidTest/java/com/example/hello/RawPreviewTest.java
+FILE: app/src/androidTest/java/com/takeone/studio/RawPreviewTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertTrue;
 
@@ -22151,9 +22151,9 @@ public class RawPreviewTest {
 }
 
 =================================================================================
-FILE: app/src/androidTest/java/com/example/hello/SaveWhileConvertingTest.java
+FILE: app/src/androidTest/java/com/takeone/studio/SaveWhileConvertingTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
@@ -22397,9 +22397,9 @@ public class SaveWhileConvertingTest {
 }
 
 =================================================================================
-FILE: app/src/androidTest/java/com/example/hello/StreamingEncodeTest.java
+FILE: app/src/androidTest/java/com/takeone/studio/StreamingEncodeTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
@@ -22633,9 +22633,9 @@ public class StreamingEncodeTest {
 }
 
 =================================================================================
-FILE: app/src/androidTest/java/com/example/hello/StudioFlowTest.java
+FILE: app/src/androidTest/java/com/takeone/studio/StudioFlowTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
@@ -23039,9 +23039,9 @@ public class StudioFlowTest {
 }
 
 =================================================================================
-FILE: app/src/androidTest/java/com/example/hello/SyntheticVoiceCaptureTest.java
+FILE: app/src/androidTest/java/com/takeone/studio/SyntheticVoiceCaptureTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertTrue;
 
@@ -23212,9 +23212,9 @@ public class SyntheticVoiceCaptureTest {
 }
 
 =================================================================================
-FILE: app/src/androidTest/java/com/example/hello/TakeSaverPartTest.java
+FILE: app/src/androidTest/java/com/takeone/studio/TakeSaverPartTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
@@ -23315,9 +23315,9 @@ public class TakeSaverPartTest {
 }
 
 =================================================================================
-FILE: app/src/androidTest/java/com/example/hello/TeleDialogsDeviceTest.java
+FILE: app/src/androidTest/java/com/takeone/studio/TeleDialogsDeviceTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
@@ -23380,9 +23380,9 @@ public class TeleDialogsDeviceTest {
 }
 
 =================================================================================
-FILE: app/src/androidTest/java/com/example/hello/TeleprompterDisplayTest.java
+FILE: app/src/androidTest/java/com/takeone/studio/TeleprompterDisplayTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -23654,9 +23654,9 @@ public class TeleprompterDisplayTest {
 }
 
 =================================================================================
-FILE: app/src/androidTest/java/com/example/hello/TeleprompterScrollBoundsTest.java
+FILE: app/src/androidTest/java/com/takeone/studio/TeleprompterScrollBoundsTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -23987,9 +23987,9 @@ public class TeleprompterScrollBoundsTest {
 }
 
 =================================================================================
-FILE: app/src/androidTest/java/com/example/hello/TeleprompterScrollStartTest.java
+FILE: app/src/androidTest/java/com/takeone/studio/TeleprompterScrollStartTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
@@ -24258,9 +24258,9 @@ public class TeleprompterScrollStartTest {
 }
 
 =================================================================================
-FILE: app/src/androidTest/java/com/example/hello/TempKillTest.java
+FILE: app/src/androidTest/java/com/takeone/studio/TempKillTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import android.content.Context;
 
@@ -24364,6 +24364,10 @@ FILE: app/src/main/AndroidManifest.xml
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission
+        android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
@@ -24430,9 +24434,9 @@ FILE: app/src/main/AndroidManifest.xml
 </manifest>
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/AdMobManager.java
+FILE: app/src/main/java/com/takeone/studio/AdMobManager.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import android.app.Activity;
 import android.content.Context;
@@ -25428,9 +25432,9 @@ public final class AdMobManager {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/AmplifyProcessor.java
+FILE: app/src/main/java/com/takeone/studio/AmplifyProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import java.io.File;
 
@@ -25542,9 +25546,9 @@ final class AmplifyProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/AudioDiagnosticsTool.java
+FILE: app/src/main/java/com/takeone/studio/AudioDiagnosticsTool.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import java.util.Locale;
 
@@ -25773,9 +25777,9 @@ final class AudioDiagnosticsTool {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/AudioGeneratorTool.java
+FILE: app/src/main/java/com/takeone/studio/AudioGeneratorTool.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import java.io.File;
 import java.io.RandomAccessFile;
@@ -26166,9 +26170,9 @@ final class AudioGeneratorTool extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/AudioImporter.java
+FILE: app/src/main/java/com/takeone/studio/AudioImporter.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import android.content.Context;
 import android.media.MediaCodec;
@@ -26952,9 +26956,9 @@ public final class AudioImporter {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/AudioProcessor.java
+FILE: app/src/main/java/com/takeone/studio/AudioProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import java.io.File;
 import java.io.RandomAccessFile;
@@ -27256,9 +27260,9 @@ public abstract class AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/AutoDuckProcessor.java
+FILE: app/src/main/java/com/takeone/studio/AutoDuckProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 /**
  * Stage 4 Auto Duck / Envelope Follower: detects vocal presence above
@@ -27368,9 +27372,9 @@ final class AutoDuckProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/BassAndTrebleProcessor.java
+FILE: app/src/main/java/com/takeone/studio/BassAndTrebleProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -27475,9 +27479,9 @@ final class BassAndTrebleProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/BiquadFilter.java
+FILE: app/src/main/java/com/takeone/studio/BiquadFilter.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 /**
  * Cascade of up to {@link Dsp} biquad sections with per-channel direct-form
@@ -27581,9 +27585,9 @@ public final class BiquadFilter {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/BrickwallLimiterProcessor.java
+FILE: app/src/main/java/com/takeone/studio/BrickwallLimiterProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import java.util.Arrays;
 
@@ -27703,9 +27707,9 @@ final class BrickwallLimiterProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/ChangePitchProcessor.java
+FILE: app/src/main/java/com/takeone/studio/ChangePitchProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import java.io.File;
 
@@ -27805,9 +27809,9 @@ final class ChangePitchProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/ChangeSpeedAndPitchProcessor.java
+FILE: app/src/main/java/com/takeone/studio/ChangeSpeedAndPitchProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import java.io.File;
 
@@ -27902,9 +27906,9 @@ final class ChangeSpeedAndPitchProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/ChangeTempoProcessor.java
+FILE: app/src/main/java/com/takeone/studio/ChangeTempoProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import java.io.File;
 
@@ -28012,9 +28016,9 @@ final class ChangeTempoProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/ChorusFlangerProcessor.java
+FILE: app/src/main/java/com/takeone/studio/ChorusFlangerProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import java.util.Arrays;
 
@@ -28146,9 +28150,9 @@ final class ChorusFlangerProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/ClassicFiltersProcessor.java
+FILE: app/src/main/java/com/takeone/studio/ClassicFiltersProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -28266,9 +28270,9 @@ final class ClassicFiltersProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/ClickRemovalProcessor.java
+FILE: app/src/main/java/com/takeone/studio/ClickRemovalProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 /**
  * Stage 5 Click & Pop Removal: detects transient impulses whose second-order
@@ -28385,9 +28389,9 @@ final class ClickRemovalProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/ClipFixProcessor.java
+FILE: app/src/main/java/com/takeone/studio/ClipFixProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 /**
  * Stage 5 Clip Fix (De-Clipper): detects flat-topped clipped runs above the
@@ -28512,9 +28516,9 @@ final class ClipFixProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/CompressorProcessor.java
+FILE: app/src/main/java/com/takeone/studio/CompressorProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 /**
  * Stage 4 full-featured dynamics Compressor with Threshold, Noise-Floor gate
@@ -28664,9 +28668,9 @@ final class CompressorProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/ConversionJob.java
+FILE: app/src/main/java/com/takeone/studio/ConversionJob.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import org.json.JSONObject;
 
@@ -28911,9 +28915,9 @@ public final class ConversionJob {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/ConversionJobs.java
+FILE: app/src/main/java/com/takeone/studio/ConversionJobs.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import android.content.Context;
 
@@ -29953,9 +29957,9 @@ public final class ConversionJobs {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/ConversionService.java
+FILE: app/src/main/java/com/takeone/studio/ConversionService.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import android.app.Notification;
 import android.app.NotificationChannel;
@@ -29991,15 +29995,15 @@ import java.util.concurrent.ConcurrentLinkedDeque;
 public class ConversionService extends Service {
 
     public static final String ACTION_CONVERT =
-            "com.example.hello.CONV_RUN";
+            "com.takeone.studio.CONV_RUN";
     public static final String ACTION_CANCEL_JOB =
-            "com.example.hello.CONV_CANCEL";
+            "com.takeone.studio.CONV_CANCEL";
 
     public static final String EXTRA_JOB_ID = "job_id";
 
     /** Broadcast when a background conversion finishes (ok or not). */
     public static final String BROADCAST_CONVERSION_DONE =
-            "com.example.hello.CONV_DONE";
+            "com.takeone.studio.CONV_DONE";
     public static final String EXTRA_OK = "ok";
     public static final String EXTRA_TITLE = "title";
     public static final String EXTRA_LABEL = "label";
@@ -30280,23 +30284,48 @@ public class ConversionService extends Service {
         worker.start();
     }
 
-    /** Android 15 dataSync budget expiry: stop cleanly instead of being killed. */
+    /** Android 14 (API 34) foreground service timeout callback. */
+    @Override
+    public void onTimeout(int startId) {
+        handleForegroundServiceTimeout();
+        super.onTimeout(startId);
+    }
+
+    /** Android 15 (API 35) dataSync budget expiry: stop cleanly instead of being killed. */
     @Override
     public void onTimeout(int startId, int fgsType) {
+        handleForegroundServiceTimeout();
+        super.onTimeout(startId, fgsType);
+    }
+
+    private void handleForegroundServiceTimeout() {
         // Pause, don't destroy: cancelling the job here would delete its
         // sidecar and .part, and clearing the queue would strand the other
-        // QUEUED jobs with no worker. Flag the timeout and wake any parked
-        // worker; the progress callback parks the current job as QUEUED so
-        // the next launch resumes everything intact.
+        // QUEUED jobs with no worker. Flag the timeout, persist the current
+        // job as QUEUED immediately, and wake any parked worker so the next
+        // launch resumes everything intact.
         serviceTimedOut = true;
+        ConversionJob job = current;
+        if (job != null && !job.cancelled
+                && ConversionJob.RUNNING.equals(job.state)) {
+            job.paused = false;
+            job.state = ConversionJob.QUEUED;
+            job.updatedAt = System.currentTimeMillis();
+            job.write();
+        }
+        onRecordingStateChanged();
+        Thread w;
+        synchronized (this) {
+            w = worker;
+        }
+        if (w != null) {
+            w.interrupt();
+        }
         // onTimeout does not stop WorkManager's own chain; re-arm it so the
         // queued sidecars are resumed after the dataSync budget resets.
         ConversionWatchdog.retry(this);
-        try {
-            stopForeground(true);
-        } catch (Exception ignored) {}
+        HardwareApiManager.get().stopForegroundCompat(this, true);
         stopSelf();
-        super.onTimeout(startId, fgsType);
     }
 
     /** Monitor that parks conversion while the microphone is capturing. */
@@ -31047,9 +31076,9 @@ public class ConversionService extends Service {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/ConversionWatchdog.java
+FILE: app/src/main/java/com/takeone/studio/ConversionWatchdog.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import android.content.Context;
 
@@ -31120,9 +31149,9 @@ final class ConversionWatchdog {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/ConversionWatchdogWorker.java
+FILE: app/src/main/java/com/takeone/studio/ConversionWatchdogWorker.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import android.app.Notification;
 import android.content.Context;
@@ -31205,9 +31234,9 @@ public class ConversionWatchdogWorker extends Worker {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/CrashLog.java
+FILE: app/src/main/java/com/takeone/studio/CrashLog.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import android.content.Context;
 import android.net.Uri;
@@ -31432,9 +31461,9 @@ public final class CrashLog {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/DbMeterView.java
+FILE: app/src/main/java/com/takeone/studio/DbMeterView.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import android.content.Context;
 import android.graphics.Canvas;
@@ -31552,9 +31581,9 @@ public class DbMeterView extends View {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/DeEsserProcessor.java
+FILE: app/src/main/java/com/takeone/studio/DeEsserProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 /**
  * Stage 4 Dedicated De-Esser (Split-Band & Broadband) with Center Frequency,
@@ -31678,9 +31707,9 @@ final class DeEsserProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/DeHumProcessor.java
+FILE: app/src/main/java/com/takeone/studio/DeHumProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -31763,9 +31792,9 @@ final class DeHumProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/DistortionWaveshaperProcessor.java
+FILE: app/src/main/java/com/takeone/studio/DistortionWaveshaperProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 /**
  * Stage 6 Distortion & Waveshaper (11 curves): Hard Clip, Soft Clip (tanh),
@@ -31935,9 +31964,9 @@ final class DistortionWaveshaperProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/Dsp.java
+FILE: app/src/main/java/com/takeone/studio/Dsp.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import java.io.File;
 import java.io.RandomAccessFile;
@@ -33256,9 +33285,9 @@ public final class Dsp {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/DspChain.java
+FILE: app/src/main/java/com/takeone/studio/DspChain.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import android.content.Context;
 import android.content.SharedPreferences;
@@ -34935,9 +34964,9 @@ public final class DspChain {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/DynamicsDetector.java
+FILE: app/src/main/java/com/takeone/studio/DynamicsDetector.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 /**
  * Shared envelope / level-detection helpers for the Stage 4 dynamics suite
@@ -35147,9 +35176,9 @@ final class DynamicsDetector {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/DynamicsGraphView.java
+FILE: app/src/main/java/com/takeone/studio/DynamicsGraphView.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import android.annotation.SuppressLint;
 import android.content.Context;
@@ -35453,9 +35482,9 @@ final class DynamicsGraphView extends View {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/EchoProcessor.java
+FILE: app/src/main/java/com/takeone/studio/EchoProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import java.util.Arrays;
 
@@ -35555,9 +35584,9 @@ final class EchoProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/EditEngine.java
+FILE: app/src/main/java/com/takeone/studio/EditEngine.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
@@ -36984,9 +37013,9 @@ public final class EditEngine {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/EditLink.java
+FILE: app/src/main/java/com/takeone/studio/EditLink.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import android.content.Context;
 import android.content.SharedPreferences;
@@ -37057,9 +37086,9 @@ public final class EditLink {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/EqCurveView.java
+FILE: app/src/main/java/com/takeone/studio/EqCurveView.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import android.content.Context;
 import android.graphics.Canvas;
@@ -37233,9 +37262,9 @@ abstract class EqCurveView extends View {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/FadeProcessor.java
+FILE: app/src/main/java/com/takeone/studio/FadeProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import java.io.File;
 import java.io.RandomAccessFile;
@@ -37552,9 +37581,9 @@ final class FadeProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/FilterCurveEqProcessor.java
+FILE: app/src/main/java/com/takeone/studio/FilterCurveEqProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import java.util.Locale;
 
@@ -37864,9 +37893,9 @@ final class FilterCurveEqProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/FilterCurveEqView.java
+FILE: app/src/main/java/com/takeone/studio/FilterCurveEqView.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import android.annotation.SuppressLint;
 import android.content.Context;
@@ -38091,9 +38120,9 @@ final class FilterCurveEqView extends EqCurveView {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/FormatConverter.java
+FILE: app/src/main/java/com/takeone/studio/FormatConverter.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import android.media.MediaCodec;
 import android.media.MediaFormat;
@@ -39278,9 +39307,9 @@ public final class FormatConverter {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/FreeverbReverbProcessor.java
+FILE: app/src/main/java/com/takeone/studio/FreeverbReverbProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import java.util.Arrays;
 
@@ -39511,9 +39540,9 @@ final class FreeverbReverbProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/FxCategory.java
+FILE: app/src/main/java/com/takeone/studio/FxCategory.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 /**
  * Coarse grouping for the FX rack, mirroring the eight effect-catalog
@@ -39538,9 +39567,9 @@ public enum FxCategory {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/FxParameter.java
+FILE: app/src/main/java/com/takeone/studio/FxParameter.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import java.util.Locale;
 
@@ -39857,9 +39886,9 @@ public final class FxParameter {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/FxPreviewPeaks.java
+FILE: app/src/main/java/com/takeone/studio/FxPreviewPeaks.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import java.io.File;
 import java.io.RandomAccessFile;
@@ -40510,9 +40539,9 @@ final class FxPreviewPeaks {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/FxRackChain.java
+FILE: app/src/main/java/com/takeone/studio/FxRackChain.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -41182,9 +41211,9 @@ public final class FxRackChain {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/FxTelemetry.java
+FILE: app/src/main/java/com/takeone/studio/FxTelemetry.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -41327,9 +41356,9 @@ public final class FxTelemetry {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/GraphicEqProcessor.java
+FILE: app/src/main/java/com/takeone/studio/GraphicEqProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -41463,9 +41492,9 @@ final class GraphicEqProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/GraphicEqView.java
+FILE: app/src/main/java/com/takeone/studio/GraphicEqView.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import android.annotation.SuppressLint;
 import android.content.Context;
@@ -41608,9 +41637,9 @@ final class GraphicEqView extends EqCurveView {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/HardwareApiManager.java
+FILE: app/src/main/java/com/takeone/studio/HardwareApiManager.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import android.Manifest;
 import android.annotation.SuppressLint;
@@ -41623,9 +41652,11 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ServiceInfo;
 import android.media.AudioAttributes;
+import android.media.AudioDeviceInfo;
 import android.media.AudioFocusRequest;
 import android.media.AudioFormat;
 import android.media.AudioManager;
+import android.media.AudioRecord;
 import android.media.AudioTrack;
 import android.media.MediaMuxer;
 import android.media.MicrophoneInfo;
@@ -42659,12 +42690,161 @@ public final class HardwareApiManager {
             view.setElevation(elevationPx);
         }
     }
+
+    /** True when running on Android 15 (API 35 / VANILLA_ICE_CREAM) or newer. */
+    public boolean isAndroid15OrAbove() {
+        return sdkInt() >= 35;
+    }
+
+    /**
+     * Stops foreground state on a {@link Service} using {@link Service#STOP_FOREGROUND_REMOVE}
+     * or {@link Service#STOP_FOREGROUND_DETACH} on API 24+ (avoiding deprecated boolean overload).
+     */
+    @SuppressLint("NewApi")
+    public void stopForegroundCompat(Service service, boolean removeNotification) {
+        if (service == null) return;
+        try {
+            if (sdkInt() >= Build.VERSION_CODES.N) {
+                service.stopForeground(removeNotification
+                        ? Service.STOP_FOREGROUND_REMOVE
+                        : Service.STOP_FOREGROUND_DETACH);
+            } else {
+                //noinspection deprecation
+                service.stopForeground(removeNotification);
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    /**
+     * Returns true on API 24–30, or on API 31+ (Android 12+) when
+     * {@link Manifest.permission#BLUETOOTH_CONNECT} has been granted.
+     */
+    @SuppressLint("InlinedApi")
+    public boolean hasBluetoothConnectPermission(Context ctx) {
+        if (sdkInt() < Build.VERSION_CODES.S) return true;
+        if (ctx == null) return false;
+        try {
+            return ContextCompat.checkSelfPermission(ctx,
+                    Manifest.permission.BLUETOOTH_CONNECT)
+                    == PackageManager.PERMISSION_GRANTED;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    /**
+     * Returns true on API 31+ when a Bluetooth audio input device is connected
+     * and {@link Manifest.permission#BLUETOOTH_CONNECT} has not yet been granted.
+     */
+    public boolean shouldRequestBluetoothConnectPermission(Context ctx, AudioManager am) {
+        if (ctx == null || am == null || sdkInt() < Build.VERSION_CODES.S) {
+            return false;
+        }
+        if (hasBluetoothConnectPermission(ctx)) {
+            return false;
+        }
+        return findBluetoothInputDevice(am) != null;
+    }
+
+    /**
+     * Finds a connected Bluetooth microphone input device ({@code TYPE_BLE_HEADSET}
+     * on API 31+ or {@code TYPE_BLUETOOTH_SCO} on API 24+), or returns null if
+     * no Bluetooth headset mic is connected.
+     */
+    @SuppressLint("NewApi")
+    public AudioDeviceInfo findBluetoothInputDevice(AudioManager am) {
+        if (am == null || sdkInt() < Build.VERSION_CODES.M) return null;
+        try {
+            AudioDeviceInfo[] inputs = am.getDevices(AudioManager.GET_DEVICES_INPUTS);
+            if (inputs == null) return null;
+            AudioDeviceInfo scoMatch = null;
+            for (AudioDeviceInfo dev : inputs) {
+                if (dev == null) continue;
+                int type = dev.getType();
+                if (sdkInt() >= Build.VERSION_CODES.S
+                        && type == AudioDeviceInfo.TYPE_BLE_HEADSET) {
+                    return dev;
+                }
+                if (type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO && scoMatch == null) {
+                    scoMatch = dev;
+                }
+            }
+            return scoMatch;
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    /**
+     * Routes {@code recorder} to a connected Bluetooth headset microphone if one
+     * is available and permitted. Uses {@link AudioManager#setCommunicationDevice}
+     * on API 31+ (Android 12–15) and legacy SCO routing on API 24–30.
+     *
+     * @return true if a Bluetooth microphone was found and selected.
+     */
+    @SuppressLint({"NewApi", "MissingPermission"})
+    public boolean routeBluetoothMicIfAvailable(Context ctx, AudioManager am,
+                                                AudioRecord recorder) {
+        if (am == null || recorder == null) return false;
+        if (!hasBluetoothConnectPermission(ctx)) return false;
+        try {
+            AudioDeviceInfo btInput = findBluetoothInputDevice(am);
+            if (btInput == null) return false;
+            recorder.setPreferredDevice(btInput);
+            if (sdkInt() >= Build.VERSION_CODES.S) {
+                List<AudioDeviceInfo> commDevs = am.getAvailableCommunicationDevices();
+                if (commDevs != null) {
+                    for (AudioDeviceInfo d : commDevs) {
+                        if (d != null && (d.getType() == AudioDeviceInfo.TYPE_BLE_HEADSET
+                                || d.getType() == AudioDeviceInfo.TYPE_BLUETOOTH_SCO)) {
+                            am.setCommunicationDevice(d);
+                            break;
+                        }
+                    }
+                }
+            } else if (am.isBluetoothScoAvailableOffCall()) {
+                //noinspection deprecation
+                am.startBluetoothSco();
+                //noinspection deprecation
+                am.setBluetoothScoOn(true);
+            }
+            return true;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    /**
+     * Releases any active Bluetooth communication/SCO microphone routing when
+     * capture pauses or stops.
+     */
+    @SuppressLint({"NewApi", "MissingPermission"})
+    public void clearBluetoothMicRouting(AudioManager am) {
+        if (am == null) return;
+        try {
+            if (sdkInt() >= Build.VERSION_CODES.S) {
+                AudioDeviceInfo cur = am.getCommunicationDevice();
+                if (cur != null && (cur.getType() == AudioDeviceInfo.TYPE_BLE_HEADSET
+                        || cur.getType() == AudioDeviceInfo.TYPE_BLUETOOTH_SCO)) {
+                    am.clearCommunicationDevice();
+                }
+            } else {
+                //noinspection deprecation
+                if (am.isBluetoothScoOn()) {
+                    //noinspection deprecation
+                    am.setBluetoothScoOn(false);
+                    //noinspection deprecation
+                    am.stopBluetoothSco();
+                }
+            }
+        } catch (Throwable ignored) {}
+    }
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/LibraryFragment.java
+FILE: app/src/main/java/com/takeone/studio/LibraryFragment.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import android.app.Dialog;
 import android.content.BroadcastReceiver;
@@ -44922,9 +45102,9 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/LoudnessNormalizationProcessor.java
+FILE: app/src/main/java/com/takeone/studio/LoudnessNormalizationProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -45172,9 +45352,9 @@ final class LoudnessNormalizationProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/MainActivity.java
+FILE: app/src/main/java/com/takeone/studio/MainActivity.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import android.content.Intent;
 import android.os.Bundle;
@@ -45442,7 +45622,7 @@ public class MainActivity extends AppCompatActivity {
     private void handleOpenStudioIntent(Intent intent) {
         if (intent == null) return;
         boolean open = intent.getBooleanExtra("open_studio", false)
-                || "com.example.hello.OPEN_STUDIO".equals(intent.getAction());
+                || "com.takeone.studio.OPEN_STUDIO".equals(intent.getAction());
         if (open && RecordingEngine.get().hasSession() && !inStudio) {
             openStudio();
         }
@@ -45657,9 +45837,9 @@ public class MainActivity extends AppCompatActivity {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/MemoryBudget.java
+FILE: app/src/main/java/com/takeone/studio/MemoryBudget.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 /**
  * Adaptive chunk sizing for offline audio work.
@@ -45710,21 +45890,19 @@ final class MemoryBudget {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/MicSupport.java
+FILE: app/src/main/java/com/takeone/studio/MicSupport.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
+import android.content.Context;
 import android.media.AudioManager;
-import android.media.MicrophoneInfo;
-import android.os.Build;
-
-import java.util.List;
+import android.media.AudioRecord;
 
 /**
- * Capability check for true stereo capture. Counts physical microphones via
- * {@link AudioManager#getMicrophones()} (API 28+) so a stereo preset can
- * fall back to mono — with a warning — instead of recording dual-mono or
- * silence on single-mic hardware.
+ * Capability check for true stereo capture and Bluetooth headset microphone
+ * routing. Counts physical microphones via {@link AudioManager#getMicrophones()}
+ * (API 28+) and routes Bluetooth Classic SCO / BLE Audio headset microphones
+ * across API 24–35 via {@link HardwareApiManager}.
  */
 public final class MicSupport {
 
@@ -45748,12 +45926,32 @@ public final class MicSupport {
     public static boolean dualAbsent(AudioManager am) {
         return physicalMicCount(am) == 1;
     }
+
+    /** True when a Bluetooth SCO or BLE Audio headset microphone is connected. */
+    public static boolean isBluetoothMicConnected(AudioManager am) {
+        return HardwareApiManager.get().findBluetoothInputDevice(am) != null;
+    }
+
+    /**
+     * Routes {@code recorder} to a connected Bluetooth headset microphone if one
+     * is available and permitted.
+     */
+    public static boolean routeBluetoothMicIfAvailable(Context ctx,
+                                                       AudioManager am,
+                                                       AudioRecord recorder) {
+        return HardwareApiManager.get().routeBluetoothMicIfAvailable(ctx, am, recorder);
+    }
+
+    /** Releases any active Bluetooth microphone communication/SCO routing. */
+    public static void clearBluetoothMicRouting(AudioManager am) {
+        HardwareApiManager.get().clearBluetoothMicRouting(am);
+    }
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/MultiDelayProcessor.java
+FILE: app/src/main/java/com/takeone/studio/MultiDelayProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import java.util.Arrays;
 
@@ -45894,9 +46092,9 @@ final class MultiDelayProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/MultibandCompressorProcessor.java
+FILE: app/src/main/java/com/takeone/studio/MultibandCompressorProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 /**
  * Stage 4 3-band Multiband Compressor: splits the spectrum at Low/Mid
@@ -46061,9 +46259,9 @@ final class MultibandCompressorProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/NoiseGateExpanderProcessor.java
+FILE: app/src/main/java/com/takeone/studio/NoiseGateExpanderProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 /**
  * Stage 4 Noise Gate / Downward Expander with Open Threshold, Close
@@ -46204,9 +46402,9 @@ final class NoiseGateExpanderProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/NoiseSuppressionProcessor.java
+FILE: app/src/main/java/com/takeone/studio/NoiseSuppressionProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import org.json.JSONArray;
 
@@ -46583,9 +46781,9 @@ final class NoiseSuppressionProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/NormalizeProcessor.java
+FILE: app/src/main/java/com/takeone/studio/NormalizeProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import java.io.File;
 
@@ -46810,9 +47008,9 @@ final class NormalizeProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/NotchFilterProcessor.java
+FILE: app/src/main/java/com/takeone/studio/NotchFilterProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 /**
  * Stage 3 · surgical notch for hum (50/60 Hz) and resonances. RBJ notch
@@ -46894,9 +47092,9 @@ final class NotchFilterProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/OptionsSheet.java
+FILE: app/src/main/java/com/takeone/studio/OptionsSheet.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import android.app.Dialog;
 import android.content.Context;
@@ -47870,9 +48068,9 @@ public final class OptionsSheet {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/ParametricEq6BandProcessor.java
+FILE: app/src/main/java/com/takeone/studio/ParametricEq6BandProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -48095,9 +48293,9 @@ final class ParametricEq6BandProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/ParametricEqView.java
+FILE: app/src/main/java/com/takeone/studio/ParametricEqView.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import android.annotation.SuppressLint;
 import android.content.Context;
@@ -48284,9 +48482,9 @@ final class ParametricEqView extends EqCurveView {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/PaulstretchProcessor.java
+FILE: app/src/main/java/com/takeone/studio/PaulstretchProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import java.io.File;
 import java.io.RandomAccessFile;
@@ -48551,9 +48749,9 @@ final class PaulstretchProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/PhaserProcessor.java
+FILE: app/src/main/java/com/takeone/studio/PhaserProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 /**
  * Stage 6 Multi-Stage All-Pass Phaser: 2 to 24 cascaded first-order all-pass
@@ -48682,9 +48880,9 @@ final class PhaserProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/PlosiveBreathSuppressorProcessor.java
+FILE: app/src/main/java/com/takeone/studio/PlosiveBreathSuppressorProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 /**
  * Stage 5 Plosive & Breath Suppressor: a dynamic low-band suppressor that
@@ -48813,9 +49011,9 @@ final class PlosiveBreathSuppressorProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/PlotSpectrumDialog.java
+FILE: app/src/main/java/com/takeone/studio/PlotSpectrumDialog.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import java.util.Locale;
 
@@ -48908,9 +49106,9 @@ final class PlotSpectrumDialog {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/PressAnim.java
+FILE: app/src/main/java/com/takeone/studio/PressAnim.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import android.annotation.SuppressLint;
 import android.view.MotionEvent;
@@ -49041,9 +49239,9 @@ public final class PressAnim {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/ProCompressorProcessor.java
+FILE: app/src/main/java/com/takeone/studio/ProCompressorProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 /**
  * Soft-knee vocal compressor and leveler ("Compressor Pro") with gated automatic
@@ -49182,9 +49380,9 @@ public final class ProCompressorProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/ProDeEsserProcessor.java
+FILE: app/src/main/java/com/takeone/studio/ProDeEsserProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 /**
  * Split-band relative sibilance suppressor ("De-Esser Pro"). Uses a phase-coherent
@@ -49346,9 +49544,9 @@ public final class ProDeEsserProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/ProGateProcessor.java
+FILE: app/src/main/java/com/takeone/studio/ProGateProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 /**
  * Professional downward expander / room gate: a key-filtered peak detector
@@ -49497,9 +49695,9 @@ final class ProGateProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/ProHpfProcessor.java
+FILE: app/src/main/java/com/takeone/studio/ProHpfProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 /**
  * Professional low-cut filter: a 4th-order (or 2nd-order) Butterworth
@@ -49688,9 +49886,9 @@ final class ProHpfProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/ProLimiterProcessor.java
+FILE: app/src/main/java/com/takeone/studio/ProLimiterProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 /**
  * Brickwall ceiling limiter ("Brickwall Limiter Pro"). Drives up to +12 dB into
@@ -49831,9 +50029,9 @@ public final class ProLimiterProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/ProToneProcessor.java
+FILE: app/src/main/java/com/takeone/studio/ProToneProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 /**
  * Combined warmth (~180 Hz body) and vocal presence (~3.5 kHz articulation
@@ -50057,9 +50255,9 @@ public final class ProToneProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/RawFloatPlayer.java
+FILE: app/src/main/java/com/takeone/studio/RawFloatPlayer.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import android.media.AudioAttributes;
 import android.media.AudioFormat;
@@ -50546,9 +50744,9 @@ public final class RawFloatPlayer {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/RecordPreset.java
+FILE: app/src/main/java/com/takeone/studio/RecordPreset.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import android.content.Context;
 import android.content.SharedPreferences;
@@ -50653,9 +50851,9 @@ public enum RecordPreset {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/RecordingEngine.java
+FILE: app/src/main/java/com/takeone/studio/RecordingEngine.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import android.content.Context;
 import android.media.AudioFormat;
@@ -50729,6 +50927,8 @@ public final class RecordingEngine {
     public volatile boolean fellBackToMono;
 
     private AudioRecord recorder;
+    private Context captureAppContext;
+    private android.media.AudioManager captureAudioManager;
     private Thread capThread;
     private volatile boolean capRun;
     private RandomAccessFile raf;
@@ -51286,6 +51486,13 @@ public final class RecordingEngine {
         // AudioRecord so the output HAL never conflicts with mic capture.
         RawFloatPlayer.releaseWarmSpeaker();
         synchronized (lock) {
+            if (ctx != null) {
+                captureAppContext = ctx.getApplicationContext();
+                try {
+                    captureAudioManager = (android.media.AudioManager)
+                            captureAppContext.getSystemService(Context.AUDIO_SERVICE);
+                } catch (Throwable ignored) {}
+            }
             if (rawFile == null) throw new IllegalStateException("no session");
             if (state == State.RECORDING) return;
             raf = new RandomAccessFile(rawFile, "rw");
@@ -51399,6 +51606,13 @@ public final class RecordingEngine {
         // AudioRecord so the output HAL never conflicts with mic capture.
         RawFloatPlayer.releaseWarmSpeaker();
         synchronized (lock) {
+            if (ctx != null) {
+                captureAppContext = ctx.getApplicationContext();
+                try {
+                    captureAudioManager = (android.media.AudioManager)
+                            captureAppContext.getSystemService(Context.AUDIO_SERVICE);
+                } catch (Throwable ignored) {}
+            }
             if (state != State.PAUSED) return;
             raf = new RandomAccessFile(rawFile, "rw");
             try {
@@ -51528,7 +51742,7 @@ public final class RecordingEngine {
         return out;
     }
 
-    private static void stopThenJoinThenRelease(AudioRecord rec, Thread th) {
+    private void stopThenJoinThenRelease(AudioRecord rec, Thread th) {
         if (rec != null) {
             try {
                 rec.stop();
@@ -51543,6 +51757,7 @@ public final class RecordingEngine {
             try {
                 rec.release();
             } catch (Exception ignored) {}
+            MicSupport.clearBluetoothMicRouting(captureAudioManager);
         }
     }
 
@@ -51648,6 +51863,8 @@ public final class RecordingEngine {
                             } catch (Exception ignored) {}
                             continue;
                         }
+                        MicSupport.routeBluetoothMicIfAvailable(
+                                captureAppContext, captureAudioManager, ar);
                         ar.startRecording();
                         if (ar.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING) {
                             try {
@@ -51701,6 +51918,8 @@ public final class RecordingEngine {
                 try { ar.release(); } catch (Exception ignored) {}
                 return false;
             }
+            MicSupport.routeBluetoothMicIfAvailable(
+                    captureAppContext, captureAudioManager, ar);
             ar.startRecording();
             if (ar.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING) {
                 try { ar.stop(); } catch (Exception ignored) {}
@@ -52103,9 +52322,9 @@ public final class RecordingEngine {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/RecordingService.java
+FILE: app/src/main/java/com/takeone/studio/RecordingService.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import android.app.Notification;
 import android.app.NotificationChannel;
@@ -52135,21 +52354,21 @@ import java.io.File;
 public class RecordingService extends Service {
 
     public static final String ACTION_START =
-            "com.example.hello.REC_START";
+            "com.takeone.studio.REC_START";
     public static final String ACTION_TOGGLE =
-            "com.example.hello.REC_TOGGLE";
+            "com.takeone.studio.REC_TOGGLE";
     public static final String ACTION_SAVE =
-            "com.example.hello.REC_SAVE";
+            "com.takeone.studio.REC_SAVE";
     public static final String ACTION_CANCEL =
-            "com.example.hello.REC_CANCEL";
+            "com.takeone.studio.REC_CANCEL";
     public static final String ACTION_RESTORE_NOTIF =
-            "com.example.hello.action.RESTORE_NOTIF";
+            "com.takeone.studio.action.RESTORE_NOTIF";
 
     public static final String EXTRA_FORMAT = "format";
 
     /** Broadcast when a background save/cancel finishes. */
     public static final String BROADCAST_DONE =
-            "com.example.hello.REC_DONE";
+            "com.takeone.studio.REC_DONE";
     public static final String EXTRA_OK = "ok";
     public static final String EXTRA_MESSAGE = "message";
     public static final String EXTRA_TITLE = "title";
@@ -52280,6 +52499,38 @@ public class RecordingService extends Service {
         stopTick();
         abandonFocus();
         super.onDestroy();
+    }
+
+    /** Android 14 (API 34) foreground service timeout callback. */
+    @Override
+    public void onTimeout(int startId) {
+        handleForegroundServiceTimeout();
+        super.onTimeout(startId);
+    }
+
+    /**
+     * Android 15 (API 35) foreground service timeout callback: pauses capture
+     * cleanly so the WAV header and {@code .pending} recovery marker stay
+     * intact on disk and stops the foreground service before the system
+     * enforces {@code ForegroundServiceDidNotStopInTimeException}.
+     */
+    @Override
+    public void onTimeout(int startId, int fgsType) {
+        handleForegroundServiceTimeout();
+        super.onTimeout(startId, fgsType);
+    }
+
+    private void handleForegroundServiceTimeout() {
+        try {
+            RecordingEngine e = RecordingEngine.get();
+            if (e.state == RecordingEngine.State.RECORDING) {
+                e.pauseCapture();
+            }
+        } catch (Throwable ignored) {}
+        stopTick();
+        abandonFocus();
+        HardwareApiManager.get().stopForegroundCompat(this, true);
+        stopSelf();
     }
 
     // ---- audio focus: interruptions pause, never auto-resume ----
@@ -52746,7 +52997,7 @@ public class RecordingService extends Service {
     private void initPendingIntents() {
         Intent open = new Intent(this, MainActivity.class);
         open.putExtra("open_studio", true);
-        open.setAction("com.example.hello.OPEN_STUDIO");
+        open.setAction("com.takeone.studio.OPEN_STUDIO");
         try {
             cachedContentIntent = PendingIntent.getActivity(this, 10, open,
                     PendingIntent.FLAG_UPDATE_CURRENT
@@ -52824,9 +53075,9 @@ public class RecordingService extends Service {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/RepairProcessor.java
+FILE: app/src/main/java/com/takeone/studio/RepairProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 /**
  * Stage 5 Repair (LPC Short-Glitch & Dropout Interpolator): detects the worst
@@ -52993,9 +53244,9 @@ final class RepairProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/SaveFormat.java
+FILE: app/src/main/java/com/takeone/studio/SaveFormat.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import android.content.Context;
 import android.media.MediaCodecInfo;
@@ -53274,9 +53525,9 @@ public enum SaveFormat {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/ScriptImporter.java
+FILE: app/src/main/java/com/takeone/studio/ScriptImporter.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import android.content.Context;
 import android.net.Uri;
@@ -53549,9 +53800,9 @@ public final class ScriptImporter {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/ShelfFilterProcessor.java
+FILE: app/src/main/java/com/takeone/studio/ShelfFilterProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 /**
  * Stage 3 Shelf Filter: Low-shelf or High-shelf with corner frequency,
@@ -53644,9 +53895,9 @@ final class ShelfFilterProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/SlidingStretchProcessor.java
+FILE: app/src/main/java/com/takeone/studio/SlidingStretchProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import java.io.File;
 import java.io.RandomAccessFile;
@@ -53886,9 +54137,9 @@ final class SlidingStretchProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/SlopeFilterProcessor.java
+FILE: app/src/main/java/com/takeone/studio/SlopeFilterProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 /**
  * Stage 3 High-Pass (`"highpass"`) and Low-Pass (`"lowpass"`) Butterworth
@@ -53975,9 +54226,9 @@ final class SlopeFilterProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/SpectralEditProcessor.java
+FILE: app/src/main/java/com/takeone/studio/SpectralEditProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 /**
  * Stage 7 spectral edit: a parametric / shelving / notching EQ applied
@@ -54100,9 +54351,9 @@ final class SpectralEditProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/SpectralNoiseReductionProcessor.java
+FILE: app/src/main/java/com/takeone/studio/SpectralNoiseReductionProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import java.util.Arrays;
 
@@ -54251,9 +54502,9 @@ final class SpectralNoiseReductionProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/StereoImagingProcessor.java
+FILE: app/src/main/java/com/takeone/studio/StereoImagingProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 /**
  * Stage 6 Stereo Imaging, Pan & Phase Tool: Constant-Power Pan (-100% L ..
@@ -54378,9 +54629,9 @@ final class StereoImagingProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/StftProcessor.java
+FILE: app/src/main/java/com/takeone/studio/StftProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 /**
  * Reusable Short-Time Fourier Transform overlap-add framework (Stage 5).
@@ -54556,9 +54807,9 @@ abstract class StftProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/StreamingEncoder.java
+FILE: app/src/main/java/com/takeone/studio/StreamingEncoder.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import android.media.MediaCodec;
 import android.media.MediaFormat;
@@ -55589,9 +55840,9 @@ public final class StreamingEncoder {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/StudioFragment.java
+FILE: app/src/main/java/com/takeone/studio/StudioFragment.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import android.Manifest;
 import android.animation.ObjectAnimator;
@@ -55893,7 +56144,9 @@ public class StudioFragment extends Fragment {
 
     private ActivityResultLauncher<String> micPermission;
     private ActivityResultLauncher<String> notifPermission;
+    private ActivityResultLauncher<String> btPermission;
     private boolean notifAsked;
+    private boolean btAsked;
 
     private BroadcastReceiver doneReceiver;
 
@@ -55912,6 +56165,11 @@ public class StudioFragment extends Fragment {
         notifPermission = registerForActivityResult(
                 new ActivityResultContracts.RequestPermission(), granted -> {
                     notifAsked = true;
+                    ensureBluetoothThenStart();
+                });
+        btPermission = registerForActivityResult(
+                new ActivityResultContracts.RequestPermission(), granted -> {
+                    btAsked = true;
                     beginCapture();
                 });
     }
@@ -57457,6 +57715,19 @@ public class StudioFragment extends Fragment {
                 .requiresPostNotificationsPermission(requireContext())) {
             try {
                 notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS);
+                return;
+            } catch (Exception ignored) {}
+        }
+        ensureBluetoothThenStart();
+    }
+
+    @android.annotation.SuppressLint("InlinedApi")
+    private void ensureBluetoothThenStart() {
+        if (!btAsked && HardwareApiManager.get()
+                .shouldRequestBluetoothConnectPermission(
+                        requireContext(), audioManager)) {
+            try {
+                btPermission.launch(Manifest.permission.BLUETOOTH_CONNECT);
                 return;
             } catch (Exception ignored) {}
         }
@@ -61731,9 +62002,9 @@ public class StudioFragment extends Fragment {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/Take.java
+FILE: app/src/main/java/com/takeone/studio/Take.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import java.text.SimpleDateFormat;
 import java.util.Date;
@@ -61807,9 +62078,9 @@ public class Take {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/TakeDao.java
+FILE: app/src/main/java/com/takeone/studio/TakeDao.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import androidx.room.Dao;
 import androidx.room.Insert;
@@ -61846,9 +62117,9 @@ public interface TakeDao {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/TakeDatabase.java
+FILE: app/src/main/java/com/takeone/studio/TakeDatabase.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import android.content.Context;
 
@@ -61905,9 +62176,9 @@ public abstract class TakeDatabase extends RoomDatabase {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/TakeEntity.java
+FILE: app/src/main/java/com/takeone/studio/TakeEntity.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import androidx.room.ColumnInfo;
 import androidx.room.Entity;
@@ -61971,9 +62242,9 @@ public class TakeEntity {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/TakeSaver.java
+FILE: app/src/main/java/com/takeone/studio/TakeSaver.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import android.content.Context;
 
@@ -62218,9 +62489,9 @@ public final class TakeSaver {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/TakesAdapter.java
+FILE: app/src/main/java/com/takeone/studio/TakesAdapter.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import android.animation.ValueAnimator;
 import android.view.LayoutInflater;
@@ -62935,9 +63206,9 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/TakesRepository.java
+FILE: app/src/main/java/com/takeone/studio/TakesRepository.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import android.content.Context;
 import android.content.SharedPreferences;
@@ -64351,9 +64622,9 @@ public final class TakesRepository {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/TeleDialogs.java
+FILE: app/src/main/java/com/takeone/studio/TeleDialogs.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import android.app.Dialog;
 import android.content.Context;
@@ -64527,9 +64798,9 @@ public final class TeleDialogs {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/TeleMath.java
+FILE: app/src/main/java/com/takeone/studio/TeleMath.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 /**
  * Pure layout/rate maths for the teleprompter. No Android imports, so the
@@ -64674,9 +64945,9 @@ public final class TeleMath {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/TeleSettings.java
+FILE: app/src/main/java/com/takeone/studio/TeleSettings.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import android.content.Context;
 import android.content.SharedPreferences;
@@ -64785,9 +65056,9 @@ public final class TeleSettings {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/TeleValue.java
+FILE: app/src/main/java/com/takeone/studio/TeleValue.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import android.app.AlertDialog;
 import android.app.Dialog;
@@ -65703,9 +65974,9 @@ public class TeleValue extends LinearLayout {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/TeleprompterView.java
+FILE: app/src/main/java/com/takeone/studio/TeleprompterView.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import android.content.Context;
 import android.graphics.Canvas;
@@ -66280,9 +66551,9 @@ public class TeleprompterView extends View {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/TimeFmt.java
+FILE: app/src/main/java/com/takeone/studio/TimeFmt.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import java.util.Locale;
 
@@ -66305,9 +66576,9 @@ public final class TimeFmt {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/TimelineUtilityProcessor.java
+FILE: app/src/main/java/com/takeone/studio/TimelineUtilityProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import java.io.File;
 import java.io.RandomAccessFile;
@@ -66544,9 +66815,9 @@ final class TimelineUtilityProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/TremoloProcessor.java
+FILE: app/src/main/java/com/takeone/studio/TremoloProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 /**
  * Stage 6 Tremolo (LFO Amplitude Modulator) with 5 waveforms (Sine, Triangle,
@@ -66659,9 +66930,9 @@ final class TremoloProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/TrialAndBillingManager.java
+FILE: app/src/main/java/com/takeone/studio/TrialAndBillingManager.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import android.app.Activity;
 import android.content.Context;
@@ -67485,9 +67756,9 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/TruncateSilenceProcessor.java
+FILE: app/src/main/java/com/takeone/studio/TruncateSilenceProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import java.io.File;
 import java.io.RandomAccessFile;
@@ -67802,9 +68073,9 @@ final class TruncateSilenceProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/VocoderProcessor.java
+FILE: app/src/main/java/com/takeone/studio/VocoderProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 /**
  * Stage 6 Multi-Band Vocoder: splits the voice (modulator) into N logarithmically
@@ -67943,9 +68214,9 @@ final class VocoderProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/WahwahProcessor.java
+FILE: app/src/main/java/com/takeone/studio/WahwahProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 /**
  * Stage 6 Wahwah / Auto-Wah: swept resonant state-variable band-pass filter
@@ -68056,9 +68327,9 @@ final class WahwahProcessor extends AudioProcessor {
 }
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/WaveformView.java
+FILE: app/src/main/java/com/takeone/studio/WaveformView.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import android.content.Context;
 import android.graphics.Canvas;
@@ -70048,9 +70319,9 @@ public class WaveformView extends View {
 
 
 =================================================================================
-FILE: app/src/main/java/com/example/hello/WsolaTimePitchProcessor.java
+FILE: app/src/main/java/com/takeone/studio/WsolaTimePitchProcessor.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import java.io.File;
 import java.io.RandomAccessFile;
@@ -72690,7 +72961,7 @@ FILE: app/src/main/res/layout/fragment_studio.xml
         android:clipChildren="true"
         android:minHeight="180dp">
 
-        <com.example.hello.TeleprompterView
+        <com.takeone.studio.TeleprompterView
             android:id="@+id/teleView"
             android:layout_width="match_parent"
             android:layout_height="match_parent" />
@@ -72793,21 +73064,21 @@ FILE: app/src/main/res/layout/fragment_studio.xml
                 android:paddingLeft="12dp"
                 android:paddingRight="12dp">
 
-                <com.example.hello.TeleValue
+                <com.takeone.studio.TeleValue
                     android:id="@+id/teleSizeValue"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_marginEnd="6dp"
                     android:layout_weight="1" />
 
-                <com.example.hello.TeleValue
+                <com.takeone.studio.TeleValue
                     android:id="@+id/teleSpeedValue"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_marginEnd="6dp"
                     android:layout_weight="1" />
 
-                <com.example.hello.TeleValue
+                <com.takeone.studio.TeleValue
                     android:id="@+id/teleWplValue"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
@@ -72918,7 +73189,7 @@ FILE: app/src/main/res/layout/fragment_studio.xml
         android:paddingLeft="16dp"
         android:paddingRight="14dp">
 
-        <com.example.hello.DbMeterView
+        <com.takeone.studio.DbMeterView
             android:id="@+id/dbMeter"
             android:layout_width="8dp"
             android:layout_height="168dp" />
@@ -72937,7 +73208,7 @@ FILE: app/src/main/res/layout/fragment_studio.xml
                 android:gravity="center_vertical"
                 android:orientation="horizontal">
 
-                <com.example.hello.WaveformView
+                <com.takeone.studio.WaveformView
                     android:id="@+id/waveform"
                     android:layout_width="0dp"
                     android:layout_height="64dp"
@@ -72950,7 +73221,7 @@ FILE: app/src/main/res/layout/fragment_studio.xml
                     android:gravity="center"
                     android:orientation="vertical">
 
-                    <com.example.hello.TeleValue
+                    <com.takeone.studio.TeleValue
                         android:id="@+id/zoomValue"
                         android:layout_width="40dp"
                         android:layout_height="wrap_content" />
@@ -73788,7 +74059,7 @@ FILE: app/src/main/res/layout-land/fragment_studio.xml
         android:clipChildren="true"
         android:minHeight="180dp">
 
-        <com.example.hello.TeleprompterView
+        <com.takeone.studio.TeleprompterView
             android:id="@+id/teleView"
             android:layout_width="match_parent"
             android:layout_height="match_parent" />
@@ -73891,21 +74162,21 @@ FILE: app/src/main/res/layout-land/fragment_studio.xml
                 android:paddingLeft="12dp"
                 android:paddingRight="12dp">
 
-                <com.example.hello.TeleValue
+                <com.takeone.studio.TeleValue
                     android:id="@+id/teleSizeValue"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_marginEnd="6dp"
                     android:layout_weight="1" />
 
-                <com.example.hello.TeleValue
+                <com.takeone.studio.TeleValue
                     android:id="@+id/teleSpeedValue"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_marginEnd="6dp"
                     android:layout_weight="1" />
 
-                <com.example.hello.TeleValue
+                <com.takeone.studio.TeleValue
                     android:id="@+id/teleWplValue"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
@@ -74016,7 +74287,7 @@ FILE: app/src/main/res/layout-land/fragment_studio.xml
         android:paddingLeft="16dp"
         android:paddingRight="14dp">
 
-        <com.example.hello.DbMeterView
+        <com.takeone.studio.DbMeterView
             android:id="@+id/dbMeter"
             android:layout_width="8dp"
             android:layout_height="168dp" />
@@ -74035,7 +74306,7 @@ FILE: app/src/main/res/layout-land/fragment_studio.xml
                 android:gravity="center_vertical"
                 android:orientation="horizontal">
 
-                <com.example.hello.WaveformView
+                <com.takeone.studio.WaveformView
                     android:id="@+id/waveform"
                     android:layout_width="0dp"
                     android:layout_height="64dp"
@@ -74048,7 +74319,7 @@ FILE: app/src/main/res/layout-land/fragment_studio.xml
                     android:gravity="center"
                     android:orientation="vertical">
 
-                    <com.example.hello.TeleValue
+                    <com.takeone.studio.TeleValue
                         android:id="@+id/zoomValue"
                         android:layout_width="40dp"
                         android:layout_height="wrap_content" />
@@ -74682,9 +74953,9 @@ FILE: app/src/main/res/xml/file_paths.xml
 </paths>
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/AdMobManagerTest.java
+FILE: app/src/test/java/com/takeone/studio/AdMobManagerTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -74874,9 +75145,9 @@ public class AdMobManagerTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/AudioImportFixTest.java
+FILE: app/src/test/java/com/takeone/studio/AudioImportFixTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -75110,9 +75381,9 @@ public class AudioImportFixTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/Audit4FixTest.java
+FILE: app/src/test/java/com/takeone/studio/Audit4FixTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -75419,9 +75690,9 @@ public class Audit4FixTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/BillingTrialTest.java
+FILE: app/src/test/java/com/takeone/studio/BillingTrialTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
@@ -75452,9 +75723,9 @@ public class BillingTrialTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/ConversionJobsTest.java
+FILE: app/src/test/java/com/takeone/studio/ConversionJobsTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -76117,9 +76388,9 @@ public class ConversionJobsTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/ConversionResumeTest.java
+FILE: app/src/test/java/com/takeone/studio/ConversionResumeTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -76468,9 +76739,9 @@ public class ConversionResumeTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/ConvertingCardsBindTest.java
+FILE: app/src/test/java/com/takeone/studio/ConvertingCardsBindTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertTrue;
 
@@ -76584,9 +76855,9 @@ public class ConvertingCardsBindTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/CrashLogTest.java
+FILE: app/src/test/java/com/takeone/studio/CrashLogTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
@@ -76650,9 +76921,9 @@ public class CrashLogTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/DspAudioFixTest.java
+FILE: app/src/test/java/com/takeone/studio/DspAudioFixTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
@@ -77009,9 +77280,9 @@ public class DspAudioFixTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/DspBugFixesTest.java
+FILE: app/src/test/java/com/takeone/studio/DspBugFixesTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -77344,9 +77615,9 @@ public class DspBugFixesTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/DspChainTest.java
+FILE: app/src/test/java/com/takeone/studio/DspChainTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -77592,9 +77863,9 @@ public class DspChainTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/DspSpliceTest.java
+FILE: app/src/test/java/com/takeone/studio/DspSpliceTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -77742,9 +78013,9 @@ public class DspSpliceTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/DspTest.java
+FILE: app/src/test/java/com/takeone/studio/DspTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -78024,9 +78295,9 @@ public class DspTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/EditEngineTest.java
+FILE: app/src/test/java/com/takeone/studio/EditEngineTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -78411,9 +78682,9 @@ public class EditEngineTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/EditLinkTest.java
+FILE: app/src/test/java/com/takeone/studio/EditLinkTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -78455,9 +78726,9 @@ public class EditLinkTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/EqSuiteTest.java
+FILE: app/src/test/java/com/takeone/studio/EqSuiteTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
@@ -78775,9 +79046,9 @@ public class EqSuiteTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/FlacHeaderTest.java
+FILE: app/src/test/java/com/takeone/studio/FlacHeaderTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -78956,9 +79227,9 @@ public class FlacHeaderTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/FxCatalogTest.java
+FILE: app/src/test/java/com/takeone/studio/FxCatalogTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -79091,9 +79362,9 @@ public class FxCatalogTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/FxCommitAndCrossfadeTest.java
+FILE: app/src/test/java/com/takeone/studio/FxCommitAndCrossfadeTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -79412,9 +79683,9 @@ public class FxCommitAndCrossfadeTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/FxDivergenceGuardTest.java
+FILE: app/src/test/java/com/takeone/studio/FxDivergenceGuardTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -79523,9 +79794,9 @@ public class FxDivergenceGuardTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/FxEffectsModeTest.java
+FILE: app/src/test/java/com/takeone/studio/FxEffectsModeTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotEquals;
@@ -80065,9 +80336,9 @@ public class FxEffectsModeTest {
 
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/FxLivePreviewTest.java
+FILE: app/src/test/java/com/takeone/studio/FxLivePreviewTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotSame;
@@ -80222,9 +80493,9 @@ public class FxLivePreviewTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/FxParamInventoryTest.java
+FILE: app/src/test/java/com/takeone/studio/FxParamInventoryTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
@@ -80338,9 +80609,9 @@ public class FxParamInventoryTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/FxParamMatrixDumpTest.java
+FILE: app/src/test/java/com/takeone/studio/FxParamMatrixDumpTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -80827,9 +81098,9 @@ public class FxParamMatrixDumpTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/FxParameterStepTest.java
+FILE: app/src/test/java/com/takeone/studio/FxParameterStepTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -80886,9 +81157,9 @@ public class FxParameterStepTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/FxPipelineTest.java
+FILE: app/src/test/java/com/takeone/studio/FxPipelineTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -81057,9 +81328,9 @@ public class FxPipelineTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/FxRackChainTest.java
+FILE: app/src/test/java/com/takeone/studio/FxRackChainTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -81865,9 +82136,9 @@ public class FxRackChainTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/FxRackDuplicatesPersistenceTest.java
+FILE: app/src/test/java/com/takeone/studio/FxRackDuplicatesPersistenceTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotEquals;
@@ -81977,9 +82248,9 @@ public class FxRackDuplicatesPersistenceTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/FxRackDuplicatesTest.java
+FILE: app/src/test/java/com/takeone/studio/FxRackDuplicatesTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -82131,9 +82402,9 @@ public class FxRackDuplicatesTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/FxSpeechProbeTest.java
+FILE: app/src/test/java/com/takeone/studio/FxSpeechProbeTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import org.junit.Test;
 
@@ -82181,9 +82452,9 @@ public class FxSpeechProbeTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/FxVerifySupport.java
+FILE: app/src/test/java/com/takeone/studio/FxVerifySupport.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -82647,9 +82918,9 @@ public final class FxVerifySupport {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/HardwareApiManagerTest.java
+FILE: app/src/test/java/com/takeone/studio/HardwareApiManagerTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -82705,6 +82976,14 @@ public class HardwareApiManagerTest {
         assertEquals("opus", mgr.getOpusFileExtension());
         assertEquals(MediaMuxer.OutputFormat.MUXER_OUTPUT_OGG,
                 mgr.getOpusMuxerOutputFormat());
+        assertFalse(mgr.isAndroid15OrAbove());
+        assertTrue(mgr.hasBluetoothConnectPermission(null));
+
+        // API 35 (Android 15 Vanilla Ice Cream)
+        HardwareApiManager.setTestSdkIntOverride(35);
+        assertTrue(mgr.isAndroid15OrAbove());
+        assertFalse(mgr.hasBluetoothConnectPermission(null));
+        assertFalse(mgr.shouldRequestBluetoothConnectPermission(null, null));
     }
 
     @Test
@@ -82756,9 +83035,9 @@ public class HardwareApiManagerTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/MemoryBudgetTest.java
+FILE: app/src/test/java/com/takeone/studio/MemoryBudgetTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -82797,9 +83076,9 @@ public class MemoryBudgetTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/MicSupportTest.java
+FILE: app/src/test/java/com/takeone/studio/MicSupportTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -82827,12 +83106,19 @@ public class MicSupportTest {
     public void unknownIsNeverDualAbsent() {
         assertFalse(MicSupport.dualAbsent(null));
     }
+
+    @Test
+    public void bluetoothMicHelpersDegradeGracefullyOnNullManager() {
+        assertFalse(MicSupport.isBluetoothMicConnected(null));
+        assertFalse(MicSupport.routeBluetoothMicIfAvailable(null, null, null));
+        MicSupport.clearBluetoothMicRouting(null);
+    }
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/NoiseSuppressionTest.java
+FILE: app/src/test/java/com/takeone/studio/NoiseSuppressionTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
@@ -83128,9 +83414,9 @@ public class NoiseSuppressionTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/OptionsSheetResultDismissTest.java
+FILE: app/src/test/java/com/takeone/studio/OptionsSheetResultDismissTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -83205,9 +83491,9 @@ public class OptionsSheetResultDismissTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/OptionsSheetTest.java
+FILE: app/src/test/java/com/takeone/studio/OptionsSheetTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -83391,9 +83677,9 @@ public class OptionsSheetTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/PressAnimTest.java
+FILE: app/src/test/java/com/takeone/studio/PressAnimTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -83453,9 +83739,9 @@ public class PressAnimTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/ProFxTest.java
+FILE: app/src/test/java/com/takeone/studio/ProFxTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
@@ -83794,9 +84080,9 @@ public class ProFxTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/PunchInTest.java
+FILE: app/src/test/java/com/takeone/studio/PunchInTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -83900,9 +84186,9 @@ public class PunchInTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/ReconcileTest.java
+FILE: app/src/test/java/com/takeone/studio/ReconcileTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertTrue;
 
@@ -84018,9 +84304,9 @@ public class ReconcileTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/RecordPresetTest.java
+FILE: app/src/test/java/com/takeone/studio/RecordPresetTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -84114,9 +84400,9 @@ public class RecordPresetTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/RecordingEngineTest.java
+FILE: app/src/test/java/com/takeone/studio/RecordingEngineTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -84298,9 +84584,9 @@ public class RecordingEngineTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/SaveFormatTest.java
+FILE: app/src/test/java/com/takeone/studio/SaveFormatTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -84647,9 +84933,9 @@ public class SaveFormatTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/SavePipelineTest.java
+FILE: app/src/test/java/com/takeone/studio/SavePipelineTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -84846,9 +85132,9 @@ public class SavePipelineTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/ScriptImporterTest.java
+FILE: app/src/test/java/com/takeone/studio/ScriptImporterTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -85001,9 +85287,9 @@ public class ScriptImporterTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/Stage3DeepAuditFixTest.java
+FILE: app/src/test/java/com/takeone/studio/Stage3DeepAuditFixTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -85326,9 +85612,9 @@ public class Stage3DeepAuditFixTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/Stage3FxAuditFixTest.java
+FILE: app/src/test/java/com/takeone/studio/Stage3FxAuditFixTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -85876,9 +86162,9 @@ public class Stage3FxAuditFixTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/Stage3PostAuditFixTest.java
+FILE: app/src/test/java/com/takeone/studio/Stage3PostAuditFixTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -86145,9 +86431,9 @@ public class Stage3PostAuditFixTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/Stage4DynamicsTest.java
+FILE: app/src/test/java/com/takeone/studio/Stage4DynamicsTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
@@ -86385,9 +86671,9 @@ public class Stage4DynamicsTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/Stage4to7AudioChangeTest.java
+FILE: app/src/test/java/com/takeone/studio/Stage4to7AudioChangeTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
@@ -86666,9 +86952,9 @@ public class Stage4to7AudioChangeTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/Stage4to7PersistenceTest.java
+FILE: app/src/test/java/com/takeone/studio/Stage4to7PersistenceTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
@@ -86739,9 +87025,9 @@ public class Stage4to7PersistenceTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/Stage5RestorationTest.java
+FILE: app/src/test/java/com/takeone/studio/Stage5RestorationTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
@@ -87059,9 +87345,9 @@ public class Stage5RestorationTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/Stage6SpatialTest.java
+FILE: app/src/test/java/com/takeone/studio/Stage6SpatialTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
@@ -87284,9 +87570,9 @@ public class Stage6SpatialTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/Stage7TimeToolsTest.java
+FILE: app/src/test/java/com/takeone/studio/Stage7TimeToolsTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
@@ -87543,9 +87829,9 @@ public class Stage7TimeToolsTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/StudioEditorLayoutTest.java
+FILE: app/src/test/java/com/takeone/studio/StudioEditorLayoutTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
@@ -87747,9 +88033,9 @@ public class StudioEditorLayoutTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/StudioLayoutTest.java
+FILE: app/src/test/java/com/takeone/studio/StudioLayoutTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -87881,9 +88167,9 @@ public class StudioLayoutTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/TakeDaoTest.java
+FILE: app/src/test/java/com/takeone/studio/TakeDaoTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -88003,9 +88289,9 @@ public class TakeDaoTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/TakeSaverTest.java
+FILE: app/src/test/java/com/takeone/studio/TakeSaverTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -88090,9 +88376,9 @@ public class TakeSaverTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/TakeTest.java
+FILE: app/src/test/java/com/takeone/studio/TakeTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -88172,9 +88458,9 @@ public class TakeTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/TeleDialogsTest.java
+FILE: app/src/test/java/com/takeone/studio/TeleDialogsTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -88296,9 +88582,9 @@ public class TeleDialogsTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/TeleMathTest.java
+FILE: app/src/test/java/com/takeone/studio/TeleMathTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -88501,9 +88787,9 @@ public class TeleMathTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/TeleSettingsTest.java
+FILE: app/src/test/java/com/takeone/studio/TeleSettingsTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -88623,9 +88909,9 @@ public class TeleSettingsTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/TeleValueGestureTest.java
+FILE: app/src/test/java/com/takeone/studio/TeleValueGestureTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -88919,9 +89205,9 @@ public class TeleValueGestureTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/TeleValueScaleTest.java
+FILE: app/src/test/java/com/takeone/studio/TeleValueScaleTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -89074,9 +89360,9 @@ public class TeleValueScaleTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/TeleprompterRenderTest.java
+FILE: app/src/test/java/com/takeone/studio/TeleprompterRenderTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -89292,9 +89578,9 @@ public class TeleprompterRenderTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/TimeFmtTest.java
+FILE: app/src/test/java/com/takeone/studio/TimeFmtTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 
@@ -89327,9 +89613,9 @@ public class TimeFmtTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/Wav32FormatTest.java
+FILE: app/src/test/java/com/takeone/studio/Wav32FormatTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -89418,9 +89704,9 @@ public class Wav32FormatTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/WaveformLoadTest.java
+FILE: app/src/test/java/com/takeone/studio/WaveformLoadTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -89533,9 +89819,9 @@ public class WaveformLoadTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/WaveformTimelineTest.java
+FILE: app/src/test/java/com/takeone/studio/WaveformTimelineTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -89943,9 +90229,9 @@ public class WaveformTimelineTest {
 }
 
 =================================================================================
-FILE: app/src/test/java/com/example/hello/WaveformZoomTest.java
+FILE: app/src/test/java/com/takeone/studio/WaveformZoomTest.java
 =================================================================================
-package com.example.hello;
+package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -90425,8 +90711,8 @@ adb install -r -t app-debug-androidTest.apk 2>&1 | tail -1
 
 echo "== running every encoder (this is the test)"
 adb logcat -c
-timeout 900 adb shell am instrument -w -e class com.example.hello.EncodeFormatsTest \
-  com.example.hello.test/androidx.test.runner.AndroidJUnitRunner 2>&1
+timeout 900 adb shell am instrument -w -e class com.takeone.studio.EncodeFormatsTest \
+  com.takeone.studio.test/androidx.test.runner.AndroidJUnitRunner 2>&1
 
 echo "== FORMAT RESULTS"
 adb logcat -d -s ENCFMT:* 2>&1 | grep -E "PASS|Exception|Error" | tail -40
@@ -90540,7 +90826,7 @@ generates the fixture (unless the committed one is reused), runs the same
 `speech_summary.py`. The authored tone/sweep/impulse anchors are omitted with
 `--skip-anchors` because those probes are not rendered in this mode.
 
-Latest run (commit `2a62a50`, run 41614185094): **52 effects, 2,424 cases,
+Latest run (commit `00ee468`, run 41625500687): **52 effects, 2,424 cases,
 0 hard failures** (no non-finite samples, length changes or blow-ups). 1,176
 cases passed their inferred directional expectation, 327 were "changed but no
 directional claim", and 256 were threshold misses on the heuristic expectation
