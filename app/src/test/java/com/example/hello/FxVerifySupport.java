@@ -74,7 +74,12 @@ public final class FxVerifySupport {
 
     private static synchronized WavData speechData() {
         if (speechCache == null) {
-            speechCache = readFloatWav(speechFixture());
+            try {
+                speechCache = readFloatWav(speechFixture());
+            } catch (Exception e) {
+                throw new IllegalStateException(
+                        "Cannot read the Kokoro speech fixture", e);
+            }
             if (speechCache.sampleRate != 48000) {
                 throw new IllegalStateException("Kokoro speech fixture must be "
                         + "48 kHz, got " + speechCache.sampleRate);

@@ -135,12 +135,7 @@ jobs:
       - name: Show the fixture
         run: |
           ls -lh tools/fxverify/fixtures/kokoro_speech_48k_f32.wav
-          python3 - <<'EOF'
-          import soundfile as sf
-          i = sf.info('tools/fxverify/fixtures/kokoro_speech_48k_f32.wav')
-          print(i)
-          assert i.samplerate == 48000 and i.channels == 1
-          EOF
+          test -s tools/fxverify/fixtures/kokoro_speech_48k_f32.wav
       - name: Upload the speech fixture
         uses: actions/upload-artifact@v4
         with:

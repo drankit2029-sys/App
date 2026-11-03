@@ -3,7 +3,6 @@ package com.example.hello;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertTrue;
 
 /** Guards the committed Kokoro fixture and the speech probe family. */
@@ -35,13 +34,13 @@ public class FxSpeechProbeTest {
         float[] clipped = FxVerifySupport.buildProbe("speech_clipped", frames, 1, null);
         float[] hum = FxVerifySupport.buildProbe("speech_hum", frames, 1, null);
         float[] gaps = FxVerifySupport.buildProbe("speech_gaps", frames, 1, null);
-        assertNotEquals(clean[100], noisy[100]);
-        assertNotEquals(clean[100], clipped[100]);
-        assertNotEquals(clean[100], hum[100]);
+        assertTrue(clean[100] != noisy[100]);
+        assertTrue(clean[100] != clipped[100]);
+        assertTrue(clean[100] != hum[100]);
         assertEquals(0f, gaps[(int) (3.2 * 48000)], 0f);
 
         float[] stereo = FxVerifySupport.buildProbe("speech_stereo", frames, 2, null);
         assertEquals(frames * 2, stereo.length);
-        assertNotEquals(stereo[100 * 2], stereo[100 * 2 + 1]);
+        assertTrue(stereo[100 * 2] != stereo[100 * 2 + 1]);
     }
 }
