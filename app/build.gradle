@@ -15,7 +15,7 @@ def kPass  = keystoreProps.getProperty("keyPassword") ?: System.getenv("TAKEONE_
 def hasReleaseKeystore = ksFile != null && !ksFile.isEmpty() && rootProject.file(ksFile).exists()
 
 android {
-    namespace 'com.example.hello'
+    namespace 'com.takeone.studio'
     compileSdk 35
 
     defaultConfig {

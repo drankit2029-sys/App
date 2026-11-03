@@ -41,8 +41,8 @@ adb install -r -t app-debug-androidTest.apk 2>&1 | tail -1
 
 echo "== running every encoder (this is the test)"
 adb logcat -c
-timeout 900 adb shell am instrument -w -e class com.example.hello.EncodeFormatsTest \
-  com.example.hello.test/androidx.test.runner.AndroidJUnitRunner 2>&1
+timeout 900 adb shell am instrument -w -e class com.takeone.studio.EncodeFormatsTest \
+  com.takeone.studio.test/androidx.test.runner.AndroidJUnitRunner 2>&1
 
 echo "== FORMAT RESULTS"
 adb logcat -d -s ENCFMT:* 2>&1 | grep -E "PASS|Exception|Error" | tail -40

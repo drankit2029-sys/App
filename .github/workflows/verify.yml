@@ -68,14 +68,14 @@ jobs:
           shard = int(os.environ['SHARD'])
           shards = int(os.environ['SHARDS'])
           classes = []
-          for path in sorted(glob.glob('app/src/test/java/com/example/hello/*Test.java')):
-              cls = 'com.example.hello.' + os.path.basename(path)[:-5]
+          for path in sorted(glob.glob('app/src/test/java/com/takeone/studio/*Test.java')):
+              cls = 'com.takeone.studio.' + os.path.basename(path)[:-5]
               if int(hashlib.md5(cls.encode()).hexdigest(), 16) % shards == shard:
                   classes.append(cls)
           print(' '.join('--tests ' + c for c in classes))
           EOF
           )
-          if [ -z "$FILTERS" ]; then FILTERS="--tests com.example.hello.DspTest"; fi
+          if [ -z "$FILTERS" ]; then FILTERS="--tests com.takeone.studio.DspTest"; fi
           for i in 1 2 3; do
             if eval ./gradlew testDebugUnitTest $FILTERS --stacktrace; then
               echo "shard $SHARD passed on attempt $i"; exit 0

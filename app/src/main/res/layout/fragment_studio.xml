@@ -176,7 +176,7 @@
         android:clipChildren="true"
         android:minHeight="180dp">
 
-        <com.example.hello.TeleprompterView
+        <com.takeone.studio.TeleprompterView
             android:id="@+id/teleView"
             android:layout_width="match_parent"
             android:layout_height="match_parent" />
@@ -279,21 +279,21 @@
                 android:paddingLeft="12dp"
                 android:paddingRight="12dp">
 
-                <com.example.hello.TeleValue
+                <com.takeone.studio.TeleValue
                     android:id="@+id/teleSizeValue"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_marginEnd="6dp"
                     android:layout_weight="1" />
 
-                <com.example.hello.TeleValue
+                <com.takeone.studio.TeleValue
                     android:id="@+id/teleSpeedValue"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_marginEnd="6dp"
                     android:layout_weight="1" />
 
-                <com.example.hello.TeleValue
+                <com.takeone.studio.TeleValue
                     android:id="@+id/teleWplValue"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
@@ -404,7 +404,7 @@
         android:paddingLeft="16dp"
         android:paddingRight="14dp">
 
-        <com.example.hello.DbMeterView
+        <com.takeone.studio.DbMeterView
             android:id="@+id/dbMeter"
             android:layout_width="8dp"
             android:layout_height="168dp" />
@@ -423,7 +423,7 @@
                 android:gravity="center_vertical"
                 android:orientation="horizontal">
 
-                <com.example.hello.WaveformView
+                <com.takeone.studio.WaveformView
                     android:id="@+id/waveform"
                     android:layout_width="0dp"
                     android:layout_height="64dp"
@@ -436,7 +436,7 @@
                     android:gravity="center"
                     android:orientation="vertical">
 
-                    <com.example.hello.TeleValue
+                    <com.takeone.studio.TeleValue
                         android:id="@+id/zoomValue"
                         android:layout_width="40dp"
                         android:layout_height="wrap_content" />

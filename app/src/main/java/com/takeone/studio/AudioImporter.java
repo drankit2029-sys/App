@@ -1,0 +1,782 @@
+package com.takeone.studio;
+
+import android.content.Context;
+import android.media.MediaCodec;
+import android.media.MediaExtractor;
+import android.media.MediaFormat;
+import android.media.MediaMetadataRetriever;
+
+import java.io.File;
+import java.io.RandomAccessFile;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.util.Locale;
+
+/**
+ * Decodes a library take (float/16-bit WAV, M4A/AAC, …) into a fresh 32-bit
+ * float WAV session file so the studio can punch in from its end. The
+ * original file is never touched.
+ */
+public final class AudioImporter {
+
+    public interface Progress {
+        void onProgress(int percent);
+    }
+
+    /** Metadata and stored file returned by {@link #importOriginal}. */
+    public static final class ImportedAudio {
+        public final File file;
+        public final long durationMs;
+        public final String title;
+        public final String badge;
+
+        public ImportedAudio(File file, long durationMs, String title,
+                             String badge) {
+            this.file = file;
+            this.durationMs = durationMs;
+            this.title = title;
+            this.badge = badge;
+        }
+    }
+
+    /** Bound on draining a decoder that never signals end of stream. */
+    private static final long DRAIN_TIMEOUT_MS = 10_000L;
+
+    private AudioImporter() {}
+
+    /**
+     * True when {@code src} is already a 48 kHz 32-bit IEEE float mono/stereo
+     * WAV, so preparing an edit session is a straight byte copy rather than a
+     * format conversion.
+     */
+    public static boolean isNativeFloatWav(File src) {
+        if (src == null || !src.exists()) return false;
+        try (RandomAccessFile r = new RandomAccessFile(src, "r")) {
+            Dsp.WavHeader h = Dsp.parseWavHeader(r);
+            return h.audioFormat == 3 && h.bits == 32
+                    && h.sampleRate == RecordingEngine.SAMPLE_RATE
+                    && (h.channels == 1 || h.channels == 2)
+                    && h.dataStart == 44L
+                    && Math.max(0, r.length() - h.dataStart) > 0;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * Copies a user-selected SAF document directly into the takes directory
+     * in its original container/format without converting it to 32-bit float.
+     * Its 32-bit float master is created lazily the first time the user
+     * presses Edit on the imported take.
+     */
+    public static ImportedAudio importOriginal(Context ctx,
+                                               android.net.Uri uri,
+                                               File targetDir) throws Exception {
+        if (ctx == null || uri == null || targetDir == null) {
+            throw new IllegalArgumentException("missing import source");
+        }
+        String display = queryDisplayName(ctx, uri);
+        String ext = extensionOf(display);
+        if (ext.isEmpty()) {
+            ext = extensionFromMime(ctx, uri);
+        }
+        if (ext.isEmpty()) {
+            ext = "m4a";
+        }
+        String rawTitle = stripExtension(display != null ? display
+                : "Imported_" + System.currentTimeMillis());
+        String cleanBase = rawTitle.replaceAll("[\\\\/:*?\"<>|]", "_").trim();
+        if (cleanBase.isEmpty()) cleanBase = "Imported";
+        String prettyTitle = Dsp.prettyFileTitle(cleanBase + "." + ext);
+        if (prettyTitle.isEmpty()) prettyTitle = cleanBase;
+
+        File dst = uniqueImportedFile(targetDir, cleanBase, ext);
+        try {
+            try (java.io.InputStream in =
+                         ctx.getContentResolver().openInputStream(uri);
+                 java.io.FileOutputStream out =
+                         new java.io.FileOutputStream(dst)) {
+                if (in == null) throw new java.io.IOException("cannot open uri");
+                byte[] buf = new byte[65536];
+                int n;
+                while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                out.getFD().sync();
+            }
+            if (!dst.exists() || dst.length() <= 0) {
+                throw new IllegalStateException("empty import");
+            }
+            long durMs;
+            String badge;
+            if ("wav".equals(ext)) {
+                try (RandomAccessFile r = new RandomAccessFile(dst, "r")) {
+                    Dsp.WavHeader h = Dsp.parseWavHeader(r);
+                    if (h.channels < 1 || h.channels > 2 || h.sampleRate <= 0) {
+                        throw new IllegalStateException("unsupported wav");
+                    }
+                    long onDisk = Math.max(0L, r.length() - h.dataStart);
+                    if (onDisk <= 0) {
+                        throw new IllegalStateException("empty wav");
+                    }
+                }
+                durMs = Math.max(1000L, Dsp.wavDurationMs(dst));
+                badge = TakesRepository.wavBadge(dst);
+            } else {
+                durMs = probeCompressedDurationAndValidate(dst);
+                badge = badgeForExtension(dst, ext);
+            }
+            return new ImportedAudio(dst, durMs, prettyTitle, badge);
+        } catch (Exception | Error e) {
+            try {
+                if (dst.exists()) {
+                    // noinspection ResultOfMethodCallIgnored
+                    dst.delete();
+                }
+            } catch (Exception ignored) {}
+            throw e;
+        }
+    }
+
+    private static File uniqueImportedFile(File dir, String base, String ext) {
+        String stamp = new java.text.SimpleDateFormat("yyyyMMdd_HHmmss",
+                Locale.US).format(new java.util.Date());
+        File c = new File(dir, base + "_" + stamp + "." + ext);
+        if (!c.exists()) return c;
+        int i = 2;
+        while (true) {
+            File n = new File(dir, base + "_" + stamp + " (" + i + ")." + ext);
+            if (!n.exists()) return n;
+            i++;
+        }
+    }
+
+    private static String extensionFromMime(Context ctx, android.net.Uri uri) {
+        try {
+            String mime = ctx.getContentResolver().getType(uri);
+            if (mime == null) return "";
+            String lower = mime.toLowerCase(Locale.US);
+            if (lower.contains("wav")) return "wav";
+            if (lower.contains("flac")) return "flac";
+            if (lower.contains("opus")) return "opus";
+            if (lower.contains("ogg")) return "ogg";
+            if (lower.contains("mpeg") || lower.contains("mp3")) return "mp3";
+            if (lower.contains("3gpp") || lower.contains("amr")) return "3gp";
+            if (lower.contains("aac")) return "aac";
+            if (lower.contains("mp4") || lower.contains("m4a")) return "m4a";
+        } catch (Exception ignored) {}
+        return "";
+    }
+
+    private static String badgeForExtension(File f, String ext) {
+        switch (ext.toLowerCase(Locale.US)) {
+            case "wav":
+                return TakesRepository.wavBadge(f);
+            case "m4a":
+            case "aac":
+                return "M4A";
+            case "flac":
+                return "FLAC";
+            case "opus":
+            case "webm":
+            case "ogg":
+                return "OPUS";
+            case "3gp":
+            case "3ga":
+                return TakesRepository.containsToken(
+                        f, new byte[]{'s', 'a', 'w', 'b'}) ? "AMR-WB" : "AMR";
+            case "mp3":
+                return "MP3";
+            default:
+                return ext.toUpperCase(Locale.US);
+        }
+    }
+
+    private static long probeCompressedDurationAndValidate(File src)
+            throws Exception {
+        long durationMs = -1L;
+        boolean hasAudio = false;
+        MediaExtractor ex = new MediaExtractor();
+        try {
+            ex.setDataSource(src.getAbsolutePath());
+            for (int i = 0; i < ex.getTrackCount(); i++) {
+                MediaFormat f = ex.getTrackFormat(i);
+                String mime = f.getString(MediaFormat.KEY_MIME);
+                if (mime != null && mime.startsWith("audio/")) {
+                    hasAudio = true;
+                    try {
+                        if (f.containsKey(MediaFormat.KEY_DURATION)) {
+                            durationMs = f.getLong(MediaFormat.KEY_DURATION)
+                                    / 1000L;
+                        }
+                    } catch (Exception ignored) {}
+                    break;
+                }
+            }
+        } catch (Exception ignored) {
+        } finally {
+            try {
+                ex.release();
+            } catch (Exception ignored) {}
+        }
+        if (!hasAudio || durationMs <= 0) {
+            MediaMetadataRetriever mmr = new MediaMetadataRetriever();
+            try {
+                mmr.setDataSource(src.getAbsolutePath());
+                String has = mmr.extractMetadata(
+                        MediaMetadataRetriever.METADATA_KEY_HAS_AUDIO);
+                String dur = mmr.extractMetadata(
+                        MediaMetadataRetriever.METADATA_KEY_DURATION);
+                if (has != null && !has.isEmpty()) {
+                    hasAudio = true;
+                }
+                if (dur != null) {
+                    long parsed = (long) Double.parseDouble(dur);
+                    if (parsed > 0) {
+                        hasAudio = true;
+                        durationMs = parsed;
+                    }
+                }
+            } finally {
+                try {
+                    mmr.release();
+                } catch (Exception ignored) {}
+            }
+        }
+        if (!hasAudio) {
+            throw new IllegalStateException("no audio track");
+        }
+        return Math.max(1000L, durationMs);
+    }
+
+    /**
+     * Imports a user-selected SAF document into the takes directory as a
+     * 32-bit float WAV edit master. Supports WAV PCM/float and any container
+     * the platform decoder can turn into PCM (M4A/AAC, MP3, OGG/Opus, FLAC,
+     * AMR, …). Throws when no decodable audio is present.
+     */
+    public static File importToFloatWav(Context ctx, android.net.Uri uri,
+                                        File targetDir) throws Exception {
+        if (ctx == null || uri == null || targetDir == null) {
+            throw new IllegalArgumentException("missing import source");
+        }
+        String display = queryDisplayName(ctx, uri);
+        String ext = extensionOf(display);
+        File temp = File.createTempFile("takeone_import_",
+                ext.isEmpty() ? ".audio" : "." + ext, ctx.getCacheDir());
+        try {
+            try (java.io.InputStream in =
+                         ctx.getContentResolver().openInputStream(uri);
+                 java.io.FileOutputStream out =
+                         new java.io.FileOutputStream(temp)) {
+                if (in == null) throw new java.io.IOException("cannot open uri");
+                byte[] buf = new byte[65536];
+                int n;
+                while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+            }
+            String base = stripExtension(display != null ? display
+                    : "Imported_" + System.currentTimeMillis());
+            base = base.replaceAll("[\\\\/:*?\"<>|]", "_").trim();
+            if (base.isEmpty()) base = "Imported";
+            return takeToFloatWav(temp, targetDir, base, null);
+        } finally {
+            // noinspection ResultOfMethodCallIgnored
+            temp.delete();
+        }
+    }
+
+    private static String queryDisplayName(Context ctx, android.net.Uri uri) {
+        try (android.database.Cursor c = ctx.getContentResolver().query(uri,
+                new String[]{android.provider.OpenableColumns.DISPLAY_NAME},
+                null, null, null)) {
+            if (c != null && c.moveToFirst()) {
+                int idx = c.getColumnIndex(
+                        android.provider.OpenableColumns.DISPLAY_NAME);
+                if (idx >= 0) return c.getString(idx);
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    private static String extensionOf(String name) {
+        if (name == null) return "";
+        int dot = name.lastIndexOf('.');
+        if (dot < 0 || dot == name.length() - 1) return "";
+        return name.substring(dot + 1).toLowerCase(java.util.Locale.US);
+    }
+
+    private static String stripExtension(String name) {
+        if (name == null) return "Imported";
+        int dot = name.lastIndexOf('.');
+        return dot > 0 ? name.substring(0, dot) : name;
+    }
+
+    /**
+     * @param dstParent   directory for the new session file (takes dir).
+     * @param baseName    sanitized take title used for the session file name.
+     * @return the new float WAV session file (without a pending marker —
+     * callers attach it via the engine, which writes the marker).
+     */
+    public static File takeToFloatWav(File src, File dstParent, String baseName,
+                                      Progress cb) throws Exception {
+        String lower = src.getName().toLowerCase(java.util.Locale.US);
+        File dst = uniqueSession(dstParent, baseName);
+        try {
+            if (lower.endsWith(".wav")) {
+                wavToFloatWav(src, dst, cb);
+            } else {
+                compressedToFloatWav(src, dst, cb);
+            }
+        } catch (Exception | Error e) {
+            // A4-05: the session file lives in takes/ and starts with a
+            // header. If decoding throws, a truncated float WAV would be
+            // sitting there with no .pending marker, and the next launch
+            // would adopt it into the library as a take full of noise.
+            try {
+                if (dst.exists()) {
+                    // noinspection ResultOfMethodCallIgnored
+                    dst.delete();
+                }
+            } catch (Exception ignored) {}
+            throw e;
+        }
+        // FMT-02d: validation lives inside the try so a malformed import
+        // deletes its output too; otherwise the orphan is adopted on the
+        // next launch by reconcile().
+        try {
+            // Importer output preserves the source geometry (mono stays
+            // mono); callers attach the session with these exact channels.
+            FormatConverter.WavInfo info = FormatConverter.readFloatWav(dst);
+            if (info.channels < 1 || info.channels > 2
+                    || info.sampleRate != RecordingEngine.SAMPLE_RATE) {
+                throw new IllegalStateException("bad import channels/rate");
+            }
+            if (info.dataBytes <= 0) {
+                throw new IllegalStateException("empty import");
+            }
+        } catch (Exception | Error e) {
+            try {
+                if (dst.exists()) {
+                    // noinspection ResultOfMethodCallIgnored
+                    dst.delete();
+                }
+            } catch (Exception ignored) {}
+            throw e;
+        }
+        if (cb != null) cb.onProgress(100);
+        return dst;
+    }
+
+    private static File uniqueSession(File dir, String base) {
+        String stamp = new java.text.SimpleDateFormat("yyyyMMdd_HHmmss",
+                java.util.Locale.US).format(new java.util.Date());
+        File c = new File(dir, base + "_" + stamp + ".raw.wav");
+        if (!c.exists()) return c;
+        int i = 2;
+        while (true) {
+            File n = new File(dir, base + "_" + stamp + " (" + i
+                    + ").raw.wav");
+            if (!n.exists()) return n;
+            i++;
+        }
+    }
+
+    // ---- WAV sources ----
+
+    private static void wavToFloatWav(File src, File dst, Progress cb) throws Exception {
+        RandomAccessFile r = new RandomAccessFile(src, "r");
+        try {
+            Dsp.WavHeader h = Dsp.parseWavHeader(r);
+            int ch = h.channels;
+            int sr = h.sampleRate;
+            if (ch < 1 || ch > 2) {
+                throw new IllegalStateException("unsupported wav (need mono/stereo)");
+            }
+            int bytesPerSample;
+            if (h.audioFormat == 3 && h.bits == 32) bytesPerSample = 4;
+            else if (h.audioFormat == 1 && h.bits == 16) bytesPerSample = 2;
+            else if (h.audioFormat == 1 && h.bits == 24) bytesPerSample = 3;
+            else throw new IllegalStateException("unsupported wav encoding");
+            long onDisk = Math.max(0, r.length() - h.dataStart);
+            long dataBytes = h.dataBytes;
+            if (dataBytes <= 0 || dataBytes > onDisk) dataBytes = onDisk;
+            long totalSrcFrames = dataBytes / bytesPerSample / ch;
+            if (totalSrcFrames <= 0) throw new IllegalStateException("empty wav");
+            // Fast path: source is already 48 kHz 32-bit IEEE float WAV.
+            // Copy raw payload bytes directly without unpacking floats or
+            // running Dsp.Resampler.
+            if (h.audioFormat == 3 && h.bits == 32
+                    && sr == RecordingEngine.SAMPLE_RATE) {
+                long payloadBytes = totalSrcFrames * ch * 4L;
+                try (RandomAccessFile w = new RandomAccessFile(dst, "rw")) {
+                    w.setLength(0);
+                    w.write(RecordingEngine.wavHeader(ch, payloadBytes));
+                    r.seek(h.dataStart);
+                    byte[] buf = new byte[65536];
+                    long left = payloadBytes;
+                    while (left > 0) {
+                        int n = r.read(buf, 0,
+                                (int) Math.min(buf.length, left));
+                        if (n <= 0) break;
+                        w.write(buf, 0, n);
+                        left -= n;
+                    }
+                    long actual = Math.max(0L, w.length() - 44L);
+                    if (actual != payloadBytes) {
+                        w.seek(0);
+                        w.write(RecordingEngine.wavHeader(ch, actual));
+                    }
+                }
+                return;
+            }
+            // Mono stays mono; foreign rates are resampled to the session
+            // rate instead of being stamped with a lying header.
+            Dsp.Resampler resampler =
+                    new Dsp.Resampler(sr, RecordingEngine.SAMPLE_RATE, ch);
+            RandomAccessFile w = new RandomAccessFile(dst, "rw");
+            try {
+                w.setLength(0);
+                w.write(RecordingEngine.wavHeader(ch, 0));
+                // Seek explicitly to the parsed data chunk start (NEW-01).
+                r.seek(h.dataStart);
+                byte[] in = new byte[32768 * 2 * 4];
+                ByteBuffer ib = ByteBuffer.wrap(in)
+                        .order(ByteOrder.LITTLE_ENDIAN);
+                float[] fbuf = new float[32768 * 2];
+                long done = 0;
+                long payloadBytes = 0;
+                int lastPct = -1;
+                while (done < totalSrcFrames) {
+                    int want = (int) Math.min(32768, totalSrcFrames - done);
+                    // NEW-01 fix: `want` is in frames, so read `want * ch`
+                    // samples (`samplesToRead * bytesPerSample` bytes).
+                    int samplesToRead = want * ch;
+                    float[] samples;
+                    if (h.audioFormat == 3) {
+                        r.readFully(in, 0, samplesToRead * 4);
+                        ib.clear();
+                        ib.limit(samplesToRead * 4);
+                        for (int i = 0; i < samplesToRead; i++) {
+                            fbuf[i] = ib.getFloat();
+                        }
+                        samples = resampler.push(fbuf, want);
+                    } else if (h.bits == 24) {
+                        r.readFully(in, 0, samplesToRead * 3);
+                        ib.clear();
+                        ib.limit(samplesToRead * 3);
+                        for (int i = 0; i < samplesToRead; i++) {
+                            int v = (ib.get() & 0xFF)
+                                    | ((ib.get() & 0xFF) << 8)
+                                    | (ib.get() << 16);
+                            if ((v & 0x800000) != 0) v |= 0xFF000000;
+                            fbuf[i] = v / 8388608f;
+                        }
+                        samples = resampler.push(fbuf, want);
+                    } else {
+                        r.readFully(in, 0, samplesToRead * 2);
+                        ib.clear();
+                        ib.limit(samplesToRead * 2);
+                        for (int i = 0; i < samplesToRead; i++) {
+                            fbuf[i] = ib.getShort() / 32768f;
+                        }
+                        samples = resampler.push(fbuf, want);
+                    }
+                    int outFrames = samples.length / ch;
+                    if (outFrames > 0) {
+                        Dsp.writeFloatsLE(w, samples, 0, samples.length);
+                        payloadBytes += (long) outFrames * ch * 4;
+                    }
+                    done += want;
+                    if (cb != null) {
+                        int pct = (int) (done * 100
+                                / Math.max(1, totalSrcFrames));
+                        if (pct != lastPct) {
+                            lastPct = pct;
+                            cb.onProgress(pct);
+                        }
+                    }
+                }
+                float[] tail = resampler.flush();
+                if (tail.length > 0) {
+                    Dsp.writeFloatsLE(w, tail, 0, tail.length);
+                    payloadBytes += tail.length * 4L;
+                }
+                w.seek(0);
+                w.write(RecordingEngine.wavHeader(ch, payloadBytes));
+            } finally {
+                try {
+                    w.close();
+                } catch (Exception ignored) {}
+            }
+        } finally {
+            try {
+                r.close();
+            } catch (Exception ignored) {}
+        }
+    }
+
+
+    private static int pcmBytesPerSample(int encoding) {
+        switch (encoding) {
+            case android.media.AudioFormat.ENCODING_PCM_8BIT:
+                return 1;
+            case android.media.AudioFormat.ENCODING_PCM_24BIT_PACKED:
+                return 3;
+            case android.media.AudioFormat.ENCODING_PCM_32BIT:
+            case android.media.AudioFormat.ENCODING_PCM_FLOAT:
+                return 4;
+            default:
+                return 2;
+        }
+    }
+
+    private static float readPcmSample(ByteBuffer b, int encoding) {
+        switch (encoding) {
+            case android.media.AudioFormat.ENCODING_PCM_8BIT:
+                return ((b.get() & 0xff) - 128) / 128f;
+            case android.media.AudioFormat.ENCODING_PCM_24BIT_PACKED: {
+                int b0 = b.get() & 0xff;
+                int b1 = b.get() & 0xff;
+                int b2 = b.get();
+                int v = (b2 << 16) | (b1 << 8) | b0;
+                return v / 8388608f;
+            }
+            case android.media.AudioFormat.ENCODING_PCM_32BIT:
+                return b.getInt() / 2147483648f;
+            case android.media.AudioFormat.ENCODING_PCM_FLOAT:
+                return b.getFloat();
+            default:
+                return b.getShort() / 32768f;
+        }
+    }
+
+    // ---- compressed sources (M4A/AAC/MP3/…) via platform decoder ----
+
+    private static void compressedToFloatWav(File src, File dst, Progress cb)
+            throws Exception {
+        MediaExtractor ex = new MediaExtractor();
+        try {
+            ex.setDataSource(src.getAbsolutePath());
+            int track = -1;
+            MediaFormat trackFmt = null;
+            for (int i = 0; i < ex.getTrackCount(); i++) {
+                MediaFormat f = ex.getTrackFormat(i);
+                String mime = f.getString(MediaFormat.KEY_MIME);
+                if (mime != null && mime.startsWith("audio/")) {
+                    track = i;
+                    trackFmt = f;
+                    break;
+                }
+            }
+            if (track < 0 || trackFmt == null) {
+                throw new IllegalStateException("no audio track");
+            }
+            int srcCh = 2;
+            try {
+                srcCh = trackFmt.getInteger(MediaFormat.KEY_CHANNEL_COUNT);
+            } catch (Exception ignored) {}
+            int srcRate = RecordingEngine.SAMPLE_RATE;
+            try {
+                srcRate = trackFmt.getInteger(MediaFormat.KEY_SAMPLE_RATE);
+            } catch (Exception ignored) {}
+            if (srcRate <= 0) srcRate = RecordingEngine.SAMPLE_RATE;
+            long durationUs = 0;
+            try {
+                durationUs = trackFmt.getLong(MediaFormat.KEY_DURATION);
+            } catch (Exception ignored) {}
+            String mime = trackFmt.getString(MediaFormat.KEY_MIME);
+            ex.selectTrack(track);
+
+            // Mono stays mono (downmix only beyond stereo); the rate is
+            // resampled to the session rate instead of being stamped with a
+            // lying 48 kHz header.
+            int outCh = Math.max(1, Math.min(2, srcCh));
+            Dsp.Resampler resampler =
+                    new Dsp.Resampler(srcRate, RecordingEngine.SAMPLE_RATE,
+                            outCh);
+
+            MediaCodec dec = MediaCodec.createDecoderByType(mime);
+            // A4-05/FMT-02a: pin the decoder output to 16-bit PCM. Set it on
+            // the track format directly: MediaFormat's copy constructor only
+            // exists from API 29, so `new MediaFormat(trackFmt)` threw
+            // NoSuchMethodError (an Error, not caught below) on API 24-28.
+            try {
+                trackFmt.setInteger(MediaFormat.KEY_PCM_ENCODING,
+                        android.media.AudioFormat.ENCODING_PCM_16BIT);
+            } catch (Exception ignored) {}
+            dec.configure(trackFmt, null, null, 0);
+            dec.start();
+            RandomAccessFile w = new RandomAccessFile(dst, "rw");
+            boolean muxed = false;
+            try {
+                w.setLength(0);
+                w.write(RecordingEngine.wavHeader(outCh, 0));
+                float[] fbuf = new float[16384 * 2];
+                MediaCodec.BufferInfo bi = new MediaCodec.BufferInfo();
+                boolean inEos = false;
+                boolean outEos = false;
+                long payloadBytes = 0;
+                int lastPct = -1;
+                // FMT-02c: bound the post-EOS drain. An OEM decoder that
+                // never emits END_OF_STREAM otherwise hangs the import
+                // dialog forever.
+                int pcmEncoding = android.media.AudioFormat
+                        .ENCODING_PCM_16BIT;
+                long drainDeadline = 0;
+                while (!outEos) {
+                    if (!inEos) {
+                        int idx = dec.dequeueInputBuffer(5000);
+                        if (idx >= 0) {
+                            ByteBuffer ib = dec.getInputBuffer(idx);
+                            int n = ex.readSampleData(ib, 0);
+                            if (n < 0) {
+                                dec.queueInputBuffer(idx, 0, 0, 0,
+                                        MediaCodec.BUFFER_FLAG_END_OF_STREAM);
+                                inEos = true;
+                                drainDeadline = android.os.SystemClock
+                                        .elapsedRealtime() + DRAIN_TIMEOUT_MS;
+                            } else {
+                                dec.queueInputBuffer(idx, 0, n,
+                                        ex.getSampleTime(), 0);
+                                ex.advance();
+                            }
+                        }
+                    }
+                    int oidx = dec.dequeueOutputBuffer(bi, 5000);
+                    if (oidx >= 0) {
+                        if (bi.size > 0) {
+                            ByteBuffer ob = dec.getOutputBuffer(oidx);
+                            // NEW-02 fix: MediaCodec output ByteBuffers
+                            // default to BIG_ENDIAN; set LITTLE_ENDIAN so
+                            // getShort() does not byte-swap PCM samples.
+                            ob.order(ByteOrder.LITTLE_ENDIAN);
+                            ob.position(bi.offset);
+                            ob.limit(bi.offset + bi.size);
+                            // Decoder PCM is 16-bit: convert to float, then
+                            // resample onto the session grid.
+                            // FMT-02b: KEY_PCM_ENCODING is only a hint. If
+                            // the decoder still reports float output, read
+                            // 4-byte samples; reading them as shorts byte-swaps
+                            // and doubles the apparent duration.
+                            final int pcmEnc = pcmEncoding;
+                            final int bytesPerSample = pcmBytesPerSample(pcmEnc);
+                            int samples = bi.size / bytesPerSample;
+                            int frames = samples / Math.max(1, srcCh);
+                            int fpos = 0;
+                            for (int f = 0; f < frames; f++) {
+                                float s0 = readPcmSample(ob, pcmEnc);
+                                float s1 = srcCh > 1
+                                        ? readPcmSample(ob, pcmEnc) : s0;
+                                // Skip any extra channels beyond stereo.
+                                for (int c = 2; c < srcCh; c++) {
+                                    readPcmSample(ob, pcmEnc);
+                                }
+                                if (outCh == 1) {
+                                    fbuf[fpos++] = srcCh > 1
+                                            ? (s0 + s1) * 0.5f : s0;
+                                } else {
+                                    fbuf[fpos++] = s0;
+                                    fbuf[fpos++] = s1;
+                                }
+                                if (fpos + 2 > fbuf.length) {
+                                    float[] conv = resampler.push(fbuf,
+                                            fpos / outCh);
+                                    if (conv.length > 0) {
+                                        Dsp.writeFloatsLE(w, conv, 0,
+                                                conv.length);
+                                        payloadBytes += conv.length * 4L;
+                                    }
+                                    fpos = 0;
+                                }
+                            }
+                            if (fpos > 0) {
+                                float[] conv = resampler.push(fbuf,
+                                        fpos / outCh);
+                                if (conv.length > 0) {
+                                    Dsp.writeFloatsLE(w, conv, 0, conv.length);
+                                    payloadBytes += conv.length * 4L;
+                                }
+                            }
+                            if (cb != null && durationUs > 0) {
+                                int pct = (int) (bi.presentationTimeUs * 100
+                                        / Math.max(1, durationUs));
+                                pct = Math.max(0, Math.min(99, pct));
+                                if (pct != lastPct) {
+                                    lastPct = pct;
+                                    cb.onProgress(pct);
+                                }
+                            }
+                        }
+                        dec.releaseOutputBuffer(oidx, false);
+                        if ((bi.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                            outEos = true;
+                        }
+                    } else if (oidx == MediaCodec.INFO_TRY_AGAIN_LATER) {
+                        if (inEos && android.os.SystemClock.elapsedRealtime()
+                                > drainDeadline) {
+                            throw new IllegalStateException(
+                                    "decoder never finished");
+                        }
+                    } else if (oidx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                        try {
+                            MediaFormat of = dec.getOutputFormat();
+                            try {
+                                pcmEncoding = of.getInteger(
+                                        MediaFormat.KEY_PCM_ENCODING);
+                            } catch (Exception ignored) {}
+                            int newCh = of.getInteger(
+                                    MediaFormat.KEY_CHANNEL_COUNT);
+                            int newRate = srcRate;
+                            try {
+                                newRate = of.getInteger(
+                                        MediaFormat.KEY_SAMPLE_RATE);
+                            } catch (Exception ignored) {}
+                            if (newCh >= 1 && newCh <= 8
+                                    && newRate > 0) {
+                                if (payloadBytes > 0
+                                        && (newCh != srcCh
+                                        || newRate != srcRate)) {
+                                    throw new IllegalStateException(
+                                            "decoder geometry changed mid-stream");
+                                }
+                                srcCh = newCh;
+                                srcRate = newRate;
+                                outCh = Math.max(1, Math.min(2, srcCh));
+                                resampler = new Dsp.Resampler(srcRate,
+                                        RecordingEngine.SAMPLE_RATE, outCh);
+                            }
+                        } catch (IllegalStateException ise) {
+                            throw ise;
+                        } catch (Exception ignored) {}
+                    }
+                    muxed = true;
+                }
+                float[] tail = resampler.flush();
+                if (tail.length > 0) {
+                    Dsp.writeFloatsLE(w, tail, 0, tail.length);
+                    payloadBytes += tail.length * 4L;
+                }
+                if (!muxed || payloadBytes <= 0) {
+                    throw new IllegalStateException("decode produced no audio");
+                }
+                w.seek(0);
+                w.write(RecordingEngine.wavHeader(outCh, payloadBytes));
+            } finally {
+                try {
+                    w.close();
+                } catch (Exception ignored) {}
+                // Stop/release the decoder HERE, not after this block: any
+                // throw inside the loop above must not skip them and leak
+                // the native MediaCodec instance.
+                try {
+                    dec.stop();
+                } catch (Exception ignored) {}
+                try {
+                    dec.release();
+                } catch (Exception ignored) {}
+            }
+        } finally {
+            try {
+                ex.release();
+            } catch (Exception ignored) {}
+        }
+    }
+}

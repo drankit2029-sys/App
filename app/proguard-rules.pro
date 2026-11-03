@@ -10,16 +10,16 @@
 -keep class * extends androidx.room.RoomDatabase { *; }
 -keep @androidx.room.Entity class * { *; }
 -keep @androidx.room.Dao class * { *; }
--keep class com.example.hello.TakeEntity { *; }
--keep class com.example.hello.TakeDao { *; }
--keep class com.example.hello.TakeDatabase { *; }
--keep class com.example.hello.TakeDatabase_Impl { *; }
+-keep class com.takeone.studio.TakeEntity { *; }
+-keep class com.takeone.studio.TakeDao { *; }
+-keep class com.takeone.studio.TakeDatabase { *; }
+-keep class com.takeone.studio.TakeDatabase_Impl { *; }
 
 # 2. WorkManager Workers (instantiated via reflection with (Context, WorkerParameters))
 -keep class * extends androidx.work.ListenableWorker {
     public <init>(android.content.Context, androidx.work.WorkerParameters);
 }
--keep class com.example.hello.ConversionWatchdogWorker {
+-keep class com.takeone.studio.ConversionWatchdogWorker {
     public <init>(android.content.Context, androidx.work.WorkerParameters);
 }
 
@@ -32,8 +32,8 @@
 }
 
 # 4. DSP Processors & Serialization models
--keep class com.example.hello.DspChain$* { *; }
--keep class * extends com.example.hello.AudioProcessor { *; }
+-keep class com.takeone.studio.DspChain$* { *; }
+-keep class * extends com.takeone.studio.AudioProcessor { *; }
 
 # 5. Google Play Billing Library
 -keep class com.android.vending.billing.** { *; }

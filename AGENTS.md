@@ -4,13 +4,13 @@ This file gives coding agents the context needed to work on this repository.
 
 ## Project overview
 - Android app (TakeOne studio): audio recording/editing, DSP/FX pipeline, teleprompter, conversion/export.
-- Single Gradle module `:app`. Package `com.example.hello`. applicationId `com.takeone.studio`.
+- Single Gradle module `:app`. Package `com.takeone.studio`. applicationId `com.takeone.studio`.
 - Min SDK 24, target/compile SDK 35. Java 17. Gradle 8.7, AGP 8.6.1.
 
 ## Layout
-- `app/src/main/java/com/example/hello/` — 100+ Java sources (DSP processors, EditEngine, DspChain, Recording/Conversion services, UI).
-- `app/src/test/java/com/example/hello/` — 66+ Robolectric/JUnit unit tests.
-- `app/src/androidTest/java/com/example/hello/` — 28 instrumentation tests.
+- `app/src/main/java/com/takeone/studio/` — 100+ Java sources (DSP processors, EditEngine, DspChain, Recording/Conversion services, UI).
+- `app/src/test/java/com/takeone/studio/` — 66+ Robolectric/JUnit unit tests.
+- `app/src/androidTest/java/com/takeone/studio/` — 28 instrumentation tests.
 - `app/schemas/` — exported Room schema.
 - Workflows: `.github/workflows/{verify,build-apk,fx-verify}.yml`.
 
