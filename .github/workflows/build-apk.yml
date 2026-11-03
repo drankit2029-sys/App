@@ -117,8 +117,50 @@ jobs:
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
 
+      - name: Build Release APK
+        env:
+          TAKEONE_KEYSTORE_FILE: ${{ secrets.TAKEONE_KEYSTORE_FILE }}
+          TAKEONE_KEYSTORE_PASSWORD: ${{ secrets.TAKEONE_KEYSTORE_PASSWORD }}
+          TAKEONE_KEY_ALIAS: ${{ secrets.TAKEONE_KEY_ALIAS }}
+          TAKEONE_KEY_PASSWORD: ${{ secrets.TAKEONE_KEY_PASSWORD }}
+        run: ./gradlew assembleRelease --stacktrace
+
+      - name: Sign the release APK if it is unsigned
+        run: |
+          OUT=app/build/outputs/apk/release
+          UNSIGNED=$(find "$OUT" -maxdepth 1 -name '*-unsigned.apk' | head -1)
+          if [ -n "$UNSIGNED" ]; then
+            echo "No release keystore configured; signing with a CI test key"
+            keytool -genkeypair -v \
+              -keystore ci-release.keystore \
+              -alias takeone-ci \
+              -storepass takeone-ci \
+              -keypass takeone-ci \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=TakeOne CI, OU=Build, O=TakeOne, C=US"
+            APKSIGNER=$(find "${ANDROID_HOME:-$ANDROID_SDK_ROOT}/build-tools" \
+              -name apksigner -type f | sort -V | tail -1)
+            "$APKSIGNER" sign \
+              --ks ci-release.keystore \
+              --ks-pass pass:takeone-ci \
+              --key-pass pass:takeone-ci \
+              --out "$OUT/app-release.apk" "$UNSIGNED"
+          fi
+
+      - name: List release APK output
+        if: always()
+        run: ls -lh app/build/outputs/apk/release/ || true
+
+      - name: Upload Release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-apk
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+
       - name: Build Release App Bundle (.aab)
         env:
+          TAKEONE_KEYSTORE_FILE: ${{ secrets.TAKEONE_KEYSTORE_FILE }}
           TAKEONE_KEYSTORE_PASSWORD: ${{ secrets.TAKEONE_KEYSTORE_PASSWORD }}
           TAKEONE_KEY_ALIAS: ${{ secrets.TAKEONE_KEY_ALIAS }}
           TAKEONE_KEY_PASSWORD: ${{ secrets.TAKEONE_KEY_PASSWORD }}
