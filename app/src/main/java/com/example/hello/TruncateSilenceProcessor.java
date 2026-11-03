@@ -192,6 +192,7 @@ final class TruncateSilenceProcessor extends AudioProcessor {
         endFrame = Math.max(startFrame, Math.min(totalFrames, endFrame));
         long frames = endFrame - startFrame;
         if (frames <= 0) return -1L;
+        final long rangeStart = startFrame;
 
         float thrLin = Dsp.dbToLin(threshold.getFloat());
         int window = Math.max(1, (int) (sr * 0.01));
@@ -215,7 +216,7 @@ final class TruncateSilenceProcessor extends AudioProcessor {
                 (chunk, chunkFrames, chunkCh, frameOffset) -> {
                     int cCount = Math.max(1, chunkCh);
                     for (int f = 0; f < chunkFrames; f++) {
-                        long relFrame = (frameOffset - startFrame) + f;
+                        long relFrame = (frameOffset - rangeStart) + f;
                         if (winFrames[0] == 0) winStartPos[0] = relFrame;
                         for (int c = 0; c < cCount; c++) {
                             double v = chunk[f * cCount + c];
