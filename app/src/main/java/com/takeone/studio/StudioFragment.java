@@ -1415,6 +1415,47 @@ public class StudioFragment extends Fragment {
                 ColorStateList.valueOf(on ? 0xFFFF3B30 : 0xFFF2F4F7));
     }
 
+    /**
+     * Keeps redundant unit controls in lock-step while editing the rack. The
+     * processors also handle unsynced programmatic values defensively, but the
+     * UI should never present two contradictory tempo/speed readings.
+     */
+    private static void syncCoupledFxParams(DspChain.EffectSlot slot,
+                                            String changedId) {
+        if (slot == null || changedId == null) return;
+        if (slot.type == DspChain.EffectType.CHANGE_TEMPO) {
+            int from = slot.extraParams.containsKey("tempo_bpmfrom")
+                    ? slot.extraParams.get("tempo_bpmfrom") : 120;
+            int to = slot.extraParams.containsKey("tempo_bpmto")
+                    ? slot.extraParams.get("tempo_bpmto") : 120;
+            if ("tempo_percent".equals(changedId)) {
+                double pct = slot.value / 100.0;
+                int nextTo = (int) Math.round(from * (1.0 + pct / 100.0));
+                slot.extraParams.put("tempo_bpmto",
+                        Math.max(30, Math.min(300, nextTo)));
+            } else if ("tempo_bpmfrom".equals(changedId)
+                    || "tempo_bpmto".equals(changedId)) {
+                if (from > 0) {
+                    double pct = ((double) to / from - 1.0) * 100.0;
+                    int raw = (int) Math.round(pct * 100.0);
+                    slot.value = Math.max(-7500, Math.min(30000, raw));
+                }
+            }
+        } else if (slot.type == DspChain.EffectType.CHANGE_SPEED_AND_PITCH) {
+            if ("speed_mult".equals(changedId)) {
+                int rawPct = (slot.value - 100) * 100;
+                slot.extraParams.put("speed_percent",
+                        Math.max(-7500, Math.min(30000, rawPct)));
+            } else if ("speed_percent".equals(changedId)) {
+                int rawPct = slot.extraParams.containsKey("speed_percent")
+                        ? slot.extraParams.get("speed_percent") : 0;
+                int rawSpeed = (int) Math.round(
+                        100.0 * (1.0 + rawPct / 10000.0));
+                slot.value = Math.max(25, Math.min(400, rawSpeed));
+            }
+        }
+    }
+
     /** Inline size / speed / words-per-line controls, plus zoom. */
     private void initTeleValueControls() {
         teleSizeValue.setCaption(getString(R.string.tele_size_short));
@@ -4404,6 +4445,7 @@ public class StudioFragment extends Fragment {
         java.util.function.IntConsumer applyPrimary = (int value) -> {
             slot.value = value;
             syncPrimaryLinks.accept(value);
+            syncCoupledFxParams(slot, dialId);
             boolean engages = slot.type.isLegacyStage()
                     ? (value > 0) : (value != slot.type.defaultVal);
             if (!slot.enabled && engages) slot.enabled = true;
@@ -4689,6 +4731,7 @@ public class StudioFragment extends Fragment {
                             slot.value = value;
                         }
                     }
+                    syncCoupledFxParams(slot, param.id);
                     if (!slot.enabled && value != param.defaultRaw) {
                         slot.enabled = true;
                     }
@@ -5106,6 +5149,7 @@ public class StudioFragment extends Fragment {
                         slot.extraParams.put("treble", val);
                     }
                 }
+                syncCoupledFxParams(slot, DspChain.primaryParamId(slot.type));
             };
             TeleValue.OnScrubListener scrub = new TeleValue.OnScrubListener() {
                 @Override
@@ -5365,6 +5409,7 @@ public class StudioFragment extends Fragment {
                                 slot.value = value;
                             }
                         }
+                        syncCoupledFxParams(slot, param.id);
                         if (!slot.enabled && value != param.defaultRaw) {
                             slot.enabled = true;
                         }
@@ -5380,11 +5425,19 @@ public class StudioFragment extends Fragment {
                         public void onScrubFinished(int value) {
                             syncSecondaryLinks.accept(value);
                             onSlotMutated.run();
+                            if (slot.type == DspChain.EffectType.CHANGE_TEMPO
+                                    || slot.type == DspChain.EffectType.CHANGE_SPEED_AND_PITCH) {
+                                rebuildFxRackList();
+                            }
                         }
                     });
                     pc.setOnValueChanged(val -> {
                         syncSecondaryLinks.accept(val);
                         onSlotMutated.run();
+                        if (slot.type == DspChain.EffectType.CHANGE_TEMPO
+                                || slot.type == DspChain.EffectType.CHANGE_SPEED_AND_PITCH) {
+                            rebuildFxRackList();
+                        }
                     });
                     secondaryViews.add(pc);
                 }
