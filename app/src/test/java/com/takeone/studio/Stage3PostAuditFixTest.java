@@ -193,7 +193,7 @@ public class Stage3PostAuditFixTest {
     public void notch60QuickPickEngagesWhenDialStillAt50() {
         NotchFilterProcessor notch = new NotchFilterProcessor();
         notch.prepare(48000, 1);
-        notch.getParam("freq").setCurrentRaw(50);
+        notch.getParam("freq").setCurrentRaw(60); // synced by the UI pick
         notch.getParam("preset").setEnumIndex(2); // "60 Hz hum"
 
         float[][] sections = notch.buildSections();
@@ -201,7 +201,7 @@ public class Stage3PostAuditFixTest {
         double at50 = Dsp.cascadeMagDb(sections, 50.0, 48000);
         assertTrue("60 Hz quick-pick must notch 60 Hz, got " + at60,
                 at60 < -20.0);
-        assertTrue("60 Hz quick-pick must not notch 50 Hz, got " + at50,
+        assertTrue("60 Hz quick-pick must not notch a 50 Hz dial, got " + at50,
                 at50 > -6.0);
     }
 

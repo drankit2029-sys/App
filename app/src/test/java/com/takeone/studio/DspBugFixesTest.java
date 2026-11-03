@@ -1,6 +1,7 @@
 package com.takeone.studio;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
@@ -137,15 +138,21 @@ public class DspBugFixesTest {
 
     // StereoImaging on mono must not be a no-op.
     @Test
-    public void stereoImagingWorksOnMono() {
+    public void stereoImagingMonoOnlyInvertsPolarityModes() {
         StereoImagingProcessor s = new StereoImagingProcessor();
         s.getParam("st_width").setCurrentRaw(150);
         s.prepare(SR, 1);
         float[] buf = sine(4800, 1, 440, 0.5f);
         float[] orig = buf.clone();
         s.processInPlace(buf, 4800, 1);
-        assertTrue("Stereo imaging on mono produced no change",
+        assertFalse("Width/pan must not fabricate a stereo difference on mono",
                 changed(orig, buf));
+
+        s.getParam("st_mode").setEnumIndex(3); // Invert Both
+        float[] inverted = sine(4800, 1, 440, 0.5f);
+        s.processInPlace(inverted, 4800, 1);
+        assertEquals("Polarity invert must invert mono", -inverted[100],
+                orig[100], 0.0001f);
     }
 
     // ClickRemoval: click_width controls removal (spike removed).

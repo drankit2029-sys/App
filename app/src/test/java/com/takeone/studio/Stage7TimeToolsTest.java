@@ -164,9 +164,9 @@ public class Stage7TimeToolsTest {
         assertEquals(buf[0], reversed[frames - 1], 0.0001f);
 
         p.getParam("tl_action").setEnumIndex(2); // Repeat
-        p.getParam("tl_repeats").setCurrentRaw(3);
+        p.getParam("tl_repeats").setCurrentRaw(3); // three additional copies
         float[] repeated = p.processOfflineRegion(buf, frames, 1);
-        assertEquals(frames * 3, repeated.length);
+        assertEquals(frames * 4, repeated.length);
         assertEquals(buf[10], repeated[frames + 10], 0.0001f);
     }
 

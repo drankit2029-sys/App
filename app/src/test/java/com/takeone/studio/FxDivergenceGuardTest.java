@@ -80,7 +80,7 @@ public class FxDivergenceGuardTest {
     }
 
     @Test
-    public void upwardCompressionAttenuatesInsteadOfBoosting() {
+    public void upwardCompressionBoostsQuietMaterial() {
         CompressorProcessor comp = new CompressorProcessor();
         comp.getParam("dyncomp_upward").setBoolean(true);
         comp.getParam("dyncomp_thresh").setFloat(-6f);
@@ -94,9 +94,9 @@ public class FxDivergenceGuardTest {
 
         double inRms = rms(before);
         double outRms = rms(quiet);
-        assertTrue("upward expansion must widen the range downward, not boost "
-                        + "quiet material (in=" + inRms + ", out=" + outRms + ")",
-                outRms < inRms);
+        assertTrue("upward compression must boost quiet material "
+                        + "(in=" + inRms + ", out=" + outRms + ")",
+                outRms > inRms);
     }
 
     private static double rms(float[] v) {

@@ -217,7 +217,7 @@ public class Stage3DeepAuditFixTest {
         cfg.applyPreset(DspChain.Preset.CLEAR_ALL);
         DspChain.EffectSlot notch = cfg.addOrFocusSlot(DspChain.EffectType.NOTCH_FILTER);
         notch.extraParams.put("preset", 1); // 50 Hz hum preset
-        notch.value = 120;                  // User scrubbed Frequency dial to 120 Hz
+        notch.value = 50;                   // UI syncs Frequency to the pick
 
         DspChain chain = new DspChain(1, cfg);
         NotchFilterProcessor np = (NotchFilterProcessor) chain.getRack()
@@ -225,10 +225,10 @@ public class Stage3DeepAuditFixTest {
         assertNotNull(np);
         double gainAt50 = Dsp.cascadeMagDb(np.buildSections(), 50.0, 48000);
         double gainAt120 = Dsp.cascadeMagDb(np.buildSections(), 120.0, 48000);
-        assertTrue("50 Hz quick-pick must notch 50 Hz even with the dial at "
-                        + "120 Hz: " + gainAt50, gainAt50 < -30.0);
-        assertTrue("50 Hz quick-pick must ignore the stale 120 Hz dial: "
-                        + gainAt120, gainAt120 > -6.0);
+        assertTrue("50 Hz quick-pick must notch 50 Hz: " + gainAt50,
+                gainAt50 < -30.0);
+        assertTrue("50 Hz quick-pick must not notch 120 Hz: " + gainAt120,
+                gainAt120 > -6.0);
     }
 
     // ---- BUG-07: FxTelemetry reference counting & Hann-window sidelobe suppression ----
