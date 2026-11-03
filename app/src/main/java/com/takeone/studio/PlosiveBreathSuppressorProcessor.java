@@ -73,6 +73,7 @@ final class PlosiveBreathSuppressorProcessor extends AudioProcessor {
         float alphaLp = (float) (1.0 - Math.exp(-2.0 * Math.PI * fc / sr));
         int rawSens = plosiveSens.getCurrentRaw();
         float sens = rawSens / 100.0f;
+        if (sens <= 0f && Math.abs(breathGain.getFloat()) < 0.1f) return;
         float breathLin = Dsp.dbToLin(breathGain.getFloat());
 
         for (int f = 0; f < frames; f++) {
