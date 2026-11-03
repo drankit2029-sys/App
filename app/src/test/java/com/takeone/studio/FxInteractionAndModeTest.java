@@ -7,6 +7,7 @@ import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
 
+import java.io.File;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
@@ -573,5 +574,44 @@ public class FxInteractionAndModeTest {
         float[] out = input.clone();
         p.processInPlace(out, frames, 1);
         return out;
+    }
+
+    @Test
+    public void spectralFileRenderMatchesWholeSelectionStft() throws Exception {
+        int frames = 40000; // deliberately above MAX_IN_MEMORY_OFFLINE_FRAMES
+        float[] in = new float[frames];
+        for (int i = 0; i < frames; i++) {
+            in[i] = (float) (0.2 * Math.sin(i * 0.021) + 0.1 * Math.sin(i * 0.117));
+        }
+        File src = File.createTempFile("takeone-stft-src", ".wav");
+        File dst = File.createTempFile("takeone-stft-dst", ".wav");
+        try {
+            FxVerifySupport.writeFloatWav(src, in, 1, SR);
+            SpectralEditProcessor fileProc = new SpectralEditProcessor();
+            fileProc.getParam("se_mode").setCurrentRaw(2);
+            fileProc.getParam("se_f1").setCurrentRaw(500);
+            fileProc.getParam("se_f2").setCurrentRaw(3000);
+            fileProc.prepare(SR, 1);
+            assertTrue(fileProc.requiresFullBuffer());
+            long outFrames = fileProc.processOfflineRangeToFile(
+                    src, 0, frames, dst, SR, 1);
+            assertEquals(frames, outFrames);
+
+            SpectralEditProcessor whole = new SpectralEditProcessor();
+            whole.getParam("se_mode").setCurrentRaw(2);
+            whole.getParam("se_f1").setCurrentRaw(500);
+            whole.getParam("se_f2").setCurrentRaw(3000);
+            whole.prepare(SR, 1);
+            float[] ref = whole.processOfflineRegion(in.clone(), frames, 1);
+
+            FxVerifySupport.WavData rendered = FxVerifySupport.readFloatWav(dst);
+            assertArrayEquals("chunked file render must match one whole STFT pass",
+                    ref, rendered.samples, 0f);
+        } finally {
+            //noinspection ResultOfMethodCallIgnored
+            src.delete();
+            //noinspection ResultOfMethodCallIgnored
+            dst.delete();
+        }
     }
 }

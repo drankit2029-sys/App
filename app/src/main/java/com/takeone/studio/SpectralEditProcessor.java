@@ -81,6 +81,24 @@ final class SpectralEditProcessor extends AudioProcessor {
     }
 
     @Override
+    public boolean isOfflineOnly() {
+        return true;
+    }
+
+    @Override
+    public boolean requiresFullBuffer() {
+        return true;
+    }
+
+    @Override
+    public float[] processOfflineRegion(float[] in, int frames, int channels) {
+        if (in == null || frames <= 0) return in;
+        float[] out = in.clone();
+        processInPlace(out, frames, channels);
+        return out;
+    }
+
+    @Override
     public void processInPlace(float[] buf, int frames, int channels) {
         if (!isEnabled() || buf == null || frames <= 0) return;
         int ch = Math.max(1, Math.min(2, channels));
