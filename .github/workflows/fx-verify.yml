@@ -31,6 +31,10 @@ on:
         description: 'Render the DSP matrix on Kokoro-generated speech probes'
         type: boolean
         default: false
+      skip_speech_generation:
+        description: 'Reuse the committed Kokoro speech fixture'
+        type: boolean
+        default: false
   push:
     branches: [verify/fx-matrix]
     paths:
@@ -116,13 +120,18 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install Kokoro and audio tools
+        if: ${{ !inputs.skip_speech_generation }}
         run: |
           sudo apt-get update
           sudo apt-get install -y espeak-ng ffmpeg
           python3 -m pip install --quiet --upgrade pip
           python3 -m pip install --quiet kokoro soundfile numpy
       - name: Generate the speech fixture
+        if: ${{ !inputs.skip_speech_generation }}
         run: python3 tools/fxverify/generate_kokoro_speech.py
+      - name: Verify the committed fixture
+        if: ${{ inputs.skip_speech_generation }}
+        run: test -f tools/fxverify/fixtures/kokoro_speech_48k_f32.wav
       - name: Show the fixture
         run: |
           ls -lh tools/fxverify/fixtures/kokoro_speech_48k_f32.wav

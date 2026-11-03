@@ -134,6 +134,7 @@ public final class FxVerifySupport {
             int sampleRate = 48000;
             int bits = 0;
             int format = 0;
+            int subFormat = -1;
             long dataStart = -1;
             long dataBytes = 0;
             long pos = 12;
@@ -158,11 +159,19 @@ public final class FxVerifySupport {
                     channels = b.getShort(2) & 0xFFFF;
                     sampleRate = b.getInt(4);
                     bits = b.getShort(14) & 0xFFFF;
+                    // WAVE_FORMAT_EXTENSIBLE stores the real format tag as the
+                    // first two bytes of the SubFormat GUID (offset 24).
+                    if (format == 0xFFFE && fmt.length >= 40) {
+                        subFormat = b.getShort(24) & 0xFFFF;
+                    }
                 } else if ("data".equals(tag)) {
                     dataStart = pos + 8;
                     dataBytes = Math.min(size, len - dataStart);
                 }
                 pos += 8 + size + (size % 2);
+            }
+            if (format == 0xFFFE && bits == 32 && subFormat == 3) {
+                format = 3;
             }
             if (format != 3 || bits != 32 || dataStart < 0) {
                 throw new IllegalStateException("Not a 32-bit float WAV: " + f
@@ -368,48 +377,48 @@ public final class FxVerifySupport {
                 return speechStereo(frames);
             }
             case "speech_noise": {
-                float[] out = speechBase(frames, 1);
+                float[] speech = speechBase(frames, 1);
                 float[] noise = speechNoiseFloor(frames);
                 for (int f = 0; f < frames; f++) {
-                    out[f] += noise[f];
+                    speech[f] += noise[f];
                 }
-                return out;
+                return speech;
             }
             case "speech_hum": {
-                float[] out = speechBase(frames, 1);
+                float[] speech = speechBase(frames, 1);
                 for (int f = 0; f < frames; f++) {
                     double t = f / 48000.0;
-                    out[f] += (float) (Math.sin(2 * Math.PI * 50.0 * t) * 0.08
+                    speech[f] += (float) (Math.sin(2 * Math.PI * 50.0 * t) * 0.08
                             + Math.sin(2 * Math.PI * 100.0 * t) * 0.03
                             + Math.sin(2 * Math.PI * 150.0 * t) * 0.015);
                 }
-                return out;
+                return speech;
             }
             case "speech_clipped": {
-                float[] out = speechBase(frames, 1);
+                float[] speech = speechBase(frames, 1);
                 for (int f = 0; f < frames; f++) {
-                    out[f] = Math.max(-0.95f, Math.min(0.95f, out[f] * 3f));
+                    speech[f] = Math.max(-0.95f, Math.min(0.95f, speech[f] * 3f));
                 }
-                return out;
+                return speech;
             }
             case "speech_clicks": {
-                float[] out = speechBase(frames, 1);
+                float[] speech = speechBase(frames, 1);
                 for (int hit = 0; hit < frames / 24000; hit++) {
                     int at = hit * 24000 + 12000;
                     if (at >= frames) break;
-                    out[at] += (hit % 2 == 0) ? 0.45f : -0.45f;
+                    speech[at] += (hit % 2 == 0) ? 0.45f : -0.45f;
                 }
-                return out;
+                return speech;
             }
             case "speech_gaps": {
-                float[] out = speechBase(frames, 1);
+                float[] speech = speechBase(frames, 1);
                 double[][] windows = {{3.0, 3.7}, {7.0, 8.2}, {10.5, 11.2}};
                 for (double[] w : windows) {
                     int a = (int) (w[0] * 48000);
                     int b = Math.min(frames, (int) (w[1] * 48000));
-                    for (int f = a; f < b; f++) out[f] = 0f;
+                    for (int f = a; f < b; f++) speech[f] = 0f;
                 }
-                return out;
+                return speech;
             }
             case "silence":
             default:
