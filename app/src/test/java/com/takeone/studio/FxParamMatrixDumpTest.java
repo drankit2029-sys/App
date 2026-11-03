@@ -144,11 +144,17 @@ public class FxParamMatrixDumpTest {
         // ---- plan the cases -------------------------------------------------
         Set<String> probesUsed = new LinkedHashSet<>();
         List<Case> cases = new ArrayList<>();
+        Map<String, Integer> defaultValues = new HashMap<>();
+        for (FxParameter q : params) defaultValues.put(q.id, q.defaultRaw);
         for (FxParameter p : params) {
             String[] probes = probesFor(effectId, p.id, primary);
             for (String probe : probes) probesUsed.add(probe);
             int[] values = valuesFor(p);
             for (int i = 0; i < values.length; i++) {
+                Map<String, Integer> candidateValues =
+                        new HashMap<>(defaultValues);
+                candidateValues.put(p.id, values[i]);
+                if (!proto.isParamApplicable(p.id, candidateValues)) continue;
                 String[] modes = profiled
                         ? new String[]{"adaptive", "profiled"}
                         : new String[]{"plain"};
@@ -184,6 +190,10 @@ public class FxParamMatrixDumpTest {
             probesUsed.add(probe);
             int[] vals = fiveSteps(p);
             for (int i = 0; i < vals.length; i++) {
+                Map<String, Integer> candidateValues =
+                        new HashMap<>(defaultValues);
+                candidateValues.put(p.id, vals[i]);
+                if (!proto.isParamApplicable(p.id, candidateValues)) continue;
                 Case c = new Case();
                 c.param = p.id;
                 c.paramName = p.name;

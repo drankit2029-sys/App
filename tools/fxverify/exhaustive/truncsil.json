@@ -1,0 +1,24 @@
+{
+  "effect": "truncsil",
+  "title": "Truncate Silence",
+  "input": {
+    "file": "Input_truncsil.wav",
+    "source": "tools/fxverify/fixtures/kokoro_speech_48k_f32.wav",
+    "sample_rate": 48000,
+    "source_offset_ms": 500,
+    "spans_ms": [2000, 1200, 2000, 6000, 2000, 1200],
+    "gap_noise_db": [-55, -120, -120]
+  },
+  "mode_param": "ts_action",
+  "targets": {"0": "ts_trunc", "1": "ts_compress"},
+  "combo_columns": ["ts_thresh", "ts_min"],
+  "active": {
+    "ts_trunc": [{"param": "ts_action", "equals": 0}],
+    "ts_compress": [{"param": "ts_action", "equals": 1}]
+  },
+  "individual_modes": {
+    "ts_trunc": {"ts_action": 0},
+    "ts_compress": {"ts_action": 1}
+  },
+  "output_format": "pcm16"
+}

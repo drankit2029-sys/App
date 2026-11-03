@@ -6,6 +6,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -252,6 +253,17 @@ public abstract class AudioProcessor {
             if (p.id.equals(id)) return p;
         }
         return null;
+    }
+
+    /**
+     * True when {@code paramId} still affects the output for the supplied
+     * parameter values. Missing values fall back to defaults. Mode-specific
+     * effects override this so the rack can disable controls that would have
+     * no effect in the current selection (for example Truncate To while the
+     * action is Compress, or most generator fields in Silence mode).
+     */
+    public boolean isParamApplicable(String paramId, Map<String, Integer> values) {
+        return true;
     }
 
     /**

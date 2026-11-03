@@ -4,6 +4,7 @@ import java.io.File;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.Map;
 
 /**
  * Stage 7 audio generator: renders tone, chirp, white / pink / brown noise,
@@ -69,6 +70,14 @@ final class AudioGeneratorTool extends AudioProcessor {
                 return "gen_amp".equals(paramId)
                         || "gen_seq".equals(paramId);
         }
+    }
+
+    @Override
+    public boolean isParamApplicable(String paramId, Map<String, Integer> values) {
+        int genType = values != null && values.containsKey("gen_type")
+                ? type.clampRaw(values.get("gen_type"))
+                : type.defaultRaw;
+        return isParamApplicable(genType, paramId);
     }
 
     private int sampleRate = DspChain.SAMPLE_RATE;

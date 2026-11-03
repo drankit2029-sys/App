@@ -4,6 +4,7 @@ import java.io.File;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.Map;
 
 /**
  * Stage 7 truncate silence: scans the region in 10 ms RMS windows, finds
@@ -57,6 +58,17 @@ final class TruncateSilenceProcessor extends AudioProcessor {
     }
 
     @Override
+    public boolean isParamApplicable(String paramId, Map<String, Integer> values) {
+        if ("ts_trunc".equals(paramId) || "ts_compress".equals(paramId)) {
+            int rawAction = values != null && values.containsKey("ts_action")
+                    ? action.clampRaw(values.get("ts_action"))
+                    : action.defaultRaw;
+            return "ts_trunc".equals(paramId) ? rawAction == 0 : rawAction == 1;
+        }
+        return true;
+    }
+
+    @Override
     public void prepare(int sampleRate, int channels) {
         if (sampleRate > 0) this.sampleRate = sampleRate;
     }
@@ -94,8 +106,7 @@ final class TruncateSilenceProcessor extends AudioProcessor {
         int effMinSilent = frames < minSilent * 2
                 ? Math.max(window, Math.min(frames / 6, window + rawMinMs / 50))
                 : minSilent;
-        boolean compress = action.getEnumIndex() == 1
-                || compressTo.getCurrentRaw() != compressTo.defaultRaw;
+        boolean compressMode = action.getEnumIndex() == 1;
         int truncTargetFrames = Math.max(1,
                 (int) (truncateTo.getCurrentRaw() * 0.001f * sampleRate));
         if (frames < truncTargetFrames * 3) {
@@ -140,11 +151,8 @@ final class TruncateSilenceProcessor extends AudioProcessor {
             int[] span = spans.get(i);
             int spanLen = span[1] - span[0];
             int targetKeep;
-            if (action.getEnumIndex() == 1) {
+            if (compressMode) {
                 targetKeep = Math.max(1, Math.round(spanLen * compRatio));
-            } else if (compress) {
-                targetKeep = Math.max(1, Math.round(
-                        Math.min(truncTargetFrames, spanLen) * (0.5f + 0.5f * (compRatio / 0.35f))));
             } else {
                 targetKeep = truncTargetFrames;
             }
@@ -194,8 +202,7 @@ final class TruncateSilenceProcessor extends AudioProcessor {
         int window = Math.max(1, (int) (sr * 0.01));
         int rawMinMs = minDuration.getCurrentRaw();
         long minSilent = Math.max(1L, Math.round(rawMinMs * 0.001 * sr));
-        boolean compress = action.getEnumIndex() == 1
-                || compressTo.getCurrentRaw() != compressTo.defaultRaw;
+        boolean compressMode = action.getEnumIndex() == 1;
         long truncTargetFrames = Math.max(1L,
                 Math.round(truncateTo.getCurrentRaw() * 0.001 * sr));
         float compRatio = compressTo.getCurrentRaw() / 100f;
@@ -248,11 +255,8 @@ final class TruncateSilenceProcessor extends AudioProcessor {
             long[] span = spans.get(i);
             long spanLen = span[1] - span[0];
             long targetKeep;
-            if (action.getEnumIndex() == 1) {
+            if (compressMode) {
                 targetKeep = Math.max(1L, Math.round(spanLen * compRatio));
-            } else if (compress) {
-                targetKeep = Math.max(1L, Math.round(
-                        Math.min(truncTargetFrames, spanLen) * (0.5f + 0.5f * (compRatio / 0.35f))));
             } else {
                 targetKeep = truncTargetFrames;
             }

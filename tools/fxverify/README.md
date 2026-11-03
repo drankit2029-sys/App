@@ -87,6 +87,32 @@ directional claim", and 256 were threshold misses on the heuristic expectation
 (mostly controls that move a narrow band rather than whole-file RMS). The
 per-effect report is in the run's `fx-report` artifact (`SPEECH.md`).
 
+## Exhaustive per-effect sweep
+
+`tools/fxverify/run_exhaustive.py` drives a complete per-effect sweep:
+inventory, input construction, individual cases, the full parameter
+combination product, Robolectric rendering, and analysis.
+
+```bash
+python3 tools/fxverify/run_exhaustive.py --effect truncsil
+```
+
+Inputs and outputs live under `fx-exhaustive/<effect>/`; WAVs are ignored by
+git, while `report.md`, `plan.csv`, `plan.json` and `analysis.csv` are kept.
+The planner reads the runtime inventory, so bounds/defaults/enum labels come
+from the code. A profile in `tools/fxverify/exhaustive/<effect>.json` supplies
+the input recipe and the mode-applicability rules. Mode-inactive parameters are
+listed as disabled and are also verified for bit-identical invariance.
+
+The first profile is `truncsil`: 14 individual cases, 4 disabled-invariance
+cases and all 162 permutations (54 active, 108 disabled) of
+Truncate/Compress × threshold × minimum silence × target at the three
+intensities. In the FX workflow:
+
+```bash
+gh workflow run fx-verify.yml --ref <branch> -f exhaustive_effect=truncsil
+```
+
 ## Evidence rules
 
 - A verdict is always backed by numbers: every case records the metric it moved,

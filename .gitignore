@@ -11,3 +11,6 @@ captures
 local.properties
 # Downloaded FX verification artifacts and frame extractions
 /fx-verify-runs/
+# Exhaustive per-effect outputs (reports/plans stay tracked)
+/fx-exhaustive/**/*.wav
+/fx-exhaustive/**/*.zip
