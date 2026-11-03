@@ -71,6 +71,21 @@ abstract class StftProcessor {
     public void process(float[] buf, int frames, int channels) {
         if (buf == null || frames <= 0) return;
         int ch = Math.max(1, Math.min(2, channels));
+        int maxChunk = Math.max(fftSize * 4, AudioProcessor.DEFAULT_DSP_CHUNK_FRAMES);
+        if (frames > maxChunk * 2) {
+            float[] slice = new float[maxChunk * ch];
+            for (int off = 0; off < frames; off += maxChunk) {
+                int want = Math.min(maxChunk, frames - off);
+                System.arraycopy(buf, off * ch, slice, 0, want * ch);
+                processSingleBlock(slice, want, ch);
+                System.arraycopy(slice, 0, buf, off * ch, want * ch);
+            }
+            return;
+        }
+        processSingleBlock(buf, frames, ch);
+    }
+
+    private void processSingleBlock(float[] buf, int frames, int ch) {
         int out = frames * ch;
         float[] result = new float[out];
         // Analysis / synthesis buffers with a full frame of padding so the

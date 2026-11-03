@@ -1,5 +1,9 @@
 package com.example.hello;
 
+import java.io.File;
+import java.io.RandomAccessFile;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -18,6 +22,12 @@ import org.json.JSONObject;
  * tail (reverb/delay) report {@link #getTailFrames()}.
  */
 public abstract class AudioProcessor {
+
+    /** Default chunk size (in frames) for streaming DSP and GPU dispatch. */
+    public static final int DEFAULT_DSP_CHUNK_FRAMES = 4096;
+
+    /** Maximum frame count processed in a single in-memory offline pass before chunking. */
+    public static final int MAX_IN_MEMORY_OFFLINE_FRAMES = 32768;
 
     private volatile boolean enabled = true;
     private volatile float wetDryMix = 1.0f;
@@ -82,6 +92,111 @@ public abstract class AudioProcessor {
      */
     public float[] processOfflineRegion(float[] in, int frames, int channels) {
         return null;
+    }
+
+    /**
+     * Chunked file-to-file offline renderer for duration-changing or full-region
+     * effects. Streams {@code [startFrame, endFrame)} from {@code srcWav} into
+     * {@code dstWav} (a 32-bit float WAV with a 44-byte header) in bounded chunks
+     * so multi-minute or multi-hour takes never allocate full-region arrays on
+     * the Java heap.
+     *
+     * <p>Note: {@link #getWetDryMix()} is blended during the chunked write when
+     * {@code mix < 0.999f}.
+     *
+     * @return the number of output frames written to {@code dstWav}, or -1 if
+     *         this processor produced no output.
+     */
+    public long processOfflineRangeToFile(File srcWav, long startFrame,
+                                          long endFrame, File dstWav,
+                                          int sampleRate, int channels)
+            throws Exception {
+        if (srcWav == null || dstWav == null) return -1L;
+        FormatConverter.WavInfo info = FormatConverter.readFloatWav(srcWav);
+        int ch = Math.max(1, channels > 0 ? channels : info.channels);
+        int sr = sampleRate > 0 ? sampleRate : info.sampleRate;
+        long totalFrames = info.dataBytes / 4L / ch;
+        startFrame = Math.max(0L, Math.min(totalFrames, startFrame));
+        endFrame = Math.max(startFrame, Math.min(totalFrames, endFrame));
+        long selFrames = endFrame - startFrame;
+        if (selFrames <= 0) return -1L;
+
+        float mix = getWetDryMix();
+        prepare(sr, ch);
+
+        if (selFrames <= MAX_IN_MEMORY_OFFLINE_FRAMES) {
+            float[] region = EditEngine.readFloatSelection(srcWav, startFrame, endFrame);
+            if (region == null || region.length == 0) return -1L;
+            int regionFrames = region.length / ch;
+            float[] rendered = processOfflineRegion(region, regionFrames, ch);
+            if (rendered == null || rendered.length == 0) return -1L;
+            int outFrames = rendered.length / ch;
+            if (outFrames <= 0) return -1L;
+            if (mix < 0.999f) {
+                float dryWeight = 1f - mix;
+                int common = Math.min(region.length, rendered.length);
+                for (int i = 0; i < common; i++) {
+                    rendered[i] = region[i] * dryWeight + rendered[i] * mix;
+                }
+                for (int i = common; i < rendered.length; i++) {
+                    rendered[i] *= mix;
+                }
+            }
+            long payloadBytes = (long) outFrames * ch * 4L;
+            try (RandomAccessFile outRaf = new RandomAccessFile(dstWav, "rw")) {
+                outRaf.setLength(0);
+                outRaf.write(Dsp.wavFloatHeader(ch, sr, payloadBytes));
+                Dsp.writeFloatsLE(outRaf, rendered, 0, outFrames * ch);
+            }
+            return outFrames;
+        }
+
+        // Large-take chunked window fallback for any offline processor:
+        int chunkFrames = MemoryBudget.chunkFrames(MAX_IN_MEMORY_OFFLINE_FRAMES, ch);
+        byte[] rawBuf = new byte[chunkFrames * ch * 4];
+        ByteBuffer bb = ByteBuffer.wrap(rawBuf).order(ByteOrder.LITTLE_ENDIAN);
+        long totalOutFrames = 0L;
+        long frameBytes = ch * 4L;
+
+        try (RandomAccessFile inRaf = new RandomAccessFile(srcWav, "r");
+             RandomAccessFile outRaf = new RandomAccessFile(dstWav, "rw")) {
+            outRaf.setLength(0);
+            outRaf.write(Dsp.wavFloatHeader(ch, sr, 0L));
+            long cur = startFrame;
+            while (cur < endFrame) {
+                int want = (int) Math.min((long) chunkFrames, endFrame - cur);
+                inRaf.seek(info.dataStart + cur * frameBytes);
+                inRaf.readFully(rawBuf, 0, want * ch * 4);
+                float[] inChunk = new float[want * ch];
+                bb.clear();
+                bb.limit(want * ch * 4);
+                bb.asFloatBuffer().get(inChunk, 0, want * ch);
+
+                float[] outChunk = processOfflineRegion(inChunk, want, ch);
+                if (outChunk == null || outChunk.length == 0) {
+                    cur += want;
+                    continue;
+                }
+                int outChunkFrames = outChunk.length / ch;
+                if (mix < 0.999f) {
+                    float dryWeight = 1f - mix;
+                    int common = Math.min(inChunk.length, outChunk.length);
+                    for (int i = 0; i < common; i++) {
+                        outChunk[i] = inChunk[i] * dryWeight + outChunk[i] * mix;
+                    }
+                    for (int i = common; i < outChunk.length; i++) {
+                        outChunk[i] *= mix;
+                    }
+                }
+                Dsp.writeFloatsLE(outRaf, outChunk, 0, outChunkFrames * ch);
+                totalOutFrames += outChunkFrames;
+                cur += want;
+            }
+            long payloadBytes = totalOutFrames * frameBytes;
+            outRaf.seek(0);
+            outRaf.write(Dsp.wavFloatHeader(ch, sr, payloadBytes));
+        }
+        return totalOutFrames > 0 ? totalOutFrames : -1L;
     }
 
     /** Latency/tail in frames after the input ends (reverb, delay). */

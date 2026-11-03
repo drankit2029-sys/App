@@ -1,8 +1,10 @@
 package com.example.hello;
 
+import java.io.File;
+
 /**
  * Stage 7 change speed and pitch: a varispeed resampler that changes the
- * duration and the pitch together.
+ * duration and the pitch together. Supports bounded-chunk file streaming.
  */
 final class ChangeSpeedAndPitchProcessor extends AudioProcessor {
 
@@ -76,5 +78,20 @@ final class ChangeSpeedAndPitchProcessor extends AudioProcessor {
         if (Math.abs(factor - 1.0) < 1e-6) return in.clone();
         WsolaTimePitchProcessor wsola = new WsolaTimePitchProcessor(sampleRate);
         return wsola.varispeed(in, frames, channels, factor);
+    }
+
+    @Override
+    public long processOfflineRangeToFile(File srcWav, long startFrame,
+                                          long endFrame, File dstWav,
+                                          int sampleRate, int channels)
+            throws Exception {
+        if (sampleRate > 0) this.sampleRate = sampleRate;
+        if (endFrame - startFrame <= MAX_IN_MEMORY_OFFLINE_FRAMES) {
+            return super.processOfflineRangeToFile(
+                    srcWav, startFrame, endFrame, dstWav, this.sampleRate, channels);
+        }
+        WsolaTimePitchProcessor wsola = new WsolaTimePitchProcessor(this.sampleRate);
+        return wsola.varispeedToFile(srcWav, startFrame, endFrame, dstWav,
+                channels, speedFactor(), getWetDryMix());
     }
 }

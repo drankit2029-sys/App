@@ -1,10 +1,19 @@
 package com.example.hello;
 
+import java.io.File;
+import java.io.RandomAccessFile;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+
 /**
  * Stage 7 Paulstretch: extreme ambient time stretching. A large-window STFT
  * preserves the bin amplitudes but replaces the phases with random angles
  * at every synthesis hop, then blends the frames with a
  * {@code (1 - x^2)^1.25} raised-cosine overlap.
+ *
+ * <p>Supports bounded-chunk file-to-file streaming via
+ * {@link #processOfflineRangeToFile} so extreme stretches on long takes never
+ * allocate full-region buffers in RAM.
  */
 final class PaulstretchProcessor extends AudioProcessor {
 
@@ -130,6 +139,125 @@ final class PaulstretchProcessor extends AudioProcessor {
             }
         }
         return out;
+    }
+
+    @Override
+    public long processOfflineRangeToFile(File srcWav, long startFrame,
+                                          long endFrame, File dstWav,
+                                          int sampleRate, int channels)
+            throws Exception {
+        if (sampleRate > 0) this.sampleRate = sampleRate;
+        long selFrames = endFrame - startFrame;
+        if (selFrames <= MAX_IN_MEMORY_OFFLINE_FRAMES / 2) {
+            return super.processOfflineRangeToFile(
+                    srcWav, startFrame, endFrame, dstWav, this.sampleRate, channels);
+        }
+
+        FormatConverter.WavInfo info = FormatConverter.readFloatWav(srcWav);
+        int ch = Math.max(1, channels > 0 ? channels : info.channels);
+        int sr = info.sampleRate > 0 ? info.sampleRate : this.sampleRate;
+        long totalFrames = info.dataBytes / 4L / ch;
+        startFrame = Math.max(0L, Math.min(totalFrames, startFrame));
+        endFrame = Math.max(startFrame, Math.min(totalFrames, endFrame));
+        long frames = endFrame - startFrame;
+        if (frames <= 0) return -1L;
+
+        reset();
+        double stretch = factor.getFloat();
+        int targetWin = Math.max(512, (int) Math.round(resolution.getFloat() * sr));
+        int fftSize = 512;
+        while (fftSize < targetWin && fftSize < 16384) fftSize <<= 1;
+        int activeWin = Math.max(256, Math.min(fftSize, targetWin));
+        int outHop = Math.max(128, activeWin / 2);
+        double inStep = outHop / Math.max(0.1, stretch);
+        long outFrames = Math.max(1L, Math.round(frames * stretch));
+        long frameBytes = ch * 4L;
+        int winPad = (fftSize - activeWin) / 2;
+
+        float[] win = new float[fftSize];
+        for (int i = 0; i < activeWin; i++) {
+            float x = (2.0f * i / Math.max(1, activeWin - 1)) - 1.0f;
+            win[winPad + i] = (float) Math.pow(Math.max(0.0, 1.0 - x * x), 1.25);
+        }
+
+        int bins = fftSize / 2 + 1;
+        float[] re = new float[fftSize];
+        float[] im = new float[fftSize];
+        float[] mag = new float[bins];
+        float[][] ola = new float[ch][activeWin];
+        float[] hopOut = new float[outHop * ch];
+        byte[] rawWinBytes = new byte[fftSize * ch * 4];
+        float[] inWin = new float[fftSize * ch];
+        float mix = getWetDryMix();
+
+        try (RandomAccessFile inRaf = new RandomAccessFile(srcWav, "r");
+             RandomAccessFile outRaf = new RandomAccessFile(dstWav, "rw")) {
+            outRaf.setLength(0);
+            outRaf.write(Dsp.wavFloatHeader(ch, sr, outFrames * frameBytes));
+
+            double inPos = 0.0;
+            long outPos = 0L;
+            while (outPos < outFrames) {
+                long baseIn = Math.round(inPos) - winPad;
+                long readStart = Math.max(0L, Math.min(frames, baseIn));
+                long readEnd = Math.max(readStart, Math.min(frames, baseIn + fftSize));
+                int avail = (int) (readEnd - readStart);
+                java.util.Arrays.fill(inWin, 0f);
+                if (avail > 0) {
+                    inRaf.seek(info.dataStart + (startFrame + readStart) * frameBytes);
+                    inRaf.readFully(rawWinBytes, 0, avail * ch * 4);
+                    int dstOff = (int) (readStart - baseIn) * ch;
+                    ByteBuffer.wrap(rawWinBytes, 0, avail * ch * 4)
+                            .order(ByteOrder.LITTLE_ENDIAN)
+                            .asFloatBuffer()
+                            .get(inWin, dstOff, avail * ch);
+                }
+
+                for (int c = 0; c < ch; c++) {
+                    for (int i = 0; i < fftSize; i++) {
+                        re[i] = inWin[i * ch + c] * win[i];
+                        im[i] = 0f;
+                    }
+                    Dsp.fft(re, im, false);
+                    for (int b = 0; b < bins; b++) {
+                        mag[b] = (float) Math.sqrt(re[b] * re[b] + im[b] * im[b]);
+                    }
+                    for (int b = 0; b < bins; b++) {
+                        float p = (float) (nextRandom() * Math.PI * 2.0);
+                        re[b] = (float) (mag[b] * Math.cos(p));
+                        im[b] = (float) (mag[b] * Math.sin(p));
+                        int mirror = fftSize - b;
+                        if (mirror < fftSize) {
+                            re[mirror] = re[b];
+                            im[mirror] = -im[b];
+                        }
+                    }
+                    Dsp.fft(re, im, true);
+                    for (int i = 0; i < activeWin; i++) {
+                        ola[c][i] += re[winPad + i] * win[winPad + i] * 0.85f;
+                    }
+                }
+
+                int emit = (int) Math.min((long) outHop, outFrames - outPos);
+                for (int f = 0; f < emit; f++) {
+                    for (int c = 0; c < ch; c++) {
+                        hopOut[f * ch + c] = ola[c][f] * mix;
+                    }
+                }
+                Dsp.writeFloatsLE(outRaf, hopOut, 0, emit * ch);
+
+                int keep = activeWin - outHop;
+                for (int c = 0; c < ch; c++) {
+                    if (keep > 0) {
+                        System.arraycopy(ola[c], outHop, ola[c], 0, keep);
+                    }
+                    java.util.Arrays.fill(ola[c], Math.max(0, keep), activeWin, 0f);
+                }
+                inPos += inStep;
+                outPos += emit;
+            }
+        }
+        return outFrames;
     }
 
     private double nextRandom() {

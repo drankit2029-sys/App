@@ -219,25 +219,7 @@ public final class AdMobManager {
      * Checks whether the device currently has an active internet-capable network.
      */
     public boolean isNetworkAvailable() {
-        try {
-            ConnectivityManager cm = (ConnectivityManager)
-                    appCtx.getSystemService(Context.CONNECTIVITY_SERVICE);
-            if (cm == null) return false;
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                Network nw = cm.getActiveNetwork();
-                if (nw == null) return false;
-                NetworkCapabilities caps = cm.getNetworkCapabilities(nw);
-                return caps != null && (caps.hasCapability(
-                        NetworkCapabilities.NET_CAPABILITY_INTERNET));
-            } else {
-                //noinspection deprecation
-                android.net.NetworkInfo info = cm.getActiveNetworkInfo();
-                //noinspection deprecation
-                return info != null && info.isConnected();
-            }
-        } catch (Throwable ignored) {
-            return false;
-        }
+        return HardwareApiManager.get().isNetworkAvailable(appCtx);
     }
 
     /**
@@ -248,21 +230,10 @@ public final class AdMobManager {
      */
     private synchronized void registerNetworkReconnectCallback() {
         if (networkCallbackRegistered) return;
-        try {
-            ConnectivityManager cm = (ConnectivityManager)
-                    appCtx.getSystemService(Context.CONNECTIVITY_SERVICE);
-            if (cm == null) return;
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                cm.registerDefaultNetworkCallback(
-                        new ConnectivityManager.NetworkCallback() {
-                            @Override
-                            public void onAvailable(@NonNull Network network) {
-                                mainHandler.post(() -> onNetworkReconnected());
-                            }
-                        });
-                networkCallbackRegistered = true;
-            }
-        } catch (Throwable ignored) {}
+        if (HardwareApiManager.get().registerDefaultNetworkCallback(
+                appCtx, () -> mainHandler.post(this::onNetworkReconnected))) {
+            networkCallbackRegistered = true;
+        }
     }
 
     private void onNetworkReconnected() {

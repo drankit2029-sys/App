@@ -255,9 +255,7 @@ public final class StreamingEncoder {
                     pumpFlac();
                     break;
                 case OPUS:
-                    int opusMuxFmt = android.os.Build.VERSION.SDK_INT >= 29
-                            ? MediaMuxer.OutputFormat.MUXER_OUTPUT_OGG
-                            : MediaMuxer.OutputFormat.MUXER_OUTPUT_WEBM;
+                    int opusMuxFmt = HardwareApiManager.get().getOpusMuxerOutputFormat();
                     pumpMuxed("audio/opus", bitrate, opusMuxFmt, -1);
                     break;
                 case M4A:

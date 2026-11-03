@@ -340,7 +340,7 @@ public final class OptionsSheet {
         LinearLayout root = new LinearLayout(ctx);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundResource(R.drawable.bg_modal);
-        if (android.os.Build.VERSION.SDK_INT >= 21) root.setElevation(dp(ctx, 16));
+        HardwareApiManager.get().setElevationCompat(root, dp(ctx, 16));
         int pad = dp(ctx, isLand ? 14 : 18);
         root.setPadding(pad, pad, pad, pad);
         scroll.addView(root,

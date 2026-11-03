@@ -242,7 +242,7 @@ public class Stage3PostAuditFixTest {
     // ---- BUG-04 ----
 
     @Test
-    public void recordSnapshotRefusesTakesOverUndoBudget() throws Exception {
+    public void recordSnapshotSupportsFullTakesOver30MbWithinFiveStepCap() throws Exception {
         File big = new File(ctx.getCacheDir(), "post_audit_big.wav");
         try (RandomAccessFile w = new RandomAccessFile(big, "rw")) {
             w.setLength(31L * 1024L * 1024L);
@@ -250,20 +250,13 @@ public class Stage3PostAuditFixTest {
         try {
             EditEngine.UndoJournal journal =
                     new EditEngine.UndoJournal(ctx.getCacheDir());
-            assertFalse("31 MB take must not be snapshotted", journal.recordSnapshot(big));
-            assertFalse(journal.canUndo());
-
-            File small = new File(ctx.getCacheDir(), "post_audit_small.wav");
-            try (RandomAccessFile w = new RandomAccessFile(small, "rw")) {
-                w.setLength(1024);
-            }
-            try {
-                assertTrue(journal.recordSnapshot(small));
-                assertTrue(journal.canUndo());
-            } finally {
-                // noinspection ResultOfMethodCallIgnored
-                small.delete();
-            }
+            assertTrue("31 MB full take must be snapshotted with streaming compression",
+                    journal.recordSnapshot(big));
+            assertTrue(journal.canUndo());
+            assertTrue(journal.undo(big));
+            assertTrue(journal.canRedo());
+            assertTrue(journal.redo(big));
+            journal.clear();
         } finally {
             // noinspection ResultOfMethodCallIgnored
             big.delete();

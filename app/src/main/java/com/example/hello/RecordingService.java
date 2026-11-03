@@ -82,17 +82,7 @@ public class RecordingService extends Service {
         Intent i = new Intent(ctx, RecordingService.class);
         i.setAction(ACTION_START);
         i.putExtra(EXTRA_FORMAT, presetId);
-        try {
-            if (Build.VERSION.SDK_INT >= 26) {
-                ctx.startForegroundService(i);
-            } else {
-                ctx.startService(i);
-            }
-        } catch (Exception e) {
-            try {
-                ctx.startService(i);
-            } catch (Exception ignored) {}
-        }
+        HardwareApiManager.get().startForegroundServiceCompat(ctx, i);
     }
 
     public static void stopService(Context ctx) {
@@ -254,23 +244,14 @@ public class RecordingService extends Service {
                     }
                 };
             }
-            int res;
-            if (Build.VERSION.SDK_INT >= 26) {
-                focusReq26 = new android.media.AudioFocusRequest.Builder(
-                        AudioManager.AUDIOFOCUS_GAIN)
-                        .setAudioAttributes(new android.media.AudioAttributes.Builder()
-                                .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
-                                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
-                                .build())
-                        .setOnAudioFocusChangeListener(focusListener, handler)
-                        .build();
-                res = audioManager.requestAudioFocus(focusReq26);
-            } else {
-                //noinspection deprecation
-                res = audioManager.requestAudioFocus(focusListener,
-                        AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN);
+            Object token = HardwareApiManager.get().requestAudioFocus(
+                    audioManager, focusListener, handler,
+                    AudioManager.AUDIOFOCUS_GAIN,
+                    android.media.AudioAttributes.CONTENT_TYPE_SPEECH);
+            if (token instanceof android.media.AudioFocusRequest) {
+                focusReq26 = (android.media.AudioFocusRequest) token;
             }
-            return res == AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
+            return token != null;
         } catch (Exception ignored) {
             return true;
         }
@@ -279,13 +260,9 @@ public class RecordingService extends Service {
     private void abandonFocus() {
         try {
             if (audioManager != null) {
-                if (Build.VERSION.SDK_INT >= 26 && focusReq26 != null) {
-                    audioManager.abandonAudioFocusRequest(focusReq26);
-                    focusReq26 = null;
-                } else if (focusListener != null) {
-                    //noinspection deprecation
-                    audioManager.abandonAudioFocus(focusListener);
-                }
+                HardwareApiManager.get().abandonAudioFocus(
+                        audioManager, focusReq26, focusListener);
+                focusReq26 = null;
             }
         } catch (Exception ignored) {}
         focusListener = null;
@@ -477,17 +454,10 @@ public class RecordingService extends Service {
     // ---- notification: one clean standard layout ----
 
     private void ensureChannel() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
-        try {
-            NotificationManager nm =
-                    (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-            if (nm == null) return;
-            NotificationChannel ch = new NotificationChannel(
-                    CHANNEL, getString(R.string.notif_channel),
-                    NotificationManager.IMPORTANCE_LOW);
-            ch.setDescription(getString(R.string.notif_channel_desc));
-            nm.createNotificationChannel(ch);
-        } catch (Exception ignored) {}
+        HardwareApiManager.get().ensureNotificationChannel(
+                this, CHANNEL, getString(R.string.notif_channel),
+                getString(R.string.notif_channel_desc),
+                NotificationManager.IMPORTANCE_LOW);
     }
 
     private void startFg() {
@@ -496,24 +466,8 @@ public class RecordingService extends Service {
         lastNotifPaused = null;
         lastNotifPct = -2;
         Notification n = buildNotif();
-        try {
-            if (Build.VERSION.SDK_INT >= 29) {
-                startForeground(NOTIF_ID, n,
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE);
-            } else {
-                startForeground(NOTIF_ID, n);
-            }
-            return;
-        } catch (Exception typed) {
-            CrashLog.breadcrumb(this, "typed startForeground failed: " + typed);
-        }
-        // Untyped retry: a service launched with startForegroundService()
-        // must reach the foreground within ~5s or the system kills the app,
-        // so it is always worth attempting the permissive call.
-        try {
-            startForeground(NOTIF_ID, n);
-        } catch (Exception e) {
-            CrashLog.breadcrumb(this, "startForeground failed: " + e);
+        if (!HardwareApiManager.get().promoteServiceToForeground(
+                this, NOTIF_ID, n, true)) {
             try {
                 stopSelf();
             } catch (Exception ignored) {}

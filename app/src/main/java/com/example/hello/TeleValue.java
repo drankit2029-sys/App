@@ -563,9 +563,7 @@ public class TeleValue extends LinearLayout {
             LinearLayout box = new LinearLayout(ctx);
             box.setOrientation(LinearLayout.VERTICAL);
             box.setBackgroundResource(R.drawable.bg_modal);
-            if (android.os.Build.VERSION.SDK_INT >= 21) {
-                box.setElevation(dp(ctx, 16));
-            }
+            HardwareApiManager.get().setElevationCompat(box, dp(ctx, 16));
             box.setPadding(pad, pad, pad, pad);
 
             TextView title = new TextView(ctx);

@@ -1,8 +1,17 @@
 package com.example.hello;
 
+import java.io.File;
+import java.io.RandomAccessFile;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+
 /**
  * Stage 7 fades: fade in, fade out, studio fade out (equal-power S-curve
  * plus a closing low-pass) and a fully customisable fade.
+ *
+ * <p>Supports bounded-chunk file-to-file streaming via
+ * {@link #processOfflineRangeToFile} so applying fades to multi-minute takes
+ * never allocates full-region arrays in RAM.
  */
 final class FadeProcessor extends AudioProcessor {
 
@@ -90,23 +99,96 @@ final class FadeProcessor extends AudioProcessor {
 
         switch (typeIdx) {
             case 0: { // Fade In
-                applyRamp(out, frames, channels, fadeFrames, true);
+                applyRamp(out, frames, channels, fadeFrames, true, 0L, frames);
                 break;
             }
             case 1: { // Fade Out
-                applyRamp(out, frames, channels, fadeFrames, false);
+                applyRamp(out, frames, channels, fadeFrames, false, 0L, frames);
                 break;
             }
             case 2: { // Studio Fade Out
-                applyStudioFade(out, frames, channels, fadeFrames);
+                closingLp.reset();
+                applyStudioFade(out, frames, channels, fadeFrames, 0L, frames);
                 break;
             }
             default: { // Adjustable Fade
-                applyAdjustable(out, frames, channels, fadeFrames);
+                applyAdjustable(out, frames, channels, fadeFrames, 0L);
                 break;
             }
         }
         return out;
+    }
+
+    @Override
+    public long processOfflineRangeToFile(File srcWav, long startFrame,
+                                          long endFrame, File dstWav,
+                                          int sampleRate, int channels)
+            throws Exception {
+        if (srcWav == null || dstWav == null) return -1L;
+        FormatConverter.WavInfo info = FormatConverter.readFloatWav(srcWav);
+        int ch = Math.max(1, channels > 0 ? channels : info.channels);
+        int sr = sampleRate > 0 ? sampleRate : info.sampleRate;
+        long totalFrames = info.dataBytes / 4L / ch;
+        startFrame = Math.max(0L, Math.min(totalFrames, startFrame));
+        endFrame = Math.max(startFrame, Math.min(totalFrames, endFrame));
+        long regionFrames = endFrame - startFrame;
+        if (regionFrames <= 0) return -1L;
+
+        prepare(sr, ch);
+        closingLp.reset();
+        int typeIdx = type.getEnumIndex();
+        long fadeFrames = Math.max(1L,
+                Math.round(regionFrames * length.getCurrentRaw() / 100.0));
+        fadeFrames = Math.min(fadeFrames, regionFrames);
+        float mix = getWetDryMix();
+
+        int chunkFrames = DEFAULT_DSP_CHUNK_FRAMES;
+        byte[] rawBuf = new byte[chunkFrames * ch * 4];
+        float[] fBuf = new float[chunkFrames * ch];
+        float[] dryBuf = mix < 0.999f ? new float[chunkFrames * ch] : null;
+        ByteBuffer bb = ByteBuffer.wrap(rawBuf).order(ByteOrder.LITTLE_ENDIAN);
+        long frameBytes = ch * 4L;
+
+        try (RandomAccessFile inRaf = new RandomAccessFile(srcWav, "r");
+             RandomAccessFile outRaf = new RandomAccessFile(dstWav, "rw")) {
+            outRaf.setLength(0);
+            outRaf.write(Dsp.wavFloatHeader(ch, sr, regionFrames * frameBytes));
+            long offset = 0L;
+            while (offset < regionFrames) {
+                int want = (int) Math.min((long) chunkFrames, regionFrames - offset);
+                inRaf.seek(info.dataStart + (startFrame + offset) * frameBytes);
+                inRaf.readFully(rawBuf, 0, want * ch * 4);
+                bb.clear();
+                bb.limit(want * ch * 4);
+                bb.asFloatBuffer().get(fBuf, 0, want * ch);
+                if (dryBuf != null) {
+                    System.arraycopy(fBuf, 0, dryBuf, 0, want * ch);
+                }
+
+                switch (typeIdx) {
+                    case 0:
+                        applyRamp(fBuf, want, ch, fadeFrames, true, offset, regionFrames);
+                        break;
+                    case 1:
+                        applyRamp(fBuf, want, ch, fadeFrames, false, offset, regionFrames);
+                        break;
+                    case 2:
+                        applyStudioFade(fBuf, want, ch, fadeFrames, offset, regionFrames);
+                        break;
+                    default:
+                        applyAdjustable(fBuf, want, ch, fadeFrames, offset);
+                        break;
+                }
+
+                if (dryBuf != null) {
+                    HardwareApiManager.get().processGainClipMixChunked(
+                            fBuf, dryBuf, want * ch, 1.0f, 0f, mix);
+                }
+                Dsp.writeFloatsLE(outRaf, fBuf, 0, want * ch);
+                offset += want;
+            }
+        }
+        return regionFrames;
     }
 
     private float shapeCurve(float u) {
@@ -139,51 +221,48 @@ final class FadeProcessor extends AudioProcessor {
     }
 
     /** Shaped ramp in or out over the first/last {@code fadeFrames}. */
-    private void applyRamp(float[] buf, int frames, int ch, int fadeFrames,
-                           boolean fadeIn) {
+    private void applyRamp(float[] buf, int chunkFrames, int ch, long fadeFrames,
+                           boolean fadeIn, long globalFrameOffset, long totalFrames) {
         float gStart = startGain.getCurrentRaw() / 100f;
         float gEnd = endGain.getCurrentRaw() / 100f;
         if (Math.abs(gStart - 1.0f) < 1e-4f && Math.abs(gEnd - 1.0f) < 1e-4f) {
-            // When both start and end sit at 100%, apply a gentle 15% soft contour
-            // over the fade span so fade_start=100% remains distinct from dry.
             gStart = 0.85f;
         }
         if (!fadeIn && gStart < 0.01f && gEnd > 0.99f) {
-            // Fade Out keeps its natural full-to-silent defaults; when the user
-            // dials custom gains, Start Gain is the initial level and End Gain
-            // is the final level.
             gStart = 1.0f;
             gEnd = 0.0f;
         }
-        for (int f = 0; f < frames; f++) {
+        long startOut = totalFrames - fadeFrames;
+        for (int local = 0; local < chunkFrames; local++) {
+            long f = globalFrameOffset + local;
             float g;
             if (fadeIn) {
                 if (f < fadeFrames) {
-                    float u = fadeFrames == 1 ? 1f : f / (float) (fadeFrames - 1);
+                    float u = fadeFrames <= 1 ? 1f : f / (float) (fadeFrames - 1);
                     float shaped = shapeCurve(u);
                     g = gStart + (gEnd - gStart) * shaped;
                 } else {
                     g = gEnd;
                 }
             } else {
-                int start = frames - fadeFrames;
-                if (f >= start) {
-                    int i = f - start;
-                    float u = fadeFrames == 1 ? 1f : i / (float) (fadeFrames - 1);
+                if (f >= startOut) {
+                    long i = f - startOut;
+                    float u = fadeFrames <= 1 ? 1f : i / (float) (fadeFrames - 1);
                     float shaped = shapeCurve(u);
                     g = gStart + (gEnd - gStart) * shaped;
                 } else {
                     g = gStart;
                 }
             }
-            int idx = f * ch;
+            int idx = local * ch;
             for (int c = 0; c < ch; c++) buf[idx + c] *= g;
         }
     }
 
     /** Equal-power S-curve with a low-pass that closes during the fade. */
-    private void applyStudioFade(float[] buf, int frames, int ch, int fadeFrames) {
-        closingLp.reset();
+    private void applyStudioFade(float[] buf, int chunkFrames, int ch,
+                                 long fadeFrames, long globalFrameOffset,
+                                 long totalFrames) {
         float gStart = startGain.getCurrentRaw() / 100f;
         float gEnd = endGain.getCurrentRaw() / 100f;
         if (Math.abs(gStart - 1.0f) < 1e-4f && Math.abs(gEnd - 1.0f) < 1e-4f) {
@@ -193,20 +272,22 @@ final class FadeProcessor extends AudioProcessor {
             gStart = 1.0f;
             gEnd = 0.0f;
         }
-        for (int f = 0; f < frames; f++) {
+        long startOut = totalFrames - fadeFrames;
+        for (int local = 0; local < chunkFrames; local++) {
+            long f = globalFrameOffset + local;
             float u = 0f;
-            if (f >= frames - fadeFrames) {
-                int i = f - (frames - fadeFrames);
-                u = fadeFrames == 1 ? 1f : i / (float) (fadeFrames - 1);
+            if (f >= startOut) {
+                long i = f - startOut;
+                u = fadeFrames <= 1 ? 1f : i / (float) (fadeFrames - 1);
             }
             float cutoff = 20000f * (float) Math.pow(800f / 20000f, u);
             closingLp.setSections(new float[][]{
                     Dsp.rbjLowPass(sampleRate, cutoff, 0.7071)}, ch);
-            closingLp.process(buf, 1, ch, f);
+            closingLp.process(buf, 1, ch, local);
             float baseCos = (float) (0.5 * (1.0 + Math.cos(Math.PI * u)));
             float shaped = 0.5f * baseCos + 0.5f * shapeCurve(1f - u);
             float g = gEnd + (gStart - gEnd) * shaped;
-            int idx = f * ch;
+            int idx = local * ch;
             for (int c = 0; c < ch; c++) {
                 buf[idx + c] *= g;
             }
@@ -214,18 +295,20 @@ final class FadeProcessor extends AudioProcessor {
     }
 
     /** Custom curve between an arbitrary start and end gain. */
-    private void applyAdjustable(float[] buf, int frames, int ch, int fadeFrames) {
+    private void applyAdjustable(float[] buf, int chunkFrames, int ch,
+                                 long fadeFrames, long globalFrameOffset) {
         float g0 = startGain.getCurrentRaw() / 100f;
         float g1 = endGain.getCurrentRaw() / 100f;
         if (Math.abs(g0 - 1.0f) < 1e-4f && Math.abs(g1 - 1.0f) < 1e-4f) {
             g0 = 0.85f;
         }
-        for (int f = 0; f < frames; f++) {
+        for (int local = 0; local < chunkFrames; local++) {
+            long f = globalFrameOffset + local;
             float u = fadeFrames <= 1 ? 1f
                     : Math.min(1f, f / (float) (fadeFrames - 1));
             float shape = shapeCurve(u);
             float g = g0 + (g1 - g0) * shape;
-            int idx = f * ch;
+            int idx = local * ch;
             for (int c = 0; c < ch; c++) buf[idx + c] *= g;
         }
     }

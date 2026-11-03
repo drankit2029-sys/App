@@ -1,10 +1,19 @@
 package com.example.hello;
 
+import java.io.File;
+import java.io.RandomAccessFile;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+
 /**
  * Stage 7 truncate silence: scans the region in 10 ms RMS windows, finds
  * the silent spans that exceed the minimum duration and either truncates
  * them to the target length or compresses them to a percentage of their
  * actual duration, with a short raised-cosine splice crossfade.
+ *
+ * <p>Supports bounded-chunk file-to-file streaming via
+ * {@link #processOfflineRangeToFile} so multi-minute or multi-hour takes never
+ * allocate full-region arrays in RAM.
  */
 final class TruncateSilenceProcessor extends AudioProcessor {
 
@@ -162,6 +171,139 @@ final class TruncateSilenceProcessor extends AudioProcessor {
         }
         copySlice(in, cursor, frames, channels, result, writeIdx);
         return result;
+    }
+
+    @Override
+    public long processOfflineRangeToFile(File srcWav, long startFrame,
+                                          long endFrame, File dstWav,
+                                          int sampleRate, int channels)
+            throws Exception {
+        if (sampleRate > 0) this.sampleRate = sampleRate;
+        if (endFrame - startFrame <= MAX_IN_MEMORY_OFFLINE_FRAMES) {
+            return super.processOfflineRangeToFile(
+                    srcWav, startFrame, endFrame, dstWav, this.sampleRate, channels);
+        }
+
+        FormatConverter.WavInfo info = FormatConverter.readFloatWav(srcWav);
+        int ch = Math.max(1, channels > 0 ? channels : info.channels);
+        int sr = info.sampleRate > 0 ? info.sampleRate : this.sampleRate;
+        long totalFrames = info.dataBytes / 4L / ch;
+        startFrame = Math.max(0L, Math.min(totalFrames, startFrame));
+        endFrame = Math.max(startFrame, Math.min(totalFrames, endFrame));
+        long frames = endFrame - startFrame;
+        if (frames <= 0) return -1L;
+
+        float thrLin = Dsp.dbToLin(threshold.getFloat());
+        int window = Math.max(1, (int) (sr * 0.01));
+        int rawMinMs = minDuration.getCurrentRaw();
+        long minSilent = Math.max(1L, Math.round(rawMinMs * 0.001 * sr));
+        boolean compress = action.getEnumIndex() == 1
+                || compressTo.getCurrentRaw() != compressTo.defaultRaw;
+        long truncTargetFrames = Math.max(1L,
+                Math.round(truncateTo.getCurrentRaw() * 0.001 * sr));
+        float compRatio = compressTo.getCurrentRaw() / 100f;
+
+        // Pass 1: Stream 10 ms RMS windows to locate silent spans without loading file in RAM
+        java.util.List<long[]> spans = new java.util.ArrayList<>();
+        final long[] silentStart = {-1L};
+        final double[] winSum = {0.0};
+        final int[] winFrames = {0};
+        final long[] winStartPos = {0L};
+
+        EditEngine.forEachFloatChunk(srcWav, startFrame, endFrame,
+                DEFAULT_DSP_CHUNK_FRAMES,
+                (chunk, chunkFrames, chunkCh, frameOffset) -> {
+                    int cCount = Math.max(1, chunkCh);
+                    for (int f = 0; f < chunkFrames; f++) {
+                        long relFrame = (frameOffset - startFrame) + f;
+                        if (winFrames[0] == 0) winStartPos[0] = relFrame;
+                        for (int c = 0; c < cCount; c++) {
+                            double v = chunk[f * cCount + c];
+                            winSum[0] += v * v;
+                        }
+                        winFrames[0]++;
+                        if (winFrames[0] == window || relFrame == frames - 1) {
+                            int count = winFrames[0] * cCount;
+                            float rms = count > 0 ? (float) Math.sqrt(winSum[0] / count) : 0f;
+                            boolean silent = rms < thrLin;
+                            long winEnd = relFrame + 1;
+                            if (silent && silentStart[0] < 0) {
+                                silentStart[0] = winStartPos[0];
+                            } else if (!silent && silentStart[0] >= 0) {
+                                if (winEnd - silentStart[0] >= minSilent) {
+                                    spans.add(new long[]{silentStart[0], winEnd});
+                                }
+                                silentStart[0] = -1L;
+                            }
+                            winSum[0] = 0.0;
+                            winFrames[0] = 0;
+                        }
+                    }
+                });
+        if (silentStart[0] >= 0 && frames - silentStart[0] >= minSilent) {
+            spans.add(new long[]{silentStart[0], frames});
+        }
+
+        long outFrames = 0L;
+        long cursor = 0L;
+        long[] keepPerSpan = new long[spans.size()];
+        for (int i = 0; i < spans.size(); i++) {
+            long[] span = spans.get(i);
+            long spanLen = span[1] - span[0];
+            long targetKeep;
+            if (action.getEnumIndex() == 1) {
+                targetKeep = Math.max(1L, Math.round(spanLen * compRatio));
+            } else if (compress) {
+                targetKeep = Math.max(1L, Math.round(
+                        Math.min(truncTargetFrames, spanLen) * (0.5f + 0.5f * (compRatio / 0.35f))));
+            } else {
+                targetKeep = truncTargetFrames;
+            }
+            long keep = Math.min(spanLen, Math.max(1L, targetKeep));
+            keepPerSpan[i] = keep;
+            outFrames += Math.max(0L, span[0] - cursor) + keep;
+            cursor = span[1];
+        }
+        outFrames += Math.max(0L, frames - cursor);
+
+        // Pass 2: Stream kept slices to dstWav in 64 KB chunks
+        long frameBytes = ch * 4L;
+        byte[] copyBuf = new byte[65536];
+        try (RandomAccessFile inRaf = new RandomAccessFile(srcWav, "r");
+             RandomAccessFile outRaf = new RandomAccessFile(dstWav, "rw")) {
+            outRaf.setLength(0);
+            outRaf.write(Dsp.wavFloatHeader(ch, sr, outFrames * frameBytes));
+            cursor = 0L;
+            for (int i = 0; i < spans.size(); i++) {
+                long[] span = spans.get(i);
+                long keep = keepPerSpan[i];
+                streamFrameSlice(inRaf, info.dataStart, startFrame + cursor,
+                        startFrame + span[0], frameBytes, outRaf, copyBuf);
+                streamFrameSlice(inRaf, info.dataStart, startFrame + span[0],
+                        startFrame + span[0] + keep, frameBytes, outRaf, copyBuf);
+                cursor = span[1];
+            }
+            streamFrameSlice(inRaf, info.dataStart, startFrame + cursor,
+                    startFrame + frames, frameBytes, outRaf, copyBuf);
+        }
+        return outFrames;
+    }
+
+    private static void streamFrameSlice(RandomAccessFile inRaf, long dataStart,
+                                         long fromFrame, long toFrame,
+                                         long frameBytes, RandomAccessFile outRaf,
+                                         byte[] buf) throws Exception {
+        long bytes = Math.max(0L, toFrame - fromFrame) * frameBytes;
+        if (bytes <= 0) return;
+        inRaf.seek(dataStart + fromFrame * frameBytes);
+        long left = bytes;
+        while (left > 0) {
+            int want = (int) Math.min((long) buf.length, left);
+            int n = inRaf.read(buf, 0, want);
+            if (n <= 0) break;
+            outRaf.write(buf, 0, n);
+            left -= n;
+        }
     }
 
     private static int copySlice(float[] src, int fromFrame, int toFrame,

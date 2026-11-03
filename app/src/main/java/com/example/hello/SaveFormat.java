@@ -92,7 +92,7 @@ public enum SaveFormat {
             case OPUS:
                 // MediaMuxer only gained OGG/WEBM Opus support across the
                 // board on API 29; older builds have the codec but no muxer.
-                if (android.os.Build.VERSION.SDK_INT < 26) return false;
+                if (!HardwareApiManager.get().isOpusMuxerSupported()) return false;
                 break;
             case FLAC:
             case AMR_NB:
@@ -155,7 +155,7 @@ public enum SaveFormat {
             case AMR_WB: return "3gp";
             case FLAC: return "flac";
             case OPUS:
-                return android.os.Build.VERSION.SDK_INT >= 29 ? "opus" : "webm";
+                return HardwareApiManager.get().getOpusFileExtension();
             case M4A:
             case AUTO:
             default: return "m4a";

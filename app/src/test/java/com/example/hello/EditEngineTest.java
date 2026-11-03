@@ -17,8 +17,10 @@ import java.io.RandomAccessFile;
 
 /**
  * Roadmap Phase 3 splice engine: trim keeps exactly the selection, cut
- * removes it with a crossfaded bridge, undo restores byte-identical audio,
- * and DSP range commits preserve file geometry.
+ * removes it with a crossfaded bridge, undo restores byte-identical audio
+ * across 5 steps on full takes of any size (including >30 MB takes),
+ * range-delta snapshots restore sub-range DSP edits in-place, and chunked
+ * offline/in-place DSP range commits preserve file geometry.
  */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 34)
@@ -138,24 +140,70 @@ public class EditEngineTest {
     }
 
     @Test
-    public void undoJournalIsBoundedToTenStepsAndSupportsRedo() throws Exception {
+    public void undoJournalIsBoundedToFiveStepsAndSupportsRedoOnFullTakes()
+            throws Exception {
+        assertEquals(5, EditEngine.MAX_UNDO_STEPS);
         File raw = dcRaw("bounded.wav", 48000);
         EditEngine.UndoJournal undo =
                 new EditEngine.UndoJournal(tmp.getRoot());
-        for (int i = 0; i < 12; i++) undo.recordSnapshot(raw);
-        assertEquals(10, undo.undoDepth());
+        for (int i = 0; i < 8; i++) undo.recordSnapshot(raw);
+        assertEquals(5, undo.undoDepth());
         assertFalse(undo.canRedo());
-        for (int i = 0; i < 10; i++) assertTrue(undo.undo(raw));
+        for (int i = 0; i < 5; i++) assertTrue(undo.undo(raw));
         assertFalse(undo.canUndo());
-        assertEquals(10, undo.redoDepth());
-        for (int i = 0; i < 10; i++) assertTrue(undo.redo(raw));
+        assertEquals(5, undo.redoDepth());
+        for (int i = 0; i < 5; i++) assertTrue(undo.redo(raw));
         assertFalse(undo.canRedo());
-        assertEquals(10, undo.undoDepth());
+        assertEquals(5, undo.undoDepth());
         // Recording a new snapshot clears the redo stack
         assertTrue(undo.undo(raw));
         assertTrue(undo.canRedo());
         assertTrue(undo.recordSnapshot(raw));
         assertFalse(undo.canRedo());
+    }
+
+    @Test
+    public void undoJournalWorksOnEntireLargeTakesOver30Mb() throws Exception {
+        File large = new File(tmp.getRoot(), "large_take.wav");
+        long payloadBytes = 32L * 1024L * 1024L;
+        try (RandomAccessFile w = new RandomAccessFile(large, "rw")) {
+            w.setLength(0);
+            w.write(Dsp.wavFloatHeader(2, 48000, payloadBytes));
+            w.setLength(44L + payloadBytes);
+            w.seek(44L + 1000L * 4L);
+            Dsp.writeFloatsLE(w, new float[]{0.25f, -0.25f, 0.75f, -0.75f}, 0, 4);
+        }
+        EditEngine.UndoJournal undo = new EditEngine.UndoJournal(tmp.getRoot());
+        assertTrue(undo.wouldRecord(large));
+        assertTrue(undo.recordSnapshot(large));
+        // Mutate the file and verify undo + redo restore exact samples and length
+        try (RandomAccessFile w = new RandomAccessFile(large, "rw")) {
+            w.seek(44L + 1000L * 4L);
+            Dsp.writeFloatsLE(w, new float[]{0.9f, 0.9f, 0.9f, 0.9f}, 0, 4);
+        }
+        assertEquals(0.9f, sampleAt(large, 1000), 1e-5f);
+        assertTrue(undo.undo(large));
+        assertEquals(44L + payloadBytes, large.length());
+        assertEquals(0.25f, sampleAt(large, 1000), 1e-5f);
+        assertTrue(undo.redo(large));
+        assertEquals(0.9f, sampleAt(large, 1000), 1e-5f);
+    }
+
+    @Test
+    public void chunkedOfflineEffectWorksOnLargeRegionAndSupportsUndoRedo()
+            throws Exception {
+        int frames = AudioProcessor.MAX_IN_MEMORY_OFFLINE_FRAMES + 8192;
+        File raw = dcRaw("large_offline.wav", frames);
+        EditEngine.UndoJournal undo = new EditEngine.UndoJournal(tmp.getRoot());
+        FadeProcessor fade = new FadeProcessor();
+        fade.prepare(48000, 1);
+        long outFrames = EditEngine.applyLengthChangingEffectToRange(
+                raw, 0, frames, fade, undo);
+        assertEquals(frames, outFrames);
+        assertTrue(undo.canUndo());
+        assertTrue(undo.undo(raw));
+        assertEquals(0.5f, sampleAt(raw, 100), 1e-4f);
+        assertTrue(undo.redo(raw));
     }
 
     @Test
@@ -175,8 +223,10 @@ public class EditEngineTest {
     }
 
     @Test
-    public void activeDspRangeKeepsGeometry() throws Exception {
+    public void activeDspRangeKeepsGeometryAndRestoresViaRangeDeltaUndo()
+            throws Exception {
         File raw = dcRaw("dsp.wav", 48000);
+        byte[] before = bytesOf(raw);
         EditEngine.UndoJournal undo =
                 new EditEngine.UndoJournal(tmp.getRoot());
         EditEngine.applyDspToRange(raw, 0, 4800,
@@ -187,6 +237,13 @@ public class EditEngineTest {
         float mid = sampleAt(raw, 2400);
         assertTrue("non-finite " + mid, Float.isFinite(mid));
         assertTrue("unbounded " + mid, Math.abs(mid) <= 1.0f);
+
+        assertTrue(undo.undo(raw));
+        byte[] restored = bytesOf(raw);
+        assertEquals(before.length, restored.length);
+        for (int i = 0; i < before.length; i++) {
+            if (before[i] != restored[i]) fail("delta undo differs at " + i);
+        }
     }
 
     @Test

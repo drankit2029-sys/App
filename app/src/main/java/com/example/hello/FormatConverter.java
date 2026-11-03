@@ -296,9 +296,7 @@ public final class FormatConverter {
 
     /** Opus in Ogg on API 29+ (WebM fallback on API 24-28). */
     public static void toOpus(File src, File dst, int bitrate, Progress cb) throws Exception {
-        int muxFmt = android.os.Build.VERSION.SDK_INT >= 29
-                ? MediaMuxer.OutputFormat.MUXER_OUTPUT_OGG
-                : MediaMuxer.OutputFormat.MUXER_OUTPUT_WEBM;
+        int muxFmt = HardwareApiManager.get().getOpusMuxerOutputFormat();
         encodeMuxed(src, dst, "audio/opus",
                 Math.max(32000, Math.min(256000, bitrate <= 0 ? 128000 : bitrate)),
                 muxFmt, -1, cb);

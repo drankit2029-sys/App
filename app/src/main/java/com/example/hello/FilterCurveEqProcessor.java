@@ -274,12 +274,8 @@ final class FilterCurveEqProcessor extends AudioProcessor {
                     inRe[f] = buf[(off + f) * c + chn];
                 }
                 Dsp.fft(inRe, inIm, false);
-                for (int k = 0; k < fftSize; k++) {
-                    float rr = inRe[k] * hRe[k] - inIm[k] * hIm[k];
-                    float ii = inRe[k] * hIm[k] + inIm[k] * hRe[k];
-                    inRe[k] = rr;
-                    inIm[k] = ii;
-                }
+                HardwareApiManager.get().complexMultiplyInPlace(
+                        inRe, inIm, hRe, hIm, fftSize);
                 Dsp.fft(inRe, inIm, true);
                 float[] cr = carry[chn];
                 for (int f = 0; f < blk; f++) {

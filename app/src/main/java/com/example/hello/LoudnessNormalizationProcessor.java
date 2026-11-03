@@ -10,6 +10,9 @@ import java.util.List;
  * 400 ms gating blocks (75% overlap), -70 LUFS absolute gate and -10 LU
  * relative gate, plus a true-peak ceiling clamp so normalizing up to a loud
  * target never clips.
+ *
+ * <p>Uses bounded chunk streaming in {@link #prepareOffline} and
+ * {@link #measureLufs} so long takes never allocate full-region buffers.
  */
 final class LoudnessNormalizationProcessor extends AudioProcessor {
 
@@ -60,51 +63,127 @@ final class LoudnessNormalizationProcessor extends AudioProcessor {
     public void prepareOffline(File raw, long startFrame, long endFrame,
                                int sampleRate, int channels) throws Exception {
         if (sampleRate > 0) this.sampleRate = sampleRate;
-        float[] slice = EditEngine.readFloatSelection(raw, startFrame, endFrame);
-        int ch = Math.max(1, Math.min(2, channels));
-        measuredLufs = measureLufs(slice, slice.length / ch, ch, this.sampleRate);
+        if (raw == null || !raw.exists()) return;
+        measuredLufs = measureLufsFromFile(raw, startFrame, endFrame,
+                this.sampleRate, channels);
+    }
+
+    /**
+     * Streams {@code [startFrame, endFrame)} from {@code raw} in bounded chunks
+     * through the ITU-R BS.1770 K-weighting filter and a 4-hop (400 ms, 75%
+     * overlap) ring accumulator without allocating a full-take array.
+     */
+    static double measureLufsFromFile(File raw, long startFrame, long endFrame,
+                                      int sampleRate, int channels)
+            throws Exception {
+        final int sr = Math.max(8000, sampleRate);
+        final int ch = Math.max(1, Math.min(2, channels));
+        final BiquadFilter kw = new BiquadFilter();
+        kw.setSections(new float[][]{
+                Dsp.rbjHighShelf(sr, 1681.97, 0.7071, 4.0),
+                Dsp.rbjHighPass(sr, 38.13, 0.5003)
+        }, ch);
+
+        final int block = Math.max(64, (int) Math.round(0.400 * sr));
+        final int hop = Math.max(16, block / 4);
+        final float[] ring = new float[block * ch];
+        final int[] ringFill = {0};
+        final double[] totalEnergy = {0.0};
+        final long[] totalFramesSeen = {0L};
+        final List<Double> blockEnergies = new ArrayList<>();
+
+        EditEngine.forEachFloatChunk(raw, startFrame, endFrame,
+                DEFAULT_DSP_CHUNK_FRAMES,
+                (chunk, frames, chunkCh, frameOffset) -> {
+                    int cCount = Math.max(1, Math.min(2, chunkCh));
+                    kw.process(chunk, frames, cCount);
+                    for (int f = 0; f < frames; f++) {
+                        int srcBase = f * cCount;
+                        int dstBase = ringFill[0] * cCount;
+                        for (int c = 0; c < cCount; c++) {
+                            float v = chunk[srcBase + c];
+                            ring[dstBase + c] = v;
+                            totalEnergy[0] += (double) v * v;
+                        }
+                        ringFill[0]++;
+                        totalFramesSeen[0]++;
+                        if (ringFill[0] == block) {
+                            double e = 0.0;
+                            int n = block * cCount;
+                            for (int i = 0; i < n; i++) {
+                                double v = ring[i];
+                                e += v * v;
+                            }
+                            blockEnergies.add(e / block);
+                            int keep = block - hop;
+                            System.arraycopy(ring, hop * cCount, ring, 0, keep * cCount);
+                            ringFill[0] = keep;
+                        }
+                    }
+                });
+        if (totalFramesSeen[0] <= 0) return -70.0;
+        return computeGatedLufs(blockEnergies, totalEnergy[0], totalFramesSeen[0]);
     }
 
     /**
      * Computes integrated loudness (LUFS) with ITU-R BS.1770 K-weighting and
-     * absolute (-70 LUFS) + relative (-10 LU) gating. Falls back to short-term
-     * K-weighted mean square when the buffer is shorter than 400 ms.
+     * absolute (-70 LUFS) + relative (-10 LU) gating in bounded chunks.
      */
     static double measureLufs(float[] interleaved, int frames, int channels,
                               int sampleRate) {
         if (interleaved == null || frames <= 0) return -70.0;
         int ch = Math.max(1, Math.min(2, channels));
-        float[] work = interleaved.clone();
         BiquadFilter kw = new BiquadFilter();
         float[][] secs = new float[][]{
                 Dsp.rbjHighShelf(sampleRate, 1681.97, 0.7071, 4.0),
                 Dsp.rbjHighPass(sampleRate, 38.13, 0.5003)
         };
         kw.setSections(secs, ch);
-        kw.process(work, frames, ch);
 
         int block = Math.max(64, (int) Math.round(0.400 * sampleRate));
         int hop = Math.max(16, block / 4);
+        int chunkFrames = DEFAULT_DSP_CHUNK_FRAMES;
+        float[] chunk = new float[Math.min(frames, chunkFrames) * ch];
+        float[] ring = new float[block * ch];
+        int ringFill = 0;
+        double totalEnergy = 0.0;
         List<Double> blockEnergies = new ArrayList<>();
-        for (int start = 0; start + block <= frames; start += hop) {
-            double e = 0;
-            for (int f = start; f < start + block; f++) {
+
+        for (int off = 0; off < frames; off += chunkFrames) {
+            int want = Math.min(chunkFrames, frames - off);
+            System.arraycopy(interleaved, off * ch, chunk, 0, want * ch);
+            kw.process(chunk, want, ch);
+            for (int f = 0; f < want; f++) {
+                int srcBase = f * ch;
+                int dstBase = ringFill * ch;
                 for (int c = 0; c < ch; c++) {
-                    double v = work[f * ch + c];
-                    e += v * v;
+                    float v = chunk[srcBase + c];
+                    ring[dstBase + c] = v;
+                    totalEnergy += (double) v * v;
+                }
+                ringFill++;
+                if (ringFill == block) {
+                    double e = 0.0;
+                    int n = block * ch;
+                    for (int i = 0; i < n; i++) {
+                        double v = ring[i];
+                        e += v * v;
+                    }
+                    blockEnergies.add(e / block);
+                    int keep = block - hop;
+                    System.arraycopy(ring, hop * ch, ring, 0, keep * ch);
+                    ringFill = keep;
                 }
             }
-            blockEnergies.add(e / block);
         }
+        return computeGatedLufs(blockEnergies, totalEnergy, frames);
+    }
+
+    private static double computeGatedLufs(List<Double> blockEnergies,
+                                           double totalEnergy,
+                                           long totalFrames) {
         if (blockEnergies.isEmpty()) {
-            double e = 0;
-            for (int f = 0; f < frames; f++) {
-                for (int c = 0; c < ch; c++) {
-                    double v = work[f * ch + c];
-                    e += v * v;
-                }
-            }
-            double meanSq = e / Math.max(1, frames);
+            double meanSq = totalEnergy / Math.max(1L, totalFrames);
             return -0.691 + 10.0 * Math.log10(Math.max(1e-14, meanSq));
         }
         double absGateEnergy = Math.pow(10.0, (-70.0 + 0.691) / 10.0);

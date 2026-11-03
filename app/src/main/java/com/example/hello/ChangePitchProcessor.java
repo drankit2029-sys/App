@@ -1,8 +1,11 @@
 package com.example.hello;
 
+import java.io.File;
+
 /**
  * Stage 7 change pitch: shifts the pitch without changing the tempo by
- * time-stretching the signal with WSOLA and resampling it back.
+ * time-stretching the signal with WSOLA and resampling it back. Supports
+ * bounded-chunk file streaming for long takes.
  */
 final class ChangePitchProcessor extends AudioProcessor {
 
@@ -80,5 +83,20 @@ final class ChangePitchProcessor extends AudioProcessor {
         WsolaTimePitchProcessor wsola = new WsolaTimePitchProcessor(sampleRate);
         return wsola.pitchShift(in, frames, channels, totalSemitones(),
                 preserveFormant.getBoolean());
+    }
+
+    @Override
+    public long processOfflineRangeToFile(File srcWav, long startFrame,
+                                          long endFrame, File dstWav,
+                                          int sampleRate, int channels)
+            throws Exception {
+        if (sampleRate > 0) this.sampleRate = sampleRate;
+        if (endFrame - startFrame <= MAX_IN_MEMORY_OFFLINE_FRAMES) {
+            return super.processOfflineRangeToFile(
+                    srcWav, startFrame, endFrame, dstWav, this.sampleRate, channels);
+        }
+        WsolaTimePitchProcessor wsola = new WsolaTimePitchProcessor(this.sampleRate);
+        return wsola.pitchShiftToFile(srcWav, startFrame, endFrame, dstWav,
+                channels, totalSemitones(), preserveFormant.getBoolean(), getWetDryMix());
     }
 }

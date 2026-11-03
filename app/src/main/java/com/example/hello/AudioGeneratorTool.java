@@ -1,11 +1,18 @@
 package com.example.hello;
 
+import java.io.File;
+import java.io.RandomAccessFile;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+
 /**
  * Stage 7 audio generator: renders tone, chirp, white / pink / brown noise,
  * silence, a rhythm track, or ITU-T Q.23 DTMF tones into the region.
  *
  * <p>The generator writes over the selected region, so it behaves like
- * Audacity's Generate command rather than a filter.
+ * Audacity's Generate command rather than a filter. Supports bounded-chunk
+ * file streaming via {@link #processOfflineRangeToFile} so generating up to
+ * 600 seconds of audio never allocates a huge array in RAM.
  */
 final class AudioGeneratorTool extends AudioProcessor {
 
@@ -115,14 +122,8 @@ final class AudioGeneratorTool extends AudioProcessor {
         return isEnabled();
     }
 
-    @Override
-    public float[] processOfflineRegion(float[] in, int frames, int channels) {
-        if (in == null || frames <= 0) return in;
-        reset();
-        int ch = Math.max(1, Math.min(2, channels));
+    private int effectiveTypeIndex() {
         int typeIdx = type.getEnumIndex();
-        // If the user adjusted Tempo (BPM) or DTMF Sequence while Generator is
-        // still on Tone & Chirp (0), honor those controls directly.
         if (typeIdx == 0) {
             if (sequence.getCurrentRaw() != sequence.defaultRaw) {
                 typeIdx = 4;
@@ -130,6 +131,15 @@ final class AudioGeneratorTool extends AudioProcessor {
                 typeIdx = 3;
             }
         }
+        return typeIdx;
+    }
+
+    @Override
+    public float[] processOfflineRegion(float[] in, int frames, int channels) {
+        if (in == null || frames <= 0) return in;
+        reset();
+        int ch = Math.max(1, Math.min(2, channels));
+        int typeIdx = effectiveTypeIndex();
         // Silence replaces the selection with silence of the same length;
         // every other generator honors its explicit Duration dial.
         int outFrames = typeIdx == 2
@@ -139,42 +149,129 @@ final class AudioGeneratorTool extends AudioProcessor {
         float amp = amplitude.getCurrentRaw() / 100f;
         switch (typeIdx) {
             case 0: // Tone & chirp
-                renderTone(out, outFrames, ch, amp);
+                renderToneChunk(out, outFrames, ch, amp, 0L, outFrames, new double[]{0.0});
                 break;
             case 1: // Noise
-                renderNoise(out, outFrames, ch, amp);
+                renderNoiseChunk(out, outFrames, ch, amp, new float[]{0f, 0f, 0f});
                 break;
             case 2: // Silence
                 break;
             case 3: // Rhythm track
-                renderRhythm(out, outFrames, ch, amp);
+                renderRhythmChunk(out, outFrames, ch, amp, 0L);
                 break;
             default: // DTMF
-                renderDtmf(out, outFrames, ch, amp);
+                renderDtmfChunk(out, outFrames, ch, amp, 0L, outFrames);
                 break;
         }
         return out;
     }
 
-    private void renderTone(float[] out, int frames, int ch, float amp) {
-        double phase = 0;
-        double f0 = startFreq.getCurrentRaw();
-        double f1 = endFreq.getCurrentRaw();
-        for (int f = 0; f < frames; f++) {
-            double u = frames <= 1 ? 0 : f / (double) (frames - 1);
-            double freq = f0 + (f1 - f0) * u;
-            phase += 2 * Math.PI * freq / sampleRate;
-            float s = waveSample(wave.getEnumIndex(), phase);
-            for (int c = 0; c < ch; c++) out[f * ch + c] = s * amp;
+    @Override
+    public long processOfflineRangeToFile(File srcWav, long startFrame,
+                                          long endFrame, File dstWav,
+                                          int sampleRate, int channels)
+            throws Exception {
+        if (srcWav == null || dstWav == null) return -1L;
+        FormatConverter.WavInfo info = FormatConverter.readFloatWav(srcWav);
+        int ch = Math.max(1, channels > 0 ? channels : info.channels);
+        int sr = sampleRate > 0 ? sampleRate : info.sampleRate;
+        prepare(sr, ch);
+        reset();
+
+        long totalInFrames = info.dataBytes / 4L / ch;
+        startFrame = Math.max(0L, Math.min(totalInFrames, startFrame));
+        endFrame = Math.max(startFrame, Math.min(totalInFrames, endFrame));
+        long inFrames = endFrame - startFrame;
+        if (inFrames <= 0) return -1L;
+
+        int typeIdx = effectiveTypeIndex();
+        long outFrames = typeIdx == 2
+                ? Math.max(1L, inFrames)
+                : Math.max(1L, Math.round(duration.getFloat() * sr));
+        float amp = amplitude.getCurrentRaw() / 100f;
+        float mix = getWetDryMix();
+
+        int chunkFrames = DEFAULT_DSP_CHUNK_FRAMES;
+        float[] genChunk = new float[chunkFrames * ch];
+        float[] dryChunk = mix < 0.999f ? new float[chunkFrames * ch] : null;
+        byte[] dryBytes = mix < 0.999f ? new byte[chunkFrames * ch * 4] : null;
+        double[] tonePhase = {0.0};
+        float[] noiseState = {0f, 0f, 0f};
+        long frameBytes = ch * 4L;
+
+        try (RandomAccessFile inRaf = new RandomAccessFile(srcWav, "r");
+             RandomAccessFile outRaf = new RandomAccessFile(dstWav, "rw")) {
+            outRaf.setLength(0);
+            outRaf.write(Dsp.wavFloatHeader(ch, sr, outFrames * frameBytes));
+            long pos = 0L;
+            while (pos < outFrames) {
+                int want = (int) Math.min((long) chunkFrames, outFrames - pos);
+                java.util.Arrays.fill(genChunk, 0, want * ch, 0f);
+                switch (typeIdx) {
+                    case 0:
+                        renderToneChunk(genChunk, want, ch, amp, pos, outFrames, tonePhase);
+                        break;
+                    case 1:
+                        renderNoiseChunk(genChunk, want, ch, amp, noiseState);
+                        break;
+                    case 2:
+                        break;
+                    case 3:
+                        renderRhythmChunk(genChunk, want, ch, amp, pos);
+                        break;
+                    default:
+                        renderDtmfChunk(genChunk, want, ch, amp, pos, outFrames);
+                        break;
+                }
+                if (mix < 0.999f && dryChunk != null && dryBytes != null) {
+                    int dryAvail = (int) Math.max(0L, Math.min((long) want, inFrames - pos));
+                    if (dryAvail > 0) {
+                        inRaf.seek(info.dataStart + (startFrame + pos) * frameBytes);
+                        inRaf.readFully(dryBytes, 0, dryAvail * ch * 4);
+                        ByteBuffer.wrap(dryBytes, 0, dryAvail * ch * 4)
+                                .order(ByteOrder.LITTLE_ENDIAN)
+                                .asFloatBuffer().get(dryChunk, 0, dryAvail * ch);
+                        float dryWeight = 1f - mix;
+                        for (int i = 0; i < dryAvail * ch; i++) {
+                            genChunk[i] = dryChunk[i] * dryWeight + genChunk[i] * mix;
+                        }
+                    }
+                    for (int i = dryAvail * ch; i < want * ch; i++) {
+                        genChunk[i] *= mix;
+                    }
+                }
+                Dsp.writeFloatsLE(outRaf, genChunk, 0, want * ch);
+                pos += want;
+            }
         }
+        return outFrames;
     }
 
-    private void renderNoise(float[] out, int frames, int ch, float amp) {
+    private void renderToneChunk(float[] out, int chunkFrames, int ch, float amp,
+                                 long frameOffset, long totalFrames,
+                                 double[] phaseHolder) {
+        double phase = phaseHolder[0];
+        double f0 = startFreq.getCurrentRaw();
+        double f1 = endFreq.getCurrentRaw();
         int waveIdx = wave.getEnumIndex();
-        float pinkB0 = 0f;
-        float pinkB1 = 0f;
-        float brown = 0f;
-        for (int f = 0; f < frames; f++) {
+        for (int local = 0; local < chunkFrames; local++) {
+            long f = frameOffset + local;
+            double u = totalFrames <= 1 ? 0 : f / (double) (totalFrames - 1);
+            double freq = f0 + (f1 - f0) * u;
+            phase += 2 * Math.PI * freq / sampleRate;
+            float s = waveSample(waveIdx, phase);
+            for (int c = 0; c < ch; c++) out[local * ch + c] = s * amp;
+        }
+        phaseHolder[0] = phase;
+    }
+
+    private void renderNoiseChunk(float[] out, int chunkFrames, int ch, float amp,
+                                  float[] state) {
+        int waveIdx = wave.getEnumIndex();
+        float pinkB0 = state[0];
+        float pinkB1 = state[1];
+        float brown = state[2];
+        for (int f = 0; f < chunkFrames; f++) {
             float white = nextNoise();
             float s;
             if (waveIdx == 0) {
@@ -194,22 +291,27 @@ final class AudioGeneratorTool extends AudioProcessor {
             }
             for (int c = 0; c < ch; c++) out[f * ch + c] = s * amp;
         }
+        state[0] = pinkB0;
+        state[1] = pinkB1;
+        state[2] = brown;
     }
 
-    private void renderRhythm(float[] out, int frames, int ch, float amp) {
+    private void renderRhythmChunk(float[] out, int chunkFrames, int ch, float amp,
+                                   long frameOffset) {
         int bpm = Math.max(30, Math.min(300, tempo.getCurrentRaw()));
         int framesPerBeat = Math.max(1, (int) Math.round(60.0 * sampleRate / bpm));
         double pingHz = startFreq.getCurrentRaw() != startFreq.defaultRaw
                 ? startFreq.getCurrentRaw() : 880.0;
-        for (int f = 0; f < frames; f++) {
-            int pos = f % framesPerBeat;
+        for (int local = 0; local < chunkFrames; local++) {
+            long f = frameOffset + local;
+            int pos = (int) (f % framesPerBeat);
             float s = 0f;
             if (pos < framesPerBeat / 8) {
                 double t = pos / (double) sampleRate;
                 s = (float) (Math.sin(2 * Math.PI * pingHz * t)
                         * Math.exp(-t * 40.0));
             }
-            for (int c = 0; c < ch; c++) out[f * ch + c] = s * amp * 0.8f;
+            for (int c = 0; c < ch; c++) out[local * ch + c] = s * amp * 0.8f;
         }
     }
 
@@ -217,16 +319,18 @@ final class AudioGeneratorTool extends AudioProcessor {
      * Renders exact ITU-T Q.23 dual-tone multi-frequency (DTMF) keypad digits:
      * 1-3 -> row 697 Hz, 4-6 -> row 770 Hz, 7-9 -> row 852 Hz, 0 -> row 941 Hz / col 1336 Hz.
      */
-    private void renderDtmf(float[] out, int frames, int ch, float amp) {
+    private void renderDtmfChunk(float[] out, int chunkFrames, int ch, float amp,
+                                 long frameOffset, long totalFrames) {
         int seqVal = Math.max(0, sequence.getCurrentRaw());
         String digitsStr = String.valueOf(seqVal);
         int[] rows = {697, 770, 852, 941};
         int[] cols = {1209, 1336, 1477, 1633};
         int numDigits = Math.max(1, digitsStr.length());
-        int slotFrames = Math.max(1, frames / numDigits);
-        for (int f = 0; f < frames; f++) {
-            int slotIdx = Math.min(numDigits - 1, f / slotFrames);
-            int posInSlot = f - slotIdx * slotFrames;
+        long slotFrames = Math.max(1L, totalFrames / numDigits);
+        for (int local = 0; local < chunkFrames; local++) {
+            long f = frameOffset + local;
+            int slotIdx = (int) Math.min((long) (numDigits - 1), f / slotFrames);
+            long posInSlot = f - slotIdx * slotFrames;
             if (numDigits > 1 && posInSlot >= slotFrames * 0.78) {
                 continue; // inter-digit silence gap
             }
@@ -245,12 +349,12 @@ final class AudioGeneratorTool extends AudioProcessor {
             double f2 = cols[col];
             double t = posInSlot / (double) sampleRate;
             double env = 1.0;
-            int ramp = Math.max(1, Math.min(64, slotFrames / 12));
+            long ramp = Math.max(1L, Math.min(64L, slotFrames / 12L));
             if (posInSlot < ramp) {
                 env = posInSlot / (double) ramp;
             }
             double s = (Math.sin(2 * Math.PI * f1 * t) + Math.sin(2 * Math.PI * f2 * t)) * 0.5 * env;
-            for (int c = 0; c < ch; c++) out[f * ch + c] = (float) (s * amp);
+            for (int c = 0; c < ch; c++) out[local * ch + c] = (float) (s * amp);
         }
     }
 

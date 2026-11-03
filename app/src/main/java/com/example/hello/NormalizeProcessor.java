@@ -5,7 +5,8 @@ import java.io.File;
 /**
  * Stage 4 Normalize: DC-offset removal + Peak or RMS normalization to a user
  * target level, with Stereo Linked (preserves balance) or Independent Stereo
- * (normalizes L and R separately).
+ * (normalizes L and R separately). Uses bounded chunk streaming in
+ * {@link #prepareOffline} so long takes never allocate full-region buffers.
  */
 final class NormalizeProcessor extends AudioProcessor {
 
@@ -75,10 +76,50 @@ final class NormalizeProcessor extends AudioProcessor {
     public void prepareOffline(File raw, long startFrame, long endFrame,
                                int sampleRate, int channels) throws Exception {
         if (sampleRate > 0) this.sampleRate = sampleRate;
-        float[] slice = EditEngine.readFloatSelection(raw, startFrame, endFrame);
-        int ch = Math.max(1, Math.min(2, channels));
-        int frames = slice.length / ch;
-        measure(slice, frames, ch);
+        if (raw == null || !raw.exists()) return;
+        dcOffset[0] = dcOffset[1] = 0f;
+        measuredPeak[0] = measuredPeak[1] = 0f;
+        measuredRms[0] = measuredRms[1] = 0f;
+
+        final double[] sum = new double[2];
+        final int[] chHolder = {Math.max(1, Math.min(2, channels))};
+        long totalFrames = EditEngine.forEachFloatChunk(raw, startFrame, endFrame,
+                DEFAULT_DSP_CHUNK_FRAMES,
+                (chunk, frames, ch, frameOffset) -> {
+                    int cCount = Math.max(1, Math.min(2, ch));
+                    chHolder[0] = cCount;
+                    for (int f = 0; f < frames; f++) {
+                        int base = f * cCount;
+                        for (int c = 0; c < cCount; c++) {
+                            sum[c] += chunk[base + c];
+                        }
+                    }
+                });
+        if (totalFrames <= 0) return;
+        int ch = chHolder[0];
+        for (int c = 0; c < ch; c++) {
+            dcOffset[c] = removeDc.getBoolean() ? (float) (sum[c] / totalFrames) : 0f;
+        }
+
+        final double[] sq = new double[2];
+        EditEngine.forEachFloatChunk(raw, startFrame, endFrame,
+                DEFAULT_DSP_CHUNK_FRAMES,
+                (chunk, frames, chunkCh, frameOffset) -> {
+                    int cCount = Math.max(1, Math.min(2, chunkCh));
+                    for (int f = 0; f < frames; f++) {
+                        int base = f * cCount;
+                        for (int c = 0; c < cCount; c++) {
+                            float v = chunk[base + c] - dcOffset[c];
+                            float a = Math.abs(v);
+                            if (a > measuredPeak[c]) measuredPeak[c] = a;
+                            sq[c] += (double) v * v;
+                        }
+                    }
+                });
+        for (int c = 0; c < ch; c++) {
+            measuredRms[c] = (float) Math.sqrt(sq[c] / totalFrames);
+        }
+        scanned = true;
     }
 
     void measure(float[] buf, int frames, int ch) {

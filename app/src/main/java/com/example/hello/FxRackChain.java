@@ -305,8 +305,31 @@ public final class FxRackChain {
      * stages can never clip the output even if the limiter's drive mix is
      * reduced.
      */
+    private float[] subChunkBuf = new float[0];
+
     public void processInPlace(float[] buf, int frames) {
         if (buf == null || frames <= 0) return;
+        int totalFrames = Math.min(frames, buf.length / Math.max(1, channels));
+        if (totalFrames <= 0) return;
+        int maxChunk = AudioProcessor.DEFAULT_DSP_CHUNK_FRAMES;
+        if (totalFrames > maxChunk) {
+            int sliceLen = maxChunk * channels;
+            if (subChunkBuf.length < sliceLen) {
+                subChunkBuf = new float[sliceLen];
+            }
+            for (int off = 0; off < totalFrames; off += maxChunk) {
+                int want = Math.min(maxChunk, totalFrames - off);
+                int samples = want * channels;
+                System.arraycopy(buf, off * channels, subChunkBuf, 0, samples);
+                processChunkInPlace(subChunkBuf, want);
+                System.arraycopy(subChunkBuf, 0, buf, off * channels, samples);
+            }
+            return;
+        }
+        processChunkInPlace(buf, totalFrames);
+    }
+
+    private void processChunkInPlace(float[] buf, int frames) {
         int n = frames * channels;
         if (n > buf.length) n = buf.length;
         final DspChain.EffectType firstTone = this.splitToneFirstType;
@@ -359,16 +382,14 @@ public final class FxRackChain {
                 if (mix >= 1.0f || (mix > 0.0f && p.handlesOwnWetDryMix())) {
                     p.processInPlace(buf, frames, channels);
                 } else if (mix > 0.0f) {
-                    if (scratch.length < buf.length) {
-                        scratch = new float[Math.max(buf.length, n)];
+                    if (scratch.length < n) {
+                        scratch = new float[n];
                     }
                     System.arraycopy(buf, 0, scratch, 0, n);
                     p.processInPlace(scratch, frames, channels);
-                    float w = mix;
-                    float d = 1.0f - mix;
-                    for (int i = 0; i < n; i++) {
-                        buf[i] = buf[i] * d + scratch[i] * w;
-                    }
+                    HardwareApiManager.get().processGainClipMixChunked(
+                            scratch, buf, n, 1.0f, 0f, mix);
+                    System.arraycopy(scratch, 0, buf, 0, n);
                     if (p instanceof ProLimiterProcessor
                             && ((ProLimiterProcessor) p).isSafetyOn()) {
                         ((ProLimiterProcessor) p).enforceSafetyCeiling(

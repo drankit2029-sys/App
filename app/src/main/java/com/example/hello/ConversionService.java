@@ -103,27 +103,7 @@ public class ConversionService extends Service {
         Intent i = new Intent(ctx, ConversionService.class);
         i.setAction(ACTION_CONVERT);
         i.putExtra(EXTRA_JOB_ID, jobId);
-        try {
-            if (Build.VERSION.SDK_INT >= 26) {
-                ctx.startForegroundService(i);
-            } else {
-                ctx.startService(i);
-            }
-            return true;
-        } catch (Throwable first) {
-            // Android 12+ blocks background FGS starts. The app is usually in
-            // the foreground at save time, but a notification action or a
-            // retry can land in the background; keep the sidecar and let the
-            // watchdog retry with a temporary foreground allowance.
-            try {
-                ctx.startService(i);
-                return true;
-            } catch (Throwable second) {
-                CrashLog.breadcrumb(ctx, "conv start failed: " + first
-                        + " / " + second);
-                return false;
-            }
-        }
+        return HardwareApiManager.get().startForegroundServiceCompat(ctx, i);
     }
 
     /** True while a live service instance owns the conversion queue. */
@@ -889,17 +869,10 @@ public class ConversionService extends Service {
 
     /** Package-private so the recovery watchdog can foreground itself. */
     static void ensureChannel(Context ctx) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
-        try {
-            NotificationManager nm = (NotificationManager)
-                    ctx.getSystemService(NOTIFICATION_SERVICE);
-            if (nm == null) return;
-            NotificationChannel ch = new NotificationChannel(
-                    CHANNEL, ctx.getString(R.string.conv_channel),
-                    NotificationManager.IMPORTANCE_LOW);
-            ch.setDescription(ctx.getString(R.string.conv_channel_desc));
-            nm.createNotificationChannel(ch);
-        } catch (Exception ignored) {}
+        HardwareApiManager.get().ensureNotificationChannel(
+                ctx, CHANNEL, ctx.getString(R.string.conv_channel),
+                ctx.getString(R.string.conv_channel_desc),
+                NotificationManager.IMPORTANCE_LOW);
     }
 
     /**
@@ -937,22 +910,14 @@ public class ConversionService extends Service {
     }
 
     private boolean startFg(ConversionJob job) {
-        try {
-            if (Build.VERSION.SDK_INT >= 29) {
-                startForeground(NOTIF_ID, buildNotif(job),
-                        android.content.pm.ServiceInfo
-                                .FOREGROUND_SERVICE_TYPE_DATA_SYNC);
-            } else {
-                startForeground(NOTIF_ID, buildNotif(job));
-            }
+        if (HardwareApiManager.get().promoteServiceToForeground(
+                this, NOTIF_ID, buildNotif(job), false)) {
             return true;
-        } catch (Exception e) {
-            CrashLog.breadcrumb(this, "conv startForeground failed: " + e);
-            try {
-                stopSelf();
-            } catch (Exception ignored) {}
-            return false;
         }
+        try {
+            stopSelf();
+        } catch (Exception ignored) {}
+        return false;
     }
 
     private void refreshNotif() {

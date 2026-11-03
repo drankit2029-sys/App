@@ -103,34 +103,8 @@ public final class RawFloatPlayer {
     }
 
     private static AudioTrack createLowLatencyTrack(int channels, int desiredBytes) {
-        int mask = channels == 2 ? AudioFormat.CHANNEL_OUT_STEREO
-                : AudioFormat.CHANNEL_OUT_MONO;
-        int minBytes = AudioTrack.getMinBufferSize(
-                RecordingEngine.SAMPLE_RATE,
-                mask, AudioFormat.ENCODING_PCM_FLOAT);
-        if (minBytes <= 0) minBytes = 8192;
-        int bufBytes = Math.max(minBytes, Math.min(32768, desiredBytes));
-        AudioAttributes attrs = new AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_MEDIA)
-                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                .build();
-        AudioFormat af = new AudioFormat.Builder()
-                .setEncoding(AudioFormat.ENCODING_PCM_FLOAT)
-                .setSampleRate(RecordingEngine.SAMPLE_RATE)
-                .setChannelMask(mask)
-                .build();
-        if (Build.VERSION.SDK_INT >= 26) {
-            try {
-                return new AudioTrack.Builder()
-                        .setAudioAttributes(attrs)
-                        .setAudioFormat(af)
-                        .setBufferSizeInBytes(bufBytes)
-                        .setTransferMode(AudioTrack.MODE_STREAM)
-                        .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
-                        .build();
-            } catch (Throwable ignored) {}
-        }
-        return new AudioTrack(attrs, af, bufBytes, AudioTrack.MODE_STREAM, 0);
+        return HardwareApiManager.get().createLowLatencyAudioTrack(
+                RecordingEngine.SAMPLE_RATE, channels, desiredBytes);
     }
 
     private final File file;
@@ -370,42 +344,53 @@ public final class RawFloatPlayer {
             }
             if (preChain != null && preChain.isActive()
                     && !preChain.offlineProcessors().isEmpty()) {
-                float[] offlineBuf = preChain.renderRegionOfflineAndInPlace(
-                        file, startFramePos, limitFrame,
-                        RecordingEngine.SAMPLE_RATE);
-                if (offlineBuf != null && offlineBuf.length > 0) {
-                    int outFrames = offlineBuf.length / channels;
-                    offlineOutFrames = outFrames;
-                    int curOut = 0;
-                    while (!stop && curOut < outFrames) {
-                        int want = Math.min(1024, outFrames - curOut);
-                        int totalSamples = want * channels;
-                        System.arraycopy(offlineBuf, curOut * channels,
-                                buf, 0, totalSamples);
-                        FxTelemetry.push(buf, want, channels);
-                        float chunkPeak = 0f;
-                        for (int i = 0; i < totalSamples; i++) {
-                            float a = Math.abs(buf[i]);
-                            if (a > chunkPeak) chunkPeak = a;
+                File offlineTmp = new File(file.getParentFile(),
+                        file.getName() + ".live_offline_" + gen + ".wav");
+                try {
+                    long renderedFrames = preChain.renderRegionToFile(
+                            file, startFramePos, limitFrame,
+                            RecordingEngine.SAMPLE_RATE, offlineTmp);
+                    if (renderedFrames > 0 && offlineTmp.exists()) {
+                        offlineOutFrames = (int) Math.min(Integer.MAX_VALUE, renderedFrames);
+                        try (RandomAccessFile offRaf = new RandomAccessFile(offlineTmp, "r")) {
+                            Dsp.WavHeader oh = Dsp.parseWavHeader(offRaf);
+                            long curOut = 0;
+                            while (!stop && curOut < renderedFrames) {
+                                int want = (int) Math.min(1024L, renderedFrames - curOut);
+                                int totalSamples = want * channels;
+                                offRaf.seek(oh.dataStart + curOut * channels * 4L);
+                                offRaf.readFully(raw, 0, totalSamples * 4);
+                                fb.clear();
+                                fb.limit(totalSamples);
+                                fb.get(buf, 0, totalSamples);
+                                FxTelemetry.push(buf, want, channels);
+                                float chunkPeak = HardwareApiManager.get()
+                                        .computeChunkPeak(buf, totalSamples);
+                                this.level = Math.min(1f, chunkPeak);
+                                int written = 0;
+                                while (written < totalSamples && !stop) {
+                                    int n = track.write(buf, written,
+                                            totalSamples - written,
+                                            AudioTrack.WRITE_BLOCKING);
+                                    if (n <= 0) break;
+                                    written += n;
+                                }
+                                curOut += want;
+                                writtenFrames += want;
+                                framePos = startFramePos + Math.round(
+                                        (double) curOut / Math.max(1L, renderedFrames)
+                                                * (limitFrame - startFramePos));
+                            }
+                            offlineOutFrames = 0;
+                            if (!stop) {
+                                framePos = limitFrame;
+                            }
                         }
-                        this.level = Math.min(1f, chunkPeak);
-                        int written = 0;
-                        while (written < totalSamples && !stop) {
-                            int n = track.write(buf, written,
-                                    totalSamples - written,
-                                    AudioTrack.WRITE_BLOCKING);
-                            if (n <= 0) break;
-                            written += n;
-                        }
-                        curOut += want;
-                        writtenFrames += want;
-                        framePos = startFramePos + Math.round(
-                                (double) curOut / Math.max(1, outFrames)
-                                        * (limitFrame - startFramePos));
                     }
-                    offlineOutFrames = 0;
-                    if (!stop) {
-                        framePos = limitFrame;
+                } finally {
+                    if (offlineTmp.exists()) {
+                        // noinspection ResultOfMethodCallIgnored
+                        offlineTmp.delete();
                     }
                 }
             }

@@ -106,27 +106,14 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                                 .getSystemService(Context.AUDIO_SERVICE);
             }
             if (playAudioManager == null) return true;
-            if (android.os.Build.VERSION.SDK_INT >= 26) {
-                playFocusRequest = new android.media.AudioFocusRequest.Builder(
-                        PLAY_FOCUS)
-                        .setAudioAttributes(new android.media.AudioAttributes
-                                .Builder()
-                                .setUsage(android.media.AudioAttributes
-                                        .USAGE_MEDIA)
-                                .setContentType(android.media.AudioAttributes
-                                        .CONTENT_TYPE_SPEECH)
-                                .build())
-                        .setOnAudioFocusChangeListener(playFocusListener(),
-                                handler)
-                        .build();
-                return playAudioManager.requestAudioFocus(playFocusRequest)
-                        == android.media.AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
+            Object token = HardwareApiManager.get().requestAudioFocus(
+                    playAudioManager, playFocusListener(), handler,
+                    PLAY_FOCUS,
+                    android.media.AudioAttributes.CONTENT_TYPE_SPEECH);
+            if (token instanceof android.media.AudioFocusRequest) {
+                playFocusRequest = (android.media.AudioFocusRequest) token;
             }
-            //noinspection deprecation
-            return playAudioManager.requestAudioFocus(playFocusListener(),
-                    android.media.AudioManager.STREAM_MUSIC,
-                    PLAY_FOCUS)
-                    == android.media.AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
+            return token != null;
         } catch (Exception e) {
             return true;
         }
@@ -135,16 +122,9 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
     private void releasePlaybackFocus() {
         try {
             if (playAudioManager == null) return;
-            if (playFocusRequest != null) {
-                if (android.os.Build.VERSION.SDK_INT >= 26) {
-                    playAudioManager.abandonAudioFocusRequest(
-                            playFocusRequest);
-                }
-                playFocusRequest = null;
-            } else {
-                //noinspection deprecation
-                playAudioManager.abandonAudioFocus(playFocusListener());
-            }
+            HardwareApiManager.get().abandonAudioFocus(
+                    playAudioManager, playFocusRequest, playFocusListener());
+            playFocusRequest = null;
         } catch (Exception ignored) {}
     }
 

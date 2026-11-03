@@ -22,14 +22,7 @@ public final class MicSupport {
      * fall back silently if the hardware refuses".
      */
     public static int physicalMicCount(AudioManager am) {
-        if (am == null || Build.VERSION.SDK_INT < 28) return -1;
-        try {
-            List<MicrophoneInfo> mics = am.getMicrophones();
-            if (mics == null) return -1;
-            return mics.size();
-        } catch (Exception e) {
-            return -1;
-        }
+        return HardwareApiManager.get().getPhysicalMicrophoneCount(am);
     }
 
     public static boolean stereoLikely(AudioManager am) {

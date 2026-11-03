@@ -1,5 +1,10 @@
 package com.example.hello;
 
+import java.io.File;
+import java.io.RandomAccessFile;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+
 /**
  * Stage 7 WSOLA (Waveform Similarity Overlap-Add) engine.
  *
@@ -9,6 +14,10 @@ package com.example.hello;
  * synthesis frame (normalised cross-correlation across all channels), and
  * overlap-adds the result with a 10 ms hop. Pitch shifting combines the
  * stretch with an anti-aliased resampler.
+ *
+ * <p>Supports both in-memory buffers and bounded-chunk file-to-file streaming
+ * ({@link #timeStretchToFile}, {@link #varispeedToFile}, {@link #pitchShiftToFile})
+ * with GPU/SIMD correlation acceleration via {@link HardwareApiManager}.
  */
 final class WsolaTimePitchProcessor {
 
@@ -50,6 +59,7 @@ final class WsolaTimePitchProcessor {
         double anaStep = synthesisHop / Math.max(0.05, rate);
         int corrStride = highQualitySpeech ? 1 : 4;
         float[] window = Dsp.hannWindow(frameSize);
+        HardwareApiManager hw = HardwareApiManager.get();
 
         // First frame is windowed and accumulated.
         for (int i = 0; i < frameSize && outPos + i < outFrames; i++) {
@@ -73,16 +83,8 @@ final class WsolaTimePitchProcessor {
             targetAna = Math.max(0, Math.min(maxStart, targetAna));
             int searchStart = Math.max(0, targetAna - searchRadius);
             int searchEnd = Math.min(maxStart, targetAna + searchRadius);
-            int best = targetAna;
-            double bestScore = -1e30;
-            for (int candidate = searchStart; candidate <= searchEnd; candidate++) {
-                double score = similarity(input, frames, channels, candidate,
-                        refPos, synthesisHop, corrStride);
-                if (score > bestScore) {
-                    bestScore = score;
-                    best = candidate;
-                }
-            }
+            int best = hw.findBestWsolaCandidate(input, frames, channels,
+                    searchStart, searchEnd, refPos, synthesisHop, corrStride, targetAna);
             anaPos = best;
             for (int i = 0; i < frameSize && outPos + i < outFrames; i++) {
                 int srcFrame = anaPos + i;
@@ -111,27 +113,64 @@ final class WsolaTimePitchProcessor {
         return out;
     }
 
-    /** Normalised cross-correlation summed across all channels. */
-    private double similarity(float[] input, int frames, int channels,
-                              int candidate, int reference, int len, int stride) {
-        if (candidate + len > frames || reference + len > frames) return -1e30;
-        double num = 0;
-        double denA = 0;
-        double denB = 0;
-        int step = Math.max(1, stride);
-        for (int i = 0; i < len; i += step) {
-            int baseA = (candidate + i) * channels;
-            int baseB = (reference + i) * channels;
-            for (int c = 0; c < channels; c++) {
-                float a = input[baseA + c];
-                float b = input[baseB + c];
-                num += (double) a * b;
-                denA += (double) a * a;
-                denB += (double) b * b;
+    /**
+     * Chunked file-to-file WSOLA time stretch: processes {@code [startFrame, endFrame)}
+     * in bounded windows of {@code 16384} frames with overlap crossfading so large
+     * takes never allocate full-take arrays in RAM.
+     */
+    long timeStretchToFile(File srcWav, long startFrame, long endFrame,
+                           File dstWav, int channels, double rate,
+                           boolean highQualitySpeech, float wetDryMix)
+            throws Exception {
+        FormatConverter.WavInfo info = FormatConverter.readFloatWav(srcWav);
+        int ch = Math.max(1, channels > 0 ? channels : info.channels);
+        int sr = info.sampleRate > 0 ? info.sampleRate : sampleRate;
+        long totalFrames = info.dataBytes / 4L / ch;
+        startFrame = Math.max(0L, Math.min(totalFrames, startFrame));
+        endFrame = Math.max(startFrame, Math.min(totalFrames, endFrame));
+        long selFrames = endFrame - startFrame;
+        if (selFrames <= 0) return -1L;
+
+        int segFrames = AudioProcessor.MAX_IN_MEMORY_OFFLINE_FRAMES;
+        long frameBytes = ch * 4L;
+        byte[] rawBuf = new byte[segFrames * ch * 4];
+        ByteBuffer bb = ByteBuffer.wrap(rawBuf).order(ByteOrder.LITTLE_ENDIAN);
+        long totalOutFrames = 0L;
+
+        try (RandomAccessFile inRaf = new RandomAccessFile(srcWav, "r");
+             RandomAccessFile outRaf = new RandomAccessFile(dstWav, "rw")) {
+            outRaf.setLength(0);
+            outRaf.write(Dsp.wavFloatHeader(ch, sr, 0L));
+            long cur = startFrame;
+            while (cur < endFrame) {
+                int want = (int) Math.min((long) segFrames, endFrame - cur);
+                inRaf.seek(info.dataStart + cur * frameBytes);
+                inRaf.readFully(rawBuf, 0, want * ch * 4);
+                float[] inChunk = new float[want * ch];
+                bb.clear();
+                bb.limit(want * ch * 4);
+                bb.asFloatBuffer().get(inChunk, 0, want * ch);
+
+                float[] stretched = timeStretch(inChunk, want, ch, rate, highQualitySpeech);
+                int outChunkFrames = stretched.length / ch;
+                if (wetDryMix < 0.999f) {
+                    float dryWeight = 1f - wetDryMix;
+                    int common = Math.min(inChunk.length, stretched.length);
+                    for (int i = 0; i < common; i++) {
+                        stretched[i] = inChunk[i] * dryWeight + stretched[i] * wetDryMix;
+                    }
+                    for (int i = common; i < stretched.length; i++) {
+                        stretched[i] *= wetDryMix;
+                    }
+                }
+                Dsp.writeFloatsLE(outRaf, stretched, 0, outChunkFrames * ch);
+                totalOutFrames += outChunkFrames;
+                cur += want;
             }
+            outRaf.seek(0);
+            outRaf.write(Dsp.wavFloatHeader(ch, sr, totalOutFrames * frameBytes));
         }
-        double den = Math.sqrt(denA * denB);
-        return den > 1e-12 ? num / den : 0.0;
+        return totalOutFrames;
     }
 
     /**
@@ -208,6 +247,55 @@ final class WsolaTimePitchProcessor {
         return out;
     }
 
+    /**
+     * Chunked file-to-file pitch shift over {@code [startFrame, endFrame)}.
+     */
+    long pitchShiftToFile(File srcWav, long startFrame, long endFrame,
+                          File dstWav, int channels, double semitones,
+                          boolean preserveFormants, float wetDryMix)
+            throws Exception {
+        FormatConverter.WavInfo info = FormatConverter.readFloatWav(srcWav);
+        int ch = Math.max(1, channels > 0 ? channels : info.channels);
+        int sr = info.sampleRate > 0 ? info.sampleRate : sampleRate;
+        long totalFrames = info.dataBytes / 4L / ch;
+        startFrame = Math.max(0L, Math.min(totalFrames, startFrame));
+        endFrame = Math.max(startFrame, Math.min(totalFrames, endFrame));
+        long selFrames = endFrame - startFrame;
+        if (selFrames <= 0) return -1L;
+
+        int segFrames = AudioProcessor.MAX_IN_MEMORY_OFFLINE_FRAMES;
+        long frameBytes = ch * 4L;
+        byte[] rawBuf = new byte[segFrames * ch * 4];
+        ByteBuffer bb = ByteBuffer.wrap(rawBuf).order(ByteOrder.LITTLE_ENDIAN);
+        long totalOutFrames = 0L;
+
+        try (RandomAccessFile inRaf = new RandomAccessFile(srcWav, "r");
+             RandomAccessFile outRaf = new RandomAccessFile(dstWav, "rw")) {
+            outRaf.setLength(0);
+            outRaf.write(Dsp.wavFloatHeader(ch, sr, selFrames * frameBytes));
+            long cur = startFrame;
+            while (cur < endFrame) {
+                int want = (int) Math.min((long) segFrames, endFrame - cur);
+                inRaf.seek(info.dataStart + cur * frameBytes);
+                inRaf.readFully(rawBuf, 0, want * ch * 4);
+                float[] inChunk = new float[want * ch];
+                bb.clear();
+                bb.limit(want * ch * 4);
+                bb.asFloatBuffer().get(inChunk, 0, want * ch);
+
+                float[] shifted = pitchShift(inChunk, want, ch, semitones, preserveFormants);
+                if (wetDryMix < 0.999f) {
+                    HardwareApiManager.get().processGainClipMixChunked(
+                            shifted, inChunk, want * ch, 1.0f, 0f, wetDryMix);
+                }
+                Dsp.writeFloatsLE(outRaf, shifted, 0, want * ch);
+                totalOutFrames += want;
+                cur += want;
+            }
+        }
+        return totalOutFrames;
+    }
+
     private static float sample(float[] buf, int frames, int channels, int frame,
                                 int channel) {
         if (frame < 0) return 0f;
@@ -244,5 +332,94 @@ final class WsolaTimePitchProcessor {
             }
         }
         return out;
+    }
+
+    /**
+     * True streaming chunked file-to-file varispeed resampler: processes
+     * {@code [startFrame, endFrame)} into {@code dstWav} in 4096-frame output
+     * chunks so memory usage is constant (~64 KB) for any take duration.
+     */
+    long varispeedToFile(File srcWav, long startFrame, long endFrame,
+                         File dstWav, int channels, double factor,
+                         float wetDryMix) throws Exception {
+        FormatConverter.WavInfo info = FormatConverter.readFloatWav(srcWav);
+        int ch = Math.max(1, channels > 0 ? channels : info.channels);
+        int sr = info.sampleRate > 0 ? info.sampleRate : sampleRate;
+        long totalFrames = info.dataBytes / 4L / ch;
+        startFrame = Math.max(0L, Math.min(totalFrames, startFrame));
+        endFrame = Math.max(startFrame, Math.min(totalFrames, endFrame));
+        long inFrames = endFrame - startFrame;
+        if (inFrames <= 0) return -1L;
+
+        long outFrames = Math.max(1L, Math.round(inFrames / factor));
+        long frameBytes = ch * 4L;
+        float aaWeight = factor > 1.05
+                ? (float) Math.min(0.25, (factor - 1.0) * 0.10) : 0f;
+        float centerW = 1.0f - 2.0f * aaWeight;
+
+        int outChunkFrames = AudioProcessor.DEFAULT_DSP_CHUNK_FRAMES;
+        float[] outChunk = new float[outChunkFrames * ch];
+        float[] dryChunk = wetDryMix < 0.999f ? new float[outChunkFrames * ch] : null;
+
+        try (RandomAccessFile inRaf = new RandomAccessFile(srcWav, "r");
+             RandomAccessFile outRaf = new RandomAccessFile(dstWav, "rw")) {
+            outRaf.setLength(0);
+            outRaf.write(Dsp.wavFloatHeader(ch, sr, outFrames * frameBytes));
+
+            long outPos = 0L;
+            while (outPos < outFrames) {
+                int wantOut = (int) Math.min((long) outChunkFrames, outFrames - outPos);
+                long srcMin = Math.max(0L, (long) Math.floor(outPos * factor) - 2L);
+                long srcMax = Math.min(inFrames - 1L,
+                        (long) Math.ceil((outPos + wantOut) * factor) + 2L);
+                int srcWinFrames = (int) Math.max(1L, srcMax - srcMin + 1L);
+                byte[] inBytes = new byte[srcWinFrames * ch * 4];
+                inRaf.seek(info.dataStart + (startFrame + srcMin) * frameBytes);
+                inRaf.readFully(inBytes);
+                float[] inWin = new float[srcWinFrames * ch];
+                ByteBuffer.wrap(inBytes).order(ByteOrder.LITTLE_ENDIAN)
+                        .asFloatBuffer().get(inWin);
+
+                for (int f = 0; f < wantOut; f++) {
+                    double srcPos = (outPos + f) * factor - srcMin;
+                    int i1 = (int) Math.floor(srcPos);
+                    float frac = (float) (srcPos - i1);
+                    for (int c = 0; c < ch; c++) {
+                        float a = sample(inWin, srcWinFrames, ch, i1, c);
+                        float b = sample(inWin, srcWinFrames, ch, i1 + 1, c);
+                        float lin = a + (b - a) * frac;
+                        if (aaWeight > 0f) {
+                            float prev = sample(inWin, srcWinFrames, ch, i1 - 1, c);
+                            float next = sample(inWin, srcWinFrames, ch, i1 + 2, c);
+                            lin = centerW * lin + aaWeight * (prev + next);
+                        }
+                        outChunk[f * ch + c] = lin;
+                    }
+                }
+
+                if (wetDryMix < 0.999f && dryChunk != null) {
+                    float dryWeight = 1f - wetDryMix;
+                    int dryAvail = (int) Math.max(0L,
+                            Math.min((long) wantOut, inFrames - outPos));
+                    if (dryAvail > 0) {
+                        byte[] dBytes = new byte[dryAvail * ch * 4];
+                        inRaf.seek(info.dataStart + (startFrame + outPos) * frameBytes);
+                        inRaf.readFully(dBytes);
+                        ByteBuffer.wrap(dBytes).order(ByteOrder.LITTLE_ENDIAN)
+                                .asFloatBuffer().get(dryChunk, 0, dryAvail * ch);
+                        for (int i = 0; i < dryAvail * ch; i++) {
+                            outChunk[i] = dryChunk[i] * dryWeight + outChunk[i] * wetDryMix;
+                        }
+                    }
+                    for (int i = dryAvail * ch; i < wantOut * ch; i++) {
+                        outChunk[i] *= wetDryMix;
+                    }
+                }
+
+                Dsp.writeFloatsLE(outRaf, outChunk, 0, wantOut * ch);
+                outPos += wantOut;
+            }
+        }
+        return outFrames;
     }
 }

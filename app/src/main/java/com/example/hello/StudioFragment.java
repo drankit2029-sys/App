@@ -1860,14 +1860,11 @@ public class StudioFragment extends Fragment {
     }
 
     private void ensureNotifThenStart() {
-        if (Build.VERSION.SDK_INT >= 33 && !notifAsked) {
+        if (!notifAsked && HardwareApiManager.get()
+                .requiresPostNotificationsPermission(requireContext())) {
             try {
-                if (ContextCompat.checkSelfPermission(requireContext(),
-                        Manifest.permission.POST_NOTIFICATIONS)
-                        != PackageManager.PERMISSION_GRANTED) {
-                    notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS);
-                    return;
-                }
+                notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS);
+                return;
             } catch (Exception ignored) {}
         }
         beginCapture();
@@ -4066,29 +4063,33 @@ public class StudioFragment extends Fragment {
             }
             long maxFrames = 8L * Math.max(8000, info.sampleRate);
             if (end - start > maxFrames) end = start + maxFrames;
-            float[] samples = EditEngine.readFloatSelection(
-                    rawFile, start, end);
-
-            // Feed the sample through every effect ABOVE this one, so a
-            // profiler that sits later in the rack learns the audio it will
-            // actually receive. This is what makes "applied on top of the
-            // previous effect" true for learning as well as playback.
             int ch = Math.max(1, info.channels);
-            DspChain prefix = new DspChain(ch, prefixConfigFor(dspConfig, slot));
-            if (prefix.isActive()) {
-                prefix.prepareOffline(rawFile, start, end,
-                        info.sampleRate, ch);
+            int totalLearnFrames = (int) Math.max(0L, end - start);
+            final float[] samples = new float[totalLearnFrames * ch];
+
+            // Stream the noise selection in bounded chunks through every effect
+            // ABOVE this one so the profiler learns the exact signal it receives
+            // without reading an unchunked whole-take slice.
+            final DspChain prefix = new DspChain(ch, prefixConfigFor(dspConfig, slot));
+            final boolean prefixActive = prefix.isActive();
+            if (prefixActive) {
+                prefix.prepareOffline(rawFile, start, end, info.sampleRate, ch);
                 prefix.reset();
-                int frames = samples.length / ch;
-                int chunk = 2048;
-                float[] block = new float[chunk * ch];
-                for (int off = 0; off < frames; off += chunk) {
-                    int n = Math.min(chunk, frames - off);
-                    System.arraycopy(samples, off * ch, block, 0, n * ch);
-                    prefix.processInPlace(block, n);
-                    System.arraycopy(block, 0, samples, off * ch, n * ch);
-                }
             }
+            final long baseStart = start;
+            EditEngine.forEachFloatChunk(rawFile, start, end,
+                    AudioProcessor.DEFAULT_DSP_CHUNK_FRAMES,
+                    (chunk, frames, chunkCh, frameOffset) -> {
+                        if (prefixActive) {
+                            prefix.processInPlace(chunk, frames);
+                        }
+                        int dstOff = (int) ((frameOffset - baseStart) * ch);
+                        int copyLen = Math.min(frames * ch,
+                                Math.max(0, samples.length - dstOff));
+                        if (copyLen > 0) {
+                            System.arraycopy(chunk, 0, samples, dstOff, copyLen);
+                        }
+                    });
 
             float[] profile = slot.type
                     == DspChain.EffectType.SPECTRAL_NOISE_REDUCTION

@@ -1,8 +1,10 @@
 package com.example.hello;
 
+import java.io.File;
+
 /**
  * Stage 7 change tempo: WSOLA time-stretch that changes the duration while
- * keeping the pitch intact.
+ * keeping the pitch intact. Supports bounded-chunk file streaming for long takes.
  */
 final class ChangeTempoProcessor extends AudioProcessor {
 
@@ -89,5 +91,20 @@ final class ChangeTempoProcessor extends AudioProcessor {
         if (Math.abs(factor - 1.0) < 1e-6 && highQuality) return in.clone();
         WsolaTimePitchProcessor wsola = new WsolaTimePitchProcessor(sampleRate);
         return wsola.timeStretch(in, frames, channels, factor, highQuality);
+    }
+
+    @Override
+    public long processOfflineRangeToFile(File srcWav, long startFrame,
+                                          long endFrame, File dstWav,
+                                          int sampleRate, int channels)
+            throws Exception {
+        if (sampleRate > 0) this.sampleRate = sampleRate;
+        if (endFrame - startFrame <= MAX_IN_MEMORY_OFFLINE_FRAMES) {
+            return super.processOfflineRangeToFile(
+                    srcWav, startFrame, endFrame, dstWav, this.sampleRate, channels);
+        }
+        WsolaTimePitchProcessor wsola = new WsolaTimePitchProcessor(this.sampleRate);
+        return wsola.timeStretchToFile(srcWav, startFrame, endFrame, dstWav,
+                channels, stretchFactor(), hq.getBoolean(), getWetDryMix());
     }
 }

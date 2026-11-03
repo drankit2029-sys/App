@@ -3,8 +3,8 @@ package com.example.hello;
 import java.io.File;
 
 /**
- * Stage 4 Amplify: two-pass gain processor with automatic peak scanning and
- * non-clipping clamp unless "Allow Clipping" is enabled.
+ * Stage 4 Amplify: two-pass gain processor with automatic chunked peak scanning
+ * and non-clipping clamp unless "Allow Clipping" is enabled.
  */
 final class AmplifyProcessor extends AudioProcessor {
 
@@ -59,15 +59,18 @@ final class AmplifyProcessor extends AudioProcessor {
     @Override
     public void prepareOffline(File raw, long startFrame, long endFrame,
                                int sampleRate, int channels) throws Exception {
-        if (raw == null) return;
-        float[] slice = EditEngine.readFloatSelection(raw, startFrame, endFrame);
-        if (slice == null || slice.length == 0) return;
-        float pk = 0f;
-        for (float v : slice) {
-            float a = Math.abs(v);
-            if (a > pk) pk = a;
+        if (raw == null || !raw.exists()) return;
+        final float[] maxHolder = {0f};
+        long readFrames = EditEngine.forEachFloatChunk(raw, startFrame, endFrame,
+                DEFAULT_DSP_CHUNK_FRAMES,
+                (chunk, frames, ch, frameOffset) -> {
+                    float p = HardwareApiManager.get()
+                            .computeChunkPeak(chunk, frames * ch);
+                    if (p > maxHolder[0]) maxHolder[0] = p;
+                });
+        if (readFrames > 0) {
+            scannedPeak = maxHolder[0];
         }
-        scannedPeak = pk;
     }
 
     /** Effective linear gain for the scanned (or in-block) peak. */
@@ -95,23 +98,13 @@ final class AmplifyProcessor extends AudioProcessor {
         int n = Math.min(buf.length, frames * Math.max(1, channels));
         float pk = scannedPeak;
         if (pk < 0f) {
-            pk = 0f;
-            for (int i = 0; i < n; i++) {
-                float a = Math.abs(buf[i]);
-                if (a > pk) pk = a;
-            }
+            pk = HardwareApiManager.get().computeChunkPeak(buf, n);
         }
         float peakDb = pk > 1e-7f ? Dsp.linToDb(pk) : -120f;
         float effDb = computeEffectiveGainDb(peakDb);
         float lin = Dsp.dbToLin(effDb);
-        boolean clipAllowed = allowClip.getBoolean();
-        for (int i = 0; i < n; i++) {
-            float v = buf[i] * lin;
-            if (!clipAllowed) {
-                if (v > 0.9885f) v = 0.9885f;
-                else if (v < -0.9885f) v = -0.9885f;
-            }
-            buf[i] = v;
-        }
+        float ceil = allowClip.getBoolean() ? 0f : 0.9885f;
+        HardwareApiManager.get().processGainClipMixChunked(
+                buf, null, n, lin, ceil, 1.0f);
     }
 }

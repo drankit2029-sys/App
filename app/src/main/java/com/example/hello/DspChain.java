@@ -1466,11 +1466,149 @@ public final class DspChain {
      * and the in-place processor chain in rack order, returning the processed
      * interleaved buffer.
      */
+    /**
+     * Chunked file-to-file region renderer: runs all active offline processors
+     * and in-place processors over {@code [startFrame, endFrame)} of {@code raw},
+     * writing the resulting 32-bit float WAV region into {@code outRegionWav}
+     * without allocating full-take arrays in RAM.
+     *
+     * @return the number of output frames written to {@code outRegionWav}, or -1
+     *         on failure.
+     */
+    public long renderRegionToFile(File raw, long startFrame, long endFrame,
+                                   int sampleRate, File outRegionWav)
+            throws Exception {
+        if (raw == null || !raw.exists() || outRegionWav == null) return -1L;
+        FormatConverter.WavInfo info = FormatConverter.readFloatWav(raw);
+        int ch = Math.max(1, info.channels);
+        int sr = sampleRate > 0 ? sampleRate : info.sampleRate;
+        setSampleRate(sr);
+        long totalFrames = info.dataBytes / 4L / ch;
+        startFrame = Math.max(0L, Math.min(totalFrames, startFrame));
+        endFrame = Math.max(startFrame, Math.min(totalFrames, endFrame));
+        long curFrames = endFrame - startFrame;
+        if (curFrames <= 0) return -1L;
+
+        java.util.List<AudioProcessor> offProcs = offlineProcessors();
+        File curIn = raw;
+        long curStart = startFrame;
+        long curEnd = endFrame;
+        File tempPrev = null;
+
+        try {
+            for (int i = 0; i < offProcs.size(); i++) {
+                AudioProcessor proc = offProcs.get(i);
+                float mix = proc.getWetDryMix();
+                if (mix <= 0.001f) continue;
+                boolean isLastOffline = (i == offProcs.size() - 1);
+                File stepOut = isLastOffline
+                        ? outRegionWav
+                        : new File(outRegionWav.getParentFile(),
+                                outRegionWav.getName() + ".step" + i);
+                long written = proc.processOfflineRangeToFile(
+                        curIn, curStart, curEnd, stepOut, sr, ch);
+                if (tempPrev != null && tempPrev.exists()) {
+                    // noinspection ResultOfMethodCallIgnored
+                    tempPrev.delete();
+                    tempPrev = null;
+                }
+                if (written <= 0) {
+                    if (stepOut != outRegionWav && stepOut.exists()) {
+                        // noinspection ResultOfMethodCallIgnored
+                        stepOut.delete();
+                    }
+                    return -1L;
+                }
+                curIn = stepOut;
+                curStart = 0L;
+                curEnd = written;
+                curFrames = written;
+                if (stepOut != outRegionWav) {
+                    tempPrev = stepOut;
+                }
+            }
+
+            if (curIn != outRegionWav) {
+                // No audible offline processors ran; stream-copy [startFrame, endFrame) to outRegionWav
+                long frameBytes = ch * 4L;
+                long copyBytes = curFrames * frameBytes;
+                byte[] copyBuf = new byte[65536];
+                try (java.io.RandomAccessFile inRaf = new java.io.RandomAccessFile(raw, "r");
+                     java.io.RandomAccessFile outRaf = new java.io.RandomAccessFile(outRegionWav, "rw")) {
+                    outRaf.setLength(0);
+                    outRaf.write(Dsp.wavFloatHeader(ch, sr, copyBytes));
+                    inRaf.seek(info.dataStart + startFrame * frameBytes);
+                    long left = copyBytes;
+                    while (left > 0) {
+                        int want = (int) Math.min((long) copyBuf.length, left);
+                        int n = inRaf.read(copyBuf, 0, want);
+                        if (n <= 0) break;
+                        outRaf.write(copyBuf, 0, n);
+                        left -= n;
+                    }
+                }
+            }
+
+            if (hasInPlaceProcessors() && curFrames > 0) {
+                reset();
+                prepareOffline(outRegionWav, 0L, curFrames, sr, ch);
+                int chunk = AudioProcessor.DEFAULT_DSP_CHUNK_FRAMES;
+                byte[] rawBuf = new byte[chunk * ch * 4];
+                float[] block = new float[chunk * ch];
+                java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(rawBuf)
+                        .order(java.nio.ByteOrder.LITTLE_ENDIAN);
+                long frameBytes = ch * 4L;
+                try (java.io.RandomAccessFile raf =
+                             new java.io.RandomAccessFile(outRegionWav, "rw")) {
+                    long off = 0L;
+                    while (off < curFrames) {
+                        int n = (int) Math.min((long) chunk, curFrames - off);
+                        long bytePos = 44L + off * frameBytes;
+                        raf.seek(bytePos);
+                        raf.readFully(rawBuf, 0, n * ch * 4);
+                        bb.clear();
+                        bb.limit(n * ch * 4);
+                        bb.asFloatBuffer().get(block, 0, n * ch);
+                        rack.processInPlace(block, n);
+                        bb.clear();
+                        bb.asFloatBuffer().put(block, 0, n * ch);
+                        raf.seek(bytePos);
+                        raf.write(rawBuf, 0, n * ch * 4);
+                        off += n;
+                    }
+                }
+            }
+            return curFrames;
+        } finally {
+            if (tempPrev != null && tempPrev.exists()) {
+                // noinspection ResultOfMethodCallIgnored
+                tempPrev.delete();
+            }
+        }
+    }
+
     public float[] renderRegionOfflineAndInPlace(File raw, long startFrame,
                                                  long endFrame, int sampleRate)
             throws Exception {
         if (raw == null || !raw.exists()) return null;
         if (sampleRate > 0) setSampleRate(sampleRate);
+        if (endFrame - startFrame > AudioProcessor.MAX_IN_MEMORY_OFFLINE_FRAMES) {
+            File tmp = new File(raw.getParentFile(),
+                    raw.getName() + ".offline_region_tmp");
+            try {
+                long outFrames = renderRegionToFile(
+                        raw, startFrame, endFrame, sampleRate, tmp);
+                if (outFrames <= 0) return new float[0];
+                long capFrames = Math.min(outFrames,
+                        AudioProcessor.MAX_IN_MEMORY_OFFLINE_FRAMES * 4L);
+                return EditEngine.readFloatSelection(tmp, 0L, capFrames);
+            } finally {
+                if (tmp.exists()) {
+                    // noinspection ResultOfMethodCallIgnored
+                    tmp.delete();
+                }
+            }
+        }
         float[] buf = EditEngine.readFloatSelection(raw, startFrame, endFrame);
         if (buf == null || buf.length == 0) return buf;
         int curFrames = buf.length / Math.max(1, channels);

@@ -71,10 +71,8 @@ public class ConversionWatchdogWorker extends Worker {
     private void goForeground(Context ctx) {
         try {
             Notification n = ConversionService.buildWatchdogNotif(ctx);
-            ForegroundInfo info = Build.VERSION.SDK_INT >= 29
-                    ? new ForegroundInfo(NOTIF_ID, n,
-                            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-                    : new ForegroundInfo(NOTIF_ID, n);
+            ForegroundInfo info = HardwareApiManager.get()
+                    .createForegroundInfo(NOTIF_ID, n, false);
             setForegroundAsync(info).get(8, TimeUnit.SECONDS);
         } catch (Throwable t) {
             CrashLog.breadcrumb(ctx, "conv watchdog foreground failed: " + t);
