@@ -19,7 +19,7 @@ public class FxSpeechProbeTest {
 
     @Test
     public void speechProbesAreFiniteAndDistinct() {
-        int frames = 48000;
+        int frames = 12 * 48000;
         float[] clean = FxVerifySupport.buildProbe("speech", frames, 1, null);
         assertEquals(frames, clean.length);
         float peak = 0f;
