@@ -27,6 +27,10 @@ on:
         description: 'Upload every rendered WAV from the DSP matrix (large)'
         type: boolean
         default: false
+      speech:
+        description: 'Render the DSP matrix on Kokoro-generated speech probes'
+        type: boolean
+        default: false
   push:
     branches: [verify/fx-matrix]
     paths:
@@ -74,6 +78,7 @@ jobs:
           retention-days: 14
 
   build:
+    if: ${{ !inputs.speech }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -101,9 +106,45 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  speech:
+    if: ${{ inputs.speech }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Kokoro and audio tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y espeak-ng ffmpeg
+          python3 -m pip install --quiet --upgrade pip
+          python3 -m pip install --quiet kokoro soundfile numpy
+      - name: Generate the speech fixture
+        run: python3 tools/fxverify/generate_kokoro_speech.py
+      - name: Show the fixture
+        run: |
+          ls -lh tools/fxverify/fixtures/kokoro_speech_48k_f32.wav
+          python3 - <<'EOF'
+          import soundfile as sf
+          i = sf.info('tools/fxverify/fixtures/kokoro_speech_48k_f32.wav')
+          print(i)
+          assert i.samplerate == 48000 and i.channels == 1
+          EOF
+      - name: Upload the speech fixture
+        uses: actions/upload-artifact@v4
+        with:
+          name: fx-speech-fixture
+          path: tools/fxverify/fixtures/kokoro_speech_48k_f32.wav
+          if-no-files-found: error
+          retention-days: 30
+
   dsp-matrix:
-    needs: params
-    if: ${{ !inputs.skip_dsp && !inputs.smoke_only }}
+    needs: [params, speech]
+    if: ${{ always() && !cancelled() && needs.params.result == 'success'
+            && !inputs.skip_dsp && !inputs.smoke_only
+            && (!inputs.speech || needs.speech.result == 'success') }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
@@ -120,6 +161,12 @@ jobs:
                  fade, timeline, truncsil, spectraledit, generator]
     steps:
       - uses: actions/checkout@v4
+      - name: Fetch the Kokoro speech fixture
+        if: ${{ inputs.speech }}
+        uses: actions/download-artifact@v4
+        with:
+          name: fx-speech-fixture
+          path: tools/fxverify/fixtures
       - uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
@@ -132,6 +179,7 @@ jobs:
       - name: Render every parameter of ${{ matrix.effect }}
         env:
           FX_EFFECT: ${{ matrix.effect }}
+          FX_PROBE_OVERRIDE: ${{ inputs.speech && 'speech' || '' }}
         run: |
           chmod +x ./gradlew
           # Robolectric fetches its android-all jar at test time, outside the
@@ -147,7 +195,7 @@ jobs:
       - name: Measure the renders
         run: |
           python3 -m pip install --quiet numpy
-          python3 tools/fxverify/analyze.py --cases "app/build/fxverify/${{ matrix.effect }}" --compact
+          python3 tools/fxverify/analyze.py --cases "app/build/fxverify/${{ matrix.effect }}" --compact ${{ inputs.speech && '--skip-anchors' || '' }}
       - name: Upload metrics
         if: always()
         uses: actions/upload-artifact@v4
@@ -174,7 +222,7 @@ jobs:
   fx-ui-device:
     needs: [params, build]
     # Emulator jobs are opt-in, as in verify.yml: a push runs the JVM tiers only.
-    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.skip_device && !inputs.smoke_only }}
+    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.skip_device && !inputs.smoke_only && !inputs.speech }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
@@ -245,7 +293,7 @@ jobs:
 
   format-matrix:
     needs: build
-    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.skip_device && !inputs.smoke_only }}
+    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.skip_device && !inputs.smoke_only && !inputs.speech }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -307,7 +355,7 @@ jobs:
 
   smoke:
     needs: build
-    if: ${{ inputs.smoke_only }}
+    if: ${{ inputs.smoke_only && !inputs.speech }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -380,13 +428,22 @@ jobs:
       - name: Install analysis dependencies
         run: python3 -m pip install --quiet numpy
       - name: Verify the applied audio per parameter
+        if: ${{ !inputs.speech }}
         run: python3 tools/fxverify/verify_applied.py --root artifacts
       - name: Merge the verdicts into one report
+        if: ${{ !inputs.speech }}
         run: |
           mkdir -p fx-report
           python3 tools/fxverify/aggregate_report.py --root artifacts \
             --report fx-report/REPORT.md --json-out fx-report/combined.json || true
           cat fx-report/REPORT.md
+      - name: Merge the speech verdicts
+        if: ${{ inputs.speech }}
+        run: |
+          mkdir -p fx-report
+          python3 tools/fxverify/speech_summary.py --root artifacts \
+            --report fx-report/SPEECH.md --json-out fx-report/speech-summary.json
+          cat fx-report/SPEECH.md
       - name: Upload the report
         if: always()
         uses: actions/upload-artifact@v4
