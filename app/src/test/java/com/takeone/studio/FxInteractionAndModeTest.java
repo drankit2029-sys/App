@@ -8,6 +8,8 @@ import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import java.util.Arrays;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * Locks in the task.md interaction/audibility rules: mode-exclusive controls
@@ -511,5 +513,65 @@ public class FxInteractionAndModeTest {
         a.processInPlace(outA, 4800, 1);
         b.processInPlace(outB, 4800, 1);
         assertSame(outA, outB, 0f);
+    }
+
+    @Test
+    public void all52EffectsDisabledParamsAreCompletelyInert() {
+        int frames = 512;
+        float[] input = new float[frames];
+        for (int i = 0; i < frames; i++) {
+            input[i] = (float) (0.2 * Math.sin(i * 0.037) + 0.05 * Math.sin(i * 0.19));
+        }
+        int checkedEffects = 0;
+        for (DspChain.EffectType type : DspChain.EffectType.values()) {
+            AudioProcessor probe = FxRackChain.createProcessor(type.id);
+            if (probe == null || probe.getParameters().isEmpty()) continue;
+            checkedEffects++;
+            Map<String, Integer> defaults = new HashMap<>();
+            for (FxParameter p : probe.getParameters()) defaults.put(p.id, p.defaultRaw);
+            for (FxParameter mode : probe.getParameters()) {
+                if (mode.type != FxParameter.Type.ENUM
+                        && mode.type != FxParameter.Type.BOOLEAN) continue;
+                int count = mode.type == FxParameter.Type.ENUM
+                        ? (mode.enumLabels == null ? 0 : mode.enumLabels.length) : 2;
+                for (int mi = 0; mi < count; mi++) {
+                    Map<String, Integer> values = new HashMap<>(defaults);
+                    values.put(mode.id, mi);
+                    AudioProcessor stateProbe = FxRackChain.createProcessor(type.id);
+                    for (FxParameter q : stateProbe.getParameters()) {
+                        if (q == mode || q.type == FxParameter.Type.ACTION
+                                || q.type == FxParameter.Type.CURVE_NODES
+                                || q.minRaw == q.maxRaw) continue;
+                        if (stateProbe.isParamApplicable(q.id, values)) continue;
+                        Map<String, Integer> lo = new HashMap<>(values);
+                        lo.put(q.id, q.minRaw);
+                        Map<String, Integer> hi = new HashMap<>(values);
+                        hi.put(q.id, q.maxRaw);
+                        float[] a = renderFx(type.id, lo, input, frames);
+                        float[] b = renderFx(type.id, hi, input, frames);
+                        assertArrayEquals(type.id + " mode " + mode.id + "=" + mi
+                                        + " inactive " + q.id + " must be inert",
+                                a, b, 0f);
+                    }
+                }
+            }
+        }
+        assertTrue("expected at least 50 effects, checked " + checkedEffects,
+                checkedEffects >= 50);
+    }
+
+    private static float[] renderFx(String effectId, Map<String, Integer> values,
+                                    float[] input, int frames) {
+        AudioProcessor p = FxRackChain.createProcessor(effectId);
+        for (FxParameter q : p.getParameters()) {
+            q.setCurrentRaw(values.containsKey(q.id) ? values.get(q.id) : q.defaultRaw);
+        }
+        p.prepare(SR, 1);
+        if (p.isOfflineOnly()) {
+            return p.processOfflineRegion(input.clone(), frames, 1);
+        }
+        float[] out = input.clone();
+        p.processInPlace(out, frames, 1);
+        return out;
     }
 }
