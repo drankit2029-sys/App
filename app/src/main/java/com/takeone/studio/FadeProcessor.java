@@ -2,6 +2,7 @@ package com.takeone.studio;
 
 import java.io.File;
 import java.io.RandomAccessFile;
+import java.util.Map;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
@@ -58,6 +59,24 @@ final class FadeProcessor extends AudioProcessor {
     @Override
     public FxCategory getCategory() {
         return FxCategory.TOOLS;
+    }
+
+    @Override
+    public boolean isParamApplicable(String paramId) {
+        return applicable(type.getEnumIndex(), paramId);
+    }
+
+    @Override
+    public boolean isParamApplicable(String paramId, Map<String, Integer> values) {
+        int rawType = values != null && values.containsKey("fade_type")
+                ? type.clampRaw(values.get("fade_type"))
+                : type.defaultRaw;
+        return applicable(rawType, paramId);
+    }
+
+    private static boolean applicable(int typeIndex, String paramId) {
+        return (!"fade_start".equals(paramId) && !"fade_end".equals(paramId))
+                || typeIndex == 3;
     }
 
     @Override
@@ -223,15 +242,11 @@ final class FadeProcessor extends AudioProcessor {
     /** Shaped ramp in or out over the first/last {@code fadeFrames}. */
     private void applyRamp(float[] buf, int chunkFrames, int ch, long fadeFrames,
                            boolean fadeIn, long globalFrameOffset, long totalFrames) {
-        float gStart = startGain.getCurrentRaw() / 100f;
-        float gEnd = endGain.getCurrentRaw() / 100f;
-        if (Math.abs(gStart - 1.0f) < 1e-4f && Math.abs(gEnd - 1.0f) < 1e-4f) {
-            gStart = 0.85f;
-        }
-        if (!fadeIn && gStart < 0.01f && gEnd > 0.99f) {
-            gStart = 1.0f;
-            gEnd = 0.0f;
-        }
+        // Fade In and Fade Out have fixed directions. Start/End Gain are only
+        // editable in Adjustable Fade, so they must never turn a fade-out into
+        // a fade-in when touched.
+        float gStart = fadeIn ? 0f : 1f;
+        float gEnd = fadeIn ? 1f : 0f;
         long startOut = totalFrames - fadeFrames;
         for (int local = 0; local < chunkFrames; local++) {
             long f = globalFrameOffset + local;
@@ -263,15 +278,9 @@ final class FadeProcessor extends AudioProcessor {
     private void applyStudioFade(float[] buf, int chunkFrames, int ch,
                                  long fadeFrames, long globalFrameOffset,
                                  long totalFrames) {
-        float gStart = startGain.getCurrentRaw() / 100f;
-        float gEnd = endGain.getCurrentRaw() / 100f;
-        if (Math.abs(gStart - 1.0f) < 1e-4f && Math.abs(gEnd - 1.0f) < 1e-4f) {
-            gStart = 0.85f;
-        }
-        if (gStart < 0.01f && gEnd > 0.99f) {
-            gStart = 1.0f;
-            gEnd = 0.0f;
-        }
+        // Studio Fade Out is always a fade to silence.
+        float gStart = 1f;
+        float gEnd = 0f;
         long startOut = totalFrames - fadeFrames;
         for (int local = 0; local < chunkFrames; local++) {
             long f = globalFrameOffset + local;
@@ -299,9 +308,6 @@ final class FadeProcessor extends AudioProcessor {
                                  long fadeFrames, long globalFrameOffset) {
         float g0 = startGain.getCurrentRaw() / 100f;
         float g1 = endGain.getCurrentRaw() / 100f;
-        if (Math.abs(g0 - 1.0f) < 1e-4f && Math.abs(g1 - 1.0f) < 1e-4f) {
-            g0 = 0.85f;
-        }
         for (int local = 0; local < chunkFrames; local++) {
             long f = globalFrameOffset + local;
             float u = fadeFrames <= 1 ? 1f

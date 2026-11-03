@@ -434,4 +434,82 @@ public class FxInteractionAndModeTest {
         assertEquals("dry impulse must not get a zero-time reflection",
                 0.5f, out[0], 0.0001f);
     }
+
+    @Test
+    public void fadeOutAndStudioFadeIgnoreAdjustableStartEndGains() {
+        for (int type = 1; type <= 2; type++) {
+            FadeProcessor a = new FadeProcessor();
+            a.getParam("fade_type").setCurrentRaw(type);
+            a.getParam("fade_len").setCurrentRaw(100);
+            a.getParam("fade_start").setCurrentRaw(0);
+            a.getParam("fade_end").setCurrentRaw(100);
+            a.prepare(SR, 1);
+            FadeProcessor b = new FadeProcessor();
+            b.getParam("fade_type").setCurrentRaw(type);
+            b.getParam("fade_len").setCurrentRaw(100);
+            b.getParam("fade_start").setCurrentRaw(5);
+            b.getParam("fade_end").setCurrentRaw(95);
+            b.prepare(SR, 1);
+            float[] in = new float[4800];
+            Arrays.fill(in, 0.25f);
+            assertSame(a.processOfflineRegion(in.clone(), 4800, 1),
+                    b.processOfflineRegion(in.clone(), 4800, 1), 0f);
+        }
+    }
+
+    @Test
+    public void rhythmTrackIgnoresDisabledStartFrequency() {
+        AudioGeneratorTool a = new AudioGeneratorTool();
+        a.getParam("gen_type").setCurrentRaw(3);
+        a.getParam("gen_start").setCurrentRaw(500);
+        a.prepare(SR, 1);
+        AudioGeneratorTool b = new AudioGeneratorTool();
+        b.getParam("gen_type").setCurrentRaw(3);
+        b.getParam("gen_start").setCurrentRaw(1500);
+        b.prepare(SR, 1);
+        float[] in = new float[4800];
+        assertSame(a.processOfflineRegion(in.clone(), 4800, 1),
+                b.processOfflineRegion(in.clone(), 4800, 1), 0f);
+    }
+
+    @Test
+    public void plosiveCutoffIsInertWhenSensitivityIsZero() {
+        PlosiveBreathSuppressorProcessor a = new PlosiveBreathSuppressorProcessor();
+        a.getParam("plosive_sens").setCurrentRaw(0);
+        a.getParam("plosive_fc").setCurrentRaw(130);
+        a.getParam("breath_atten").setCurrentRaw(0);
+        a.prepare(SR, 1);
+        assertFalse(a.isAudible());
+        PlosiveBreathSuppressorProcessor b = new PlosiveBreathSuppressorProcessor();
+        b.getParam("plosive_sens").setCurrentRaw(0);
+        b.getParam("plosive_fc").setCurrentRaw(220);
+        b.getParam("breath_atten").setCurrentRaw(0);
+        b.prepare(SR, 1);
+        float[] in = new float[4800];
+        for (int i = 0; i < in.length; i++) in[i] = (float) Math.sin(i * 0.05) * 0.3f;
+        float[] outA = in.clone();
+        float[] outB = in.clone();
+        a.processInPlace(outA, 4800, 1);
+        b.processInPlace(outB, 4800, 1);
+        assertSame(outA, outB, 0f);
+    }
+
+    @Test
+    public void loudnessCeilingDoesNotShiftProgramLoudness() {
+        LoudnessNormalizationProcessor a = new LoudnessNormalizationProcessor();
+        a.getParam("loud_target").setCurrentRaw(-1600);
+        a.getParam("loud_ceiling").setCurrentRaw(-900);
+        a.prepare(SR, 1);
+        LoudnessNormalizationProcessor b = new LoudnessNormalizationProcessor();
+        b.getParam("loud_target").setCurrentRaw(-1600);
+        b.getParam("loud_ceiling").setCurrentRaw(-100);
+        b.prepare(SR, 1);
+        float[] in = new float[4800];
+        for (int i = 0; i < in.length; i++) in[i] = 0.01f * (float) Math.sin(i * 0.05);
+        float[] outA = in.clone();
+        float[] outB = in.clone();
+        a.processInPlace(outA, 4800, 1);
+        b.processInPlace(outB, 4800, 1);
+        assertSame(outA, outB, 0f);
+    }
 }

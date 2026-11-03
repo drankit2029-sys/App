@@ -60,8 +60,7 @@ final class PlosiveBreathSuppressorProcessor extends AudioProcessor {
     @Override
     public boolean isAudible() {
         return isEnabled() && (plosiveSens.getCurrentRaw() > 0
-                || Math.abs(breathGain.getFloat()) > 0.1f
-                || plosiveCutoff.getCurrentRaw() != plosiveCutoff.defaultRaw);
+                || Math.abs(breathGain.getFloat()) > 0.1f);
     }
 
     @Override
@@ -73,8 +72,7 @@ final class PlosiveBreathSuppressorProcessor extends AudioProcessor {
         // Phase-coherent first-order split: low + (s - low) == s identically.
         float alphaLp = (float) (1.0 - Math.exp(-2.0 * Math.PI * fc / sr));
         int rawSens = plosiveSens.getCurrentRaw();
-        float sens = rawSens > 0 ? (rawSens / 100.0f)
-                : (plosiveCutoff.getCurrentRaw() != plosiveCutoff.defaultRaw ? 0.35f : 0.0f);
+        float sens = rawSens / 100.0f;
         float breathLin = Dsp.dbToLin(breathGain.getFloat());
 
         for (int f = 0; f < frames; f++) {

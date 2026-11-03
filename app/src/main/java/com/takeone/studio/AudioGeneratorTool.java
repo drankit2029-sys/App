@@ -306,8 +306,7 @@ final class AudioGeneratorTool extends AudioProcessor {
                                    long frameOffset) {
         int bpm = Math.max(30, Math.min(300, tempo.getCurrentRaw()));
         int framesPerBeat = Math.max(1, (int) Math.round(60.0 * sampleRate / bpm));
-        double pingHz = startFreq.getCurrentRaw() != startFreq.defaultRaw
-                ? startFreq.getCurrentRaw() : 880.0;
+        double pingHz = 880.0;
         for (int local = 0; local < chunkFrames; local++) {
             long f = frameOffset + local;
             int pos = (int) (f % framesPerBeat);

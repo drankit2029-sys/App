@@ -164,11 +164,6 @@ final class TruncateSilenceProcessor extends AudioProcessor {
             } else {
                 targetKeep = truncTargetFrames;
             }
-            // Also let ts_min slightly modulate the kept margin when rawMinMs > 400
-            if (rawMinMs != minDuration.defaultRaw && frames < minSilent * 2) {
-                int minDelta = (rawMinMs - minDuration.defaultRaw) / 50;
-                targetKeep = Math.max(1, Math.min(spanLen, targetKeep + minDelta));
-            }
             int keep = Math.min(spanLen, Math.max(1, targetKeep));
             keepPerSpan[i] = keep;
             outFrames += Math.max(0, span[0] - cursor) + keep;

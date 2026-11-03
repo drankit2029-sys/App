@@ -221,11 +221,6 @@ final class LoudnessNormalizationProcessor extends AudioProcessor {
         // Dual-mono applies the +3.0 dB ITU-R BS.1770 dual-channel correlation law.
         double dualOffset = dualMono.getBoolean() ? 3.0 : 0.0;
         double gainDb = target.getFloat() - (lufs + dualOffset);
-        if (ceiling.getCurrentRaw() != ceiling.defaultRaw) {
-            // Subtle ceiling-linked headroom scaling so ceiling adjustments
-            // also shape program density before the brickwall soft-knee.
-            gainDb += (ceiling.getFloat() - (-1.0)) * 0.20;
-        }
         gainDb = Math.max(-36.0, Math.min(36.0, gainDb));
         float g = Dsp.dbToLin(gainDb);
         float ceilLin = Dsp.dbToLin(ceiling.getFloat());
