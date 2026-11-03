@@ -2,6 +2,7 @@ package com.takeone.studio;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Stage 3 Graphic EQ: switchable 10-band ISO octave (31.5 Hz..16 kHz,
@@ -67,6 +68,32 @@ final class GraphicEqProcessor extends AudioProcessor {
     }
 
     @Override
+    public boolean isParamApplicable(String paramId) {
+        return applicable(layout.getEnumIndex(), paramId);
+    }
+
+    @Override
+    public boolean isParamApplicable(String paramId, Map<String, Integer> values) {
+        int rawLayout = values != null && values.containsKey("bands")
+                ? layout.clampRaw(values.get("bands"))
+                : layout.defaultRaw;
+        return applicable(rawLayout, paramId);
+    }
+
+    private static boolean applicable(int layoutIndex, String paramId) {
+        return !isUpperBand(paramId) || layoutIndex == 1;
+    }
+
+    private static boolean isUpperBand(String paramId) {
+        if (paramId == null || !paramId.startsWith("g")) return false;
+        try {
+            return Integer.parseInt(paramId.substring(1)) >= 10;
+        } catch (NumberFormatException e) {
+            return false;
+        }
+    }
+
+    @Override
     public void prepare(int sampleRate, int channels) {
         if (sampleRate > 0) this.sampleRate = sampleRate;
         this.channels = Math.max(1, Math.min(2, channels));
@@ -76,13 +103,6 @@ final class GraphicEqProcessor extends AudioProcessor {
     @Override
     public void reset() {
         filter.reset();
-    }
-
-    private boolean hasUpperBandGain() {
-        for (int i = 10; i < 31; i++) {
-            if (Math.abs(bands[i].getFloat()) > 0.01f) return true;
-        }
-        return false;
     }
 
     @Override
@@ -97,7 +117,7 @@ final class GraphicEqProcessor extends AudioProcessor {
     }
 
     float[][] buildSections() {
-        boolean thirdOctave = layout.getEnumIndex() == 1 || hasUpperBandGain();
+        boolean thirdOctave = layout.getEnumIndex() == 1;
         double[] freqs = thirdOctave ? ISO_31 : ISO_10;
         double q = thirdOctave ? 4.318 : 1.414;
         double sr = sampleRate;
@@ -108,12 +128,6 @@ final class GraphicEqProcessor extends AudioProcessor {
             double f = freqs[i];
             if (f >= sr * 0.48) continue;
             list.add(Dsp.rbjPeaking(sr, f, q, g));
-        }
-        if (list.isEmpty() && layout.getEnumIndex() == 1
-                && Math.abs(outGain.getFloat()) <= 0.01f) {
-            // Subtle 1/3-octave console presence contour when switched to 31-band
-            // layout at flat sliders so the layout switch is immediately audible.
-            list.add(Dsp.rbjPeaking(sr, 1000.0, 4.318, 1.2));
         }
         double out = outGain.getFloat();
         if (Math.abs(out) > 0.01) {

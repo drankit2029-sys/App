@@ -89,22 +89,15 @@ public final class ProDeEsserProcessor extends AudioProcessor {
         amt.setCurrentRaw(pct);
     }
 
-    private boolean hasNonDefaultSecondary() {
-        return freq.getCurrentRaw() != freq.defaultRaw
-                || width.getCurrentRaw() != width.defaultRaw
-                || mode.getCurrentRaw() != mode.defaultRaw;
-    }
-
     @Override
     public boolean isAudible() {
-        return isEnabled() && (amt.getCurrentRaw() > 0 || hasNonDefaultSecondary());
+        return isEnabled() && amt.getCurrentRaw() > 0;
     }
 
     @Override
     public void processInPlace(float[] buf, int frames, int channels) {
         int rawAmt = amt.getCurrentRaw();
-        float dAmt = rawAmt > 0 ? (rawAmt / 100.0f)
-                : (hasNonDefaultSecondary() ? 0.30f : 0.0f);
+        float dAmt = rawAmt / 100.0f;
         if (dAmt <= 0.001f || frames <= 0) return;
 
         updateCoefficients();

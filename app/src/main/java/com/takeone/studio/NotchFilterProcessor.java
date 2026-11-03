@@ -67,10 +67,11 @@ final class NotchFilterProcessor extends AudioProcessor {
      */
     float[][] buildSections() {
         int p = preset.getEnumIndex();
+        boolean untouched = freq.getCurrentRaw() == freq.defaultRaw;
         double f;
-        if (p == 1) {
+        if (p == 1 && untouched) {
             f = 50.0;
-        } else if (p == 2) {
+        } else if (p == 2 && untouched) {
             f = 60.0;
         } else {
             f = freq.getFloat();

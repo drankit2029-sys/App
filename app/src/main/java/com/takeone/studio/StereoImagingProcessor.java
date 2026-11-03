@@ -70,16 +70,8 @@ final class StereoImagingProcessor extends AudioProcessor {
         float w = width.getCurrentRaw() / 100f;
 
         if (ch == 1) {
-            float sign = (m == 3 || m == 4) ? -1f : (m == 5 ? -0.92f : 1f);
-            float modeScale = (m == 1) ? 0.96f : (m == 2 ? 0.92f : 1.0f);
-            float panTrim = 1.0f + 0.18f * p;
-            float widthDiff = (w - 1.0f) * 0.22f;
-            for (int f = 0; f < frames; f++) {
-                float x = buf[f];
-                float diff = x - prevMono;
-                prevMono = x;
-                buf[f] = (x + diff * widthDiff) * sign * modeScale * panTrim;
-            }
+            float sign = (m == 3 || m == 4) ? -1f : 1f;
+            for (int f = 0; f < frames; f++) buf[f] *= sign;
             return;
         }
 
@@ -105,14 +97,6 @@ final class StereoImagingProcessor extends AudioProcessor {
             }
             float mid = 0.5f * (l + r);
             float side = 0.5f * (l - r);
-            if (Math.abs(side) < 1e-6f && Math.abs(w - 1.0f) > 0.01f && m != 2) {
-                // When input L and R are identical (dual-mono), synthesize a subtle
-                // high-frequency Haas side component when width != 100% so stereo
-                // width expansion/contraction is audible on dual-mono tracks too.
-                float diff = mid - prevMono;
-                side = diff * 0.25f;
-            }
-            prevMono = mid;
             side *= w;
             l = (mid + side) * gl;
             r = (mid - side) * gr;

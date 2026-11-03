@@ -66,12 +66,6 @@ final class SlopeFilterProcessor extends AudioProcessor {
         int idx = Math.max(0, Math.min(ORDERS.length - 1, slope.getEnumIndex()));
         int order = ORDERS[idx];
         double f0 = Math.max(20.0, Math.min(sampleRate * 0.45, freq.getCurrentRaw()));
-        if (!highpass && freq.getCurrentRaw() == freq.defaultRaw && idx != slope.defaultRaw) {
-            // When low-pass cutoff sits at its 12 kHz default and the user changes
-            // the roll-off slope, scale the transition knee slightly by order so
-            // mid-band material reflects the steeper/gentler roll-off immediately.
-            f0 = Math.max(1500.0, f0 * Math.pow(0.82, idx));
-        }
         return Dsp.butterworth(order, sampleRate, f0, highpass);
     }
 

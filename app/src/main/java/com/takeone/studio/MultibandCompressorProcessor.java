@@ -66,20 +66,9 @@ final class MultibandCompressorProcessor extends AudioProcessor {
         env[0] = env[1] = env[2] = 0f;
     }
 
-    private boolean hasSecondaryChange() {
-        return lowCross.getCurrentRaw() != lowCross.defaultRaw
-                || highCross.getCurrentRaw() != highCross.defaultRaw
-                || lowThresh.getCurrentRaw() != lowThresh.defaultRaw
-                || lowRatio.getCurrentRaw() != lowRatio.defaultRaw
-                || midThresh.getCurrentRaw() != midThresh.defaultRaw
-                || midRatio.getCurrentRaw() != midRatio.defaultRaw
-                || highThresh.getCurrentRaw() != highThresh.defaultRaw
-                || highRatio.getCurrentRaw() != highRatio.defaultRaw;
-    }
-
     @Override
     public boolean isAudible() {
-        return isEnabled() && (amount.getCurrentRaw() > 0 || hasSecondaryChange());
+        return isEnabled() && amount.getCurrentRaw() > 0;
     }
 
     private static float bandGain(float level, float threshDb, float ratio, float amt) {
@@ -98,7 +87,7 @@ final class MultibandCompressorProcessor extends AudioProcessor {
     @Override
     public void processInPlace(float[] buf, int frames, int channels) {
         int rawAmt = amount.getCurrentRaw();
-        float amt = rawAmt > 0 ? (rawAmt / 100f) : (hasSecondaryChange() ? 0.35f : 0f);
+        float amt = rawAmt / 100f;
         if (!isEnabled() || amt <= 0.001f || buf == null || frames <= 0) return;
 
         int ch = Math.max(1, Math.min(2, channels));

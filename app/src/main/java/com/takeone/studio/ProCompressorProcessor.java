@@ -63,23 +63,15 @@ public final class ProCompressorProcessor extends AudioProcessor {
         amt.setCurrentRaw(pct);
     }
 
-    private boolean hasNonDefaultSecondary() {
-        return ratio.getCurrentRaw() != ratio.defaultRaw
-                || attack.getCurrentRaw() != attack.defaultRaw
-                || release.getCurrentRaw() != release.defaultRaw
-                || knee.getCurrentRaw() != knee.defaultRaw;
-    }
-
     @Override
     public boolean isAudible() {
-        return isEnabled() && (amt.getCurrentRaw() > 0 || hasNonDefaultSecondary());
+        return isEnabled() && amt.getCurrentRaw() > 0;
     }
 
     @Override
     public void processInPlace(float[] buf, int frames, int channels) {
         int rawAmt = amt.getCurrentRaw();
-        float cAmt = rawAmt > 0 ? (rawAmt / 100.0f)
-                : (hasNonDefaultSecondary() ? 0.30f : 0.0f);
+        float cAmt = rawAmt / 100.0f;
         if (cAmt <= 0.001f) {
             lastGainReductionDb = 0f;
             return;

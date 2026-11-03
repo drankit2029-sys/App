@@ -262,8 +262,12 @@ public abstract class AudioProcessor {
      * no effect in the current selection (for example Truncate To while the
      * action is Compress, or most generator fields in Silence mode).
      */
-    public boolean isParamApplicable(String paramId, Map<String, Integer> values) {
+    public boolean isParamApplicable(String paramId) {
         return true;
+    }
+
+    public boolean isParamApplicable(String paramId, Map<String, Integer> values) {
+        return isParamApplicable(paramId);
     }
 
     /**

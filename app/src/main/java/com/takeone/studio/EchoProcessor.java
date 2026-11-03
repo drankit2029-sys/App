@@ -82,12 +82,6 @@ final class EchoProcessor extends AudioProcessor {
             for (int c = 0; c < ch; c++) {
                 float dry = samples[idx + c];
                 float echo = buf[c][readPos];
-                if (echo == 0f && f < delaySamples && frames < delaySamples) {
-                    int earlyDelay = Math.max(48, delaySamples % Math.max(96, frames / 2));
-                    int earlyPos = writePos - earlyDelay;
-                    if (earlyPos < 0) earlyPos += cap;
-                    echo = buf[c][earlyPos] * (0.40f / (1.0f + delaySamples / (float) sampleRate));
-                }
                 float out = dry + echo * fb;
                 buf[c][writePos] = out;
                 samples[idx + c] = out;

@@ -66,6 +66,11 @@ final class BrickwallLimiterProcessor extends AudioProcessor {
     }
 
     @Override
+    public int getLatencyFrames() {
+        return delay[0].length;
+    }
+
+    @Override
     public void processInPlace(float[] buf, int frames, int channels) {
         if (!isEnabled() || buf == null || frames <= 0) return;
         int ch = Math.max(1, Math.min(2, channels));
@@ -86,19 +91,30 @@ final class BrickwallLimiterProcessor extends AudioProcessor {
         // limited. Quiet material far below the ceiling must pass untouched.
         float effCeiling = ceilLin;
 
+        float[] delayed = new float[2];
         for (int f = 0; f < frames; f++) {
             int idx = f * ch;
             float peak = 0f;
+            float delayedPeak = 0f;
             for (int c = 0; c < ch; c++) {
+                delayed[c] = delay[c][writeIdx];
+                if (Math.abs(delayed[c]) > delayedPeak) delayedPeak = Math.abs(delayed[c]);
                 float s = buf[idx + c] * inLin;
                 float a = Math.abs(s);
                 if (a > peak) peak = a;
-                buf[idx + c] = s;
+                delay[c][writeIdx] = s;
             }
+            writeIdx++;
+            if (writeIdx >= delay[0].length) writeIdx = 0;
+
             float want = peak > effCeiling ? (effCeiling / peak) : 1.0f;
             gain += (want < gain ? attAlpha : relAlpha) * (want - gain);
+            if (delayedPeak > 1e-7f) {
+                float allowed = effCeiling / delayedPeak;
+                if (gain > allowed) gain = allowed;
+            }
             for (int c = 0; c < ch; c++) {
-                float y = buf[idx + c] * gain;
+                float y = delayed[c] * gain;
                 if (soft) {
                     float knee = effCeiling * 0.85f;
                     float ay = Math.abs(y);

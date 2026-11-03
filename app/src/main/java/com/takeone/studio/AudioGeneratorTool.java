@@ -73,6 +73,11 @@ final class AudioGeneratorTool extends AudioProcessor {
     }
 
     @Override
+    public boolean isParamApplicable(String paramId) {
+        return isParamApplicable(type.getEnumIndex(), paramId);
+    }
+
+    @Override
     public boolean isParamApplicable(String paramId, Map<String, Integer> values) {
         int genType = values != null && values.containsKey("gen_type")
                 ? type.clampRaw(values.get("gen_type"))
@@ -132,15 +137,7 @@ final class AudioGeneratorTool extends AudioProcessor {
     }
 
     private int effectiveTypeIndex() {
-        int typeIdx = type.getEnumIndex();
-        if (typeIdx == 0) {
-            if (sequence.getCurrentRaw() != sequence.defaultRaw) {
-                typeIdx = 4;
-            } else if (tempo.getCurrentRaw() != tempo.defaultRaw) {
-                typeIdx = 3;
-            }
-        }
-        return typeIdx;
+        return type.getEnumIndex();
     }
 
     @Override

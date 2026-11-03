@@ -1,6 +1,7 @@
 package com.takeone.studio;
 
 import java.util.Arrays;
+import java.util.Map;
 
 /**
  * Stage 6 Studio Reverb (Jezar Freeverb topology): 8 parallel low-pass-
@@ -95,6 +96,23 @@ final class FreeverbReverbProcessor extends AudioProcessor {
     }
 
     @Override
+    public boolean isParamApplicable(String paramId) {
+        return applicable(wetOnly.getBoolean(), paramId);
+    }
+
+    @Override
+    public boolean isParamApplicable(String paramId, Map<String, Integer> values) {
+        boolean wet = values != null && values.containsKey("rv_wetonly")
+                ? wetOnly.clampRaw(values.get("rv_wetonly")) != 0
+                : wetOnly.defaultRaw != 0;
+        return applicable(wet, paramId);
+    }
+
+    private static boolean applicable(boolean wetOnlyOn, String paramId) {
+        return !"rv_dry".equals(paramId) || !wetOnlyOn;
+    }
+
+    @Override
     public int getTailFrames() {
         return sampleRate * 2;
     }
@@ -140,10 +158,7 @@ final class FreeverbReverbProcessor extends AudioProcessor {
         float damp2 = 1f - damp;
         float wet = Dsp.dbToLin(wetGain.getFloat()) * 0.08f
                 * (0.5f + 0.5f * (reverberance.getCurrentRaw() / 100f));
-        float dry = wetOnly.getBoolean()
-                ? (dryGain.getCurrentRaw() != dryGain.defaultRaw
-                        ? Dsp.dbToLin(dryGain.getFloat()) * 0.08f : 0f)
-                : Dsp.dbToLin(dryGain.getFloat());
+        float dry = wetOnly.getBoolean() ? 0f : Dsp.dbToLin(dryGain.getFloat());
         float w = width.getCurrentRaw() / 100f;
         float w1 = 0.5f * (1f + w);
         float w2 = 0.5f * (1f - w);

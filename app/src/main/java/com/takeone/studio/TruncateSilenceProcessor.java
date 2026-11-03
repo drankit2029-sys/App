@@ -58,13 +58,21 @@ final class TruncateSilenceProcessor extends AudioProcessor {
     }
 
     @Override
+    public boolean isParamApplicable(String paramId) {
+        return applicable(action.getEnumIndex(), paramId);
+    }
+
+    @Override
     public boolean isParamApplicable(String paramId, Map<String, Integer> values) {
-        if ("ts_trunc".equals(paramId) || "ts_compress".equals(paramId)) {
-            int rawAction = values != null && values.containsKey("ts_action")
-                    ? action.clampRaw(values.get("ts_action"))
-                    : action.defaultRaw;
-            return "ts_trunc".equals(paramId) ? rawAction == 0 : rawAction == 1;
-        }
+        int rawAction = values != null && values.containsKey("ts_action")
+                ? action.clampRaw(values.get("ts_action"))
+                : action.defaultRaw;
+        return applicable(rawAction, paramId);
+    }
+
+    private static boolean applicable(int actionIndex, String paramId) {
+        if ("ts_trunc".equals(paramId)) return actionIndex == 0;
+        if ("ts_compress".equals(paramId)) return actionIndex == 1;
         return true;
     }
 

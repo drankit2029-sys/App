@@ -110,13 +110,7 @@ final class CompressorProcessor extends AudioProcessor {
                 float targetGrDb = 0f;
                 if (up) {
                     if (lvlDb < threshDb) {
-                        float under = Math.min(24f, threshDb - lvlDb);
-                        targetGrDb = -slope * under * 0.5f;
-                    } else {
-                        // Above threshold in upward mode, use a gentler top-end knee
-                        // so toggling upward mode is also audible on loud passages.
-                        float over = lvlDb - threshDb;
-                        targetGrDb = -slope * over * 0.65f;
+                        targetGrDb = Math.min(20.0f, slope * (threshDb - lvlDb));
                     }
                 } else {
                     float over = lvlDb - threshDb;
@@ -134,9 +128,7 @@ final class CompressorProcessor extends AudioProcessor {
                 currentGainDb += (targetGrDb < currentGainDb ? attAlpha : relAlpha)
                         * (targetGrDb - currentGainDb);
             } else {
-                float floorScale = Math.max(0f, Math.min(1f, (floorDb + 80f) / 60f));
-                float bleedTarget = -floorScale * 3.0f;
-                currentGainDb += relAlpha * (bleedTarget - currentGainDb);
+                currentGainDb += relAlpha * (0f - currentGainDb);
             }
             if (currentGainDb < minGr) minGr = currentGainDb;
             float g = DspChain.fastDbToLin(currentGainDb + makeupDb);

@@ -56,23 +56,14 @@ final class ShelfFilterProcessor extends AudioProcessor {
         filter.reset();
     }
 
-    private boolean hasSecondaryChange() {
-        return type.getCurrentRaw() != type.defaultRaw
-                || freq.getCurrentRaw() != freq.defaultRaw
-                || slope.getCurrentRaw() != slope.defaultRaw;
-    }
-
     @Override
     public boolean isAudible() {
-        return isEnabled() && (Math.abs(gain.getFloat()) > 0.01f || hasSecondaryChange());
+        return isEnabled() && Math.abs(gain.getFloat()) > 0.01f;
     }
 
     float[][] buildSections() {
         double g = gain.getFloat();
-        if (Math.abs(g) < 0.01) {
-            if (!hasSecondaryChange()) return new float[0][];
-            g = 3.0;
-        }
+        if (Math.abs(g) < 0.01) return new float[0][];
         double f0 = Math.max(20.0, Math.min(sampleRate * 0.45, freq.getCurrentRaw()));
         double s = Math.max(0.2, Math.min(2.0, slope.getFloat()));
         float[] sec = type.getEnumIndex() == 1

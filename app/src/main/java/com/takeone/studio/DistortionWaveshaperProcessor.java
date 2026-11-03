@@ -78,18 +78,9 @@ final class DistortionWaveshaperProcessor extends AudioProcessor {
         prevX[0] = prevX[1] = 0f;
     }
 
-    private boolean hasSecondaryChange() {
-        return type.getCurrentRaw() != type.defaultRaw
-                || dcOffset.getCurrentRaw() != dcOffset.defaultRaw
-                || clipLevel.getCurrentRaw() != clipLevel.defaultRaw
-                || softness.getCurrentRaw() != softness.defaultRaw
-                || oversample.getCurrentRaw() != oversample.defaultRaw
-                || toneFreq.getCurrentRaw() != toneFreq.defaultRaw;
-    }
-
     @Override
     public boolean isAudible() {
-        return isEnabled() && (drive.getCurrentRaw() > 0 || hasSecondaryChange());
+        return isEnabled() && drive.getCurrentRaw() > 0;
     }
 
     private static double shape(double x, int curve, double param) {
@@ -137,8 +128,7 @@ final class DistortionWaveshaperProcessor extends AudioProcessor {
         rebuildTone(ch);
         int curve = type.getEnumIndex();
         int rawDrive = drive.getCurrentRaw();
-        double driveAmt = rawDrive > 0 ? (rawDrive / 100.0)
-                : (hasSecondaryChange() ? 0.22 : 0.0);
+        double driveAmt = rawDrive / 100.0;
         double preGain = Dsp.dbToLin(driveAmt * 30.0);
         double ceil = Dsp.dbToLin(clipLevel.getFloat());
         double dc = (dcOffset.getCurrentRaw() / 100.0) * 0.35;

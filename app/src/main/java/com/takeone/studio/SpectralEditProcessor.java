@@ -1,5 +1,7 @@
 package com.takeone.studio;
 
+import java.util.Map;
+
 /**
  * Stage 7 spectral edit: a parametric / shelving / notching EQ applied
  * through the STFT engine, so the response can be shaped inside a narrow
@@ -46,6 +48,23 @@ final class SpectralEditProcessor extends AudioProcessor {
     }
 
     @Override
+    public boolean isParamApplicable(String paramId) {
+        return applicable(mode.getEnumIndex(), paramId);
+    }
+
+    @Override
+    public boolean isParamApplicable(String paramId, Map<String, Integer> values) {
+        int rawMode = values != null && values.containsKey("se_mode")
+                ? mode.clampRaw(values.get("se_mode"))
+                : mode.defaultRaw;
+        return applicable(rawMode, paramId);
+    }
+
+    private static boolean applicable(int modeIndex, String paramId) {
+        return !"se_gain".equals(paramId) || modeIndex != 2;
+    }
+
+    @Override
     public void prepare(int sampleRate, int channels) {
         if (sampleRate > 0) this.sampleRate = sampleRate;
         this.channels = Math.max(1, Math.min(2, channels));
@@ -55,17 +74,10 @@ final class SpectralEditProcessor extends AudioProcessor {
     public void reset() {
     }
 
-    private boolean hasSecondaryChange() {
-        return mode.getCurrentRaw() != mode.defaultRaw
-                || lowFreq.getCurrentRaw() != lowFreq.defaultRaw
-                || highFreq.getCurrentRaw() != highFreq.defaultRaw;
-    }
-
     @Override
     public boolean isAudible() {
         return isEnabled() && (mode.getEnumIndex() == 2
-                || Math.abs(gain.getFloat()) >= 0.01f
-                || hasSecondaryChange());
+                || Math.abs(gain.getFloat()) >= 0.01f);
     }
 
     @Override
@@ -76,9 +88,6 @@ final class SpectralEditProcessor extends AudioProcessor {
         float f2 = Math.max(f1 + 10f, highFreq.getCurrentRaw());
         float rawG = gain.getFloat();
         int modeIdx = mode.getEnumIndex();
-        if (Math.abs(rawG) < 0.01f && modeIdx != 2 && hasSecondaryChange()) {
-            rawG = -6.0f;
-        }
         final float g = rawG;
 
         StftProcessor stft = new StftProcessor(2048, 4) {
@@ -100,10 +109,7 @@ final class SpectralEditProcessor extends AudioProcessor {
                         float u = Math.min(1f, (hz - f1) / Math.max(1f, f2 - f1));
                         weight = 0.5f * (1f - (float) Math.cos(Math.PI * u));
                     }
-                    // In Spectral Delete / Notch mode (mode 2), map g (-36..+24 dB)
-                    // monotonically around -24 dB (-40.2 dB at -36 dB, -24 dB at 0 dB,
-                    // -13.2 dB at +24 dB) so positive and negative g values are distinct.
-                    float targetDb = modeIdx == 2 ? (-24.0f + g * 0.45f) : g;
+                    float targetDb = modeIdx == 2 ? -48.0f : g;
                     float factor = (float) Math.pow(10.0,
                             targetDb * weight / 20.0);
                     re[b] *= factor;

@@ -87,12 +87,10 @@ final class PhaserProcessor extends AudioProcessor {
         int sr = Math.max(8000, sampleRate);
         int nStages = Math.max(2, Math.min(24, (stages.getCurrentRaw() / 2) * 2));
         int rawMix = mix.getCurrentRaw();
-        float wet = rawMix > 0 ? (rawMix / 100f) : 0.25f;
+        float wet = rawMix / 100f;
         float dry = 1f - wet * 0.5f;
         int rawDepth = depth.getCurrentRaw();
-        float d = rawDepth > 0 ? (rawDepth / 100f)
-                : ((rate.getCurrentRaw() != rate.defaultRaw
-                        || phase.getCurrentRaw() != phase.defaultRaw) ? 0.20f : 0f);
+        float d = rawDepth / 100f;
         float fb = (feedback.getCurrentRaw() / 100f) * 0.70f;
         double baseF = centerFreq.getCurrentRaw();
         double lfoInc = 2.0 * Math.PI * rate.getFloat() / sr;

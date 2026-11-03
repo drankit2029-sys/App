@@ -110,21 +110,11 @@ public final class ProToneProcessor extends AudioProcessor {
     }
 
     private float effectiveWarmthAmt() {
-        int w = warmth.getCurrentRaw();
-        if (w > 0) return w / 100.0f;
-        if (!"presence".equals(role) && warmthFreq.getCurrentRaw() != warmthFreq.defaultRaw) {
-            return 0.25f;
-        }
-        return 0.0f;
+        return warmth.getCurrentRaw() / 100.0f;
     }
 
     private float effectivePresenceAmt() {
-        int p = presence.getCurrentRaw();
-        if (p > 0) return p / 100.0f;
-        if (!"warmth".equals(role) && presenceFreq.getCurrentRaw() != presenceFreq.defaultRaw) {
-            return 0.25f;
-        }
-        return 0.0f;
+        return presence.getCurrentRaw() / 100.0f;
     }
 
     @Override

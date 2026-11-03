@@ -1,6 +1,7 @@
 package com.takeone.studio;
 
 import java.util.ArrayList;
+import java.util.Map;
 import java.util.Arrays;
 import java.util.List;
 
@@ -56,6 +57,23 @@ final class ClassicFiltersProcessor extends AudioProcessor {
     }
 
     @Override
+    public boolean isParamApplicable(String paramId) {
+        return applicable(type.getEnumIndex(), paramId);
+    }
+
+    @Override
+    public boolean isParamApplicable(String paramId, Map<String, Integer> values) {
+        int proto = values != null && values.containsKey("type")
+                ? type.clampRaw(values.get("type"))
+                : type.defaultRaw;
+        return applicable(proto, paramId);
+    }
+
+    private static boolean applicable(int prototype, String paramId) {
+        return !"ripple".equals(paramId) || prototype == 1 || prototype == 2;
+    }
+
+    @Override
     public void prepare(int sampleRate, int channels) {
         if (sampleRate > 0) this.sampleRate = sampleRate;
         this.channels = Math.max(1, Math.min(2, channels));
@@ -86,17 +104,6 @@ final class ClassicFiltersProcessor extends AudioProcessor {
             default:
                 base = Dsp.butterworth(n, sampleRate, f0, hp);
                 break;
-        }
-        if (ripple.getCurrentRaw() != ripple.defaultRaw) {
-            // When the user explicitly adjusts Ripple while on Butterworth or Bessel,
-            // apply a subtle corner Q/ripple shaping section at f0 while keeping
-            // default ripple=1.0 dB exact (-3.01 dB at f0).
-            List<float[]> list = new ArrayList<>(Arrays.asList(base));
-            double cornerDb = (r - 1.0) * 0.65;
-            if (Math.abs(cornerDb) > 0.01) {
-                list.add(Dsp.rbjPeaking(sampleRate, f0, 0.9, cornerDb));
-            }
-            return list.toArray(new float[0][]);
         }
         return base;
     }

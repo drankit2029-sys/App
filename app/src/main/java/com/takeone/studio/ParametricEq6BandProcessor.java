@@ -98,42 +98,16 @@ final class ParametricEq6BandProcessor extends AudioProcessor {
         filter.reset();
     }
 
-    private boolean isBand2SecondaryTouched() {
-        return b2Type.getCurrentRaw() != b2Type.defaultRaw
-                || b2Freq.getCurrentRaw() != b2Freq.defaultRaw
-                || b2Q.getCurrentRaw() != b2Q.defaultRaw;
-    }
-
-    private boolean isBand3SecondaryTouched() {
-        return b3Freq.getCurrentRaw() != b3Freq.defaultRaw
-                || b3Q.getCurrentRaw() != b3Q.defaultRaw;
-    }
-
-    private boolean isBand4SecondaryTouched() {
-        return b4Freq.getCurrentRaw() != b4Freq.defaultRaw
-                || b4Q.getCurrentRaw() != b4Q.defaultRaw;
-    }
-
-    private boolean isBand5SecondaryTouched() {
-        return b5Type.getCurrentRaw() != b5Type.defaultRaw
-                || b5Freq.getCurrentRaw() != b5Freq.defaultRaw
-                || b5Q.getCurrentRaw() != b5Q.defaultRaw;
-    }
-
-    private boolean isBand6SecondaryTouched() {
-        return b6Slope.getCurrentRaw() != b6Slope.defaultRaw;
-    }
-
     @Override
     public boolean isAudible() {
         if (!isEnabled()) return false;
         if (b1Freq.getCurrentRaw() > 20) return true;
-        if (b6Freq.getCurrentRaw() < 20000 || isBand6SecondaryTouched()) return true;
+        if (b6Freq.getCurrentRaw() < 20000) return true;
         if (Math.abs(outGain.getFloat()) > 0.01f) return true;
-        if (Math.abs(b2Gain.getFloat()) > 0.01f || isBand2SecondaryTouched()) return true;
-        if (Math.abs(b3Gain.getFloat()) > 0.01f || isBand3SecondaryTouched()) return true;
-        if (Math.abs(b4Gain.getFloat()) > 0.01f || isBand4SecondaryTouched()) return true;
-        return Math.abs(b5Gain.getFloat()) > 0.01f || isBand5SecondaryTouched();
+        return Math.abs(b2Gain.getFloat()) > 0.01f
+                || Math.abs(b3Gain.getFloat()) > 0.01f
+                || Math.abs(b4Gain.getFloat()) > 0.01f
+                || Math.abs(b5Gain.getFloat()) > 0.01f;
     }
 
     /** Builds the active biquad cascade (package-private for tests/UI). */
@@ -146,9 +120,6 @@ final class ParametricEq6BandProcessor extends AudioProcessor {
             for (float[] s : Dsp.butterworth(order, sr, f1, true)) list.add(s);
         }
         double g2 = b2Gain.getFloat();
-        if (Math.abs(g2) <= 0.01 && isBand2SecondaryTouched()) {
-            g2 = 3.0;
-        }
         if (Math.abs(g2) > 0.01) {
             double f2 = Math.min(b2Freq.getCurrentRaw(), sr * 0.45);
             double q2 = Math.max(0.15, b2Q.getFloat());
@@ -160,27 +131,18 @@ final class ParametricEq6BandProcessor extends AudioProcessor {
             }
         }
         double g3 = b3Gain.getFloat();
-        if (Math.abs(g3) <= 0.01 && isBand3SecondaryTouched()) {
-            g3 = 3.0;
-        }
         if (Math.abs(g3) > 0.01) {
             list.add(Dsp.rbjPeaking(sr,
                     Math.min(b3Freq.getCurrentRaw(), sr * 0.45),
                     b3Q.getFloat(), g3));
         }
         double g4 = b4Gain.getFloat();
-        if (Math.abs(g4) <= 0.01 && isBand4SecondaryTouched()) {
-            g4 = 3.0;
-        }
         if (Math.abs(g4) > 0.01) {
             list.add(Dsp.rbjPeaking(sr,
                     Math.min(b4Freq.getCurrentRaw(), sr * 0.45),
                     b4Q.getFloat(), g4));
         }
         double g5 = b5Gain.getFloat();
-        if (Math.abs(g5) <= 0.01 && isBand5SecondaryTouched()) {
-            g5 = 3.0;
-        }
         if (Math.abs(g5) > 0.01) {
             double f5 = Math.min(b5Freq.getCurrentRaw(), sr * 0.45);
             double q5 = Math.max(0.15, b5Q.getFloat());
@@ -192,9 +154,6 @@ final class ParametricEq6BandProcessor extends AudioProcessor {
             }
         }
         int rawF6 = b6Freq.getCurrentRaw();
-        if (rawF6 >= 20000 && isBand6SecondaryTouched()) {
-            rawF6 = 12000;
-        }
         if (rawF6 < 20000) {
             double f6 = Math.min(rawF6, sr * 0.45);
             int order = b6Slope.getEnumIndex() == 1 ? 4 : 2;

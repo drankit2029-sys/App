@@ -4,6 +4,7 @@ import java.io.File;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.Map;
 
 /**
  * Stage 7 timeline utility: invert the polarity, reverse the region in
@@ -49,6 +50,23 @@ final class TimelineUtilityProcessor extends AudioProcessor {
     }
 
     @Override
+    public boolean isParamApplicable(String paramId) {
+        return applicable(action.getEnumIndex(), paramId);
+    }
+
+    @Override
+    public boolean isParamApplicable(String paramId, Map<String, Integer> values) {
+        int rawAction = values != null && values.containsKey("tl_action")
+                ? action.clampRaw(values.get("tl_action"))
+                : action.defaultRaw;
+        return applicable(rawAction, paramId);
+    }
+
+    private static boolean applicable(int actionIndex, String paramId) {
+        return !"tl_repeats".equals(paramId) || actionIndex == 2;
+    }
+
+    @Override
     public void prepare(int sampleRate, int channels) {
     }
 
@@ -72,12 +90,7 @@ final class TimelineUtilityProcessor extends AudioProcessor {
     }
 
     private int effectiveAction() {
-        int actIdx = action.getEnumIndex();
-        int repRaw = repeats.getCurrentRaw();
-        if (actIdx == 0 && repRaw != repeats.defaultRaw) {
-            actIdx = 2;
-        }
-        return actIdx;
+        return action.getEnumIndex();
     }
 
     @Override
@@ -102,19 +115,12 @@ final class TimelineUtilityProcessor extends AudioProcessor {
                 }
                 return out;
             }
-            default: { // Repeat
-                int count = Math.max(1, repRaw);
+            default: { // Repeat (count is the number of additional copies)
+                int count = 1 + Math.max(1, repRaw);
                 float[] out = new float[frames * channels * count];
                 for (int r = 0; r < count; r++) {
                     System.arraycopy(in, 0, out, r * frames * channels,
                             frames * channels);
-                }
-                if (count == 1 && out.length > 0) {
-                    // For a 1x repeat, apply a subtle -0.5 dB boundary trim so
-                    // tl_repeats=1 is audibly and measurably distinct from dry.
-                    for (int i = 0; i < out.length; i++) {
-                        out[i] *= 0.944f;
-                    }
                 }
                 return out;
             }

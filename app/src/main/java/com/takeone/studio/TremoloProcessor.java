@@ -56,15 +56,9 @@ final class TremoloProcessor extends AudioProcessor {
         phase = 0.0;
     }
 
-    private boolean hasSecondaryChange() {
-        return wave.getCurrentRaw() != wave.defaultRaw
-                || rate.getCurrentRaw() != rate.defaultRaw
-                || stereoPhase.getCurrentRaw() != stereoPhase.defaultRaw;
-    }
-
     @Override
     public boolean isAudible() {
-        return isEnabled() && (depth.getCurrentRaw() > 0 || hasSecondaryChange());
+        return isEnabled() && depth.getCurrentRaw() > 0;
     }
 
     private static float lfo01(double normPhase, int waveType) {
@@ -89,8 +83,7 @@ final class TremoloProcessor extends AudioProcessor {
         if (!isEnabled() || buf == null || frames <= 0) return;
         int ch = Math.max(1, Math.min(2, channels));
         int rawDepth = depth.getCurrentRaw();
-        float d = rawDepth > 0 ? (rawDepth / 100f)
-                : (hasSecondaryChange() ? 0.25f : 0f);
+        float d = rawDepth / 100f;
         if (d <= 0.001f) return;
         int w = wave.getEnumIndex();
         double inc = rate.getFloat() / Math.max(8000, sampleRate);

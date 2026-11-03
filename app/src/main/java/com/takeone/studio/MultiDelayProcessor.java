@@ -115,14 +115,6 @@ final class MultiDelayProcessor extends AudioProcessor {
                     int readIdx = writePos - delaySamples;
                     if (readIdx < 0) readIdx += cap;
                     float tapSample = ring[c][readIdx];
-                    if (tapSample == 0f && f < delaySamples && frames < delaySamples) {
-                        // Early pre-reflection for short buffers shorter than delaySamples
-                        // so long delay times remain audible during short region previews.
-                        int earlyDelay = Math.max(32, delaySamples % Math.max(64, frames / 2));
-                        int earlyIdx = writePos - earlyDelay;
-                        if (earlyIdx < 0) earlyIdx += cap;
-                        tapSample = ring[c][earlyIdx] * (0.35f / (1.0f + delaySamples / (float) sampleRate));
-                    }
                     acc += tapSample * tapGain;
                 }
                 // Soft-bound feedback write so extreme 30-tap chains stay finite and clean.

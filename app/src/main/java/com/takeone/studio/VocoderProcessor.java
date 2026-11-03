@@ -1,5 +1,8 @@
 package com.takeone.studio;
 
+import java.util.Arrays;
+import java.util.Map;
+
 /**
  * Stage 6 Multi-Band Vocoder: splits the voice (modulator) into N logarithmically
  * spaced band-pass channels (8..32 bands), tracks the amplitude envelope in
@@ -23,11 +26,20 @@ final class VocoderProcessor extends AudioProcessor {
     private final FxParameter release = addParameter(FxParameter.floatParam(
             "vc_release", "Envelope Speed", " ms", 1f, 120f, 10f));
 
+    private static final int MAX_BANDS = 32;
+    private final BiquadFilter[] modBp = new BiquadFilter[MAX_BANDS];
+    private final BiquadFilter[] carBp = new BiquadFilter[MAX_BANDS];
+    private final float[] bandEnv = new float[MAX_BANDS];
+
     private int sampleRate = DspChain.SAMPLE_RATE;
     private double carrierPhase = 0.0;
     private long noiseState = 0x1234567L;
 
     VocoderProcessor() {
+        for (int i = 0; i < MAX_BANDS; i++) {
+            modBp[i] = new BiquadFilter();
+            carBp[i] = new BiquadFilter();
+        }
     }
 
     @Override
@@ -51,6 +63,23 @@ final class VocoderProcessor extends AudioProcessor {
     }
 
     @Override
+    public boolean isParamApplicable(String paramId) {
+        return applicable(carrierType.getEnumIndex(), paramId);
+    }
+
+    @Override
+    public boolean isParamApplicable(String paramId, Map<String, Integer> values) {
+        int rawCarrier = values != null && values.containsKey("vc_carrier")
+                ? carrierType.clampRaw(values.get("vc_carrier"))
+                : carrierType.defaultRaw;
+        return applicable(rawCarrier, paramId);
+    }
+
+    private static boolean applicable(int carrierIndex, String paramId) {
+        return !"vc_pitch".equals(paramId) || carrierIndex != 1;
+    }
+
+    @Override
     public void prepare(int sampleRate, int channels) {
         if (sampleRate > 0) this.sampleRate = sampleRate;
     }
@@ -59,6 +88,11 @@ final class VocoderProcessor extends AudioProcessor {
     public void reset() {
         carrierPhase = 0.0;
         noiseState = 0x1234567L;
+        Arrays.fill(bandEnv, 0f);
+        for (int i = 0; i < MAX_BANDS; i++) {
+            modBp[i].reset();
+            carBp[i].reset();
+        }
     }
 
     private float nextNoise() {
@@ -93,9 +127,7 @@ final class VocoderProcessor extends AudioProcessor {
             float noise = nextNoise() * 0.4f;
             float c;
             if (cType == 1) {
-                // White Noise mode retains a subtle pitched harmonic formant
-                // and noiseMix scaling so vc_pitch and vc_noise remain active.
-                c = noise * (0.65f + 0.35f * nMix) + 0.18f * saw;
+                c = noise * (0.5f + 0.5f * nMix);
             } else if (cType == 2) {
                 // Original + Synth mode blends noiseMix into the synth carrier.
                 c = 0.45f * m + 0.45f * saw + nMix * noise * 0.5f;
@@ -106,27 +138,28 @@ final class VocoderProcessor extends AudioProcessor {
         }
 
         float[] sumOut = new float[frames];
+        float[] mBand = new float[frames];
+        float[] cBand = new float[frames];
         double fMin = 120.0, fMax = Math.min(8000.0, sr * 0.42);
         double qBand = 3.5 + nBands * 0.12;
         for (int b = 0; b < nBands; b++) {
             double frac = b / (double) Math.max(1, nBands - 1);
             double fc = fMin * Math.pow(fMax / fMin, frac);
             float[] sec = Dsp.rbjBandPass(sr, fc, qBand);
-            BiquadFilter modBp = new BiquadFilter();
-            BiquadFilter carBp = new BiquadFilter();
-            modBp.setSections(new float[][]{sec}, 1);
-            carBp.setSections(new float[][]{sec}, 1);
-            float[] mBand = modMono.clone();
-            float[] cBand = carMono.clone();
-            modBp.process(mBand, frames, 1);
-            carBp.process(cBand, frames, 1);
+            modBp[b].setSections(new float[][]{sec}, 1);
+            carBp[b].setSections(new float[][]{sec}, 1);
+            System.arraycopy(modMono, 0, mBand, 0, frames);
+            System.arraycopy(carMono, 0, cBand, 0, frames);
+            modBp[b].process(mBand, frames, 1);
+            carBp[b].process(cBand, frames, 1);
 
-            float env = 0f;
+            float env = bandEnv[b];
             for (int f = 0; f < frames; f++) {
                 float a = Math.abs(mBand[f]);
                 env += (a > env ? 0.08f : relAlpha) * (a - env);
                 sumOut[f] += cBand[f] * env * 4.5f;
             }
+            bandEnv[b] = env;
         }
         float scale = (float) (1.2 / Math.sqrt(nBands / 8.0));
         for (int f = 0; f < frames; f++) {

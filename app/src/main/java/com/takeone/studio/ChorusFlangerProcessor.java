@@ -68,12 +68,7 @@ final class ChorusFlangerProcessor extends AudioProcessor {
 
     @Override
     public boolean isAudible() {
-        return isEnabled() && (mix.getCurrentRaw() > 0
-                || mode.getCurrentRaw() != mode.defaultRaw
-                || delay.getCurrentRaw() != delay.defaultRaw
-                || depth.getCurrentRaw() != depth.defaultRaw
-                || rate.getCurrentRaw() != rate.defaultRaw
-                || feedback.getCurrentRaw() != feedback.defaultRaw);
+        return isEnabled() && mix.getCurrentRaw() > 0;
     }
 
     @Override
@@ -101,7 +96,7 @@ final class ChorusFlangerProcessor extends AudioProcessor {
         // so negative feedback never diverges while remaining responsive across -90..+90%.
         float fb = (feedback.getCurrentRaw() / 90.0f) * 0.62f;
         int rawMix = mix.getCurrentRaw();
-        float wet = rawMix > 0 ? (rawMix / 100f) : 0.25f;
+        float wet = rawMix / 100f;
         float dry = 1f - wet * 0.4f;
         double lfoInc = 2.0 * Math.PI * rate.getFloat() / sr;
 

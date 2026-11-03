@@ -1,6 +1,7 @@
 package com.takeone.studio;
 
 import java.io.File;
+import java.util.Map;
 
 /**
  * Stage 4 Amplify: two-pass gain processor with automatic chunked peak scanning
@@ -41,6 +42,23 @@ final class AmplifyProcessor extends AudioProcessor {
     }
 
     @Override
+    public boolean isParamApplicable(String paramId) {
+        return applicable(allowClip.getBoolean(), paramId);
+    }
+
+    @Override
+    public boolean isParamApplicable(String paramId, Map<String, Integer> values) {
+        boolean clip = values != null && values.containsKey("amp_clip")
+                ? allowClip.clampRaw(values.get("amp_clip")) != 0
+                : allowClip.defaultRaw != 0;
+        return applicable(clip, paramId);
+    }
+
+    private static boolean applicable(boolean allowClipping, String paramId) {
+        return !"amp_peak".equals(paramId) || !allowClipping;
+    }
+
+    @Override
     public void prepare(int sampleRate, int channels) {
     }
 
@@ -76,18 +94,17 @@ final class AmplifyProcessor extends AudioProcessor {
     /** Effective linear gain for the scanned (or in-block) peak. */
     float computeEffectiveGainDb(float peakDb) {
         float requested = gain.getFloat();
+        if (allowClip.getBoolean()) {
+            return Math.abs(requested) <= 0.01f ? 1.5f : requested;
+        }
         float ceiling = newPeak.getFloat();
         if (Math.abs(requested) <= 0.01f && Math.abs(ceiling) > 0.01f) {
             requested = (peakDb > -60f) ? (ceiling - peakDb) : ceiling;
-        } else if (Math.abs(requested) <= 0.01f && allowClip.getBoolean()) {
-            requested = 1.5f;
         }
-        if (!allowClip.getBoolean()) {
-            float effCeiling = Math.abs(ceiling) > 0.01f ? ceiling : -0.1f;
-            float maxAllowed = effCeiling - peakDb;
-            if (requested > maxAllowed && requested > 0f) {
-                requested = maxAllowed;
-            }
+        float effCeiling = Math.abs(ceiling) > 0.01f ? ceiling : -0.1f;
+        float maxAllowed = effCeiling - peakDb;
+        if (requested > maxAllowed && requested > 0f) {
+            requested = maxAllowed;
         }
         return requested;
     }
