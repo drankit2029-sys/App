@@ -354,8 +354,8 @@ public class FxInteractionAndModeTest {
             p.getParam("dist_drive").setCurrentRaw(600);
             p.getParam("dist_type").setEnumIndex(1);
         }
-        d1.getParam("dist_param").setCurrentRaw(200);
-        d2.getParam("dist_param").setCurrentRaw(800);
+        d1.getParam("dist_param").setCurrentRaw(20);
+        d2.getParam("dist_param").setCurrentRaw(80);
         assertDiffers(run(d1, sine(4800, 1, 500, 0.4f), 4800, 1),
                 run(d2, sine(4800, 1, 500, 0.4f), 4800, 1));
 
@@ -377,7 +377,8 @@ public class FxInteractionAndModeTest {
         float[] in = sine(9600, 1, 620, 0.4f);
         VocoderProcessor contiguous = new VocoderProcessor();
         contiguous.prepare(SR, 1);
-        float[] full = contiguous.processOfflineRegion(in.clone(), 9600, 1);
+        float[] full = in.clone();
+        contiguous.processInPlace(full, 9600, 1);
 
         VocoderProcessor chunked = new VocoderProcessor();
         chunked.prepare(SR, 1);
@@ -396,13 +397,14 @@ public class FxInteractionAndModeTest {
         float[] in = sine(9600, 1, 220, 0.9f);
         BrickwallLimiterProcessor contiguous = new BrickwallLimiterProcessor();
         contiguous.getParam("lim_ceiling").setCurrentRaw(-100);
-        contiguous.getParam("lim_input").setCurrentRaw(600);
+        contiguous.getParam("lim_gain").setCurrentRaw(600);
         contiguous.prepare(SR, 1);
-        float[] full = contiguous.processOfflineRegion(in.clone(), 9600, 1);
+        float[] full = in.clone();
+        contiguous.processInPlace(full, 9600, 1);
 
         BrickwallLimiterProcessor chunked = new BrickwallLimiterProcessor();
         chunked.getParam("lim_ceiling").setCurrentRaw(-100);
-        chunked.getParam("lim_input").setCurrentRaw(600);
+        chunked.getParam("lim_gain").setCurrentRaw(600);
         chunked.prepare(SR, 1);
         float[] first = Arrays.copyOfRange(in, 0, 4800);
         float[] second = Arrays.copyOfRange(in, 4800, 9600);
@@ -427,7 +429,8 @@ public class FxInteractionAndModeTest {
         echo.prepare(SR, 1);
         float[] in = new float[9600];
         in[0] = 0.5f;
-        float[] out = echo.processOfflineRegion(in.clone(), 9600, 1);
+        float[] out = in.clone();
+        echo.processInPlace(out, 9600, 1);
         assertEquals("dry impulse must not get a zero-time reflection",
                 0.5f, out[0], 0.0001f);
     }

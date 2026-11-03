@@ -100,7 +100,7 @@ final class SpectralEditProcessor extends AudioProcessor {
                     float hz = (float) b * sampleRate / 2048f;
                     // Mode 0 evaluates the Gaussian across the whole spectrum so
                     // the bell tapers smoothly instead of stepping to zero at f1/f2.
-                    if (modeIdx == 1 && (hz < f1 || hz > f2)) continue;
+                    if ((modeIdx == 1 || modeIdx == 2) && (hz < f1 || hz > f2)) continue;
                     float weight = 1f;
                     if (modeIdx == 0) {
                         float d = (hz - centre) / (centre * Math.max(0.05f, width));
