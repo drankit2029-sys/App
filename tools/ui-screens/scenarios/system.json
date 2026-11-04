@@ -1,0 +1,69 @@
+{
+  "steps": [
+    {
+      "action": "launch",
+      "package": "com.takeone.studio.debug",
+      "delay_ms": 1800,
+      "folder": "system",
+      "screenshot": "03_app_cold_launch"
+    },
+    {
+      "action": "open_notifications",
+      "delay_ms": 1200,
+      "folder": "system",
+      "screenshot": "04_notification_overlay_after_relaunch",
+      "optional": true
+    },
+    {
+      "action": "collapse_notifications",
+      "optional": true
+    },
+    {
+      "action": "press_home",
+      "delay_ms": 900,
+      "folder": "system",
+      "screenshot": "05_home",
+      "optional": true
+    },
+    {
+      "action": "press_recents",
+      "delay_ms": 900,
+      "folder": "system",
+      "screenshot": "06_recents",
+      "optional": true
+    },
+    {
+      "action": "press_back",
+      "optional": true
+    },
+    {
+      "action": "launch",
+      "package": "com.takeone.studio.debug",
+      "delay_ms": 1500,
+      "folder": "system",
+      "screenshot": "07_relaunch"
+    },
+    {
+      "action": "tap",
+      "by": "id",
+      "value": "sortBtn",
+      "delay_ms": 700,
+      "folder": "system",
+      "screenshot": "08_library_sort_menu",
+      "optional": true
+    },
+    {
+      "action": "press_back",
+      "optional": true
+    },
+    {
+      "action": "tap",
+      "by": "id",
+      "value": "searchToggle",
+      "delay_ms": 600,
+      "folder": "system",
+      "screenshot": "09_library_search",
+      "optional": true
+    }
+  ]
+}

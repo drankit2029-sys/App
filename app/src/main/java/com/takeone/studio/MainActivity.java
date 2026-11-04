@@ -36,7 +36,13 @@ public class MainActivity extends AppCompatActivity {
         CrashLog.install(this);
         AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES);
         super.onCreate(savedInstanceState);
-        setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
+        // Phones stay portrait; tablets are large enough for the same
+        // single-column layout to expand horizontally in landscape.
+        boolean largeScreen = getResources().getConfiguration()
+                .smallestScreenWidthDp >= 600;
+        setRequestedOrientation(largeScreen
+                ? android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                : android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
         setContentView(R.layout.activity_main);
 
         fabWrap = findViewById(R.id.fabWrap);

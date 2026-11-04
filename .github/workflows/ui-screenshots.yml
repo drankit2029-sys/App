@@ -1,0 +1,132 @@
+name: UI Screenshot Matrix
+
+# Generic emulator UI verification: every supported API level, representative
+# phone resolutions in portrait, and tablets allowed to rotate landscape.
+# Screenshots are uploaded as one artifact per device.
+
+on:
+  workflow_dispatch:
+  push:
+    branches-ignore: [master, main]
+    paths:
+      - 'tools/ui-screens/**'
+      - 'app/src/androidTest/java/com/takeone/studio/UiScreenshotTourTest.java'
+      - 'app/src/main/java/com/takeone/studio/MainActivity.java'
+      - 'app/src/main/res/layout-land/**'
+      - '.github/workflows/ui-screenshots.yml'
+
+concurrency:
+  group: ui-screens-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-ui-apks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+      - name: Setup Android SDK
+        run: |
+          sdkmanager --install "platform-tools" "platforms;android-35" "build-tools;35.0.0" || true
+          yes | sdkmanager --licenses || true
+      - name: Build debug and instrumentation APKs
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleDebug assembleDebugAndroidTest --stacktrace
+      - name: Upload APK pair
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-apks
+          path: |
+            app/build/outputs/apk/debug/app-debug.apk
+            app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+          if-no-files-found: error
+
+  screenshots:
+    needs: build-ui-apks
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      max-parallel: 40
+      matrix:
+        include:
+          # Every supported API level, phones locked to portrait.
+          - { id: api24_phone_320x480, api: 24, arch: x86, target: default, profile: 'Nexus 5', width: 320, height: 480, density: 160, orientation: portrait }
+          - { id: api25_phone_360x640, api: 25, arch: x86, target: default, profile: 'Nexus 5', width: 360, height: 640, density: 240, orientation: portrait }
+          - { id: api26_phone_360x740, api: 26, arch: x86_64, target: default, profile: 'Nexus 5', width: 360, height: 740, density: 320, orientation: portrait }
+          - { id: api27_phone_393x786, api: 27, arch: x86_64, target: default, profile: 'Nexus 5', width: 393, height: 786, density: 280, orientation: portrait }
+          - { id: api28_phone_412x732, api: 28, arch: x86_64, target: default, profile: 'Nexus 5', width: 412, height: 732, density: 420, orientation: portrait }
+          - { id: api29_phone_360x800, api: 29, arch: x86_64, target: default, profile: 'Nexus 5', width: 360, height: 800, density: 400, orientation: portrait }
+          - { id: api30_phone_412x915, api: 30, arch: x86_64, target: google_apis, profile: 'Nexus 5', width: 412, height: 915, density: 420, orientation: portrait }
+          - { id: api31_phone_393x873, api: 31, arch: x86_64, target: google_apis, profile: 'Nexus 5', width: 393, height: 873, density: 440, orientation: portrait }
+          - { id: api32_phone_480x800, api: 32, arch: x86_64, target: google_apis, profile: 'Nexus 5', width: 480, height: 800, density: 240, orientation: portrait }
+          - { id: api33_phone_1080x2340, api: 33, arch: x86_64, target: google_apis, profile: 'Nexus 5', width: 1080, height: 2340, density: 440, orientation: portrait }
+          - { id: api34_phone_1080x2400, api: 34, arch: x86_64, target: google_apis, profile: 'Nexus 5', width: 1080, height: 2400, density: 420, orientation: portrait }
+          - { id: api35_phone_1440x3120, api: 35, arch: x86_64, target: google_apis, profile: 'Nexus 5', width: 1440, height: 3120, density: 560, orientation: portrait }
+          # Additional common phone geometries on current APIs.
+          - { id: api35_phone_320x480, api: 35, arch: x86_64, target: google_apis, profile: 'Nexus 5', width: 320, height: 480, density: 160, orientation: portrait }
+          - { id: api35_phone_393x873, api: 35, arch: x86_64, target: google_apis, profile: 'Nexus 5', width: 393, height: 873, density: 440, orientation: portrait }
+          - { id: api34_phone_720x1280, api: 34, arch: x86_64, target: google_apis, profile: 'Nexus 5', width: 720, height: 1280, density: 320, orientation: portrait }
+          - { id: api33_phone_1440x2560, api: 33, arch: x86_64, target: google_apis, profile: 'Nexus 5', width: 1440, height: 2560, density: 560, orientation: portrait }
+          - { id: api30_phone_360x640, api: 30, arch: x86_64, target: google_apis, profile: 'Nexus 5', width: 360, height: 640, density: 240, orientation: portrait }
+          # Tablets: landscape allowed and exercised.
+          - { id: api24_tablet_800x1280, api: 24, arch: x86, target: default, profile: 'Nexus 10', width: 800, height: 1280, density: 213, orientation: landscape }
+          - { id: api28_tablet_1200x1920, api: 28, arch: x86_64, target: default, profile: 'Nexus 10', width: 1200, height: 1920, density: 240, orientation: landscape }
+          - { id: api30_tablet_1600x2560, api: 30, arch: x86_64, target: google_apis, profile: 'Nexus 10', width: 1600, height: 2560, density: 320, orientation: landscape }
+          - { id: api33_tablet_1200x2000, api: 33, arch: x86_64, target: google_apis, profile: 'Nexus 10', width: 1200, height: 2000, density: 280, orientation: landscape }
+          - { id: api35_tablet_2560x1600, api: 35, arch: x86_64, target: google_apis, profile: 'Nexus 10', width: 2560, height: 1600, density: 320, orientation: landscape }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download APK pair
+        uses: actions/download-artifact@v4
+        with:
+          name: ui-apks
+          path: build-outputs
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Run UI tour on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api }}
+          target: ${{ matrix.target }}
+          arch: ${{ matrix.arch }}
+          profile: ${{ matrix.profile }}
+          disable-animations: true
+          emulator-options: >-
+            -no-window -no-snapshot -gpu swiftshader_indirect
+            -no-boot-anim -camera-back none
+          script: |
+            set -e
+            APK_PATH=build-outputs/app-debug.apk \
+            TEST_APK_PATH=build-outputs/app-debug-androidTest.apk \
+            DEVICE_ID=${{ matrix.id }} \
+            UI_WIDTH=${{ matrix.width }} \
+            UI_HEIGHT=${{ matrix.height }} \
+            UI_DENSITY=${{ matrix.density }} \
+            UI_ORIENTATION=${{ matrix.orientation }} \
+            bash tools/ui-screens/run_device.sh
+      - name: Upload device screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-screens-${{ matrix.id }}
+          path: ui-screens/${{ matrix.id }}/
+          if-no-files-found: warn
+      - name: Upload emulator log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-log-${{ matrix.id }}
+          path: |
+            ui-screens/${{ matrix.id }}/instrumentation.txt
+            ui-screens/${{ matrix.id }}/driver.txt
+            ui-screens/${{ matrix.id }}/device-info.txt
+          if-no-files-found: ignore
