@@ -320,7 +320,8 @@ public class UiScreenshotTourTest {
             }
             host.runOnUiThread(() -> {
                 try {
-                    host.getSupportFragmentManager().executePendingTransactions();
+                    ((MainActivity) host).getSupportFragmentManager()
+                            .executePendingTransactions();
                 } catch (Throwable ignored) {
                 }
                 holder[0] = frag.getView();
