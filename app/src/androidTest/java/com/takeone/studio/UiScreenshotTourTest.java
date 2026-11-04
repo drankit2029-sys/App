@@ -129,8 +129,15 @@ public class UiScreenshotTourTest {
             sleep(SETTLE_MS);
             shoot(device, outRoot, "library", "02_sort_menu", screenshots, issues);
             UiObject2 newest = find(device, By.textContains("Newest first"));
-            if (newest != null) newest.click();
-            else device.pressBack();
+            if (newest != null) {
+                try {
+                    newest.click();
+                } catch (Throwable stale) {
+                    device.pressBack();
+                }
+            } else {
+                device.pressBack();
+            }
             sleep(300);
 
             click(activity, R.id.searchToggle);
