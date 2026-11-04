@@ -118,8 +118,9 @@ public class PunchInTest {
             java.lang.reflect.Field f = RecordingEngine.class
                     .getDeclaredField("lastChunkElapsedNanos");
             f.setAccessible(true);
-            f.setLong(e, android.os.SystemClock.elapsedRealtimeNanos()
-                    - 100_000_000L);
+            f.setLong(e, 1L);
+            org.robolectric.shadows.ShadowSystemClock.advanceBy(
+                    java.time.Duration.ofMillis(100));
             long live = e.liveInterpolatedFrames();
             assertTrue("live=" + live, live > 12000L && live <= 12960L);
         } finally {

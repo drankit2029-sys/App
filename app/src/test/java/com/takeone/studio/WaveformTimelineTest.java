@@ -412,7 +412,7 @@ public class WaveformTimelineTest {
         wv.setReplacingInPlace(true);
         long end = 240000L;
         for (int bar = 50; bar < 60; bar++) {
-            long frame = 120000L + (bar - 50) * 2400L;
+            long frame = 120000L + (bar - 50) * 2400L + 1200L;
             for (int n = 0; n < 5; n++) {
                 wv.updateLiveFromFrames(0.9f, frame, end);
             }
@@ -435,7 +435,7 @@ public class WaveformTimelineTest {
 
         // Overwriting the same span with silence must pull the bars down.
         for (int bar = 50; bar < 60; bar++) {
-            long frame = 120000L + (bar - 50) * 2400L;
+            long frame = 120000L + (bar - 50) * 2400L + 1200L;
             for (int n = 0; n < 10; n++) {
                 wv.updateLiveFromFrames(0f, frame, end);
             }
