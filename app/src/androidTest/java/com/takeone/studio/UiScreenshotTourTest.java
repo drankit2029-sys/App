@@ -223,7 +223,11 @@ public class UiScreenshotTourTest {
                 sleep(SETTLE_MS);
                 shoot(device, outRoot, "fx", "04_add_effect_dialog",
                         screenshots, issues);
-                UiObject2 choice = find(device, By.textContains("Noise Reduction"));
+                // Pick a row that is visible without scrolling; the catalog is
+                // alphabetically sorted and starts with Amplify on small screens.
+                UiObject2 choice = find(device, By.textContains("Amplify"));
+                if (choice == null) choice = find(device, By.textContains("Noise Suppression"));
+                if (choice == null) choice = find(device, By.textContains("Noise Reduction"));
                 if (choice != null) {
                     choice.click();
                     sleep(1000);
@@ -243,7 +247,7 @@ public class UiScreenshotTourTest {
                         issues.put("effect added but no Expand effect button found");
                     }
                 } else {
-                    issues.put("Noise Reduction row not found in Add Effect dialog");
+                    issues.put("no visible effect row found in Add Effect dialog");
                 }
             } else {
                 issues.put("Add Effect button not found");

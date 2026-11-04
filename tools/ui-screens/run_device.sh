@@ -98,7 +98,17 @@ if [ "$INSTR_STATUS" -ne 0 ] \
 fi
 
 # The app writes report.json and its screenshots into external files.
+# API 30+ often blocks adb from /sdcard/Android/data directly; userdebug
+# emulator images allow root, and run-as is the fallback for test builds.
+adb root >>"$OUT/pull.txt" 2>&1 || true
+adb wait-for-device
 adb pull "$REMOTE/." "$OUT/" >>"$OUT/pull.txt" 2>&1 || true
+if [ ! -f "$OUT/report.json" ]; then
+  adb exec-out run-as "$APP_PACKAGE" sh -c     "cd /sdcard/Android/data/$APP_PACKAGE/files && tar cf - ui-screens/$DEVICE_ID"     > "$OUT/screens.tar" 2>>"$OUT/pull.txt" || true
+  if [ -s "$OUT/screens.tar" ]; then
+    tar xf "$OUT/screens.tar" -C "$OUT" --strip-components=2 >>"$OUT/pull.txt" 2>&1 || true
+  fi
+fi
 adb logcat -d -v threadtime > "$OUT/logcat.txt" 2>&1 || true
 adb shell dumpsys activity activities > "$OUT/activities.txt" 2>&1 || true
 
