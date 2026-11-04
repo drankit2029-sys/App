@@ -1,10 +1,10 @@
 PROJECT DUMP — TakeOne
-Generated: 2026-11-04T10:13:41
+Generated: 2026-11-04T17:57:39
 Root: /mnt/sdcard/Download/App
-APK md5: bbfffc450313dfbdc1985c9051e42384
-HEAD: facd36f Implement true streaming STFT and neighbor-context block rendering
+APK md5: e18dd3aec306ef67b6ef3929a6e01302
+HEAD: 9da4b66 Fix FX commit splicing, latency priming, and live-rack races
 Branch: ut/fx-gpu-undo
-Files: 370 source files
+Files: 371 source files
 =================================================================================
 =================================================================================
 FILE: .github/workflows/build-apk.yml
@@ -3186,23 +3186,28 @@ FILE: TASK_REPORT.txt
 =================================================================================
 TAKEONE STUDIO — FINAL TASK IMPLEMENTATION REPORT
 ==================================================
-Date: 2026-11-03
+Date: 2026-11-04
 Repository: /mnt/sdcard/Download/App
 Branch: ut/fx-gpu-undo
-Head: facd36f
-Task sources: task.md, task (1).md, Task (2).md
+Head: 9da4b66
+Task sources: task.md, task (1).md, Task (2).md, Task (3).md
 
 1. EXECUTIVE SUMMARY
 -------------------
 The 52-effect FX audit, Round-2 cleanup, UI coupling, all-effects inertness
-sweep, and the true STFT streaming rewrite are implemented and verified.
+sweep, the true STFT streaming rewrite, and the seven Task (3) Part B
+pipeline/concurrency fixes are implemented and verified.
 
-Final verification: Parallel Verify run 41773245683
+Final verification: Parallel Verify run 41827498199
   - compile: app + unit-test + androidTest sources  PASS
   - lint                                            PASS
   - unit tests, 6/6 shards                           PASS
   - 32 tests in FxInteractionAndModeTest
   -  2 tests in FxParamCouplingTest
+  - new sub-range splice and render-latency regressions PASS
+
+APK build: Build Debug APK run 41828057873 — SUCCESS
+  - debug APK, CI-key-signed release APK, release AAB, device tests
 
 The previously documented full-selection STFT workaround has been replaced
 with bounded-memory block rendering plus a causal streaming overlap-add path.
@@ -3275,6 +3280,69 @@ loudnessCeilingDoesNotShiftProgramLoudness.
   it, so it is testable without a Fragment.
 - Notch preset/frequency coupling remains in both rack paths.
 - FxParamCouplingTest covers both directions for tempo and speed.
+
+
+4B. TASK (3) PART B FIXES
+-------------------------
+B.1 Sub-selection offline splice
+   - applyLengthChangingEffectToRange no longer calls
+     spliceTailAfterReplace(), which pulled the tail 240 frames backwards
+     and shortened every sub-selection edit by 5 ms.
+   - Dry head/tail frames are captured before writing. The rendered region is
+     crossfaded at its first/last frames inside the selection, and the saved
+     [endFrame, totalFrames) tail is appended unchanged at
+     startFrame + newFrames.
+   - Undo snapshots exactly [startFrame, endFrame). newTotal is
+     startFrame + newFrames + tailFrames, so equal-length effects preserve the
+     file length to the sample.
+
+B.2 Offline + in-place undo
+   - commitDspFx computes the in-place probe's tail, records one range
+     snapshot covering the selection, both crossfades, and the effect tail,
+     then passes null to every offline/in-place apply call in that commit.
+   - Undo no longer leaves a baked reverb/echo/delay tail after the selection.
+
+B.3 Preview and file-render latency priming
+   - RawFloatPlayer records primedLatency and reads from
+     framePos + primedLatency, padding post-selection frames with 0, so the
+     first latency frames are not fed twice and the tail is drained.
+   - DspChain.renderRegionToFile primes the in-place chain by its reported
+     latency, then reads off + latency (zero-padding), preventing lat frames of
+     leading silence when offline and latency-reporting in-place effects combine.
+
+B.4 Live-rack thread safety
+   - DspChain.updateConfig/reset/prepareOffline/setSampleRate/processInPlace
+     synchronize on the rack; FxRackChain reset/prepare/process/setSampleRate/
+     applyLegacyConfig are synchronized.
+   - BiquadFilter setSections/reset/process and FilterCurveEqProcessor
+     prepare/rebuild/reset/processInPlace are synchronized.
+   - FilterCurveEqProcessor.prepare no longer invalidates designKey, so an
+     unrelated slider scrub does not rebuild two 8,192-point FFTs on the UI
+     thread; the existing parameter hash still forces a rebuild when needed.
+
+B.5 Concurrent temp-file races
+   - FxPreviewPeaks, DspChain step/offline-region files, and EditEngine
+     lcrender/lctail files now use File.createTempFile(...) in the take's
+     directory. Concurrent preview/apply renders cannot delete each other's
+     intermediate file.
+
+B.6 EQ modal and extra-control refresh
+   - showEffectDetailModal adds eqView::invalidate to its refreshers, so the
+     curve redraws while paused.
+   - rebuildFxRackList onSlotMutated falls back to each extra parameter's
+     defaultRaw when the slot value is null and reapplies applicability
+     enabled/alpha state.
+
+B.7 Analyzer UI
+   - Added a Tools action to the FX rack header with Plot Spectrum and Audio
+     Diagnostics.
+   - Both analyze the current selection (or 65,536 frames around the playhead)
+     via EditEngine.readFloatSelection on a background thread and show the
+     formatted summary in a clean modal.
+
+New regression tests:
+   subRangeOfflineFadePreservesLengthAndPostSelectionTail
+   renderRegionToFilePrimesInPlaceLatencyWithoutLeadingSilence
 
 
 5. ALL-52 INERTNESS SWEEP
@@ -3368,6 +3436,7 @@ F. Test coverage
 
 7. COMMITS
 ----------
+9da4b66  Fix FX commit splicing, latency priming, and live-rack races
 facd36f  Implement true streaming STFT and neighbor-context block rendering
 e343c89  Render STFT spectral edits as a single full-selection pass (superseded)
 7ebdd19  Test redundant FX control coupling directly
@@ -3380,10 +3449,11 @@ e343c89  Render STFT spectral edits as a single full-selection pass (superseded)
 8. VERIFICATION
 ---------------
 Latest full run:
-  Parallel Verify 41773245683 — SUCCESS
+  Parallel Verify 41827498199 — SUCCESS
   - compile app + unit-test + androidTest sources
   - lint
   - six unit-test shards
+  Build Debug APK 41828057873 — SUCCESS
 
 Earlier:
   41714501082 — FxParamCouplingTest green
@@ -3396,6 +3466,7 @@ Earlier:
 -------------
 app/src/test/java/com/takeone/studio/FxInteractionAndModeTest.java  (32 tests)
 app/src/test/java/com/takeone/studio/FxParamCouplingTest.java       (2 tests)
+app/src/test/java/com/takeone/studio/FxCommitAndCrossfadeTest.java  (+2 regressions)
 
 Updated legacy expectations:
   DspBugFixesTest, FxDivergenceGuardTest, Stage3DeepAuditFixTest,
@@ -3415,6 +3486,8 @@ Updated legacy expectations:
   four separate all-52 sensitivity/continuity/non-finite methods.
 - No open STFT boundary workaround remains: full-selection offline-only mode
   has been removed and real-time preview is restored.
+- B.6/B.7 are UI wiring; their behavior is compile/lint verified in the
+  fragment but not covered by a Robolectric interaction test.
 
 
 11. REPRODUCTION
@@ -17523,6 +17596,111 @@ both `SpectralEditProcessor` and `SpectralNoiseReductionProcessor` run in **real
     2. `spectralProcessorsStreamInChunksWithBoundedMemoryAndMatchSinglePass()` — verifies that `SpectralEditProcessor` and `SpectralNoiseReductionProcessor` have `isOfflineOnly() == false`, report `getLatencyFrames() == FFT_SIZE`, and produce bit-identical output (`maxDiff == 0.0f`) when streamed in `4096`-frame chunks (with `getLatencyFrames()` priming/draining, exactly like `NoiseSuppressionTest.chunkedProcessingMatchesSingleCallAndReportsLatency()`) vs. a single padded call!
 
 =================================================================================
+FILE: Task (3).md
+=================================================================================
+# TakeOne Studio — STFT Streaming + UI, Effect Pipeline & Concurrency Fix `task.md`
+
+> **Instructions for the AI Agent**:
+> Work through Part A (STFT Streaming & Neighbor-Context Fix) and Part B (7 Critical UI, Effect Pipeline & Concurrency Bugs) sequentially. Mark each item `- [x]` once verified by `./gradlew testDebugUnitTest lintDebug`.
+
+## Part A: STFT Neighbor-Context Block & Bounded-Memory Streaming Fix
+
+### A.1 Why Commit `e343c89`'s STFT Workaround Must Be Replaced
+1. **`StftProcessor.process()` still chunks internally at `maxChunk` with zero-padding**:
+   - In `StftProcessor.java` (lines 79–87), when `frames > maxChunk * 2`, `StftProcessor.process()` slices `buf` into isolated `maxChunk` blocks and runs `processSingleBlock(slice, want, ch)` with zero-padding at both ends of each slice, causing a `0.248` (`-12 dBFS`) boundary glitch at frame `4095`/`8191`.
+2. **OOM Risk on Long Takes**:
+   - `requiresFullBuffer() = true` bypasses `MAX_IN_MEMORY_OFFLINE_FRAMES` (`32,768` frames) and reads the entire selection into a single `float[]` in RAM (`EditEngine.readFloatSelection()` + `in.clone()`), which will OOM on multi-minute takes.
+3. **Lost Real-Time Live Preview**:
+   - Setting `isOfflineOnly() = true` causes `FxRackChain`, `RawFloatPlayer`, and `FxPreviewPeaks` to skip `Spectral Edit` and `Spectral Noise Reduction` during live preview.
+
+### A.2 Replace `StftProcessor.java` & Restore Streaming on `SpectralEditProcessor` / `SpectralNoiseReductionProcessor`
+- [x] **File**: `app/src/main/java/com/takeone/studio/StftProcessor.java`
+  - In `process(float[] buf, int frames, int channels)` (zero-latency block mode used by `Stage5RestorationTest.stftReconstructsTheSignalAboveOneHundredDbSnr()`):
+    - When `frames > maxChunk`, process in `maxChunk` (`4096`) windows, but for each window `[off .. off + want)`, copy the actual neighbor context `[Math.max(0, off - pad) .. Math.min(frames, off + want + pad))` from `buf` into `inBuf` instead of zero-padding at `off` and `off + want`. This reduces the slice boundary error on a 40,000-frame buffer from `0.248` to **`0.0`** while keeping `0` latency and `O(maxChunk)` scratch memory.
+  - Add `processStreaming(float[] buf, int frames, int channels, float wetDryMix)` and `reset()`:
+    - Use the exact per-channel `inHist[2][fftSize]`, `ola[2][fftSize]`, and `outQ[2][...]` streaming overlap-add ring buffer already proven in `NoiseSuppressionProcessor.java` (`olaScale = 8.0f / (3.0f * overlap)`), with `getLatencyFrames() = fftSize`.
+- [x] **File**: `app/src/main/java/com/takeone/studio/AudioProcessor.java`
+  - Remove `requiresFullBuffer()` and restore the strict `MAX_IN_MEMORY_OFFLINE_FRAMES` bound in `processOfflineRangeToFile()`.
+- [x] **Files**: `SpectralEditProcessor.java` & `SpectralNoiseReductionProcessor.java`
+  - Keep a persistent `StftProcessor stft` instance field on both processors and call `stft.reset()` inside `reset()`.
+  - Remove `isOfflineOnly() = true` and `requiresFullBuffer() = true`.
+  - Override `getLatencyFrames()` to return `isAudible() ? FFT_SIZE : 0` and `handlesOwnWetDryMix()` to return `true`.
+  - In `SpectralNoiseReductionProcessor`, cache `private float[] autoProfile` on the first block after `reset()` (and pre-compute it in `prepareOffline()` when `learnedProfile == null`) so all 4,096-frame chunks use the exact same fallback noise profile.
+  - In `processInPlace(float[] buf, int frames, int channels)`:
+    - If `frames` is being streamed via `EditEngine` / `RawFloatPlayer` / `FxPreviewPeaks` (or whenever `stft.processStreaming` is used), note that standalone unit tests that call `p.processInPlace(buf, frames, ch)` once without priming `getLatencyFrames()` can either prime `FFT_SIZE` frames or `processInPlace` can use `stft.processStreaming(buf, frames, ch, getWetDryMix())` (all existing tests in `Stage5RestorationTest`, `Stage4to7AudioChangeTest`, and `FxInteractionAndModeTest` use `frames >= 4800 > FFT_SIZE`).
+
+## Part B: Fix 7 Critical UI, Effect Pipeline & Concurrency Bugs
+
+### B.1 Fix `EditEngine.applyLengthChangingEffectToRange` Deleting 240 Frames (`5 ms`) on Sub-Selection Offline Edits
+- [x] **File**: `app/src/main/java/com/takeone/studio/EditEngine.java` (lines 1020–1062)
+  - **Root Cause**:
+    - `saveTailFrom(raw, endFrame, tailTmp, false)` saves `[endFrame, totalFrames)` (`tailFrames = totalFrames - endFrame`).
+    - Then `spliceTailAfterReplace(raw, newEnd, tailTmp)` overlaps `tailTmp[0..240)` (`[endFrame, endFrame + 240)`) backwards onto `[newEnd - 240, newEnd)` and writes `newTotal = newEnd + tailFrames - 240`!
+    - Whenever the user applies any non-length-changing offline effect (`Fade`, `Timeline Invert`, `Timeline Reverse`, `Change Pitch`) to a sub-selection (`endFrame < totalFrames`), **the file shrinks by 240 frames (5 ms) and every sample after the selection shifts 240 frames earlier in time!** Also `startFrame` has no crossfade at all.
+  - **Fix**:
+    1. Before overwriting `raw` at `startFrame`, if `startFrame > 0`, read `headFade = (int) Math.min(Dsp.CROSSFADE_FRAMES, Math.min(selFrames / 2, newFrames / 2))` dry frames starting at `startFrame` (`origHead`) and `tailFade = (endFrame < totalFrames) ? headFade : 0` dry frames ending at `endFrame` (`origTail`, from `[endFrame - tailFade, endFrame)`).
+    2. In `undo.recordRangeSnapshot(...)`, record `[startFrame, endFrame)` (since `startFrame` and `endFrame` are the exact splice boundaries and `tailTmp` starts at `endFrame`).
+    3. Write all `newFrames` of `renderTmp` at `startFrame .. startFrame + newFrames`, crossfading the first `headFade` frames of `renderTmp` (`0 -> 1`) against `origHead` (`1 -> 0`) and the last `tailFade` frames of `renderTmp` (`1 -> 0`) against `origTail` (`0 -> 1`).
+    4. Append `tailTmp` (`[endFrame, totalFrames)`) directly at `newEnd = startFrame + newFrames` **without** pulling `tailTmp` backwards by 240 frames! Now `newTotal = startFrame + newFrames + tailFrames`, so `newFrames == selFrames` preserves the exact file length `totalFrames` down to the sample!
+
+### B.2 Fix Undo Corruption When Combining Offline Effects + In-Place Tail Effects (`Reverb` / `Echo` / `MultiDelay`)
+- [x] **File**: `app/src/main/java/com/takeone/studio/StudioFragment.java` (lines 5902–5935)
+  - **Root Cause**:
+    - In `commitDspFx()`, when `!offline.isEmpty()` and `chain.hasInPlaceProcessors()`, `applyLengthChangingEffectToRange` only records an undo snapshot up to `end` (or `end + 240`), and then `EditEngine.applyDspToRange(raw, start, regionEnd, inPlace, null)` runs with `undo = null` and writes up to `96,000` frames (`2 seconds`) of reverb/delay tail past `regionEnd` into `[regionEnd, regionEnd + tailFrames)`.
+    - Tapping **Undo** restores `[start, end)` and shifts the tail back, leaving the 2-second reverb/delay tail permanently baked into the dry audio after `end`!
+  - **Fix**:
+    - Before the `for (AudioProcessor proc : offline)` loop in `commitDspFx()`, compute:
+      ```java
+      DspChain inPlaceProbe = chain.hasInPlaceProcessors()
+              ? new DspChain(info.channels, dspConfig) : null;
+      if (inPlaceProbe != null) inPlaceProbe.clearOfflineProcessors();
+      int inPlaceTail = inPlaceProbe != null ? Math.max(0, inPlaceProbe.getTailFrames()) : 0;
+      ```
+    - Record a single undo range snapshot on `uj` upfront covering `[Math.max(0L, start - Dsp.CROSSFADE_FRAMES), Math.min(totalFrames, end + Dsp.CROSSFADE_FRAMES + inPlaceTail))` and pass `null` as the `UndoJournal` to every `applyLengthChangingEffectToRange` and `applyDspToRange` call inside that commit.
+
+### B.3 Fix `RawFloatPlayer` Live Preview Latency Double-Play / Stutter Bug
+- [x] **File**: `app/src/main/java/com/takeone/studio/RawFloatPlayer.java` (lines 328–344 & 394–430)
+  - **Root Cause**:
+    - When `preChain.offlineProcessors().isEmpty()` and `lat = preChain.getLatencyFrames() > 0` (`NoiseSuppressionProcessor`, `FilterCurveEqProcessor`, `BrickwallLimiterProcessor`, `SpectralEditProcessor`, `SpectralNoiseReductionProcessor`), lines 329–341 prime `preChain` with frames `[startFramePos .. startFramePos + lat)`.
+    - Then the main playback loop (line 394) starts reading at `framePos = startFramePos` again instead of `framePos + lat`! As a result, the first `lat` frames (`2048` frames = `43 ms`) are fed into `preChain` **twice** (causing an audible double-play stutter at the start of playback) and the last `lat` frames before `limitFrame` are never drained!
+  - **Fix**:
+    - Track `int primedLatency = 0;` when priming `preChain` (lines 329–341).
+    - In the main playback loop (`while (!stop && framePos < limitFrame)`), read from `long inStart = framePos + primedLatency;` (clamping available file frames to `limitFrame` and padding any remaining `want - fromFile` tail frames with post-context or `0f`, identical to `EditEngine.java` lines 1165–1182 and `FxPreviewPeaks.java` lines 402–425).
+- [x] **File**: `app/src/main/java/com/takeone/studio/DspChain.java` (`renderRegionToFile`, lines 1554–1585)
+  - In `DspChain.renderRegionToFile()`, when `hasInPlaceProcessors() && curFrames > 0`, also prime `int lat = Math.max(0, getLatencyFrames());` before the `while (off < curFrames)` loop and read `off + lat` ahead (padding with `0f` past `curFrames`), so combining an offline effect with a latency-reporting in-place effect (`Noise Suppression Pro`, `Filter Curve EQ`, `Brickwall Limiter`) never prepends `lat` frames of silence!
+
+### B.4 Fix Live Scrubbing Thread-Safety & UI-Thread FFT Stall (`DspChain`, `BiquadFilter`, `FilterCurveEqProcessor`)
+- [x] **File**: `app/src/main/java/com/takeone/studio/DspChain.java` & `FxRackChain.java`
+  - **Root Cause**:
+    - During live playback, `StudioFragment` calls `livePreviewDsp.updateConfig(dspConfig)` on the UI thread on every slider scrub event while `RawFloatPlayer` calls `dspChain.processInPlace(buf, want)` on the audio thread.
+    - `DspChain.updateConfig()` calls `resetProcessorSlotExtras()`, which temporarily sets every processor's `wetDryMix = 1.0f`, clears `noiseProfile = null`, and resets all secondary parameters to `defaultRaw` before `applySlotExtras(cfg)` restores them! Because `updateConfig()` and `processInPlace()` are unsynchronized, the audio thread frequently processes chunks right in the middle of `updateConfig()`, causing sudden 100%-wet default-parameter blasts!
+  - **Fix**:
+    - Synchronize `updateConfig(Config)`, `processInPlace(float[], int)`, `reset()`, `setSampleRate(int)`, and `prepareOffline(...)` on a shared lock (`synchronized (rack)`) in `DspChain` (and `FxRackChain`).
+- [x] **File**: `app/src/main/java/com/takeone/studio/BiquadFilter.java`
+  - Make `setSections`, `reset`, and `process` `synchronized` (or swap an immutable `(sections, z1, z2, channels)` state holder atomically) so changing filter order/slope/band-count (`10-band <-> 31-band` Graphic EQ, Slope Filter, Classic Filter) during live playback can never throw `ArrayIndexOutOfBoundsException` on `z1[k]` or `sections[s]`.
+- [x] **File**: `app/src/main/java/com/takeone/studio/FilterCurveEqProcessor.java` (lines 130–135)
+  - **Root Cause**: `prepare(int sr, int ch)` unconditionally sets `designKey = Long.MIN_VALUE; rebuild();`. Because `DspChain.applySlotExtras()` calls `p.prepare()` on **every** slot whenever **any** slider in the rack moves, `FilterCurveEqProcessor` recomputes two 8,192-point FFTs on the UI thread on every touch event even when nothing on `FilterCurveEqProcessor` changed (and `designKeyNow()` already hashes `sampleRate`, `channels`, and all node parameters!).
+  - **Fix**: Remove `designKey = Long.MIN_VALUE;` from `FilterCurveEqProcessor.prepare(int sr, int ch)` so `rebuild()` only runs when `designKeyNow() != designKey`, and synchronize `rebuild()`, `reset()`, and `processInPlace()`.
+
+### B.5 Fix Concurrent Temp-File Race in `FxPreviewPeaks` & `DspChain.renderRegionToFile`
+- [x] **Files**:
+  - `app/src/main/java/com/takeone/studio/FxPreviewPeaks.java` (line 271)
+  - `app/src/main/java/com/takeone/studio/DspChain.java` (lines 1506, 1595)
+  - `app/src/main/java/com/takeone/studio/EditEngine.java` (lines 1012–1015)
+  - **Root Cause**: `FxPreviewPeaks.renderRegionLive` is spawned on a new background `Thread` on every slider scrub (`StudioFragment.java:3687`), yet all threads share the hardcoded file path `new File(raw.getParentFile(), raw.getName() + ".fxprev_reg_tmp")` (and `.step0` inside `renderRegionToFile`). When Thread 1 finishes and deletes `regionTmp` in its `finally` block, it deletes the file while Thread 2 is reading/writing it!
+  - **Fix**: Use `File.createTempFile("fxprev_reg_", ".wav", raw.getParentFile())` (and `File.createTempFile(...)` for `.step`, `.offline_region_tmp`, `.lcrender`, and `.lctail`) so concurrent preview and apply threads never collide on disk.
+
+### B.6 Fix Frozen EQ Curve in `StudioFragment.showEffectDetailModal()` & Null-Reset in `rebuildFxRackList()`
+- [x] **File**: `app/src/main/java/com/takeone/studio/StudioFragment.java`
+  1. **Lines 4324–4340 (`showEffectDetailModal`)**: Add `refreshers.add(eqView::invalidate);` right after `body.addView(eqView, eqLp);` (matching `refreshers.add(dynView::invalidate);` on line 4354) so scrubbing any EQ parameter slider in the full-screen modal immediately redraws the EQ response curve even when playback is paused.
+  2. **Lines 4951–4957 (`rebuildFxRackList` -> `onSlotMutated`)**: When refreshing `extraControls`, if `slot.extraParams.get(entry.getKey())` is `null`, fall back to the parameter's `defaultRaw` (`FxParameter p = meta != null ? meta.getParam(entry.getKey()) : null; int val = v != null ? v : (p != null ? p.defaultRaw : 0); entry.getValue().setValue(val, false);`) and also update `pc.setEnabled(meta.isParamApplicable(...))` and `pc.setAlpha(...)`.
+
+### B.7 Wire `PlotSpectrumDialog` and `AudioDiagnosticsTool` Into the Studio UI
+- [x] **File**: `app/src/main/java/com/takeone/studio/StudioFragment.java`
+  - **Root Cause**: `PlotSpectrumDialog.java` and `AudioDiagnosticsTool.java` exist in `src/main/java/com/takeone/studio/` and are unit-tested in `Stage7TimeToolsTest`, but have zero UI entry points in `StudioFragment`!
+  - **Fix**: Add `"Plot Spectrum"` and `"Audio Diagnostics"` actions (e.g., in the Studio options sheet / FX header tools or analyzer section) that read up to `65,536` frames from the current selection (or active take around the cursor) via `EditEngine.readFloatSelection`, run `PlotSpectrumDialog.analyze(...)` / `AudioDiagnosticsTool.analyze(...)`, and display the formatted summary in a clean modal dialog.
+
+=================================================================================
 FILE: app/build.gradle
 =================================================================================
 plugins {
@@ -28137,7 +28315,7 @@ public final class BiquadFilter {
      * Installs new coefficients, preserving state for all surviving sections
      * even when the cascade section count changes (e.g. live slope/order edits).
      */
-    public void setSections(float[][] newSections, int channels) {
+    public synchronized void setSections(float[][] newSections, int channels) {
         if (newSections == null) newSections = new float[0][];
         int ch = Math.max(1, Math.min(2, channels));
         boolean chChanged = this.channels != ch;
@@ -28181,7 +28359,7 @@ public final class BiquadFilter {
         return sections.length;
     }
 
-    public void reset() {
+    public synchronized void reset() {
         for (int i = 0; i < z1.length; i++) {
             z1[i] = 0f;
             z2[i] = 0f;
@@ -28189,7 +28367,7 @@ public final class BiquadFilter {
     }
 
     /** Processes interleaved frames in place. */
-    public void process(float[] buf, int frames, int ch) {
+    public synchronized void process(float[] buf, int frames, int ch) {
         process(buf, frames, ch, 0);
     }
 
@@ -28198,7 +28376,7 @@ public final class BiquadFilter {
      * The offset variant lets a caller sweep the coefficients over a block
      * without copying the samples out of the buffer.
      */
-    public void process(float[] buf, int frames, int ch, int frameOffset) {
+    public synchronized void process(float[] buf, int frames, int ch, int frameOffset) {
         if (buf == null || frames <= 0 || sections.length == 0) return;
         final int c = Math.max(1, Math.min(2, Math.min(ch, channels)));
         final int secs = sections.length;
@@ -34910,10 +35088,12 @@ public final class DspChain {
     }
 
     public void updateConfig(Config cfg) {
-        resetProcessorSlotExtras();
-        ensureRackSlots(cfg);
-        rack.applyLegacyConfig(cfg);
-        applySlotExtras(cfg);
+        synchronized (rack) {
+            resetProcessorSlotExtras();
+            ensureRackSlots(cfg);
+            rack.applyLegacyConfig(cfg);
+            applySlotExtras(cfg);
+        }
     }
 
     /**
@@ -35286,12 +35466,16 @@ public final class DspChain {
     }
 
     public void reset() {
-        rack.reset();
+        synchronized (rack) {
+            rack.reset();
+        }
     }
 
     /** Total algorithmic latency (frames) of the active rack. */
     public int getLatencyFrames() {
-        return rack.getLatencyFrames();
+        synchronized (rack) {
+            return rack.getLatencyFrames();
+        }
     }
 
     /**
@@ -35323,7 +35507,9 @@ public final class DspChain {
 
     /** Longest tail (frames) reported by any enabled processor. */
     public int getTailFrames() {
-        return rack.getTailFrames();
+        synchronized (rack) {
+            return rack.getTailFrames();
+        }
     }
 
     /**
@@ -35332,7 +35518,9 @@ public final class DspChain {
      */
     public void prepareOffline(File raw, long startFrame, long endFrame,
                                int sampleRate, int channels) throws Exception {
-        rack.prepareOffline(raw, startFrame, endFrame, sampleRate, channels);
+        synchronized (rack) {
+            rack.prepareOffline(raw, startFrame, endFrame, sampleRate, channels);
+        }
     }
 
     /** The first enabled processor that renders its region offline. */
@@ -35377,11 +35565,15 @@ public final class DspChain {
     }
 
     public void setSampleRate(int sampleRate) {
-        rack.setSampleRate(sampleRate);
+        synchronized (rack) {
+            rack.setSampleRate(sampleRate);
+        }
     }
 
     public void processInPlace(float[] buf, int frames) {
-        rack.processInPlace(buf, frames);
+        synchronized (rack) {
+            rack.processInPlace(buf, frames);
+        }
     }
 
     /**
@@ -35428,8 +35620,10 @@ public final class DspChain {
                 boolean isLastOffline = (i == offProcs.size() - 1);
                 File stepOut = isLastOffline
                         ? outRegionWav
-                        : new File(outRegionWav.getParentFile(),
-                                outRegionWav.getName() + ".step" + i);
+                        : (outRegionWav.getParentFile() != null
+                                ? File.createTempFile("takeone_fxstep_", ".wav",
+                                        outRegionWav.getParentFile())
+                                : File.createTempFile("takeone_fxstep_", ".wav"));
                 long written = proc.processOfflineRangeToFile(
                         curIn, curStart, curEnd, stepOut, sr, ch);
                 if (tempPrev != null && tempPrev.exists()) {
@@ -35477,6 +35671,7 @@ public final class DspChain {
             if (hasInPlaceProcessors() && curFrames > 0) {
                 reset();
                 prepareOffline(outRegionWav, 0L, curFrames, sr, ch);
+                int lat = Math.max(0, getLatencyFrames());
                 int chunk = AudioProcessor.DEFAULT_DSP_CHUNK_FRAMES;
                 byte[] rawBuf = new byte[chunk * ch * 4];
                 float[] block = new float[chunk * ch];
@@ -35485,19 +35680,41 @@ public final class DspChain {
                 long frameBytes = ch * 4L;
                 try (java.io.RandomAccessFile raf =
                              new java.io.RandomAccessFile(outRegionWav, "rw")) {
-                    long off = 0L;
-                    while (off < curFrames) {
-                        int n = (int) Math.min((long) chunk, curFrames - off);
-                        long bytePos = 44L + off * frameBytes;
-                        raf.seek(bytePos);
+                    // Prime the chain so its reported latency is consumed here
+                    // instead of being written back as leading silence.
+                    long primeFrames = Math.min((long) lat, curFrames);
+                    long primePos = 0L;
+                    while (primePos < primeFrames) {
+                        int n = (int) Math.min((long) chunk,
+                                primeFrames - primePos);
+                        raf.seek(44L + primePos * frameBytes);
                         raf.readFully(rawBuf, 0, n * ch * 4);
                         bb.clear();
                         bb.limit(n * ch * 4);
                         bb.asFloatBuffer().get(block, 0, n * ch);
                         rack.processInPlace(block, n);
+                        primePos += n;
+                    }
+
+                    long off = 0L;
+                    while (off < curFrames) {
+                        int n = (int) Math.min((long) chunk, curFrames - off);
+                        long inStart = off + lat;
+                        int fromFile = (int) Math.max(0L,
+                                Math.min((long) n, curFrames - inStart));
+                        if (fromFile > 0) {
+                            raf.seek(44L + inStart * frameBytes);
+                            raf.readFully(rawBuf, 0, fromFile * ch * 4);
+                            bb.clear();
+                            bb.limit(fromFile * ch * 4);
+                            bb.asFloatBuffer().get(block, 0, fromFile * ch);
+                        }
+                        java.util.Arrays.fill(block, fromFile * ch,
+                                n * ch, 0f);
+                        rack.processInPlace(block, n);
                         bb.clear();
                         bb.asFloatBuffer().put(block, 0, n * ch);
-                        raf.seek(bytePos);
+                        raf.seek(44L + off * frameBytes);
                         raf.write(rawBuf, 0, n * ch * 4);
                         off += n;
                     }
@@ -35518,8 +35735,10 @@ public final class DspChain {
         if (raw == null || !raw.exists()) return null;
         if (sampleRate > 0) setSampleRate(sampleRate);
         if (endFrame - startFrame > AudioProcessor.MAX_IN_MEMORY_OFFLINE_FRAMES) {
-            File tmp = new File(raw.getParentFile(),
-                    raw.getName() + ".offline_region_tmp");
+            File tmp = raw.getParentFile() != null
+                    ? File.createTempFile("takeone_offline_region_", ".wav",
+                            raw.getParentFile())
+                    : File.createTempFile("takeone_offline_region_", ".wav");
             try {
                 long outFrames = renderRegionToFile(
                         raw, startFrame, endFrame, sampleRate, tmp);
@@ -37227,31 +37446,53 @@ public final class EditEngine {
         float mix = processor.getWetDryMix();
         if (mix <= 0.001f) return totalFrames;
 
-        File renderTmp = new File(raw.getParentFile(),
-                raw.getName() + ".lcrender");
-        File tailTmp = new File(raw.getParentFile(),
-                raw.getName() + ".lctail");
+        File dir = raw.getParentFile();
+        File renderTmp = dir != null
+                ? File.createTempFile("takeone_lcrender_", ".wav", dir)
+                : File.createTempFile("takeone_lcrender_", ".wav");
+        File tailTmp = dir != null
+                ? File.createTempFile("takeone_lctail_", ".wav", dir)
+                : File.createTempFile("takeone_lctail_", ".wav");
         try {
             long newFrames = processor.processOfflineRangeToFile(
                     raw, startFrame, endFrame, renderTmp, info.sampleRate, ch);
             if (newFrames <= 0 || !renderTmp.exists()) return -1;
 
+            long frameBytes = ch * 4L;
+            // The tail begins exactly at endFrame and is appended unchanged at
+            // startFrame + newFrames.  Both crossfades live inside the replaced
+            // selection, so no tail frames are pulled backwards.
+            long tailFrames = saveTailFrom(raw, endFrame, tailTmp, false);
             if (undo != null) {
-                long frameBytes = ch * 4L;
-                long touchStart = Math.max(0L, startFrame - Dsp.CROSSFADE_FRAMES);
-                long touchEnd = Math.min(totalFrames, endFrame + Dsp.CROSSFADE_FRAMES);
                 undo.recordRangeSnapshot(raw,
-                        info.dataStart + touchStart * frameBytes,
-                        Math.max(0L, (touchEnd - touchStart) * frameBytes));
+                        info.dataStart + startFrame * frameBytes,
+                        selFrames * frameBytes);
             }
 
-            long tailFrames = saveTailFrom(raw, endFrame, tailTmp, false);
-            long frameBytes = ch * 4L;
+            int headFade = (int) Math.min(Dsp.CROSSFADE_FRAMES,
+                    Math.min(selFrames / 2, newFrames / 2));
+            if (startFrame <= 0) headFade = 0;
+            int tailFade = endFrame < totalFrames ? headFade : 0;
+            long newEnd = startFrame + newFrames;
+
             FormatConverter.WavInfo rInfo = FormatConverter.readFloatWav(renderTmp);
+            FormatConverter.WavInfo tInfo = FormatConverter.readFloatWav(tailTmp);
             try (RandomAccessFile raf = new RandomAccessFile(raw, "rw");
-                 RandomAccessFile rRaf = new RandomAccessFile(renderTmp, "r")) {
-                long writePos = info.dataStart + startFrame * frameBytes;
-                raf.seek(writePos);
+                 RandomAccessFile rRaf = new RandomAccessFile(renderTmp, "r");
+                 RandomAccessFile tRaf = new RandomAccessFile(tailTmp, "r")) {
+                // Capture the dry boundary frames before writing anything.
+                float[] origHead = headFade > 0
+                        ? readFloatFrames(raf,
+                                info.dataStart + startFrame * frameBytes,
+                                headFade, ch)
+                        : null;
+                float[] origTail = tailFade > 0
+                        ? readFloatFrames(raf,
+                                info.dataStart + (endFrame - tailFade) * frameBytes,
+                                tailFade, ch)
+                        : null;
+
+                raf.seek(info.dataStart + startFrame * frameBytes);
                 rRaf.seek(rInfo.dataStart);
                 byte[] copyBuf = new byte[CHUNK_BYTES];
                 long leftBytes = newFrames * frameBytes;
@@ -37262,18 +37503,64 @@ public final class EditEngine {
                     raf.write(copyBuf, 0, n);
                     leftBytes -= n;
                 }
-                long newEndFrame = startFrame + newFrames;
-                raf.setLength(info.dataStart + newEndFrame * frameBytes);
+                raf.setLength(info.dataStart + newEnd * frameBytes);
+
+                if (headFade > 0) {
+                    float[] wet = readFloatFrames(rRaf, rInfo.dataStart,
+                            headFade, ch);
+                    for (int f = 0; f < headFade; f++) {
+                        float u = (headFade == 1) ? 1f
+                                : (f / (float) (headFade - 1));
+                        float gWet = 0.5f * (1f - (float) Math.cos(Math.PI * u));
+                        float gDry = 1f - gWet;
+                        for (int c = 0; c < ch; c++) {
+                            int i = f * ch + c;
+                            wet[i] = origHead[i] * gDry + wet[i] * gWet;
+                        }
+                    }
+                    raf.seek(info.dataStart + startFrame * frameBytes);
+                    Dsp.writeFloatsLE(raf, wet, 0, wet.length);
+                }
+
+                if (tailFade > 0) {
+                    float[] wet = readFloatFrames(rRaf,
+                            rInfo.dataStart + (newFrames - tailFade) * frameBytes,
+                            tailFade, ch);
+                    for (int f = 0; f < tailFade; f++) {
+                        float u = (tailFade == 1) ? 1f
+                                : (f / (float) (tailFade - 1));
+                        float gDry = 0.5f * (1f - (float) Math.cos(Math.PI * u));
+                        float gWet = 1f - gDry;
+                        for (int c = 0; c < ch; c++) {
+                            int i = f * ch + c;
+                            wet[i] = wet[i] * gWet + origTail[i] * gDry;
+                        }
+                    }
+                    raf.seek(info.dataStart
+                            + (newEnd - tailFade) * frameBytes);
+                    Dsp.writeFloatsLE(raf, wet, 0, wet.length);
+                }
+
+                if (tailFrames > 0) {
+                    raf.seek(info.dataStart + newEnd * frameBytes);
+                    tRaf.seek(tInfo.dataStart);
+                    long leftTail = tailFrames * frameBytes;
+                    while (leftTail > 0) {
+                        int want = (int) Math.min((long) copyBuf.length, leftTail);
+                        int n = tRaf.read(copyBuf, 0, want);
+                        if (n <= 0) break;
+                        raf.write(copyBuf, 0, n);
+                        leftTail -= n;
+                    }
+                }
+
+                long newTotal = newEnd + tailFrames;
+                raf.setLength(info.dataStart + newTotal * frameBytes);
                 raf.seek(0);
                 raf.write(Dsp.wavFloatHeader(ch, info.sampleRate,
-                        newEndFrame * frameBytes));
+                        newTotal * frameBytes));
+                return newTotal;
             }
-            long newEnd = startFrame + newFrames;
-            int fade = (int) Math.min(Dsp.CROSSFADE_FRAMES,
-                    Math.min(newEnd, tailFrames));
-            long newTotal = newEnd + tailFrames - fade;
-            spliceTailAfterReplace(raw, newEnd, tailTmp);
-            return newTotal;
         } finally {
             if (renderTmp.exists()) {
                 // noinspection ResultOfMethodCallIgnored
@@ -38348,15 +38635,14 @@ final class FilterCurveEqProcessor extends AudioProcessor {
     }
 
     @Override
-    public void prepare(int sr, int ch) {
+    public synchronized void prepare(int sr, int ch) {
         sampleRate = Math.max(8000, sr);
         channels = Math.max(1, Math.min(2, ch));
-        designKey = Long.MIN_VALUE;
         rebuild();
     }
 
     @Override
-    public void reset() {
+    public synchronized void reset() {
         for (float[] c : carry) {
             if (c != null) java.util.Arrays.fill(c, 0f);
         }
@@ -38364,7 +38650,7 @@ final class FilterCurveEqProcessor extends AudioProcessor {
     }
 
     @Override
-    public void processInPlace(float[] buf, int frames, int ch) {
+    public synchronized void processInPlace(float[] buf, int frames, int ch) {
         if (buf == null || frames <= 0) return;
         float mix = getWetDryMix();
         if (mix <= 0.001f || !isAudible()) return;
@@ -38373,7 +38659,7 @@ final class FilterCurveEqProcessor extends AudioProcessor {
         offset256(buf, frames, c);
     }
 
-    private void rebuild() {
+    private synchronized void rebuild() {
         long key = designKeyNow();
         if (key == designKey) return;
         designKey = key;
@@ -40859,8 +41145,10 @@ final class FxPreviewPeaks {
                 float[] dryEnv = computePerceptualBucketsStreaming(
                         raf, h.dataStart, start, dryFrames, ch,
                         origRegionBuckets, null, 0);
-                File regionTmp = new File(raw.getParentFile(),
-                        raw.getName() + ".fxprev_reg_tmp");
+                File regionTmp = raw.getParentFile() != null
+                        ? File.createTempFile("takeone_fxprev_reg_", ".wav",
+                                raw.getParentFile())
+                        : File.createTempFile("takeone_fxprev_reg_", ".wav");
                 try {
                     long rFrames = chain.renderRegionToFile(
                             raw, start, end, effSampleRate, regionTmp);
@@ -41499,12 +41787,12 @@ public final class FxRackChain {
         return false;
     }
 
-    public void reset() {
+    public synchronized void reset() {
         for (AudioProcessor p : processors) p.reset();
     }
 
     /** Runs the optional two-pass analysis hook on every enabled processor. */
-    public void prepareOffline(java.io.File raw, long startFrame,
+    public synchronized void prepareOffline(java.io.File raw, long startFrame,
                                long endFrame, int sampleRate, int channels)
             throws Exception {
         if (sampleRate > 0 && sampleRate != this.sampleRate) {
@@ -41551,7 +41839,7 @@ public final class FxRackChain {
      */
     private float[] subChunkBuf = new float[0];
 
-    public void processInPlace(float[] buf, int frames) {
+    public synchronized void processInPlace(float[] buf, int frames) {
         if (buf == null || frames <= 0) return;
         int totalFrames = Math.min(frames, buf.length / Math.max(1, channels));
         if (totalFrames <= 0) return;
@@ -41685,7 +41973,7 @@ public final class FxRackChain {
         }
     }
 
-    public void setSampleRate(int sr) {
+    public synchronized void setSampleRate(int sr) {
         if (sr <= 0) return;
         this.sampleRate = sr;
         for (AudioProcessor p : processors) p.prepare(sampleRate, channels);
@@ -41869,7 +42157,7 @@ public final class FxRackChain {
      * rack in place, preserving filter/envelope state across live edits and
      * synchronizing processor order with {@code cfg.slots}.
      */
-    void applyLegacyConfig(DspChain.Config cfg) {
+    synchronized void applyLegacyConfig(DspChain.Config cfg) {
         if (cfg == null) {
             this.splitToneFirstType = null;
             this.splitToneAfterProcessorId = null;
@@ -51193,6 +51481,7 @@ public final class RawFloatPlayer {
                 Dsp.WavHeader wh = Dsp.parseWavHeader(r);
                 if (wh.sampleRate > 0) fileSr = wh.sampleRate;
             } catch (Exception ignored) {}
+            int primedLatency = 0;
             if (preChain != null && preChain.isActive()) {
                 try {
                     preChain.setSampleRate(fileSr);
@@ -51214,6 +51503,7 @@ public final class RawFloatPlayer {
                             preChain.processInPlace(buf, step);
                             primePos += step;
                             lat -= step;
+                            primedLatency += step;
                         }
                     }
                 } catch (Exception ignored) {}
@@ -51272,11 +51562,21 @@ public final class RawFloatPlayer {
             }
             while (!stop && framePos < limitFrame) {
                 int want = (int) Math.min(1024, limitFrame - framePos);
-                r.seek(dataStart + framePos * channels * 4L);
-                r.readFully(raw, 0, want * channels * 4);
-                fb.clear();
-                fb.limit(want * channels);
-                fb.get(buf, 0, want * channels);
+                long inStart = framePos + primedLatency;
+                int fromFile = (int) Math.max(0L,
+                        Math.min((long) want, limitFrame - inStart));
+                if (fromFile > 0) {
+                    r.seek(dataStart + inStart * channels * 4L);
+                    r.readFully(raw, 0, fromFile * channels * 4);
+                    fb.clear();
+                    fb.limit(fromFile * channels);
+                    fb.get(buf, 0, fromFile * channels);
+                }
+                for (int f = fromFile; f < want; f++) {
+                    for (int c = 0; c < channels; c++) {
+                        buf[f * channels + c] = 0f;
+                    }
+                }
                 DspChain chain = this.dspChain;
                 if (chain != null && chain.isActive()) {
                     chain.processInPlace(buf, want);
@@ -56686,6 +56986,7 @@ public class StudioFragment extends Fragment {
     private View fxPanel;
     private TextView fxTitle;
     private TextView fxPresetDropdown;
+    private View fxToolsBtn;
     private View fxCloseBtn;
     private android.widget.LinearLayout fxListContainer;
     private TextView fxHint;
@@ -57025,6 +57326,7 @@ public class StudioFragment extends Fragment {
         fxPanel = v.findViewById(R.id.fxPanel);
         fxTitle = v.findViewById(R.id.fxTitle);
         fxPresetDropdown = v.findViewById(R.id.fxPresetDropdown);
+        fxToolsBtn = v.findViewById(R.id.fxToolsBtn);
         fxCloseBtn = v.findViewById(R.id.fxCloseBtn);
         fxListContainer = v.findViewById(R.id.fxListContainer);
         fxHint = v.findViewById(R.id.fxHint);
@@ -57183,6 +57485,10 @@ public class StudioFragment extends Fragment {
         if (fxPresetDropdown != null) {
             PressAnim.applySoft(fxPresetDropdown, 0.95f);
             fxPresetDropdown.setOnClickListener(view -> showFxPresetsMenu());
+        }
+        if (fxToolsBtn != null) {
+            PressAnim.applySoft(fxToolsBtn, 0.95f);
+            fxToolsBtn.setOnClickListener(view -> showAnalysisToolsMenu());
         }
         waveform.setTimelineListener(new WaveformView.TimelineListener() {
             @Override
@@ -60955,6 +61261,7 @@ public class StudioFragment extends Fragment {
                             Math.round(210 * density));
             eqLp.topMargin = Math.round(10 * density);
             body.addView(eqView, eqLp);
+            refreshers.add(eqView::invalidate);
         }
 
         DynamicsGraphView[] dynHolder = new DynamicsGraphView[1];
@@ -61568,12 +61875,21 @@ public class StudioFragment extends Fragment {
                     mixCtlHolder[0].setValue(
                             Math.round(slot.wetDry * 100f), false);
                 }
+                AudioProcessor extraMeta =
+                        FxRackChain.getPrototypeProcessor(slot.type.id);
                 for (java.util.Map.Entry<String, TeleValue> entry
                         : extraControls.entrySet()) {
                     Integer v = slot.extraParams.get(entry.getKey());
-                    if (v != null) {
-                        entry.getValue().setValue(v, false);
-                    }
+                    FxParameter p = extraMeta != null
+                            ? extraMeta.getParam(entry.getKey()) : null;
+                    int val = v != null ? v
+                            : (p != null ? p.defaultRaw : 0);
+                    entry.getValue().setValue(val, false);
+                    boolean applicable = extraMeta == null
+                            || extraMeta.isParamApplicable(
+                                    entry.getKey(), slot.extraParams);
+                    entry.getValue().setEnabled(applicable);
+                    entry.getValue().setAlpha(applicable ? 1f : 0.35f);
                 }
                 if (eqViewHolder[0] != null) {
                     eqViewHolder[0].invalidate();
@@ -62184,6 +62500,172 @@ public class StudioFragment extends Fragment {
         }
     }
 
+    private void showAnalysisToolsMenu() {
+        if (!isAdded()) return;
+        List<OptionsSheet.Item> items = new ArrayList<>();
+        items.add(OptionsSheet.Item.detail(R.drawable.ic_wave,
+                "Plot Spectrum", "Peak frequency, note and FFT size", false,
+                () -> analyzeRegion(true)));
+        items.add(OptionsSheet.Item.detail(R.drawable.ic_sliders,
+                "Audio Diagnostics", "Peak, RMS, LUFS, DC and clipping", false,
+                () -> analyzeRegion(false)));
+        OptionsSheet.showOptions(requireContext(), "Audio Analyzers",
+                "Uses the selection, or 65,536 frames around the playhead",
+                items);
+    }
+
+    private void analyzeRegion(boolean spectrum) {
+        if (!isAdded() || engine == null) return;
+        final File raw = engine.rawFile;
+        if (raw == null || !raw.exists()) {
+            Toast.makeText(requireContext(), "No audio loaded",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final long startFrame;
+        final long endFrame;
+        final int sampleRate;
+        final int channels;
+        try {
+            FormatConverter.WavInfo info = FormatConverter.readFloatWav(raw);
+            channels = Math.max(1, info.channels);
+            sampleRate = info.sampleRate > 0
+                    ? info.sampleRate : RecordingEngine.SAMPLE_RATE;
+            long totalFrames = info.dataBytes / 4L / channels;
+            long start;
+            long end;
+            if (waveform != null && waveform.hasSelection()) {
+                start = Math.round(waveform.selectionStartFraction()
+                        * totalFrames);
+                end = Math.round(waveform.selectionEndFraction() * totalFrames);
+            } else {
+                long cursor = Math.max(0L,
+                        Math.min(totalFrames, engine.cursorFrames()));
+                start = Math.max(0L, cursor - 32768L);
+                end = Math.min(totalFrames, start + 65536L);
+            }
+            start = Math.max(0L, Math.min(totalFrames, start));
+            end = Math.max(start, Math.min(totalFrames, end));
+            long maxFrames = 65536L;
+            if (end - start > maxFrames) {
+                long mid = start + (end - start) / 2L;
+                start = Math.max(start, mid - maxFrames / 2L);
+                end = Math.min(end, start + maxFrames);
+            }
+            if (end <= start) {
+                Toast.makeText(requireContext(),
+                        "Select some audio or move the playhead",
+                        Toast.LENGTH_SHORT).show();
+                return;
+            }
+            startFrame = start;
+            endFrame = end;
+        } catch (Exception e) {
+            Toast.makeText(requireContext(), "Could not read the take",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        new Thread(() -> {
+            try {
+                float[] buf = EditEngine.readFloatSelection(
+                        raw, startFrame, endFrame);
+                int frames = buf == null ? 0 : buf.length / channels;
+                if (frames <= 0) {
+                    postAnalysisError("No audio in that range");
+                    return;
+                }
+                final String title;
+                final String message;
+                if (spectrum) {
+                    int fft = 256;
+                    int limit = Math.min(65536, Math.max(1, frames));
+                    while (fft * 2 <= limit) fft *= 2;
+                    PlotSpectrumDialog.Result result =
+                            PlotSpectrumDialog.analyze(buf, frames, channels,
+                                    sampleRate, fft);
+                    title = "Plot Spectrum";
+                    message = PlotSpectrumDialog.summarize(result);
+                } else {
+                    AudioDiagnosticsTool.Report report =
+                            AudioDiagnosticsTool.analyze(buf, frames, channels,
+                                    sampleRate, 3);
+                    title = "Audio Diagnostics";
+                    message = report.summary();
+                }
+                if (!isAdded()) return;
+                final android.app.Activity activity = getActivity();
+                if (activity == null) return;
+                activity.runOnUiThread(() -> showAnalysisSummary(title, message));
+            } catch (Exception e) {
+                postAnalysisError("Analysis failed");
+            }
+        }, "takeone-analysis").start();
+    }
+
+    private void postAnalysisError(String message) {
+        if (!isAdded()) return;
+        final android.app.Activity activity = getActivity();
+        if (activity == null) return;
+        activity.runOnUiThread(() -> {
+            if (isAdded()) {
+                Toast.makeText(requireContext(), message,
+                        Toast.LENGTH_SHORT).show();
+            }
+        });
+    }
+
+    private void showAnalysisSummary(String title, String message) {
+        if (!isAdded()) return;
+        final Context ctx = requireContext();
+        final float density = getResources().getDisplayMetrics().density;
+        final android.app.Dialog dialog = new android.app.Dialog(ctx,
+                R.style.TakeOneCenterDialog);
+        dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE);
+
+        android.widget.LinearLayout root = new android.widget.LinearLayout(ctx);
+        root.setOrientation(android.widget.LinearLayout.VERTICAL);
+        root.setBackgroundResource(R.drawable.bg_modal);
+        int pad = Math.round(18 * density);
+        root.setPadding(pad, pad, pad, Math.round(14 * density));
+
+        TextView heading = new TextView(ctx);
+        heading.setText(title);
+        heading.setTextSize(17f);
+        heading.setTextColor(0xFFF2F4F7);
+        heading.setTypeface(android.graphics.Typeface.create(
+                "sans-serif-medium", android.graphics.Typeface.NORMAL));
+        root.addView(heading);
+
+        android.widget.ScrollView scroll = new android.widget.ScrollView(ctx);
+        TextView body = new TextView(ctx);
+        body.setText(message);
+        body.setTextSize(12.5f);
+        body.setTextColor(0xFFC7CDD6);
+        body.setLineSpacing(0f, 1.2f);
+        body.setPadding(0, Math.round(10 * density), 0, 0);
+        scroll.addView(body);
+        android.widget.LinearLayout.LayoutParams scrollLp =
+                new android.widget.LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        Math.round(120 * density));
+        scrollLp.topMargin = Math.round(6 * density);
+        root.addView(scroll, scrollLp);
+
+        TextView close = makeFxChip(ctx, "Close", density);
+        close.setOnClickListener(v -> dialog.dismiss());
+        android.widget.LinearLayout.LayoutParams closeLp =
+                new android.widget.LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT);
+        closeLp.topMargin = Math.round(8 * density);
+        closeLp.gravity = android.view.Gravity.END;
+        root.addView(close, closeLp);
+
+        dialog.setContentView(root);
+        dialog.show();
+    }
+
     private void showFxPresetsMenu() {
         if (!isAdded()) return;
         DspChain.Preset[] presets = {
@@ -62532,13 +63014,40 @@ public class StudioFragment extends Fragment {
             java.util.List<AudioProcessor> offline =
                     chain.offlineProcessors();
             if (!offline.isEmpty()) {
+                // Snapshot once for the whole commit, including the in-place
+                // tail (reverb/echo/delay) that will be written after the
+                // offline region.  Passing null below prevents each step from
+                // pushing its own overlapping snapshot.
+                DspChain inPlaceProbe = chain.hasInPlaceProcessors()
+                        ? new DspChain(info.channels, dspConfig) : null;
+                if (inPlaceProbe != null) inPlaceProbe.clearOfflineProcessors();
+                int inPlaceTail = inPlaceProbe != null
+                        ? Math.max(0, inPlaceProbe.getTailFrames()) : 0;
+                if (uj != null) {
+                    long snapStart = Math.max(0L,
+                            start - Dsp.CROSSFADE_FRAMES);
+                    long snapEnd = Math.min(totalFrames,
+                            end + Dsp.CROSSFADE_FRAMES + inPlaceTail);
+                    boolean recorded = uj.recordRangeSnapshot(raw,
+                            info.dataStart + snapStart * info.channels * 4L,
+                            Math.max(0L, (snapEnd - snapStart)
+                                    * info.channels * 4L));
+                    if (!recorded) {
+                        waveform.discardTopUndoPeaks();
+                        peaksPushed = false;
+                        Toast.makeText(requireContext(),
+                                "Could not record undo for these effects",
+                                Toast.LENGTH_SHORT).show();
+                        return false;
+                    }
+                }
                 long regionEnd = end;
                 boolean firstOffline = true;
                 for (AudioProcessor proc : offline) {
                     FormatConverter.WavInfo curInfo = FormatConverter.readFloatWav(raw);
                     long curTotalBefore = curInfo.dataBytes / 4 / Math.max(1, curInfo.channels);
                     long newTotal = EditEngine.applyLengthChangingEffectToRange(
-                            raw, start, regionEnd, proc, firstOffline ? uj : null);
+                            raw, start, regionEnd, proc, null);
                     if (newTotal < 0) {
                         if (firstOffline) {
                             waveform.discardTopUndoPeaks();
@@ -73964,6 +74473,19 @@ FILE: app/src/main/res/layout/fragment_studio.xml
                 android:textSize="11sp" />
 
             <TextView
+                android:id="@+id/fxToolsBtn"
+                android:layout_width="wrap_content"
+                android:layout_height="28dp"
+                android:layout_marginEnd="6dp"
+                android:background="@drawable/bg_round_btn"
+                android:gravity="center"
+                android:paddingLeft="10dp"
+                android:paddingRight="10dp"
+                android:text="Tools"
+                android:textColor="@color/text_secondary"
+                android:textSize="11sp" />
+
+            <TextView
                 android:id="@+id/fxCloseBtn"
                 android:layout_width="wrap_content"
                 android:layout_height="28dp"
@@ -80514,6 +81036,68 @@ public class FxCommitAndCrossfadeTest {
             ConversionJobs.cancel(res.job.jobId, true);
         }
         engine.abortAndDelete();
+    }
+
+    @Test
+    public void subRangeOfflineFadePreservesLengthAndPostSelectionTail()
+            throws Exception {
+        File dir = RuntimeEnvironment.getApplication().getCacheDir();
+        int totalFrames = 12000;
+        File raw = writeSineWav(dir, "fx_sub_offline.wav", totalFrames, 1, 0.2f);
+        float[] before = readAllSamples(raw, totalFrames, 1);
+
+        int start = 3000;
+        int end = 9000;
+        FadeProcessor fade = new FadeProcessor();
+        fade.prepare(SR, 1);
+        long newTotal = EditEngine.applyLengthChangingEffectToRange(
+                raw, start, end, fade, null);
+
+        assertEquals("sub-selection fade must not change file length",
+                totalFrames, newTotal);
+        FormatConverter.WavInfo info = FormatConverter.readFloatWav(raw);
+        assertEquals(totalFrames, info.dataBytes / 4);
+        float[] after = readAllSamples(raw, totalFrames, 1);
+        for (int i = 0; i < start; i++) {
+            assertEquals("pre-selection sample moved at " + i,
+                    before[i], after[i], 1e-6f);
+        }
+        for (int i = end; i < totalFrames; i++) {
+            assertEquals("post-selection tail shifted at " + i,
+                    before[i], after[i], 1e-6f);
+        }
+        boolean changed = false;
+        for (int i = start; i < end; i++) {
+            if (Math.abs(after[i] - before[i]) > 1e-4f) {
+                changed = true;
+                break;
+            }
+        }
+        assertTrue("fade should modify the selected region", changed);
+    }
+
+    @Test
+    public void renderRegionToFilePrimesInPlaceLatencyWithoutLeadingSilence()
+            throws Exception {
+        File dir = RuntimeEnvironment.getApplication().getCacheDir();
+        int frames = 4800;
+        File raw = writeSineWav(dir, "fx_render_latency.wav", frames, 1, 0.2f);
+        File out = new File(dir, "fx_render_latency_out.wav");
+        try {
+            DspChain chain = limiterChain();
+            long written = chain.renderRegionToFile(raw, 0, frames, SR, out);
+            assertEquals(frames, written);
+            float[] rendered = readAllSamples(out, frames, 1);
+            float earlyPeak = 0f;
+            for (int i = 0; i < 120; i++) {
+                earlyPeak = Math.max(earlyPeak, Math.abs(rendered[i]));
+            }
+            assertTrue("render must not prepend the limiter latency as silence: "
+                    + earlyPeak, earlyPeak > 0.1f);
+        } finally {
+            // noinspection ResultOfMethodCallIgnored
+            out.delete();
+        }
     }
 }
 
