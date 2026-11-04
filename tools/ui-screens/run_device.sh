@@ -92,7 +92,7 @@ INSTR_STATUS=$?
 set -e
 cat "$OUT/instrumentation.txt"
 if [ "$INSTR_STATUS" -ne 0 ] \
-   || grep -q -E "FAILURES!!!|INSTRUMENTATION_FAILED|INSTRUMENTATION_CODE: -1" \
+   || grep -q -E "FAILURES!!!|INSTRUMENTATION_FAILED" \
         "$OUT/instrumentation.txt"; then
   INSTR_FAILED=1
 fi
