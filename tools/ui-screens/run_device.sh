@@ -132,8 +132,24 @@ for f in $(find "$OUT" -type f -name '*.png'); do
 done
 echo "screenshots=$SHOT_COUNT empty_or_small=$EMPTY_COUNT" | tee -a "$OUT/device-info.txt"
 
-if [ "$INSTR_FAILED" -ne 0 ] || [ "$SHOT_COUNT" -lt 3 ] \
-   || [ "${DRIVER_FAILED:-0}" -ne 0 ]; then
-  echo "UI screenshot run failed for $DEVICE_ID (instrumentation=$INSTR_FAILED, shots=$SHOT_COUNT)" >&2
+REPORT_FAILED=0
+if [ ! -f "$OUT/report.json" ]; then
+  echo "missing app report.json for $DEVICE_ID" >&2
+  REPORT_FAILED=1
+else
+  python3 - "$OUT/report.json" <<'PY' || REPORT_FAILED=1
+import json, sys
+r = json.load(open(sys.argv[1]))
+issues = r.get("issues", [])
+shots = len(r.get("screenshots", []))
+print("report screenshots=%d issues=%s" % (shots, issues))
+if issues or shots < 16:
+    sys.exit(1)
+PY
+fi
+
+if [ "$INSTR_FAILED" -ne 0 ] || [ "$SHOT_COUNT" -lt 16 ] \
+   || [ "${DRIVER_FAILED:-0}" -ne 0 ] || [ "$REPORT_FAILED" -ne 0 ]; then
+  echo "UI screenshot run failed for $DEVICE_ID (instrumentation=$INSTR_FAILED, shots=$SHOT_COUNT, report=$REPORT_FAILED)" >&2
   exit 1
 fi

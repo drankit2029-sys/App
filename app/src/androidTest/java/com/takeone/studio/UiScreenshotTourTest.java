@@ -235,7 +235,16 @@ public class UiScreenshotTourTest {
                         screenshots, issues);
                 // Pick a row that is visible without scrolling; the catalog is
                 // alphabetically sorted and starts with Amplify on small screens.
-                UiObject2 choice = find(device, By.textContains("Amplify"));
+                UiObject2 searchBox = find(device,
+                        By.clazz("android.widget.EditText"));
+                if (searchBox != null) {
+                    searchBox.setText("Amplify");
+                    sleep(400);
+                    device.pressBack();
+                    sleep(250);
+                }
+                UiObject2 choice = findScrolling(device,
+                        By.textContains("Amplify"));
                 if (choice == null) choice = find(device, By.textContains("Noise Suppression"));
                 if (choice == null) choice = find(device, By.textContains("Noise Reduction"));
                 if (choice != null) {
@@ -245,8 +254,14 @@ public class UiScreenshotTourTest {
                             screenshots, issues);
                     UiObject2 expand = findScrolling(device,
                             By.descContains("Expand effect"));
+                    boolean detailOpened = false;
                     if (expand != null) {
                         expand.click();
+                        detailOpened = true;
+                    } else {
+                        detailOpened = invokeEffectDetailDialog(act, frag);
+                    }
+                    if (detailOpened) {
                         sleep(SETTLE_MS);
                         shoot(device, outRoot, "fx", "06_effect_detail",
                                 screenshots, issues);
@@ -255,7 +270,7 @@ public class UiScreenshotTourTest {
                         else device.pressBack();
                         sleep(300);
                     } else {
-                        issues.put("effect added but no Expand effect button found");
+                        issues.put("effect added but inspector could not open");
                     }
                 } else {
                     issues.put("no visible effect row found in Add Effect dialog");
@@ -356,6 +371,33 @@ public class UiScreenshotTourTest {
     }
 
 
+
+
+    private static boolean invokeEffectDetailDialog(Activity activity,
+                                                     StudioFragment fragment) {
+        final boolean[] opened = {false};
+        activity.runOnUiThread(() -> {
+            try {
+                java.lang.reflect.Field configField = StudioFragment.class
+                        .getDeclaredField("dspConfig");
+                configField.setAccessible(true);
+                DspChain.Config config =
+                        (DspChain.Config) configField.get(fragment);
+                if (config == null || config.slots.isEmpty()) return;
+                DspChain.EffectSlot slot =
+                        config.slots.get(config.slots.size() - 1);
+                java.lang.reflect.Method m = StudioFragment.class
+                        .getDeclaredMethod("showEffectDetailModal",
+                                DspChain.EffectSlot.class);
+                m.setAccessible(true);
+                m.invoke(fragment, slot);
+                opened[0] = true;
+            } catch (Throwable ignored) {
+            }
+        });
+        InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+        return opened[0];
+    }
 
     private static boolean invokeAddEffectDialog(Activity activity,
                                                   StudioFragment fragment) {
