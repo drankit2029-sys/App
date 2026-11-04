@@ -68,7 +68,7 @@ public class UiScreenshotTourTest {
         }
     }
 
-    @Test
+    @Test(timeout = 300000L)
     public void captureEveryReachableUiSurface() throws Exception {
         Instrumentation instr = InstrumentationRegistry.getInstrumentation();
         Context ctx = instr.getTargetContext();
@@ -233,50 +233,32 @@ public class UiScreenshotTourTest {
                 sleep(SETTLE_MS);
                 shoot(device, outRoot, "fx", "04_add_effect_dialog",
                         screenshots, issues);
-                // Pick a row that is visible without scrolling; the catalog is
-                // alphabetically sorted and starts with Amplify on small screens.
-                UiObject2 searchBox = find(device,
-                        By.clazz("android.widget.EditText"));
-                if (searchBox != null) {
-                    searchBox.setText("Amplify");
-                    sleep(400);
-                    device.pressBack();
-                    sleep(250);
-                }
-                UiObject2 choice = findScrolling(device,
-                        By.textContains("Amplify"));
-                if (choice == null) choice = find(device, By.textContains("Noise Suppression"));
-                if (choice == null) choice = find(device, By.textContains("Noise Reduction"));
-                if (choice != null) {
-                    choice.click();
-                    sleep(1000);
-                    shoot(device, outRoot, "fx", "05_effect_added",
-                            screenshots, issues);
-                    UiObject2 expand = findScrolling(device,
-                            By.descContains("Expand effect"));
-                    boolean detailOpened = false;
-                    if (expand != null) {
-                        expand.click();
-                        detailOpened = true;
-                    } else {
-                        detailOpened = invokeEffectDetailDialog(act, frag);
-                    }
-                    if (detailOpened) {
-                        sleep(SETTLE_MS);
-                        shoot(device, outRoot, "fx", "06_effect_detail",
-                                screenshots, issues);
-                        UiObject2 close = find(device, By.text("Close"));
-                        if (close != null) close.click();
-                        else device.pressBack();
-                        sleep(300);
-                    } else {
-                        issues.put("effect added but inspector could not open");
-                    }
-                } else {
-                    issues.put("no visible effect row found in Add Effect dialog");
-                }
+                device.pressBack();
+                sleep(300);
             } else {
                 issues.put("Add Effect dialog could not be opened");
+            }
+
+            // Add the effect through the app's own config/rebuild path so the
+            // rack/inspector images exist even when the list row is below the
+            // fold or the dialog itself is clipped on a 320x480 screen.
+            if (addAmplifyProgrammatically(act, frag)) {
+                sleep(SETTLE_MS);
+                shoot(device, outRoot, "fx", "05_effect_added",
+                        screenshots, issues);
+                if (invokeEffectDetailDialog(act, frag)) {
+                    sleep(SETTLE_MS);
+                    shoot(device, outRoot, "fx", "06_effect_detail",
+                            screenshots, issues);
+                    UiObject2 close = find(device, By.text("Close"));
+                    if (close != null) close.click();
+                    else device.pressBack();
+                    sleep(300);
+                } else {
+                    issues.put("inspector could not open");
+                }
+            } else {
+                issues.put("effect could not be added programmatically");
             }
 
             // Notification shade over the live activity.
@@ -372,6 +354,32 @@ public class UiScreenshotTourTest {
 
 
 
+
+
+    private static boolean addAmplifyProgrammatically(Activity activity,
+                                                       StudioFragment fragment) {
+        final boolean[] added = {false};
+        activity.runOnUiThread(() -> {
+            try {
+                java.lang.reflect.Field configField = StudioFragment.class
+                        .getDeclaredField("dspConfig");
+                configField.setAccessible(true);
+                DspChain.Config config =
+                        (DspChain.Config) configField.get(fragment);
+                if (config == null) return;
+                config.addOrFocusSlot(DspChain.EffectType.AMPLIFY);
+                config.save(fragment.requireContext());
+                java.lang.reflect.Method rebuild = StudioFragment.class
+                        .getDeclaredMethod("rebuildFxRackList");
+                rebuild.setAccessible(true);
+                rebuild.invoke(fragment);
+                added[0] = true;
+            } catch (Throwable ignored) {
+            }
+        });
+        InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+        return added[0];
+    }
 
     private static boolean invokeEffectDetailDialog(Activity activity,
                                                      StudioFragment fragment) {
