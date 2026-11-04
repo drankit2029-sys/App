@@ -349,13 +349,20 @@ public class UiScreenshotTourTest {
 
     private static UiObject2 findScrolling(UiDevice device,
                                            androidx.test.uiautomator.BySelector by) {
-        for (int i = 0; i < 8; i++) {
+        for (int i = 0; i < 10; i++) {
             UiObject2 found = find(device, by);
             if (found != null) return found;
-            UiObject2 scrollable = device.findObject(By.scrollable(true));
-            if (scrollable != null) {
-                scrollable.scroll(Direction.DOWN, 0.8f);
-            } else {
+            boolean scrolled = false;
+            java.util.List<UiObject2> scrollables =
+                    device.findObjects(By.scrollable(true));
+            for (UiObject2 scrollable : scrollables) {
+                try {
+                    scrollable.scroll(Direction.DOWN, 0.7f);
+                    scrolled = true;
+                } catch (Throwable ignored) {
+                }
+            }
+            if (!scrolled) {
                 int w = device.getDisplayWidth();
                 int h = device.getDisplayHeight();
                 device.swipe(w / 2, (int) (h * 0.72), w / 2,
