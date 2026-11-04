@@ -127,15 +127,24 @@ public class UiScreenshotTourTest {
             click(activity, R.id.sortBtn);
             sleep(SETTLE_MS);
             shoot(device, outRoot, "library", "02_sort_menu", screenshots, issues);
-            device.pressBack();
-            sleep(250);
+            UiObject2 newest = find(device, By.textContains("Newest first"));
+            if (newest != null) newest.click();
+            else device.pressBack();
+            sleep(300);
 
             click(activity, R.id.searchToggle);
             sleep(SETTLE_MS);
             shoot(device, outRoot, "library", "03_search", screenshots, issues);
-            device.pressBack();
-            sleep(250);
+            // Close search through its own toggle instead of a system BACK;
+            // BACK can close the activity when the keyboard is already gone.
+            click(activity, R.id.searchToggle);
+            sleep(300);
 
+            shoot(device, outRoot, "library", "04_before_studio",
+                    screenshots, issues);
+            if (activity.isFinishing()) {
+                issues.put("library activity finished before studio launch");
+            }
             final Activity act = activity;
             act.runOnUiThread(() -> ((MainActivity) act).openStudioWithEdit(
                     raw, 991L, "UI Screenshot Take"));
@@ -304,7 +313,19 @@ public class UiScreenshotTourTest {
     private static View awaitRoot(StudioFragment frag) throws Exception {
         for (int i = 0; i < 50; i++) {
             final View[] holder = new View[1];
-            frag.getActivity().runOnUiThread(() -> holder[0] = frag.getView());
+            Activity host = frag.getActivity();
+            if (host == null) {
+                sleep(100);
+                continue;
+            }
+            host.runOnUiThread(() -> {
+                try {
+                    host.getSupportFragmentManager().executePendingTransactions();
+                } catch (Throwable ignored) {
+                }
+                holder[0] = frag.getView();
+            });
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync();
             if (holder[0] != null) return holder[0];
             sleep(100);
         }

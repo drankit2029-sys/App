@@ -99,6 +99,8 @@ fi
 
 # The app writes report.json and its screenshots into external files.
 adb pull "$REMOTE/." "$OUT/" >>"$OUT/pull.txt" 2>&1 || true
+adb logcat -d -v threadtime > "$OUT/logcat.txt" 2>&1 || true
+adb shell dumpsys activity activities > "$OUT/activities.txt" 2>&1 || true
 
 # Drive raw adb-level system surfaces too (notification shade, home, recents).
 python3 tools/ui-screens/ui_driver.py \
