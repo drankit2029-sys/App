@@ -81,8 +81,8 @@ jobs:
           - { id: api33_tablet_1200x2000, api: 33, arch: x86_64, target: google_apis, profile: 'Nexus 10', width: 1200, height: 2000, density: 280, orientation: landscape }
           - { id: api35_tablet_2560x1600, api: 35, arch: x86_64, target: google_apis, profile: 'Nexus 10', width: 2560, height: 1600, density: 320, orientation: landscape }
     env:
-      APK_PATH: build-outputs/app-debug.apk
-      TEST_APK_PATH: build-outputs/app-debug-androidTest.apk
+      APK_PATH: build-outputs/debug/app-debug.apk
+      TEST_APK_PATH: build-outputs/androidTest/debug/app-debug-androidTest.apk
       DEVICE_ID: ${{ matrix.id }}
       UI_WIDTH: ${{ matrix.width }}
       UI_HEIGHT: ${{ matrix.height }}
