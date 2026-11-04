@@ -225,17 +225,10 @@ public class UiScreenshotTourTest {
             device.pressBack();
             sleep(250);
 
-            UiObject2 add = findScrolling(device, By.textContains("Add Effect"));
-            boolean addDialogOpened = false;
-            if (add != null) {
-                add.click();
-                addDialogOpened = true;
-            } else {
-                // Extremely short legacy screens clip the rack's bottom action
-                // row entirely. Open the same production dialog through its
-                // inspector entry point so the modal is still captured.
-                addDialogOpened = invokeAddEffectDialog(act, frag);
-            }
+            // Open the production Add Effect dialog directly: on very short
+            // screens the rack action row is clipped, and UiAutomator's
+            // scroll/idle handshake can wedge inside the scroll view.
+            boolean addDialogOpened = invokeAddEffectDialog(act, frag);
             if (addDialogOpened) {
                 sleep(SETTLE_MS);
                 shoot(device, outRoot, "fx", "04_add_effect_dialog",
