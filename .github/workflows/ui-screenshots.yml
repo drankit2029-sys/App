@@ -57,7 +57,7 @@ jobs:
         include:
           # Every supported API level, phones locked to portrait.
           - { id: api24_phone_320x480, api: 24, arch: x86, target: default, profile: 'Nexus 5', width: 320, height: 480, density: 160, orientation: portrait }
-          - { id: api25_phone_360x640, api: 25, arch: x86, target: default, profile: 'Nexus 5', width: 360, height: 640, density: 240, orientation: portrait }
+          - { id: api25_phone_360x640, api: 25, arch: x86_64, target: default, profile: 'Nexus 5', width: 360, height: 640, density: 240, orientation: portrait }
           - { id: api26_phone_360x740, api: 26, arch: x86_64, target: default, profile: 'Nexus 5', width: 360, height: 740, density: 320, orientation: portrait }
           - { id: api27_phone_393x786, api: 27, arch: x86_64, target: default, profile: 'Nexus 5', width: 393, height: 786, density: 280, orientation: portrait }
           - { id: api28_phone_412x732, api: 28, arch: x86_64, target: default, profile: 'Nexus 5', width: 412, height: 732, density: 420, orientation: portrait }

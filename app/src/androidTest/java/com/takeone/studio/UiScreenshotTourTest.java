@@ -19,6 +19,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
 import androidx.test.rule.GrantPermissionRule;
 import androidx.test.uiautomator.By;
+import androidx.test.uiautomator.Direction;
 import androidx.test.uiautomator.UiDevice;
 import androidx.test.uiautomator.UiObject2;
 
@@ -217,7 +218,7 @@ public class UiScreenshotTourTest {
             device.pressBack();
             sleep(250);
 
-            UiObject2 add = find(device, By.textContains("Add Effect"));
+            UiObject2 add = findScrolling(device, By.textContains("Add Effect"));
             if (add != null) {
                 add.click();
                 sleep(SETTLE_MS);
@@ -233,7 +234,8 @@ public class UiScreenshotTourTest {
                     sleep(1000);
                     shoot(device, outRoot, "fx", "05_effect_added",
                             screenshots, issues);
-                    UiObject2 expand = find(device, By.descContains("Expand effect"));
+                    UiObject2 expand = findScrolling(device,
+                            By.descContains("Expand effect"));
                     if (expand != null) {
                         expand.click();
                         sleep(SETTLE_MS);
@@ -342,6 +344,26 @@ public class UiScreenshotTourTest {
         if (v == null) return;
         activity.runOnUiThread(v::performClick);
         InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+    }
+
+
+    private static UiObject2 findScrolling(UiDevice device,
+                                           androidx.test.uiautomator.BySelector by) {
+        for (int i = 0; i < 8; i++) {
+            UiObject2 found = find(device, by);
+            if (found != null) return found;
+            UiObject2 scrollable = device.findObject(By.scrollable(true));
+            if (scrollable != null) {
+                scrollable.scroll(Direction.DOWN, 0.8f);
+            } else {
+                int w = device.getDisplayWidth();
+                int h = device.getDisplayHeight();
+                device.swipe(w / 2, (int) (h * 0.72), w / 2,
+                        (int) (h * 0.32), 20);
+            }
+            sleep(220);
+        }
+        return find(device, by);
     }
 
     private static UiObject2 find(UiDevice device, androidx.test.uiautomator.BySelector by) {
