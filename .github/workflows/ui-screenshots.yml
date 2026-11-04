@@ -16,8 +16,8 @@ on:
       - '.github/workflows/ui-screenshots.yml'
 
 concurrency:
-  group: ui-screens-${{ github.ref }}
-  cancel-in-progress: true
+  group: ui-screens-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: false
 
 jobs:
   build-ui-apks:
