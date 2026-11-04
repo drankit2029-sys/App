@@ -749,7 +749,10 @@ public class FxInteractionAndModeTest {
         p.prepare(SR, 1);
 
         float[] memory = p.processOfflineRegion(input.clone(), frames, 1);
-        int expectedFrames = frames - ((pauseEnd - pauseStart) - 4800);
+        // The detector closes a silent span at the END of the first non-silent
+        // 10 ms analysis window, so the detected pause includes that window.
+        int detectedSpan = (pauseEnd - pauseStart) + 480;
+        int expectedFrames = frames - (detectedSpan - 4800);
         assertEquals(expectedFrames, memory.length);
         int splice = pauseStart + 4800;
         float memoryStep = Math.abs(memory[splice] - memory[splice - 1]);
