@@ -96,6 +96,7 @@ public final class RecordingEngine {
      */
     private volatile boolean fxBakeRequired = false;
     private float[] punchInFadeBuf;
+    private int punchInFadeOffset = 0;
     private float[] punchOutFadeBuf;
 
     /**
@@ -187,9 +188,8 @@ public final class RecordingEngine {
      */
     public long liveInterpolatedFrames() {
         synchronized (lock) {
-            long base = dataBytes / (Math.max(1, channels) * 4L);
-            if (state != State.RECORDING || lastChunkElapsedNanos <= 0L
-                    || cursorFrame < base) {
+            long base = cursorFrame;
+            if (state != State.RECORDING || lastChunkElapsedNanos <= 0L) {
                 return base;
             }
             long elapsedNs = Math.max(0L,
@@ -197,7 +197,11 @@ public final class RecordingEngine {
                             - lastChunkElapsedNanos);
             long extraFrames = (elapsedNs * SAMPLE_RATE) / 1_000_000_000L;
             long maxExtra = Math.max(1L, SAMPLE_RATE / 50L);
-            return base + Math.min(extraFrames, maxExtra);
+            long interp = base + Math.min(extraFrames, maxExtra);
+            if (punchOutFrame > 0 && interp > punchOutFrame) {
+                interp = punchOutFrame;
+            }
+            return interp;
         }
     }
 
@@ -449,6 +453,7 @@ public final class RecordingEngine {
             inPlaceEdited = false;
             fxBakeRequired = false;
             punchInFadeBuf = null;
+                punchInFadeOffset = 0;
             punchOutFadeBuf = null;
             fellBackToMono = false;
             state = State.IDLE;
@@ -489,6 +494,7 @@ public final class RecordingEngine {
             inPlaceEdited = false;
             fxBakeRequired = false;
             punchInFadeBuf = null;
+                punchInFadeOffset = 0;
             punchOutFadeBuf = null;
             if (!pendingFor(raw).exists()) writePending(raw, takeName, channels);
             state = State.IDLE;
@@ -538,6 +544,7 @@ public final class RecordingEngine {
             inPlaceEdited = false;
             fxBakeRequired = false;
             punchInFadeBuf = null;
+                punchInFadeOffset = 0;
             punchOutFadeBuf = null;
             level = 0f;
             parentRawFile = null;
@@ -650,6 +657,7 @@ public final class RecordingEngine {
                     truncateTailOnWrite = false;
                 }
                 punchInFadeBuf = null;
+                punchInFadeOffset = 0;
                 punchOutFadeBuf = null;
                 if (cursorFrame < totalFrames) {
                     inPlaceEdited = true;
@@ -707,7 +715,10 @@ public final class RecordingEngine {
             capThread.setPriority(Thread.MAX_PRIORITY);
             capThread.start();
             state = State.RECORDING;
-            lastChunkElapsedNanos = android.os.SystemClock.elapsedRealtimeNanos();
+            // Stay parked at cursorFrame until capLoop writes its first chunk.
+            lastChunkElapsedNanos = 0L;
+            lastSmoothedPeak = 0f;
+            level = 0f;
             lastHeaderPatch = System.currentTimeMillis();
         }
         ConversionService.onRecordingStateChanged();
@@ -772,6 +783,7 @@ public final class RecordingEngine {
                     truncateTailOnWrite = false;
                 }
                 punchInFadeBuf = null;
+                punchInFadeOffset = 0;
                 punchOutFadeBuf = null;
                 if (cursorFrame < totalFrames) {
                     inPlaceEdited = true;
@@ -829,7 +841,10 @@ public final class RecordingEngine {
             capThread.setPriority(Thread.MAX_PRIORITY);
             capThread.start();
             state = State.RECORDING;
-            lastChunkElapsedNanos = android.os.SystemClock.elapsedRealtimeNanos();
+            // Stay parked at cursorFrame until capLoop writes its first chunk.
+            lastChunkElapsedNanos = 0L;
+            lastSmoothedPeak = 0f;
+            level = 0f;
             lastHeaderPatch = System.currentTimeMillis();
         }
         ConversionService.onRecordingStateChanged();
@@ -949,6 +964,7 @@ public final class RecordingEngine {
             inPlaceEdited = false;
             fxBakeRequired = false;
             punchInFadeBuf = null;
+                punchInFadeOffset = 0;
             punchOutFadeBuf = null;
             level = 0f;
         }
@@ -1220,23 +1236,32 @@ public final class RecordingEngine {
                     }
                 }
                 if (frames <= 0) break;
-                lastChunkElapsedNanos =
-                        android.os.SystemClock.elapsedRealtimeNanos();
-
-                // Blend first 240 frames on mid-file punch-in
+                // Blend the 240-frame punch-in across consecutive reads; the
+                // first post-warmup read can be shorter than the fade.
                 if (punchInFadeBuf != null) {
-                    int fadeN = Math.min(punchInFadeBuf.length / outCh, frames);
-                    bb.position(0);
-                    java.nio.FloatBuffer fb = bb.asFloatBuffer();
-                    for (int f = 0; f < fadeN; f++) {
-                        float wIn = (f + 0.5f) / fadeN;
-                        float wOut = 1.0f - wIn;
-                        for (int c = 0; c < outCh; c++) {
-                            int idx = f * outCh + c;
-                            fb.put(idx, punchInFadeBuf[idx] * wOut + fb.get(idx) * wIn);
+                    int totalFadeFrames = punchInFadeBuf.length / outCh;
+                    int remFade = totalFadeFrames - punchInFadeOffset;
+                    int fadeN = Math.min(remFade, frames);
+                    if (fadeN > 0) {
+                        bb.position(0);
+                        java.nio.FloatBuffer fb = bb.asFloatBuffer();
+                        for (int f = 0; f < fadeN; f++) {
+                            int fadeIdx = punchInFadeOffset + f;
+                            float wIn = (fadeIdx + 0.5f) / totalFadeFrames;
+                            float wOut = 1.0f - wIn;
+                            for (int c = 0; c < outCh; c++) {
+                                int bufIdx = f * outCh + c;
+                                int srcIdx = fadeIdx * outCh + c;
+                                fb.put(bufIdx, punchInFadeBuf[srcIdx] * wOut
+                                        + fb.get(bufIdx) * wIn);
+                            }
                         }
+                        punchInFadeOffset += fadeN;
                     }
-                    punchInFadeBuf = null;
+                    if (punchInFadeOffset >= totalFadeFrames) {
+                        punchInFadeBuf = null;
+                        punchInFadeOffset = 0;
+                    }
                 }
                 // Blend last 240 frames on range punch-out
                 if (reachedPunchOut && punchOutFadeBuf != null) {
@@ -1264,6 +1289,8 @@ public final class RecordingEngine {
                             cursorFrame += frames;
                             long endBytes = cursorFrame * outCh * 4L;
                             if (endBytes > dataBytes) dataBytes = endBytes;
+                            lastChunkElapsedNanos =
+                                    android.os.SystemClock.elapsedRealtimeNanos();
                         } catch (Exception e) {
                             break;
                         }

@@ -459,11 +459,16 @@ public class StudioFragment extends Fragment {
                         setFxPanelVisible(false);
                     }
                     RawFloatPlayer.releaseWarmSpeaker();
+                    engine.warmUpMic(requireContext(), preset.audioSource,
+                            engine.channels);
                 } else {
                     if (waveform != null) {
                         waveform.setSelectionLocked(false);
                     }
                     RawFloatPlayer.warmUpSpeaker(engine.channels);
+                    long cur = engine.cursorFrames();
+                    userScrolledWhilePaused =
+                            cur < engine.totalFrames() - 480;
                 }
                 paintEditorStrip();
                 paintFxPanelControls();
@@ -2177,6 +2182,7 @@ public class StudioFragment extends Fragment {
                     // the waveform bars as new audio is recorded!
                     replacePassStartFrame = curFrames;
                     replaceTargetEndFrame = totalFrames;
+                    waveform.setReplacingInPlace(true);
                     FormatConverter.WavInfo repInfo =
                             FormatConverter.readFloatWav(engine.rawFile);
                     long repFrameBytes = Math.max(1, repInfo.channels) * 4L;
@@ -2204,11 +2210,13 @@ public class StudioFragment extends Fragment {
                     lastEditWasSubRangeBake = false;
                     replacePassStartFrame = -1L;
                     replaceTargetEndFrame = -1L;
+                    if (waveform != null) waveform.setReplacingInPlace(false);
                 }
             } else {
                 replacePassStartFrame = -1L;
                 replaceTargetEndFrame = -1L;
                 if (waveform != null) {
+                    waveform.setReplacingInPlace(false);
                     waveform.syncFramesPerBar(0L);
                 }
             }
@@ -2251,10 +2259,10 @@ public class StudioFragment extends Fragment {
 
     private void pauseTake(boolean fromInterruption) {
         if (engine.state != RecordingEngine.State.RECORDING) return;
-        long pausedAtFrame = engine.cursorFrames();
         engine.pauseCapture();
+        long pausedAtFrame = engine.cursorFrames();
         setTelePaused(true);
-        userScrolledWhilePaused = false;
+        if (waveform != null) waveform.setReplacingInPlace(false);
         if (replacingSelectionActive) {
             replaceModeArmed = false;
             if (waveform != null) waveform.setSelectionLocked(false);
@@ -2263,6 +2271,7 @@ public class StudioFragment extends Fragment {
             long total = Math.max(1L, engine.totalFrames());
             long target = (pausedAtFrame >= 0 && pausedAtFrame <= total)
                     ? pausedAtFrame : total;
+            userScrolledWhilePaused = (target < total - 480);
             // If the user was in Replace mode and reached the end of the take,
             // Replace auto-deactivates; if they paused mid-take before the end,
             // keep Replace active so the user can disable it manually after pausing!
@@ -2689,6 +2698,7 @@ public class StudioFragment extends Fragment {
                         replaceTargetEndFrame = -1L;
                         if (waveform != null) {
                             waveform.setSelectionLocked(false);
+                            waveform.setReplacingInPlace(false);
                         }
                         paintEditorStrip();
                         paintFxPanelControls();
@@ -3262,7 +3272,7 @@ public class StudioFragment extends Fragment {
         if (btnPreviewPlay != null) {
             boolean showReplaceActive = proUnlocked && replaceModeArmed
                     && (canEdit || engine.state == RecordingEngine.State.RECORDING);
-            boolean tapAllowed = !proUnlocked || replaceEnabled;
+            boolean tapAllowed = canEdit && (!proUnlocked || replaceEnabled);
             btnPreviewPlay.setText("Replace");
             btnPreviewPlay.setEnabled(tapAllowed);
             btnPreviewPlay.setClickable(tapAllowed);

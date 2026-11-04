@@ -95,6 +95,8 @@ public class WaveformView extends View {
 
     // Smooth morphing state for in-place Replace & frame-locked live speed
     private int lastMorphIdx = -1;
+    private boolean replacingInPlace = false;
+    private float lastMorphPeak = 0f;
     private float morphAlpha = 0f;
     private float framesPerBar = 2400f; // 2400 frames @ 48 kHz = 50 ms (20 bars/sec)
 
@@ -1151,6 +1153,19 @@ public class WaveformView extends View {
      * and seamlessly transitions into appending, the waveform continues at the
      * exact same speed without any abrupt jump or shape distortion on Pause!
      */
+
+    public synchronized void setReplacingInPlace(boolean replacing) {
+        if (this.replacingInPlace != replacing) {
+            this.replacingInPlace = replacing;
+            if (!replacing) {
+                lastMorphIdx = -1;
+                lastMorphPeak = 0f;
+                morphAlpha = 0f;
+            }
+            postInvalidateOnAnimation();
+        }
+    }
+
     public synchronized void updateLiveFromFrames(float v, long curFrames,
                                                   long replaceEndFrame) {
         float clampedV = Math.max(0f, Math.min(1f, v));
@@ -1159,22 +1174,33 @@ public class WaveformView extends View {
 
         if (replaceEndFrame > 0 && curFrames < replaceEndFrame && count > 0) {
             // In-place Replace before the original end of the take:
+            replacingInPlace = true;
             float exactPos = Math.max(0f,
                     Math.min(count, (curFrames / (float) replaceEndFrame) * count));
             int idx = Math.min(count - 1, Math.max(0, (int) Math.floor(exactPos)));
             if (idx != lastMorphIdx) {
+                if (lastMorphIdx >= 0 && idx > lastMorphIdx + 1) {
+                    for (int skip = lastMorphIdx + 1; skip < idx && skip < count; skip++) {
+                        history[skip] = clampedV;
+                    }
+                }
                 lastMorphIdx = idx;
+                lastMorphPeak = clampedV;
                 morphAlpha = 0.62f;
             } else {
+                if (clampedV > lastMorphPeak) {
+                    lastMorphPeak = clampedV;
+                }
                 morphAlpha = Math.min(1.0f, morphAlpha + 0.20f);
             }
-            history[idx] = history[idx] * (1.0f - morphAlpha) + clampedV * morphAlpha;
+            history[idx] = history[idx] * (1.0f - morphAlpha)
+                    + lastMorphPeak * morphAlpha;
             playheadPos = exactPos;
             playheadIndex = Math.round(playheadPos);
             postInvalidateOnAnimation();
             return;
         }
-
+        replacingInPlace = false;
         // Appending (either a fresh recording or Replace after passing replaceEndFrame):
         // Advance strictly by audio frame position (curFrames / framesPerBar)
         // so the speed is 100% identical to pre-end Replace and independent of UI tick rate!
@@ -1274,7 +1300,9 @@ public class WaveformView extends View {
             selectionActive = false;
         } else {
             lastMorphIdx = -1;
+            lastMorphPeak = 0f;
             morphAlpha = 0f;
+            replacingInPlace = false;
         }
         invalidate();
     }
@@ -1334,7 +1362,9 @@ public class WaveformView extends View {
         followMinZoom = false;
         savedReplaceTailPeaks = null;
         lastMorphIdx = -1;
+        lastMorphPeak = 0f;
         morphAlpha = 0f;
+        replacingInPlace = false;
         framesPerBar = 2400f;
         invalidate();
     }
@@ -1805,6 +1835,7 @@ public class WaveformView extends View {
 
         int n;
         boolean isLive;
+        boolean repInPlace;
         float headPos;
         int pIdx;
         boolean selOn;
@@ -1820,6 +1851,7 @@ public class WaveformView extends View {
         synchronized (this) {
             n = count;
             isLive = live;
+            repInPlace = replacingInPlace;
             pIdx = playheadIndex;
             headPos = (playheadPos >= 0f && playheadPos <= n)
                     ? playheadPos
@@ -1871,9 +1903,9 @@ public class WaveformView extends View {
             long kMax = (long) Math.ceil((headPos + (w - centerX + barW) / gap) / bucketsPerBar) + 1L;
             long kStart = Math.max(0L, kMin);
             long kEnd = Math.min((long) Math.ceil(n / (double) bucketsPerBar), kMax);
-            if (isLive && savedReplaceTailPeaks == null) {
-                // Live capture only has buckets up to the interpolated head;
-                // never draw bars ahead of the centre playhead.
+            if (isLive && !repInPlace && savedReplaceTailPeaks == null) {
+                // Live append capture only has buckets up to the interpolated
+                // head; in-place Replace keeps the future bars visible.
                 kEnd = Math.min(kEnd,
                         (long) Math.floor(headPos / bucketsPerBar));
             }

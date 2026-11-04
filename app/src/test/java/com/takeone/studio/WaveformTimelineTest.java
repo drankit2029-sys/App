@@ -403,4 +403,50 @@ public class WaveformTimelineTest {
 
         engine.abortAndDelete();
     }
+
+    @Test
+    public void inPlaceReplaceReplacesMidTakeBarsAndKeepsFutureBarsVisible() {
+        WaveformView wv = loaded(activity(), 100);
+        wv.setPlayheadFraction(0.5f);
+        wv.setLive(true);
+        wv.setReplacingInPlace(true);
+        long end = 240000L;
+        for (int bar = 50; bar < 60; bar++) {
+            long frame = 120000L + (bar - 50) * 2400L;
+            for (int n = 0; n < 5; n++) {
+                wv.updateLiveFromFrames(0.9f, frame, end);
+            }
+        }
+        float playhead = wv.playheadFraction();
+        assertTrue("playhead=" + playhead,
+                playhead >= 0.59f && playhead <= 0.61f);
+        for (int i = 50; i < 60; i++) {
+            float v = wv.peakAtForTest(i);
+            assertTrue("bar " + i + "=" + v, v > 0.8f);
+        }
+        for (int i = 0; i < 50; i++) {
+            assertEquals("future/preceding bar " + i,
+                    0.5f, wv.peakAtForTest(i), 0.001f);
+        }
+        for (int i = 60; i < 100; i++) {
+            assertEquals("future bar " + i, 0.5f,
+                    wv.peakAtForTest(i), 0.001f);
+        }
+
+        // Overwriting the same span with silence must pull the bars down.
+        for (int bar = 50; bar < 60; bar++) {
+            long frame = 120000L + (bar - 50) * 2400L;
+            for (int n = 0; n < 10; n++) {
+                wv.updateLiveFromFrames(0f, frame, end);
+            }
+        }
+        assertTrue("silence overwrite did not reduce bar 55",
+                wv.peakAtForTest(55) < 0.3f);
+
+        wv.setLive(false);
+        wv.setReplacingInPlace(false);
+        assertEquals(playhead, wv.playheadFraction(), 0.01f);
+        assertTrue("bar 55 was not retained",
+                wv.peakAtForTest(55) < 0.5f);
+    }
 }

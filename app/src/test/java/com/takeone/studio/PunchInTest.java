@@ -99,4 +99,31 @@ public class PunchInTest {
             e.abortAndDelete();
         }
     }
+
+    @Test
+    public void liveInterpolatedFramesStartsAtMidTakeCursorDuringReplace()
+            throws Exception {
+        RecordingEngine e = RecordingEngine.get();
+        e.abortAndDelete();
+        File raw = dcRaw("replace_live.wav", 48000, 1);
+        try {
+            e.attachExisting(ApplicationProvider.getApplicationContext(),
+                    raw, "Replace Live", 1, raw.length() - 44);
+            e.seekCursorFrame(12000);
+            e.state = RecordingEngine.State.RECORDING;
+
+            // Mic warmup: stay parked at the mid-take cursor, not totalFrames.
+            assertEquals(12000L, e.liveInterpolatedFrames());
+
+            java.lang.reflect.Field f = RecordingEngine.class
+                    .getDeclaredField("lastChunkElapsedNanos");
+            f.setAccessible(true);
+            f.setLong(e, android.os.SystemClock.elapsedRealtimeNanos()
+                    - 100_000_000L);
+            long live = e.liveInterpolatedFrames();
+            assertTrue("live=" + live, live > 12000L && live <= 12960L);
+        } finally {
+            e.abortAndDelete();
+        }
+    }
 }
