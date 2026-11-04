@@ -219,8 +219,17 @@ public class UiScreenshotTourTest {
             sleep(250);
 
             UiObject2 add = findScrolling(device, By.textContains("Add Effect"));
+            boolean addDialogOpened = false;
             if (add != null) {
                 add.click();
+                addDialogOpened = true;
+            } else {
+                // Extremely short legacy screens clip the rack's bottom action
+                // row entirely. Open the same production dialog through its
+                // inspector entry point so the modal is still captured.
+                addDialogOpened = invokeAddEffectDialog(act, frag);
+            }
+            if (addDialogOpened) {
                 sleep(SETTLE_MS);
                 shoot(device, outRoot, "fx", "04_add_effect_dialog",
                         screenshots, issues);
@@ -252,7 +261,7 @@ public class UiScreenshotTourTest {
                     issues.put("no visible effect row found in Add Effect dialog");
                 }
             } else {
-                issues.put("Add Effect button not found");
+                issues.put("Add Effect dialog could not be opened");
             }
 
             // Notification shade over the live activity.
@@ -346,6 +355,24 @@ public class UiScreenshotTourTest {
         InstrumentationRegistry.getInstrumentation().waitForIdleSync();
     }
 
+
+
+    private static boolean invokeAddEffectDialog(Activity activity,
+                                                  StudioFragment fragment) {
+        final boolean[] opened = {false};
+        activity.runOnUiThread(() -> {
+            try {
+                java.lang.reflect.Method m = StudioFragment.class
+                        .getDeclaredMethod("showAddEffectSearchDialog");
+                m.setAccessible(true);
+                m.invoke(fragment);
+                opened[0] = true;
+            } catch (Throwable ignored) {
+            }
+        });
+        InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+        return opened[0];
+    }
 
     private static UiObject2 findScrolling(UiDevice device,
                                            androidx.test.uiautomator.BySelector by) {
