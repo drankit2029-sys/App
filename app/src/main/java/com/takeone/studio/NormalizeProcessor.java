@@ -26,6 +26,8 @@ final class NormalizeProcessor extends AudioProcessor {
     private final float[] measuredRms = new float[2];
     private boolean scanned = false;
     private int sampleRate = DspChain.SAMPLE_RATE;
+    private float prevX0 = 0f, prevY0 = 0f;
+    private float prevX1 = 0f, prevY1 = 0f;
 
     NormalizeProcessor() {
     }
@@ -61,6 +63,7 @@ final class NormalizeProcessor extends AudioProcessor {
         dcOffset[0] = dcOffset[1] = 0f;
         measuredPeak[0] = measuredPeak[1] = 0f;
         measuredRms[0] = measuredRms[1] = 0f;
+        prevX0 = prevY0 = prevX1 = prevY1 = 0f;
     }
 
     @Override
@@ -98,7 +101,7 @@ final class NormalizeProcessor extends AudioProcessor {
         if (totalFrames <= 0) return;
         int ch = chHolder[0];
         for (int c = 0; c < ch; c++) {
-            dcOffset[c] = removeDc.getBoolean() ? (float) (sum[c] / totalFrames) : 0f;
+            dcOffset[c] = (float) (sum[c] / totalFrames);
         }
 
         final double[] sq = new double[2];
@@ -109,7 +112,8 @@ final class NormalizeProcessor extends AudioProcessor {
                     for (int f = 0; f < frames; f++) {
                         int base = f * cCount;
                         for (int c = 0; c < cCount; c++) {
-                            float v = chunk[base + c] - dcOffset[c];
+                            float v = chunk[base + c]
+                                    - (removeDc.getBoolean() ? dcOffset[c] : 0f);
                             float a = Math.abs(v);
                             if (a > measuredPeak[c]) measuredPeak[c] = a;
                             sq[c] += (double) v * v;
@@ -132,12 +136,13 @@ final class NormalizeProcessor extends AudioProcessor {
             for (int c = 0; c < ch; c++) sum[c] += buf[f * ch + c];
         }
         for (int c = 0; c < ch; c++) {
-            dcOffset[c] = removeDc.getBoolean() ? (float) (sum[c] / frames) : 0f;
+            dcOffset[c] = (float) (sum[c] / frames);
         }
         double[] sq = new double[ch];
         for (int f = 0; f < frames; f++) {
             for (int c = 0; c < ch; c++) {
-                float v = buf[f * ch + c] - dcOffset[c];
+                float v = buf[f * ch + c]
+                    - (removeDc.getBoolean() ? dcOffset[c] : 0f);
                 float a = Math.abs(v);
                 if (a > measuredPeak[c]) measuredPeak[c] = a;
                 sq[c] += (double) v * v;
@@ -167,18 +172,12 @@ final class NormalizeProcessor extends AudioProcessor {
                     float ref = rmsMode ? measuredRms[c] : measuredPeak[c];
                     gain[c] = ref > 1e-6f ? (targetLin / ref) : 1f;
                 }
-                if (Math.abs(measuredPeak[0] - measuredPeak[1]) < 1e-5f) {
-                    gain[0] *= 0.985f;
-                }
             } else {
                 float ref = rmsMode
                         ? (ch == 2 ? (float) Math.sqrt(0.5 * (measuredRms[0] * measuredRms[0]
                                 + measuredRms[1] * measuredRms[1])) : measuredRms[0])
                         : (ch == 2 ? Math.max(measuredPeak[0], measuredPeak[1]) : measuredPeak[0]);
                 float g = ref > 1e-6f ? (targetLin / ref) : 1f;
-                if (indepStereo.getBoolean() && ch == 1) {
-                    g *= 0.985f;
-                }
                 gain[0] = gain[1] = g;
             }
         }
@@ -191,13 +190,13 @@ final class NormalizeProcessor extends AudioProcessor {
                 && Math.abs(dcOffset[0]) < 1e-4f
                 && (ch < 2 || Math.abs(dcOffset[1]) < 1e-4f);
         float hpR = (float) Math.exp(-2.0 * Math.PI * 4.5 / Math.max(8000, sampleRate));
-        float prevX0 = 0f, prevY0 = 0f;
-        float prevX1 = 0f, prevY1 = 0f;
+        float dc0 = removeDc.getBoolean() ? dcOffset[0] : 0f;
+        float dc1 = removeDc.getBoolean() ? dcOffset[1] : 0f;
 
         for (int f = 0; f < frames; f++) {
             int base = f * ch;
             for (int c = 0; c < ch; c++) {
-                float v = buf[base + c] - dcOffset[c];
+                float v = buf[base + c] - (c == 0 ? dc0 : dc1);
                 if (subsonicDcBlock) {
                     if (c == 0) {
                         float y = v - prevX0 + hpR * prevY0;

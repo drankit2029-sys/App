@@ -143,7 +143,7 @@ final class TimelineUtilityProcessor extends AudioProcessor {
         if (regionFrames <= 0) return -1L;
 
         int actIdx = effectiveAction();
-        int repCount = Math.max(1, repeats.getCurrentRaw());
+        int repCount = 1 + Math.max(1, repeats.getCurrentRaw());
         float mix = getWetDryMix();
         int chunkFrames = DEFAULT_DSP_CHUNK_FRAMES;
         byte[] rawBuf = new byte[chunkFrames * ch * 4];
@@ -209,7 +209,6 @@ final class TimelineUtilityProcessor extends AudioProcessor {
             } else { // Repeat
                 long outTotalFrames = regionFrames * repCount;
                 outRaf.write(Dsp.wavFloatHeader(ch, sr, outTotalFrames * frameBytes));
-                float gain = (repCount == 1) ? 0.944f : 1.0f;
                 for (int r = 0; r < repCount; r++) {
                     long cur = 0L;
                     while (cur < regionFrames) {
@@ -222,9 +221,9 @@ final class TimelineUtilityProcessor extends AudioProcessor {
                         if (r == 0 && dryBuf != null) {
                             System.arraycopy(fBuf, 0, dryBuf, 0, want * ch);
                             HardwareApiManager.get().processGainClipMixChunked(
-                                    fBuf, dryBuf, want * ch, gain, 0f, mix);
+                                    fBuf, dryBuf, want * ch, 1.0f, 0f, mix);
                         } else {
-                            float effGain = (r > 0 && mix < 0.999f) ? (gain * mix) : gain;
+                            float effGain = (r > 0 && mix < 0.999f) ? mix : 1.0f;
                             if (Math.abs(effGain - 1.0f) > 1e-5f) {
                                 HardwareApiManager.get().processGainClipMixChunked(
                                         fBuf, null, want * ch, effGain, 0f, 1.0f);

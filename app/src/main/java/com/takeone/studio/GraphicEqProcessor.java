@@ -109,8 +109,8 @@ final class GraphicEqProcessor extends AudioProcessor {
     public boolean isAudible() {
         if (!isEnabled()) return false;
         if (Math.abs(outGain.getFloat()) > 0.01f) return true;
-        if (layout.getCurrentRaw() != layout.defaultRaw) return true;
-        for (int i = 0; i < 31; i++) {
+        int count = layout.getEnumIndex() == 1 ? 31 : 10;
+        for (int i = 0; i < count; i++) {
             if (Math.abs(bands[i].getFloat()) > 0.01f) return true;
         }
         return false;

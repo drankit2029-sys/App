@@ -4129,8 +4129,8 @@ public class StudioFragment extends Fragment {
             final DspChain prefix = new DspChain(ch, prefixConfigFor(dspConfig, slot));
             final boolean prefixActive = prefix.isActive();
             if (prefixActive) {
-                prefix.prepareOffline(rawFile, start, end, info.sampleRate, ch);
                 prefix.reset();
+                prefix.prepareOffline(rawFile, start, end, info.sampleRate, ch);
             }
             final double[] accumProfile = new double[bins];
             final int[] chunkCount = {0};

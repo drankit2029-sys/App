@@ -169,6 +169,7 @@ final class SpectralNoiseReductionProcessor extends AudioProcessor {
         if (prof == null) prof = autoProfile;
         if (prof == null && frames >= FFT_SIZE) {
             prof = StftProcessor.welchSpectrum(buf, frames, ch, FFT_SIZE, 0.55f);
+            autoProfile = prof;
         }
         streamProfile = prof;
         streamFloor = Dsp.dbToLin(-Math.max(0f, reduction.getFloat()));

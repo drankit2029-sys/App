@@ -139,6 +139,42 @@ public class FxInteractionAndModeTest {
     }
 
     @Test
+    public void timelineRepeatFileRenderMatchesInMemoryAndUnityGain()
+            throws Exception {
+        int frames = 1000;
+        float[] input = new float[frames];
+        Arrays.fill(input, 0.125f);
+        File src = File.createTempFile("takeone-tl-src", ".wav");
+        File dst = File.createTempFile("takeone-tl-dst", ".wav");
+        try {
+            FxVerifySupport.writeFloatWav(src, input, 1, SR);
+            TimelineUtilityProcessor p = new TimelineUtilityProcessor();
+            p.getParam("tl_action").setEnumIndex(2);
+            p.getParam("tl_repeats").setCurrentRaw(1);
+            p.prepare(SR, 1);
+
+            float[] memory = p.processOfflineRegion(input.clone(), frames, 1);
+            assertEquals(frames * 2, memory.length);
+            long fileFrames = p.processOfflineRangeToFile(
+                    src, 0, frames, dst, SR, 1);
+            assertEquals(frames * 2L, fileFrames);
+
+            FxVerifySupport.WavData rendered = FxVerifySupport.readFloatWav(dst);
+            assertEquals(memory.length, rendered.samples.length);
+            assertArrayEquals(memory, rendered.samples, 1e-6f);
+            for (float sample : rendered.samples) {
+                assertEquals("repeat must use unity gain",
+                        0.125f, sample, 1e-6f);
+            }
+        } finally {
+            // noinspection ResultOfMethodCallIgnored
+            src.delete();
+            // noinspection ResultOfMethodCallIgnored
+            dst.delete();
+        }
+    }
+
+    @Test
     public void generatorControlsFollowGeneratorType() {
         AudioGeneratorTool p = new AudioGeneratorTool();
         assertTrue(p.isParamApplicable("gen_start"));
