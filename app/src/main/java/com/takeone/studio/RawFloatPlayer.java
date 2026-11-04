@@ -317,6 +317,7 @@ public final class RawFloatPlayer {
                 Dsp.WavHeader wh = Dsp.parseWavHeader(r);
                 if (wh.sampleRate > 0) fileSr = wh.sampleRate;
             } catch (Exception ignored) {}
+            int primedLatency = 0;
             if (preChain != null && preChain.isActive()) {
                 try {
                     preChain.setSampleRate(fileSr);
@@ -338,6 +339,7 @@ public final class RawFloatPlayer {
                             preChain.processInPlace(buf, step);
                             primePos += step;
                             lat -= step;
+                            primedLatency += step;
                         }
                     }
                 } catch (Exception ignored) {}
@@ -396,11 +398,21 @@ public final class RawFloatPlayer {
             }
             while (!stop && framePos < limitFrame) {
                 int want = (int) Math.min(1024, limitFrame - framePos);
-                r.seek(dataStart + framePos * channels * 4L);
-                r.readFully(raw, 0, want * channels * 4);
-                fb.clear();
-                fb.limit(want * channels);
-                fb.get(buf, 0, want * channels);
+                long inStart = framePos + primedLatency;
+                int fromFile = (int) Math.max(0L,
+                        Math.min((long) want, limitFrame - inStart));
+                if (fromFile > 0) {
+                    r.seek(dataStart + inStart * channels * 4L);
+                    r.readFully(raw, 0, fromFile * channels * 4);
+                    fb.clear();
+                    fb.limit(fromFile * channels);
+                    fb.get(buf, 0, fromFile * channels);
+                }
+                for (int f = fromFile; f < want; f++) {
+                    for (int c = 0; c < channels; c++) {
+                        buf[f * channels + c] = 0f;
+                    }
+                }
                 DspChain chain = this.dspChain;
                 if (chain != null && chain.isActive()) {
                     chain.processInPlace(buf, want);

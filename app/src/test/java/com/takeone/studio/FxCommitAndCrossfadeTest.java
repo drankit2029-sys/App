@@ -314,4 +314,66 @@ public class FxCommitAndCrossfadeTest {
         }
         engine.abortAndDelete();
     }
+
+    @Test
+    public void subRangeOfflineFadePreservesLengthAndPostSelectionTail()
+            throws Exception {
+        File dir = RuntimeEnvironment.getApplication().getCacheDir();
+        int totalFrames = 12000;
+        File raw = writeSineWav(dir, "fx_sub_offline.wav", totalFrames, 1, 0.2f);
+        float[] before = readAllSamples(raw, totalFrames, 1);
+
+        int start = 3000;
+        int end = 9000;
+        FadeProcessor fade = new FadeProcessor();
+        fade.prepare(SR, 1);
+        long newTotal = EditEngine.applyLengthChangingEffectToRange(
+                raw, start, end, fade, null);
+
+        assertEquals("sub-selection fade must not change file length",
+                totalFrames, newTotal);
+        FormatConverter.WavInfo info = FormatConverter.readFloatWav(raw);
+        assertEquals(totalFrames, info.dataBytes / 4);
+        float[] after = readAllSamples(raw, totalFrames, 1);
+        for (int i = 0; i < start; i++) {
+            assertEquals("pre-selection sample moved at " + i,
+                    before[i], after[i], 1e-6f);
+        }
+        for (int i = end; i < totalFrames; i++) {
+            assertEquals("post-selection tail shifted at " + i,
+                    before[i], after[i], 1e-6f);
+        }
+        boolean changed = false;
+        for (int i = start; i < end; i++) {
+            if (Math.abs(after[i] - before[i]) > 1e-4f) {
+                changed = true;
+                break;
+            }
+        }
+        assertTrue("fade should modify the selected region", changed);
+    }
+
+    @Test
+    public void renderRegionToFilePrimesInPlaceLatencyWithoutLeadingSilence()
+            throws Exception {
+        File dir = RuntimeEnvironment.getApplication().getCacheDir();
+        int frames = 4800;
+        File raw = writeSineWav(dir, "fx_render_latency.wav", frames, 1, 0.2f);
+        File out = new File(dir, "fx_render_latency_out.wav");
+        try {
+            DspChain chain = limiterChain();
+            long written = chain.renderRegionToFile(raw, 0, frames, SR, out);
+            assertEquals(frames, written);
+            float[] rendered = readAllSamples(out, frames, 1);
+            float earlyPeak = 0f;
+            for (int i = 0; i < 120; i++) {
+                earlyPeak = Math.max(earlyPeak, Math.abs(rendered[i]));
+            }
+            assertTrue("render must not prepend the limiter latency as silence: "
+                    + earlyPeak, earlyPeak > 0.1f);
+        } finally {
+            // noinspection ResultOfMethodCallIgnored
+            out.delete();
+        }
+    }
 }

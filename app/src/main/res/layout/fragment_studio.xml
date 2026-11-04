@@ -351,6 +351,19 @@
                 android:textSize="11sp" />
 
             <TextView
+                android:id="@+id/fxToolsBtn"
+                android:layout_width="wrap_content"
+                android:layout_height="28dp"
+                android:layout_marginEnd="6dp"
+                android:background="@drawable/bg_round_btn"
+                android:gravity="center"
+                android:paddingLeft="10dp"
+                android:paddingRight="10dp"
+                android:text="Tools"
+                android:textColor="@color/text_secondary"
+                android:textSize="11sp" />
+
+            <TextView
                 android:id="@+id/fxCloseBtn"
                 android:layout_width="wrap_content"
                 android:layout_height="28dp"

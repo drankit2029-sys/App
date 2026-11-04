@@ -255,12 +255,12 @@ public final class FxRackChain {
         return false;
     }
 
-    public void reset() {
+    public synchronized void reset() {
         for (AudioProcessor p : processors) p.reset();
     }
 
     /** Runs the optional two-pass analysis hook on every enabled processor. */
-    public void prepareOffline(java.io.File raw, long startFrame,
+    public synchronized void prepareOffline(java.io.File raw, long startFrame,
                                long endFrame, int sampleRate, int channels)
             throws Exception {
         if (sampleRate > 0 && sampleRate != this.sampleRate) {
@@ -307,7 +307,7 @@ public final class FxRackChain {
      */
     private float[] subChunkBuf = new float[0];
 
-    public void processInPlace(float[] buf, int frames) {
+    public synchronized void processInPlace(float[] buf, int frames) {
         if (buf == null || frames <= 0) return;
         int totalFrames = Math.min(frames, buf.length / Math.max(1, channels));
         if (totalFrames <= 0) return;
@@ -441,7 +441,7 @@ public final class FxRackChain {
         }
     }
 
-    public void setSampleRate(int sr) {
+    public synchronized void setSampleRate(int sr) {
         if (sr <= 0) return;
         this.sampleRate = sr;
         for (AudioProcessor p : processors) p.prepare(sampleRate, channels);
@@ -625,7 +625,7 @@ public final class FxRackChain {
      * rack in place, preserving filter/envelope state across live edits and
      * synchronizing processor order with {@code cfg.slots}.
      */
-    void applyLegacyConfig(DspChain.Config cfg) {
+    synchronized void applyLegacyConfig(DspChain.Config cfg) {
         if (cfg == null) {
             this.splitToneFirstType = null;
             this.splitToneAfterProcessorId = null;

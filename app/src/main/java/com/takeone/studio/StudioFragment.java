@@ -78,6 +78,7 @@ public class StudioFragment extends Fragment {
     private View fxPanel;
     private TextView fxTitle;
     private TextView fxPresetDropdown;
+    private View fxToolsBtn;
     private View fxCloseBtn;
     private android.widget.LinearLayout fxListContainer;
     private TextView fxHint;
@@ -417,6 +418,7 @@ public class StudioFragment extends Fragment {
         fxPanel = v.findViewById(R.id.fxPanel);
         fxTitle = v.findViewById(R.id.fxTitle);
         fxPresetDropdown = v.findViewById(R.id.fxPresetDropdown);
+        fxToolsBtn = v.findViewById(R.id.fxToolsBtn);
         fxCloseBtn = v.findViewById(R.id.fxCloseBtn);
         fxListContainer = v.findViewById(R.id.fxListContainer);
         fxHint = v.findViewById(R.id.fxHint);
@@ -575,6 +577,10 @@ public class StudioFragment extends Fragment {
         if (fxPresetDropdown != null) {
             PressAnim.applySoft(fxPresetDropdown, 0.95f);
             fxPresetDropdown.setOnClickListener(view -> showFxPresetsMenu());
+        }
+        if (fxToolsBtn != null) {
+            PressAnim.applySoft(fxToolsBtn, 0.95f);
+            fxToolsBtn.setOnClickListener(view -> showAnalysisToolsMenu());
         }
         waveform.setTimelineListener(new WaveformView.TimelineListener() {
             @Override
@@ -4347,6 +4353,7 @@ public class StudioFragment extends Fragment {
                             Math.round(210 * density));
             eqLp.topMargin = Math.round(10 * density);
             body.addView(eqView, eqLp);
+            refreshers.add(eqView::invalidate);
         }
 
         DynamicsGraphView[] dynHolder = new DynamicsGraphView[1];
@@ -4960,12 +4967,21 @@ public class StudioFragment extends Fragment {
                     mixCtlHolder[0].setValue(
                             Math.round(slot.wetDry * 100f), false);
                 }
+                AudioProcessor extraMeta =
+                        FxRackChain.getPrototypeProcessor(slot.type.id);
                 for (java.util.Map.Entry<String, TeleValue> entry
                         : extraControls.entrySet()) {
                     Integer v = slot.extraParams.get(entry.getKey());
-                    if (v != null) {
-                        entry.getValue().setValue(v, false);
-                    }
+                    FxParameter p = extraMeta != null
+                            ? extraMeta.getParam(entry.getKey()) : null;
+                    int val = v != null ? v
+                            : (p != null ? p.defaultRaw : 0);
+                    entry.getValue().setValue(val, false);
+                    boolean applicable = extraMeta == null
+                            || extraMeta.isParamApplicable(
+                                    entry.getKey(), slot.extraParams);
+                    entry.getValue().setEnabled(applicable);
+                    entry.getValue().setAlpha(applicable ? 1f : 0.35f);
                 }
                 if (eqViewHolder[0] != null) {
                     eqViewHolder[0].invalidate();
@@ -5576,6 +5592,172 @@ public class StudioFragment extends Fragment {
         }
     }
 
+    private void showAnalysisToolsMenu() {
+        if (!isAdded()) return;
+        List<OptionsSheet.Item> items = new ArrayList<>();
+        items.add(OptionsSheet.Item.detail(R.drawable.ic_wave,
+                "Plot Spectrum", "Peak frequency, note and FFT size", false,
+                () -> analyzeRegion(true)));
+        items.add(OptionsSheet.Item.detail(R.drawable.ic_sliders,
+                "Audio Diagnostics", "Peak, RMS, LUFS, DC and clipping", false,
+                () -> analyzeRegion(false)));
+        OptionsSheet.showOptions(requireContext(), "Audio Analyzers",
+                "Uses the selection, or 65,536 frames around the playhead",
+                items);
+    }
+
+    private void analyzeRegion(boolean spectrum) {
+        if (!isAdded() || engine == null) return;
+        final File raw = engine.rawFile;
+        if (raw == null || !raw.exists()) {
+            Toast.makeText(requireContext(), "No audio loaded",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final long startFrame;
+        final long endFrame;
+        final int sampleRate;
+        final int channels;
+        try {
+            FormatConverter.WavInfo info = FormatConverter.readFloatWav(raw);
+            channels = Math.max(1, info.channels);
+            sampleRate = info.sampleRate > 0
+                    ? info.sampleRate : RecordingEngine.SAMPLE_RATE;
+            long totalFrames = info.dataBytes / 4L / channels;
+            long start;
+            long end;
+            if (waveform != null && waveform.hasSelection()) {
+                start = Math.round(waveform.selectionStartFraction()
+                        * totalFrames);
+                end = Math.round(waveform.selectionEndFraction() * totalFrames);
+            } else {
+                long cursor = Math.max(0L,
+                        Math.min(totalFrames, engine.cursorFrames()));
+                start = Math.max(0L, cursor - 32768L);
+                end = Math.min(totalFrames, start + 65536L);
+            }
+            start = Math.max(0L, Math.min(totalFrames, start));
+            end = Math.max(start, Math.min(totalFrames, end));
+            long maxFrames = 65536L;
+            if (end - start > maxFrames) {
+                long mid = start + (end - start) / 2L;
+                start = Math.max(start, mid - maxFrames / 2L);
+                end = Math.min(end, start + maxFrames);
+            }
+            if (end <= start) {
+                Toast.makeText(requireContext(),
+                        "Select some audio or move the playhead",
+                        Toast.LENGTH_SHORT).show();
+                return;
+            }
+            startFrame = start;
+            endFrame = end;
+        } catch (Exception e) {
+            Toast.makeText(requireContext(), "Could not read the take",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        new Thread(() -> {
+            try {
+                float[] buf = EditEngine.readFloatSelection(
+                        raw, startFrame, endFrame);
+                int frames = buf == null ? 0 : buf.length / channels;
+                if (frames <= 0) {
+                    postAnalysisError("No audio in that range");
+                    return;
+                }
+                final String title;
+                final String message;
+                if (spectrum) {
+                    int fft = 256;
+                    int limit = Math.min(65536, Math.max(1, frames));
+                    while (fft * 2 <= limit) fft *= 2;
+                    PlotSpectrumDialog.Result result =
+                            PlotSpectrumDialog.analyze(buf, frames, channels,
+                                    sampleRate, fft);
+                    title = "Plot Spectrum";
+                    message = PlotSpectrumDialog.summarize(result);
+                } else {
+                    AudioDiagnosticsTool.Report report =
+                            AudioDiagnosticsTool.analyze(buf, frames, channels,
+                                    sampleRate, 3);
+                    title = "Audio Diagnostics";
+                    message = report.summary();
+                }
+                if (!isAdded()) return;
+                final android.app.Activity activity = getActivity();
+                if (activity == null) return;
+                activity.runOnUiThread(() -> showAnalysisSummary(title, message));
+            } catch (Exception e) {
+                postAnalysisError("Analysis failed");
+            }
+        }, "takeone-analysis").start();
+    }
+
+    private void postAnalysisError(String message) {
+        if (!isAdded()) return;
+        final android.app.Activity activity = getActivity();
+        if (activity == null) return;
+        activity.runOnUiThread(() -> {
+            if (isAdded()) {
+                Toast.makeText(requireContext(), message,
+                        Toast.LENGTH_SHORT).show();
+            }
+        });
+    }
+
+    private void showAnalysisSummary(String title, String message) {
+        if (!isAdded()) return;
+        final Context ctx = requireContext();
+        final float density = getResources().getDisplayMetrics().density;
+        final android.app.Dialog dialog = new android.app.Dialog(ctx,
+                R.style.TakeOneCenterDialog);
+        dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE);
+
+        android.widget.LinearLayout root = new android.widget.LinearLayout(ctx);
+        root.setOrientation(android.widget.LinearLayout.VERTICAL);
+        root.setBackgroundResource(R.drawable.bg_modal);
+        int pad = Math.round(18 * density);
+        root.setPadding(pad, pad, pad, Math.round(14 * density));
+
+        TextView heading = new TextView(ctx);
+        heading.setText(title);
+        heading.setTextSize(17f);
+        heading.setTextColor(0xFFF2F4F7);
+        heading.setTypeface(android.graphics.Typeface.create(
+                "sans-serif-medium", android.graphics.Typeface.NORMAL));
+        root.addView(heading);
+
+        android.widget.ScrollView scroll = new android.widget.ScrollView(ctx);
+        TextView body = new TextView(ctx);
+        body.setText(message);
+        body.setTextSize(12.5f);
+        body.setTextColor(0xFFC7CDD6);
+        body.setLineSpacing(0f, 1.2f);
+        body.setPadding(0, Math.round(10 * density), 0, 0);
+        scroll.addView(body);
+        android.widget.LinearLayout.LayoutParams scrollLp =
+                new android.widget.LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        Math.round(120 * density));
+        scrollLp.topMargin = Math.round(6 * density);
+        root.addView(scroll, scrollLp);
+
+        TextView close = makeFxChip(ctx, "Close", density);
+        close.setOnClickListener(v -> dialog.dismiss());
+        android.widget.LinearLayout.LayoutParams closeLp =
+                new android.widget.LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT);
+        closeLp.topMargin = Math.round(8 * density);
+        closeLp.gravity = android.view.Gravity.END;
+        root.addView(close, closeLp);
+
+        dialog.setContentView(root);
+        dialog.show();
+    }
+
     private void showFxPresetsMenu() {
         if (!isAdded()) return;
         DspChain.Preset[] presets = {
@@ -5924,13 +6106,40 @@ public class StudioFragment extends Fragment {
             java.util.List<AudioProcessor> offline =
                     chain.offlineProcessors();
             if (!offline.isEmpty()) {
+                // Snapshot once for the whole commit, including the in-place
+                // tail (reverb/echo/delay) that will be written after the
+                // offline region.  Passing null below prevents each step from
+                // pushing its own overlapping snapshot.
+                DspChain inPlaceProbe = chain.hasInPlaceProcessors()
+                        ? new DspChain(info.channels, dspConfig) : null;
+                if (inPlaceProbe != null) inPlaceProbe.clearOfflineProcessors();
+                int inPlaceTail = inPlaceProbe != null
+                        ? Math.max(0, inPlaceProbe.getTailFrames()) : 0;
+                if (uj != null) {
+                    long snapStart = Math.max(0L,
+                            start - Dsp.CROSSFADE_FRAMES);
+                    long snapEnd = Math.min(totalFrames,
+                            end + Dsp.CROSSFADE_FRAMES + inPlaceTail);
+                    boolean recorded = uj.recordRangeSnapshot(raw,
+                            info.dataStart + snapStart * info.channels * 4L,
+                            Math.max(0L, (snapEnd - snapStart)
+                                    * info.channels * 4L));
+                    if (!recorded) {
+                        waveform.discardTopUndoPeaks();
+                        peaksPushed = false;
+                        Toast.makeText(requireContext(),
+                                "Could not record undo for these effects",
+                                Toast.LENGTH_SHORT).show();
+                        return false;
+                    }
+                }
                 long regionEnd = end;
                 boolean firstOffline = true;
                 for (AudioProcessor proc : offline) {
                     FormatConverter.WavInfo curInfo = FormatConverter.readFloatWav(raw);
                     long curTotalBefore = curInfo.dataBytes / 4 / Math.max(1, curInfo.channels);
                     long newTotal = EditEngine.applyLengthChangingEffectToRange(
-                            raw, start, regionEnd, proc, firstOffline ? uj : null);
+                            raw, start, regionEnd, proc, null);
                     if (newTotal < 0) {
                         if (firstOffline) {
                             waveform.discardTopUndoPeaks();

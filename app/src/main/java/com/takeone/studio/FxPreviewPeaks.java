@@ -268,8 +268,10 @@ final class FxPreviewPeaks {
                 float[] dryEnv = computePerceptualBucketsStreaming(
                         raf, h.dataStart, start, dryFrames, ch,
                         origRegionBuckets, null, 0);
-                File regionTmp = new File(raw.getParentFile(),
-                        raw.getName() + ".fxprev_reg_tmp");
+                File regionTmp = raw.getParentFile() != null
+                        ? File.createTempFile("takeone_fxprev_reg_", ".wav",
+                                raw.getParentFile())
+                        : File.createTempFile("takeone_fxprev_reg_", ".wav");
                 try {
                     long rFrames = chain.renderRegionToFile(
                             raw, start, end, effSampleRate, regionTmp);

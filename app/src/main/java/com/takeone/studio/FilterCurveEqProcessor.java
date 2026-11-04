@@ -127,15 +127,14 @@ final class FilterCurveEqProcessor extends AudioProcessor {
     }
 
     @Override
-    public void prepare(int sr, int ch) {
+    public synchronized void prepare(int sr, int ch) {
         sampleRate = Math.max(8000, sr);
         channels = Math.max(1, Math.min(2, ch));
-        designKey = Long.MIN_VALUE;
         rebuild();
     }
 
     @Override
-    public void reset() {
+    public synchronized void reset() {
         for (float[] c : carry) {
             if (c != null) java.util.Arrays.fill(c, 0f);
         }
@@ -143,7 +142,7 @@ final class FilterCurveEqProcessor extends AudioProcessor {
     }
 
     @Override
-    public void processInPlace(float[] buf, int frames, int ch) {
+    public synchronized void processInPlace(float[] buf, int frames, int ch) {
         if (buf == null || frames <= 0) return;
         float mix = getWetDryMix();
         if (mix <= 0.001f || !isAudible()) return;
@@ -152,7 +151,7 @@ final class FilterCurveEqProcessor extends AudioProcessor {
         offset256(buf, frames, c);
     }
 
-    private void rebuild() {
+    private synchronized void rebuild() {
         long key = designKeyNow();
         if (key == designKey) return;
         designKey = key;

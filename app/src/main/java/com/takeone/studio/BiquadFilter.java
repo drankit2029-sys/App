@@ -17,7 +17,7 @@ public final class BiquadFilter {
      * Installs new coefficients, preserving state for all surviving sections
      * even when the cascade section count changes (e.g. live slope/order edits).
      */
-    public void setSections(float[][] newSections, int channels) {
+    public synchronized void setSections(float[][] newSections, int channels) {
         if (newSections == null) newSections = new float[0][];
         int ch = Math.max(1, Math.min(2, channels));
         boolean chChanged = this.channels != ch;
@@ -61,7 +61,7 @@ public final class BiquadFilter {
         return sections.length;
     }
 
-    public void reset() {
+    public synchronized void reset() {
         for (int i = 0; i < z1.length; i++) {
             z1[i] = 0f;
             z2[i] = 0f;
@@ -69,7 +69,7 @@ public final class BiquadFilter {
     }
 
     /** Processes interleaved frames in place. */
-    public void process(float[] buf, int frames, int ch) {
+    public synchronized void process(float[] buf, int frames, int ch) {
         process(buf, frames, ch, 0);
     }
 
@@ -78,7 +78,7 @@ public final class BiquadFilter {
      * The offset variant lets a caller sweep the coefficients over a block
      * without copying the samples out of the buffer.
      */
-    public void process(float[] buf, int frames, int ch, int frameOffset) {
+    public synchronized void process(float[] buf, int frames, int ch, int frameOffset) {
         if (buf == null || frames <= 0 || sections.length == 0) return;
         final int c = Math.max(1, Math.min(2, Math.min(ch, channels)));
         final int secs = sections.length;

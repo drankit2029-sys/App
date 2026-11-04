@@ -1009,31 +1009,53 @@ public final class EditEngine {
         float mix = processor.getWetDryMix();
         if (mix <= 0.001f) return totalFrames;
 
-        File renderTmp = new File(raw.getParentFile(),
-                raw.getName() + ".lcrender");
-        File tailTmp = new File(raw.getParentFile(),
-                raw.getName() + ".lctail");
+        File dir = raw.getParentFile();
+        File renderTmp = dir != null
+                ? File.createTempFile("takeone_lcrender_", ".wav", dir)
+                : File.createTempFile("takeone_lcrender_", ".wav");
+        File tailTmp = dir != null
+                ? File.createTempFile("takeone_lctail_", ".wav", dir)
+                : File.createTempFile("takeone_lctail_", ".wav");
         try {
             long newFrames = processor.processOfflineRangeToFile(
                     raw, startFrame, endFrame, renderTmp, info.sampleRate, ch);
             if (newFrames <= 0 || !renderTmp.exists()) return -1;
 
+            long frameBytes = ch * 4L;
+            // The tail begins exactly at endFrame and is appended unchanged at
+            // startFrame + newFrames.  Both crossfades live inside the replaced
+            // selection, so no tail frames are pulled backwards.
+            long tailFrames = saveTailFrom(raw, endFrame, tailTmp, false);
             if (undo != null) {
-                long frameBytes = ch * 4L;
-                long touchStart = Math.max(0L, startFrame - Dsp.CROSSFADE_FRAMES);
-                long touchEnd = Math.min(totalFrames, endFrame + Dsp.CROSSFADE_FRAMES);
                 undo.recordRangeSnapshot(raw,
-                        info.dataStart + touchStart * frameBytes,
-                        Math.max(0L, (touchEnd - touchStart) * frameBytes));
+                        info.dataStart + startFrame * frameBytes,
+                        selFrames * frameBytes);
             }
 
-            long tailFrames = saveTailFrom(raw, endFrame, tailTmp, false);
-            long frameBytes = ch * 4L;
+            int headFade = (int) Math.min(Dsp.CROSSFADE_FRAMES,
+                    Math.min(selFrames / 2, newFrames / 2));
+            if (startFrame <= 0) headFade = 0;
+            int tailFade = endFrame < totalFrames ? headFade : 0;
+            long newEnd = startFrame + newFrames;
+
             FormatConverter.WavInfo rInfo = FormatConverter.readFloatWav(renderTmp);
+            FormatConverter.WavInfo tInfo = FormatConverter.readFloatWav(tailTmp);
             try (RandomAccessFile raf = new RandomAccessFile(raw, "rw");
-                 RandomAccessFile rRaf = new RandomAccessFile(renderTmp, "r")) {
-                long writePos = info.dataStart + startFrame * frameBytes;
-                raf.seek(writePos);
+                 RandomAccessFile rRaf = new RandomAccessFile(renderTmp, "r");
+                 RandomAccessFile tRaf = new RandomAccessFile(tailTmp, "r")) {
+                // Capture the dry boundary frames before writing anything.
+                float[] origHead = headFade > 0
+                        ? readFloatFrames(raf,
+                                info.dataStart + startFrame * frameBytes,
+                                headFade, ch)
+                        : null;
+                float[] origTail = tailFade > 0
+                        ? readFloatFrames(raf,
+                                info.dataStart + (endFrame - tailFade) * frameBytes,
+                                tailFade, ch)
+                        : null;
+
+                raf.seek(info.dataStart + startFrame * frameBytes);
                 rRaf.seek(rInfo.dataStart);
                 byte[] copyBuf = new byte[CHUNK_BYTES];
                 long leftBytes = newFrames * frameBytes;
@@ -1044,18 +1066,64 @@ public final class EditEngine {
                     raf.write(copyBuf, 0, n);
                     leftBytes -= n;
                 }
-                long newEndFrame = startFrame + newFrames;
-                raf.setLength(info.dataStart + newEndFrame * frameBytes);
+                raf.setLength(info.dataStart + newEnd * frameBytes);
+
+                if (headFade > 0) {
+                    float[] wet = readFloatFrames(rRaf, rInfo.dataStart,
+                            headFade, ch);
+                    for (int f = 0; f < headFade; f++) {
+                        float u = (headFade == 1) ? 1f
+                                : (f / (float) (headFade - 1));
+                        float gWet = 0.5f * (1f - (float) Math.cos(Math.PI * u));
+                        float gDry = 1f - gWet;
+                        for (int c = 0; c < ch; c++) {
+                            int i = f * ch + c;
+                            wet[i] = origHead[i] * gDry + wet[i] * gWet;
+                        }
+                    }
+                    raf.seek(info.dataStart + startFrame * frameBytes);
+                    Dsp.writeFloatsLE(raf, wet, 0, wet.length);
+                }
+
+                if (tailFade > 0) {
+                    float[] wet = readFloatFrames(rRaf,
+                            rInfo.dataStart + (newFrames - tailFade) * frameBytes,
+                            tailFade, ch);
+                    for (int f = 0; f < tailFade; f++) {
+                        float u = (tailFade == 1) ? 1f
+                                : (f / (float) (tailFade - 1));
+                        float gDry = 0.5f * (1f - (float) Math.cos(Math.PI * u));
+                        float gWet = 1f - gDry;
+                        for (int c = 0; c < ch; c++) {
+                            int i = f * ch + c;
+                            wet[i] = wet[i] * gWet + origTail[i] * gDry;
+                        }
+                    }
+                    raf.seek(info.dataStart
+                            + (newEnd - tailFade) * frameBytes);
+                    Dsp.writeFloatsLE(raf, wet, 0, wet.length);
+                }
+
+                if (tailFrames > 0) {
+                    raf.seek(info.dataStart + newEnd * frameBytes);
+                    tRaf.seek(tInfo.dataStart);
+                    long leftTail = tailFrames * frameBytes;
+                    while (leftTail > 0) {
+                        int want = (int) Math.min((long) copyBuf.length, leftTail);
+                        int n = tRaf.read(copyBuf, 0, want);
+                        if (n <= 0) break;
+                        raf.write(copyBuf, 0, n);
+                        leftTail -= n;
+                    }
+                }
+
+                long newTotal = newEnd + tailFrames;
+                raf.setLength(info.dataStart + newTotal * frameBytes);
                 raf.seek(0);
                 raf.write(Dsp.wavFloatHeader(ch, info.sampleRate,
-                        newEndFrame * frameBytes));
+                        newTotal * frameBytes));
+                return newTotal;
             }
-            long newEnd = startFrame + newFrames;
-            int fade = (int) Math.min(Dsp.CROSSFADE_FRAMES,
-                    Math.min(newEnd, tailFrames));
-            long newTotal = newEnd + tailFrames - fade;
-            spliceTailAfterReplace(raw, newEnd, tailTmp);
-            return newTotal;
         } finally {
             if (renderTmp.exists()) {
                 // noinspection ResultOfMethodCallIgnored

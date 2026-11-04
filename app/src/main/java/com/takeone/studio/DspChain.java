@@ -985,10 +985,12 @@ public final class DspChain {
     }
 
     public void updateConfig(Config cfg) {
-        resetProcessorSlotExtras();
-        ensureRackSlots(cfg);
-        rack.applyLegacyConfig(cfg);
-        applySlotExtras(cfg);
+        synchronized (rack) {
+            resetProcessorSlotExtras();
+            ensureRackSlots(cfg);
+            rack.applyLegacyConfig(cfg);
+            applySlotExtras(cfg);
+        }
     }
 
     /**
@@ -1361,12 +1363,16 @@ public final class DspChain {
     }
 
     public void reset() {
-        rack.reset();
+        synchronized (rack) {
+            rack.reset();
+        }
     }
 
     /** Total algorithmic latency (frames) of the active rack. */
     public int getLatencyFrames() {
-        return rack.getLatencyFrames();
+        synchronized (rack) {
+            return rack.getLatencyFrames();
+        }
     }
 
     /**
@@ -1398,7 +1404,9 @@ public final class DspChain {
 
     /** Longest tail (frames) reported by any enabled processor. */
     public int getTailFrames() {
-        return rack.getTailFrames();
+        synchronized (rack) {
+            return rack.getTailFrames();
+        }
     }
 
     /**
@@ -1407,7 +1415,9 @@ public final class DspChain {
      */
     public void prepareOffline(File raw, long startFrame, long endFrame,
                                int sampleRate, int channels) throws Exception {
-        rack.prepareOffline(raw, startFrame, endFrame, sampleRate, channels);
+        synchronized (rack) {
+            rack.prepareOffline(raw, startFrame, endFrame, sampleRate, channels);
+        }
     }
 
     /** The first enabled processor that renders its region offline. */
@@ -1452,11 +1462,15 @@ public final class DspChain {
     }
 
     public void setSampleRate(int sampleRate) {
-        rack.setSampleRate(sampleRate);
+        synchronized (rack) {
+            rack.setSampleRate(sampleRate);
+        }
     }
 
     public void processInPlace(float[] buf, int frames) {
-        rack.processInPlace(buf, frames);
+        synchronized (rack) {
+            rack.processInPlace(buf, frames);
+        }
     }
 
     /**
@@ -1503,8 +1517,10 @@ public final class DspChain {
                 boolean isLastOffline = (i == offProcs.size() - 1);
                 File stepOut = isLastOffline
                         ? outRegionWav
-                        : new File(outRegionWav.getParentFile(),
-                                outRegionWav.getName() + ".step" + i);
+                        : (outRegionWav.getParentFile() != null
+                                ? File.createTempFile("takeone_fxstep_", ".wav",
+                                        outRegionWav.getParentFile())
+                                : File.createTempFile("takeone_fxstep_", ".wav"));
                 long written = proc.processOfflineRangeToFile(
                         curIn, curStart, curEnd, stepOut, sr, ch);
                 if (tempPrev != null && tempPrev.exists()) {
@@ -1552,6 +1568,7 @@ public final class DspChain {
             if (hasInPlaceProcessors() && curFrames > 0) {
                 reset();
                 prepareOffline(outRegionWav, 0L, curFrames, sr, ch);
+                int lat = Math.max(0, getLatencyFrames());
                 int chunk = AudioProcessor.DEFAULT_DSP_CHUNK_FRAMES;
                 byte[] rawBuf = new byte[chunk * ch * 4];
                 float[] block = new float[chunk * ch];
@@ -1560,19 +1577,41 @@ public final class DspChain {
                 long frameBytes = ch * 4L;
                 try (java.io.RandomAccessFile raf =
                              new java.io.RandomAccessFile(outRegionWav, "rw")) {
-                    long off = 0L;
-                    while (off < curFrames) {
-                        int n = (int) Math.min((long) chunk, curFrames - off);
-                        long bytePos = 44L + off * frameBytes;
-                        raf.seek(bytePos);
+                    // Prime the chain so its reported latency is consumed here
+                    // instead of being written back as leading silence.
+                    long primeFrames = Math.min((long) lat, curFrames);
+                    long primePos = 0L;
+                    while (primePos < primeFrames) {
+                        int n = (int) Math.min((long) chunk,
+                                primeFrames - primePos);
+                        raf.seek(44L + primePos * frameBytes);
                         raf.readFully(rawBuf, 0, n * ch * 4);
                         bb.clear();
                         bb.limit(n * ch * 4);
                         bb.asFloatBuffer().get(block, 0, n * ch);
                         rack.processInPlace(block, n);
+                        primePos += n;
+                    }
+
+                    long off = 0L;
+                    while (off < curFrames) {
+                        int n = (int) Math.min((long) chunk, curFrames - off);
+                        long inStart = off + lat;
+                        int fromFile = (int) Math.max(0L,
+                                Math.min((long) n, curFrames - inStart));
+                        if (fromFile > 0) {
+                            raf.seek(44L + inStart * frameBytes);
+                            raf.readFully(rawBuf, 0, fromFile * ch * 4);
+                            bb.clear();
+                            bb.limit(fromFile * ch * 4);
+                            bb.asFloatBuffer().get(block, 0, fromFile * ch);
+                        }
+                        java.util.Arrays.fill(block, fromFile * ch,
+                                n * ch, 0f);
+                        rack.processInPlace(block, n);
                         bb.clear();
                         bb.asFloatBuffer().put(block, 0, n * ch);
-                        raf.seek(bytePos);
+                        raf.seek(44L + off * frameBytes);
                         raf.write(rawBuf, 0, n * ch * 4);
                         off += n;
                     }
@@ -1593,8 +1632,10 @@ public final class DspChain {
         if (raw == null || !raw.exists()) return null;
         if (sampleRate > 0) setSampleRate(sampleRate);
         if (endFrame - startFrame > AudioProcessor.MAX_IN_MEMORY_OFFLINE_FRAMES) {
-            File tmp = new File(raw.getParentFile(),
-                    raw.getName() + ".offline_region_tmp");
+            File tmp = raw.getParentFile() != null
+                    ? File.createTempFile("takeone_offline_region_", ".wav",
+                            raw.getParentFile())
+                    : File.createTempFile("takeone_offline_region_", ".wav");
             try {
                 long outFrames = renderRegionToFile(
                         raw, startFrame, endFrame, sampleRate, tmp);
