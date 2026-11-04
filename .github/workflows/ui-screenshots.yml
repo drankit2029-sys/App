@@ -12,6 +12,7 @@ on:
       - 'tools/ui-screens/**'
       - 'app/src/androidTest/java/com/takeone/studio/UiScreenshotTourTest.java'
       - 'app/src/main/java/com/takeone/studio/MainActivity.java'
+      - 'app/src/main/AndroidManifest.xml'
       - 'app/src/main/res/layout-land/**'
       - '.github/workflows/ui-screenshots.yml'
 
