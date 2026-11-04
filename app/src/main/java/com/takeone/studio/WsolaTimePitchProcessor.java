@@ -104,9 +104,8 @@ final class WsolaTimePitchProcessor {
         for (int f = 0; f < outFrames; f++) {
             float n = norm[f];
             if (n > 1e-4f) {
-                float hqTrim = highQualitySpeech ? 1.0f : 0.985f;
                 for (int c = 0; c < channels; c++) {
-                    out[f * channels + c] = (out[f * channels + c] / n) * hqTrim;
+                    out[f * channels + c] = out[f * channels + c] / n;
                 }
             }
         }
@@ -186,15 +185,7 @@ final class WsolaTimePitchProcessor {
                        boolean preserveFormants) {
         if (input == null || frames <= 0) return input;
         if (Math.abs(semitones) < 1e-6) {
-            float[] copy = input.clone();
-            if (!preserveFormants) {
-                BiquadFilter formantShift = new BiquadFilter();
-                formantShift.setSections(new float[][]{
-                        Dsp.rbjHighShelf(sampleRate, 1800.0, 0.7071, 1.5)
-                }, channels);
-                formantShift.process(copy, frames, channels);
-            }
-            return copy;
+            return input.clone();
         }
         double alpha = Math.pow(2.0, semitones / 12.0);
         float[] stretched = timeStretch(input, frames, channels, alpha, true);

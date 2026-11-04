@@ -176,8 +176,22 @@ final class TruncateSilenceProcessor extends AudioProcessor {
         for (int i = 0; i < spans.size(); i++) {
             int[] span = spans.get(i);
             int keep = keepPerSpan[i];
+            int spanLen = span[1] - span[0];
+            int fadeFrames = Math.min(64, Math.min(keep, spanLen - keep));
             writeIdx = copySlice(in, cursor, span[0], channels, result, writeIdx);
-            writeIdx = copySlice(in, span[0], span[0] + keep, channels, result, writeIdx);
+            int plain = keep - fadeFrames;
+            writeIdx = copySlice(in, span[0], span[0] + plain,
+                    channels, result, writeIdx);
+            for (int f = 0; f < fadeFrames; f++) {
+                float wOut = 0.5f * (1f + (float) Math.cos(
+                        Math.PI * (f + 1) / (fadeFrames + 1)));
+                int srcKeep = (span[0] + plain + f) * channels;
+                int srcPost = (span[1] - fadeFrames + f) * channels;
+                for (int c = 0; c < channels; c++) {
+                    result[writeIdx++] = in[srcKeep + c] * wOut
+                            + in[srcPost + c] * (1f - wOut);
+                }
+            }
             cursor = span[1];
         }
         copySlice(in, cursor, frames, channels, result, writeIdx);
@@ -281,16 +295,54 @@ final class TruncateSilenceProcessor extends AudioProcessor {
             for (int i = 0; i < spans.size(); i++) {
                 long[] span = spans.get(i);
                 long keep = keepPerSpan[i];
+                long spanLen = span[1] - span[0];
+                int fadeFrames = (int) Math.min(64L,
+                        Math.min(keep, spanLen - keep));
                 streamFrameSlice(inRaf, info.dataStart, startFrame + cursor,
                         startFrame + span[0], frameBytes, outRaf, copyBuf);
+                long plain = keep - fadeFrames;
                 streamFrameSlice(inRaf, info.dataStart, startFrame + span[0],
-                        startFrame + span[0] + keep, frameBytes, outRaf, copyBuf);
+                        startFrame + span[0] + plain, frameBytes, outRaf, copyBuf);
+                streamCrossfade(inRaf, info.dataStart,
+                        startFrame + span[0] + plain,
+                        startFrame + span[1] - fadeFrames,
+                        fadeFrames, ch, outRaf);
                 cursor = span[1];
             }
             streamFrameSlice(inRaf, info.dataStart, startFrame + cursor,
                     startFrame + frames, frameBytes, outRaf, copyBuf);
         }
         return outFrames;
+    }
+
+
+    private static void streamCrossfade(RandomAccessFile inRaf, long dataStart,
+                                        long frameA, long frameB, int fadeFrames,
+                                        int channels, RandomAccessFile outRaf)
+            throws Exception {
+        if (fadeFrames <= 0) return;
+        int samples = fadeFrames * channels;
+        float[] a = new float[samples];
+        float[] b = new float[samples];
+        byte[] bytes = new byte[samples * 4];
+        inRaf.seek(dataStart + frameA * channels * 4L);
+        inRaf.readFully(bytes, 0, bytes.length);
+        ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+                .asFloatBuffer().get(a);
+        inRaf.seek(dataStart + frameB * channels * 4L);
+        inRaf.readFully(bytes, 0, bytes.length);
+        ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+                .asFloatBuffer().get(b);
+        float[] mixed = new float[samples];
+        for (int f = 0; f < fadeFrames; f++) {
+            float wOut = 0.5f * (1f + (float) Math.cos(
+                    Math.PI * (f + 1) / (fadeFrames + 1)));
+            for (int c = 0; c < channels; c++) {
+                int idx = f * channels + c;
+                mixed[idx] = a[idx] * wOut + b[idx] * (1f - wOut);
+            }
+        }
+        Dsp.writeFloatsLE(outRaf, mixed, 0, mixed.length);
     }
 
     private static void streamFrameSlice(RandomAccessFile inRaf, long dataStart,

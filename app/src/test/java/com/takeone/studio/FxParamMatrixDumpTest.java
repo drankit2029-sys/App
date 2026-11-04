@@ -266,6 +266,15 @@ public class FxParamMatrixDumpTest {
             float[] in = FxVerifySupport.buildProbe(c.probe, n, ch, clip);
 
             JSONObject o = c.toJson();
+            // Preserve-Formants only has a meaning during an actual pitch
+            // shift. Keep the matrix case at a real +4 st operating point.
+            if ("changepitch".equals(effectId)
+                    && "pitch_formant".equals(c.param)
+                    && p.getParam("pitch_semitones") != null
+                    && Math.abs(p.getParam("pitch_semitones").getFloat()) < 1e-4f) {
+                p.getParam("pitch_semitones").setFloat(4f);
+                o.put("pitchShiftForFormant", 4.0);
+            }
             o.put("channels", ch);
             o.put("inFrames", n);
             o.put("dry", "dry/" + c.probe + ".wav");

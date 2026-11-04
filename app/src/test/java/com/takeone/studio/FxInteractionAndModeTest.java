@@ -694,6 +694,89 @@ public class FxInteractionAndModeTest {
                 nrExpected, nrActual, 0f);
     }
 
+    @Test
+    public void changePitchAtZeroSemitonesIsBitExactBypassRegardlessOfPreserveFormants() {
+        int frames = 4800;
+        float[] input = sine(frames, 1, 440, 0.25f);
+        ChangePitchProcessor p = new ChangePitchProcessor();
+        p.prepare(SR, 1);
+        for (int formant = 0; formant <= 1; formant++) {
+            p.getParam("pitch_formant").setBoolean(formant == 1);
+            p.getParam("pitch_semitones").setFloat(0f);
+            p.getParam("pitch_cents").setCurrentRaw(0);
+            p.getParam("pitch_percent").setFloat(0f);
+            assertFalse("zero-semitone pitch shift must be silent", p.isAudible());
+            float[] out = p.processOfflineRegion(input.clone(), frames, 1);
+            assertArrayEquals("zero-semitone pitch shift must be bit-exact",
+                    input, out, 0f);
+        }
+    }
+
+    @Test
+    public void wsolaTimeStretchPreservesUnityGainWhenHqSpeechIsOff() {
+        int frames = 4800;
+        float[] input = new float[frames];
+        Arrays.fill(input, 0.25f);
+        WsolaTimePitchProcessor wsola = new WsolaTimePitchProcessor(SR);
+        float[] out = wsola.timeStretch(input, frames, 1, 1.0, false);
+        assertEquals(frames, out.length);
+        for (int i = 1200; i < 3600; i++) {
+            assertEquals("WSOLA off-HQ gain changed at " + i,
+                    0.25f, out[i], 1e-4f);
+        }
+    }
+
+    @Test
+    public void truncateSilenceCrossfadesSpliceBoundaryWithoutStepDiscontinuity()
+            throws Exception {
+        int frames = 38400;
+        float[] input = new float[frames];
+        int pauseStart = 9600;   // 0.20 s
+        int pauseEnd = 24000;    // 0.50 s
+        for (int f = 0; f < frames; f++) {
+            if (f < pauseStart) {
+                input[f] = (float) (0.20 * Math.sin(2.0 * Math.PI * 440.0 * f / SR));
+            } else if (f < pauseEnd) {
+                input[f] = (float) (0.03 * Math.sin(2.0 * Math.PI * 137.0 * f / SR));
+            } else {
+                input[f] = (float) (0.20 * Math.sin(2.0 * Math.PI * 137.0 * f / SR));
+            }
+        }
+        TruncateSilenceProcessor p = new TruncateSilenceProcessor();
+        p.getParam("ts_thresh").setFloat(-30f);
+        p.getParam("ts_min").setCurrentRaw(100);
+        p.getParam("ts_trunc").setCurrentRaw(100);
+        p.prepare(SR, 1);
+
+        float[] memory = p.processOfflineRegion(input.clone(), frames, 1);
+        int expectedFrames = frames - ((pauseEnd - pauseStart) - 4800);
+        assertEquals(expectedFrames, memory.length);
+        int splice = pauseStart + 4800;
+        float memoryStep = Math.abs(memory[splice] - memory[splice - 1]);
+        assertTrue("in-memory splice step=" + memoryStep,
+                memoryStep < 0.01f);
+
+        File src = File.createTempFile("takeone-trunc-src", ".wav");
+        File dst = File.createTempFile("takeone-trunc-dst", ".wav");
+        try {
+            FxVerifySupport.writeFloatWav(src, input, 1, SR);
+            long fileFrames = p.processOfflineRangeToFile(
+                    src, 0, frames, dst, SR, 1);
+            assertEquals(expectedFrames, fileFrames);
+            FxVerifySupport.WavData rendered = FxVerifySupport.readFloatWav(dst);
+            assertEquals(memory.length, rendered.samples.length);
+            assertArrayEquals(memory, rendered.samples, 1e-6f);
+            float fileStep = Math.abs(rendered.samples[splice]
+                    - rendered.samples[splice - 1]);
+            assertTrue("file splice step=" + fileStep, fileStep < 0.01f);
+        } finally {
+            // noinspection ResultOfMethodCallIgnored
+            src.delete();
+            // noinspection ResultOfMethodCallIgnored
+            dst.delete();
+        }
+    }
+
     private static void streamChunks(AudioProcessor processor, float[] input,
                                      float[] actual, int frames, int latency) {
         int cur = 0;

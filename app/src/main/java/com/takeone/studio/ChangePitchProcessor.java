@@ -64,8 +64,7 @@ final class ChangePitchProcessor extends AudioProcessor {
 
     @Override
     public boolean isAudible() {
-        return isEnabled() && (Math.abs(totalSemitones()) > 0.001f
-                || preserveFormant.getCurrentRaw() != preserveFormant.defaultRaw);
+        return isEnabled() && Math.abs(totalSemitones()) > 1e-4f;
     }
 
     private float totalSemitones() {

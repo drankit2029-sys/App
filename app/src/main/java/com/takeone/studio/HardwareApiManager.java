@@ -432,15 +432,14 @@ public final class HardwareApiManager {
         }
     }
 
-    private void readBackSsboOnGlThread(int slot, float[] dst, int offset, int count) {
+    private boolean readBackSsboOnGlThread(int slot, float[] dst, int offset, int count) {
         int bytes = count * 4;
         GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, ssboIds[slot]);
         ByteBuffer mapped = (ByteBuffer) GLES31.glMapBufferRange(
                 GLES31.GL_SHADER_STORAGE_BUFFER, 0, bytes, GLES30.GL_MAP_READ_BIT);
-        if (mapped != null) {
-            mapped.order(ByteOrder.nativeOrder()).asFloatBuffer().get(dst, offset, count);
-            GLES31.glUnmapBuffer(GLES31.GL_SHADER_STORAGE_BUFFER);
-        }
+        if (mapped == null) return false;
+        mapped.order(ByteOrder.nativeOrder()).asFloatBuffer().get(dst, offset, count);
+        return GLES31.glUnmapBuffer(GLES31.GL_SHADER_STORAGE_BUFFER);
     }
 
     private void teardownEglOnGlThread() {
@@ -528,7 +527,9 @@ public final class HardwareApiManager {
                                 GLES31.glDispatchCompute(groups, 1, 1);
                                 GLES31.glMemoryBarrier(GLES31.GL_BUFFER_UPDATE_BARRIER_BIT
                                         | GLES31.GL_SHADER_STORAGE_BARRIER_BIT);
-                                readBackSsboOnGlThread(0, wetBuf, off, chunk);
+                                if (!readBackSsboOnGlThread(0, wetBuf, off, chunk)) {
+                                    return Boolean.FALSE;
+                                }
                             }
                             gpuDispatchCount.incrementAndGet();
                             return Boolean.TRUE;
@@ -570,7 +571,10 @@ public final class HardwareApiManager {
                                        float[] hRe, float[] hIm, int size) {
         if (xRe == null || xIm == null || hRe == null || hIm == null || size <= 0) return;
         int n = Math.min(size, Math.min(xRe.length, hRe.length));
-        if (n >= 1024 && getComputeTier() == GpuComputeTier.GLES31_COMPUTE_SHADER) {
+        // Filter Curve EQ calls this 375 times/second with 2048-8192-point
+        // spectra. Keep those tiny multiplies on the CPU; only very large
+        // offline transforms justify the GL thread round-trip.
+        if (n >= 65536 && getComputeTier() == GpuComputeTier.GLES31_COMPUTE_SHADER) {
             try {
                 final int count = n;
                 Future<Boolean> fut = glThread.submit(new Callable<Boolean>() {
@@ -595,7 +599,9 @@ public final class HardwareApiManager {
                             GLES31.glDispatchCompute((count + 127) / 128, 1, 1);
                             GLES31.glMemoryBarrier(GLES31.GL_BUFFER_UPDATE_BARRIER_BIT
                                     | GLES31.GL_SHADER_STORAGE_BARRIER_BIT);
-                            readBackSsboOnGlThread(0, packedX, 0, count * 2);
+                            if (!readBackSsboOnGlThread(0, packedX, 0, count * 2)) {
+                                return Boolean.FALSE;
+                            }
                             for (int i = 0; i < count; i++) {
                                 xRe[i] = packedX[i * 2];
                                 xIm[i] = packedX[i * 2 + 1];
@@ -670,7 +676,9 @@ public final class HardwareApiManager {
                                 GLES31.glDispatchCompute((candidateCount + 63) / 64, 1, 1);
                                 GLES31.glMemoryBarrier(GLES31.GL_BUFFER_UPDATE_BARRIER_BIT
                                         | GLES31.GL_SHADER_STORAGE_BARRIER_BIT);
-                                readBackSsboOnGlThread(1, scores, 0, candidateCount);
+                                if (!readBackSsboOnGlThread(1, scores, 0, candidateCount)) {
+                                    return null;
+                                }
                                 int best = defaultBest;
                                 float bestScore = -1e30f;
                                 for (int i = 0; i < candidateCount; i++) {

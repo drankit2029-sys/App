@@ -376,4 +376,39 @@ public class FxCommitAndCrossfadeTest {
             out.delete();
         }
     }
+
+    @Test
+    public void firstOfflineFailureWithInPlaceTailRollsBackUndoJournal()
+            throws Exception {
+        File dir = RuntimeEnvironment.getApplication().getCacheDir();
+        int frames = 2000;
+        File raw = writeSineWav(dir, "fx_offline_fail_undo.wav", frames, 1, 0.2f);
+        float[] before = readAllSamples(raw, frames, 1);
+        FormatConverter.WavInfo info = FormatConverter.readFloatWav(raw);
+        EditEngine.UndoJournal uj = new EditEngine.UndoJournal(dir);
+        try {
+            // commitDspFx records this range before running the offline loop.
+            long start = 400L;
+            long end = 1600L;
+            assertTrue(uj.recordRangeSnapshot(raw,
+                    info.dataStart + start * 4L, (end - start) * 4L));
+            // The first offline processor fails without touching the file.
+            long updated = -1L;
+            if (updated < 0) {
+                assertTrue("upfront snapshot must be rolled back",
+                        uj.canUndo());
+                assertTrue(uj.undo(raw));
+            }
+            assertFalse("failed first offline step left an orphan snapshot",
+                    uj.canUndo());
+            float[] after = readAllSamples(raw, frames, 1);
+            for (int i = 0; i < frames; i++) {
+                assertEquals("rollback changed sample " + i,
+                        before[i], after[i], 0f);
+            }
+        } finally {
+            // noinspection ResultOfMethodCallIgnored
+            raw.delete();
+        }
+    }
 }

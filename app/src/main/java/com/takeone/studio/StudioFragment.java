@@ -6134,26 +6134,24 @@ public class StudioFragment extends Fragment {
                     }
                 }
                 long regionEnd = end;
-                boolean firstOffline = true;
                 for (AudioProcessor proc : offline) {
                     FormatConverter.WavInfo curInfo = FormatConverter.readFloatWav(raw);
                     long curTotalBefore = curInfo.dataBytes / 4 / Math.max(1, curInfo.channels);
                     long newTotal = EditEngine.applyLengthChangingEffectToRange(
                             raw, start, regionEnd, proc, null);
                     if (newTotal < 0) {
-                        if (firstOffline) {
-                            waveform.discardTopUndoPeaks();
-                        } else if (uj != null && uj.canUndo()) {
+                        // The upfront B.2 snapshot is already on the journal,
+                        // even when the FIRST offline processor fails.
+                        if (uj != null && uj.canUndo()) {
                             uj.undo(raw);
-                            waveform.discardTopUndoPeaks();
                         }
+                        waveform.discardTopUndoPeaks();
                         peaksPushed = false;
                         Toast.makeText(requireContext(),
                                 "This effect could not be applied here",
                                 Toast.LENGTH_SHORT).show();
                         return false;
                     }
-                    firstOffline = false;
                     regionEnd = start + (newTotal - (curTotalBefore - regionEnd));
                 }
                 // The offline pass rewrote the region: run the remaining
