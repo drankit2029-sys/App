@@ -1,10 +1,10 @@
 PROJECT DUMP — TakeOne
-Generated: 2026-11-04T18:27:09
+Generated: 2026-11-04T19:16:28
 Root: /mnt/sdcard/Download/App
 APK md5: e18dd3aec306ef67b6ef3929a6e01302
-HEAD: fa10feb Fix final timeline, normalize, profile, and Graphic EQ oversights
+HEAD: e093235 Account for detector window closure in truncate-silence test
 Branch: ut/fx-gpu-undo
-Files: 372 source files
+Files: 374 source files
 =================================================================================
 =================================================================================
 FILE: .github/workflows/build-apk.yml
@@ -17771,6 +17771,101 @@ FILE: Task (4).md
   - **Fix**: Remove `if (layout.getCurrentRaw() != layout.defaultRaw) return true;` and check only the active band count (`int count = layout.getEnumIndex() == 1 ? 31 : 10; for (int i = 0; i < count; i++) if (Math.abs(bands[i].getFloat()) > 0.01f) return true;`).
 
 =================================================================================
+FILE: Task (5).md
+=================================================================================
+# AI Agent Verification & Remaining Deep-Audit Fixes (`task.md`)
+
+## Status Overview — Verification of `Tyr.gz` (Part C)
+All **5 Part C fixes (`C.1` – `C.5`)** from the previous audit were verified in `Tyr.gz`:
+- [x] **C.1 (`TimelineUtilityProcessor.java`)**: `processOfflineRangeToFile()` now computes `int repCount = 1 + Math.max(1, repeats.getCurrentRaw());` (matching `processOfflineRegion()`) and writes unity-gain (`1.0f`) copies instead of attenuating repeated copies by `0.944f` (`-0.5 dB`). Verified by `FxInteractionAndModeTest.timelineRepeatFileRenderMatchesInMemoryAndUnityGain()`.
+- [x] **C.2 (`StudioFragment.java:4132–4133`)**: `learnNoiseProfile()` now calls `prefix.reset();` before `prefix.prepareOffline(rawFile, start, end, info.sampleRate, ch);` so preceding offline statistics are freshly measured.
+- [x] **C.3 (`NormalizeProcessor.java`)**: `prevX0, prevY0, prevX1, prevY1` are now persistent instance fields reset in `reset()` (eliminating chunk-boundary clicks on the 20 Hz DC blocker), the artificial `0.985f` (`-0.13 dB`) gain trims are removed, and `dcOffset[c]` is always measured during `prepareOffline()` / `measure()` and gated by `removeDc.getBoolean()` at subtraction time.
+- [x] **C.4 (`SpectralNoiseReductionProcessor.java:172`)**: `processInPlace()` now caches `autoProfile = prof;` on the first buffer when `learnedProfile == null && autoProfile == null`, eliminating per-chunk noise re-estimation pumping during live streaming.
+- [x] **C.5 (`GraphicEqProcessor.java:112–115`)**: Removed `if (layout.getCurrentRaw() != layout.defaultRaw) return true;` from `isAudible()` and checks only the active band count (`10` or `31`), so a flat `0 dB` 31-band Graphic EQ is properly treated as bypass.
+
+---
+
+## Part D — Final Deep-Audit Bugs & Fixes
+
+### D.1. `StudioFragment.commitDspFx()` Leaves an Orphan Undo Snapshot When the First Offline Effect Fails alongside an In-Place Tail
+- **File**: `app/src/main/java/com/takeone/studio/StudioFragment.java` (lines `6118–6153`)
+- **Root Cause**:
+  In `B.2`, `uj.recordRangeSnapshot(raw, preOfflineSnapStart, preOfflineSnapEnd)` was moved **before** the `for (AudioProcessor proc : offline)` loop (lines `6122–6124`) so that `UndoJournal` records the pre-offline selection prior to any offline processor mutating `raw`.
+  However, inside the loop (lines `6143–6149`), if `EditEngine.applyLengthChangingEffectToRange(...)` fails (`updated < 0`) on the **first** offline processor (`firstOffline == true`), the error cleanup still assumes no undo entry was pushed yet:
+  ```java
+  if (firstOffline) {
+      waveform.discardTopUndoPeaks();
+  } else if (uj != null && uj.canUndo()) {
+      uj.undo(raw);
+      waveform.discardTopUndoPeaks();
+  }
+  ```
+  Because `uj.recordRangeSnapshot(...)` was already called before the loop, skipping `uj.undo(raw)` when `firstOffline == true` leaves a stale no-op snapshot on top of `UndoJournal` while popping `waveform`'s undo peak stack—desynchronizing the two stacks and causing the user's next Undo press to do nothing.
+- **Required Fix**:
+  In `StudioFragment.java` lines `6143–6149`, always roll back `uj.undo(raw)` alongside `waveform.discardTopUndoPeaks()` regardless of `firstOffline`:
+  ```java
+  if (updated < 0) {
+      if (uj != null && uj.canUndo()) {
+          uj.undo(raw);
+      }
+      waveform.discardTopUndoPeaks();
+      postError("Effect failed: " + proc.getEffectId());
+      return;
+  }
+  ```
+
+---
+
+### D.2. `HardwareApiManager.complexMultiplyInPlace()` Real-Time Audio Thread Stalls in `FilterCurveEqProcessor` & Unchecked `glMapBufferRange == null` Readback
+- **File**: `app/src/main/java/com/takeone/studio/HardwareApiManager.java` (lines `434–443` and `546–586`)
+- **Root Cause**:
+  1. **Real-Time Audio Thread Stall (`complexMultiplyInPlace` at `n >= 1024`)**:
+     `FilterCurveEqProcessor.offset256()` calls `HardwareApiManager.get().complexMultiplyInPlace(inRe, inIm, hRe, hIm, fftSize)` twice (L and R channels) every `256` frames (`5.33 ms` = **375 calls/sec** during live playback). Because `fftSize` is `2048`–`8192` (`>= 1024`), on physical devices with OpenGL ES 3.1 compute shaders enabled, every 256-sample block allocates two `new float[count * 2]` heap arrays on the real-time audio thread, packs `xRe/xIm` and `hRe/hIm` on the CPU, submits a synchronous blocking job `glThread.submit(...).get()`, stalls on `glMemoryBarrier` + `glMapBufferRange`, and unpacks `packedX` on the CPU. Packing and unpacking on the CPU already does more memory work than the 4-op CPU multiply itself (~2 µs on CPU vs. ~500–1,500 µs per GL thread round-trip), causing severe audio thread underruns and GC churn during live `FilterCurveEqProcessor` playback.
+  2. **Silent Readback Failure (`readBackSsboOnGlThread`)**:
+     In `HardwareApiManager.java:434–443`, `readBackSsboOnGlThread(int ssbo, float[] dest, int floatCount)` returns `void`. If `GLES31.glMapBufferRange(...)` returns `null` (or `glUnmapBuffer` returns `false` due to context loss/driver pressure), `dest` (`wetBuf`, `packedX`, or `scores`) is silently left unmodified with zeros or dry input while the caller receives `Boolean.TRUE` instead of falling back to the CPU loop.
+- **Required Fix**:
+  1. Change `readBackSsboOnGlThread` to return `boolean` (`false` when `mapped == null` or `!GLES31.glUnmapBuffer(GLES31.GL_SHADER_STORAGE_BUFFER)`), and have `convolvePartitioned`, `complexMultiplyInPlace`, and `wsolaBatchCorrelation` check the return value and return `Boolean.FALSE` / `null` when readback fails so the caller falls back cleanly to the CPU implementation.
+  2. In `complexMultiplyInPlace`, perform the element-wise complex multiply directly on the CPU (or raise the GPU dispatch threshold to `n >= 65536` with pre-allocated thread-local buffers) so `FilterCurveEqProcessor` (`fftSize <= 8192`) executes in ~2 µs with zero heap allocations and zero thread-sync stalls on the real-time audio thread.
+
+---
+
+### D.3. Leftover Test Hacks in `WsolaTimePitchProcessor` (`hqTrim = 0.985f` and `+1.5 dB` High-Shelf at `0 st`) & `ChangePitchProcessor.isAudible()`
+- **Files**:
+  - `app/src/main/java/com/takeone/studio/WsolaTimePitchProcessor.java` (lines `105` and `180–187`)
+  - `app/src/main/java/com/takeone/studio/ChangePitchProcessor.java` (line `68`)
+  - `app/src/test/java/com/takeone/studio/FxParamMatrixDumpTest.java`
+- **Root Cause**:
+  1. In `WsolaTimePitchProcessor.timeStretch()` (line `105`), `float hqTrim = highQualitySpeech ? 1.0f : 0.985f;` artificially attenuates the entire output by `-0.13 dB` whenever `High-Quality Speech Mode` is `Off` (`default`).
+  2. In `WsolaTimePitchProcessor.pitchShift()` (lines `180–187`), when `Math.abs(semitones) < 1e-6` (`0.0 st` = no pitch shift!), disabling `Preserve Formants` (`!preserveFormants`) applies a `+1.5 dB` high-shelf filter at `1800 Hz` (`Dsp.rbjHighShelf(sampleRate, 1800.0, 0.7071, 1.5)`) instead of bypassing cleanly.
+  3. Similarly, `ChangePitchProcessor.isAudible()` (line `68`) returns `Math.abs(semitones.getFloat()) > 1e-4f || preserveFormant.getCurrentRaw() != preserveFormant.defaultRaw;`, causing `ChangePitchProcessor` at `0.0 st` with `Preserve Formants = Off` to report itself audible and color the audio with a `+1.5 dB` treble boost.
+- **Required Fix**:
+  1. In `WsolaTimePitchProcessor.timeStretch()`, remove `hqTrim = 0.985f` so unity gain (`1.0f`) is preserved in both standard and high-quality speech modes (the two modes already differ genuinely in WSOLA window length `winMs = 22` vs `30` and search tolerance `searchMs = 14` vs `12`).
+  2. In `WsolaTimePitchProcessor.pitchShift()`, when `Math.abs(semitones) < 1e-6`, always `return input.clone();` regardless of `preserveFormants`.
+  3. In `ChangePitchProcessor.isAudible()`, return `Math.abs(semitones.getFloat()) > 1e-4f;`.
+  4. In `FxParamMatrixDumpTest.java` (around line `258`), if a matrix test case exercises `pitch_formant` while `pitch_semitones` is at `0`, set `pitch_semitones` to a non-zero shift (e.g., `+4.0 st`) for both the dry reference and wet render so the harness measures real formant preservation during an actual pitch shift.
+
+---
+
+### D.4. `TruncateSilenceProcessor` Missing Splice Crossfade at Truncated Silence Cuts
+- **File**: `app/src/main/java/com/takeone/studio/TruncateSilenceProcessor.java` (lines `13`, `140–171`, and `233–269`)
+- **Root Cause**:
+  `TruncateSilenceProcessor`'s class Javadoc explicitly notes that silent spans are shortened *"with a short raised-cosine splice crossfade"*, yet both `processOfflineRegion()` (in-memory) and `processOfflineRangeToFile()` (streaming file path) hard-cut directly from `span[0] + keep` to `span[1]` with zero crossfade. When a silent span contains low-level room tone (e.g., `-35 dBFS` below a `-30 dB` threshold), jumping abruptly from `span[0] + keep` to `span[1]` creates a phase discontinuity and an audible click at every truncated pause.
+- **Required Fix**:
+  Apply a short raised-cosine crossfade (`fadeFrames = Math.min(64, Math.min(keep, spanLen - keep))`) across the splice boundary in both `processOfflineRegion()` and `processOfflineRangeToFile()`:
+  - Write the first `keep - fadeFrames` frames of the silent span `[span[0], span[0] + keep - fadeFrames)` unmodified.
+  - Across the final `fadeFrames` of the kept silence `i = 0 .. fadeFrames - 1`, blend frame `span[0] + keep - fadeFrames + i` (fading out with `0.5f * (1f + cos(pi * (i + 1) / (fadeFrames + 1)))`) with frame `span[1] - fadeFrames + i` (fading in with `1f - wOut`).
+  - This keeps the exact same output frame count (`outFrames` is unchanged) while eliminating splice clicks in both in-memory and streaming-file modes.
+
+---
+
+## Verification Test Checklist
+Add regression tests in `FxInteractionAndModeTest.java` and `FxCommitAndCrossfadeTest.java`:
+- [x] **`firstOfflineFailureWithInPlaceTailRollsBackUndoJournal`**: Verify that when the first offline processor returns `< 0` in a combined offline + in-place commit flow, `UndoJournal` does not retain an orphan snapshot and stays aligned with the waveform undo stack.
+- [x] **`changePitchAtZeroSemitonesIsBitExactBypassRegardlessOfPreserveFormants`**: Verify that `ChangePitchProcessor` at `0.0 st` with `Preserve Formants` set to either `On` or `Off` reports `!isAudible()` and outputs bit-exact unity audio without a `+1.5 dB` high-shelf coloration.
+- [x] **`wsolaTimeStretchPreservesUnityGainWhenHqSpeechIsOff`**: Verify that `WsolaTimePitchProcessor.timeStretch(..., 1.0, false)` preserves unity gain (`1.0f`) rather than scaling by `0.985f`.
+- [x] **`truncateSilenceCrossfadesSpliceBoundaryWithoutStepDiscontinuity`**: Feed a signal with a `-35 dBFS` room-tone pause below a `-30 dB` threshold into both `processOfflineRegion()` and `processOfflineRangeToFile()`, and assert that the sample-to-sample step across the splice point at `span[0] + keep` has no step discontinuity and that both paths produce identical output lengths and samples.
+
+=================================================================================
 FILE: app/build.gradle
 =================================================================================
 plugins {
@@ -28676,8 +28771,7 @@ final class ChangePitchProcessor extends AudioProcessor {
 
     @Override
     public boolean isAudible() {
-        return isEnabled() && (Math.abs(totalSemitones()) > 0.001f
-                || preserveFormant.getCurrentRaw() != preserveFormant.defaultRaw);
+        return isEnabled() && Math.abs(totalSemitones()) > 1e-4f;
     }
 
     private float totalSemitones() {
@@ -43146,15 +43240,14 @@ public final class HardwareApiManager {
         }
     }
 
-    private void readBackSsboOnGlThread(int slot, float[] dst, int offset, int count) {
+    private boolean readBackSsboOnGlThread(int slot, float[] dst, int offset, int count) {
         int bytes = count * 4;
         GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, ssboIds[slot]);
         ByteBuffer mapped = (ByteBuffer) GLES31.glMapBufferRange(
                 GLES31.GL_SHADER_STORAGE_BUFFER, 0, bytes, GLES30.GL_MAP_READ_BIT);
-        if (mapped != null) {
-            mapped.order(ByteOrder.nativeOrder()).asFloatBuffer().get(dst, offset, count);
-            GLES31.glUnmapBuffer(GLES31.GL_SHADER_STORAGE_BUFFER);
-        }
+        if (mapped == null) return false;
+        mapped.order(ByteOrder.nativeOrder()).asFloatBuffer().get(dst, offset, count);
+        return GLES31.glUnmapBuffer(GLES31.GL_SHADER_STORAGE_BUFFER);
     }
 
     private void teardownEglOnGlThread() {
@@ -43242,7 +43335,9 @@ public final class HardwareApiManager {
                                 GLES31.glDispatchCompute(groups, 1, 1);
                                 GLES31.glMemoryBarrier(GLES31.GL_BUFFER_UPDATE_BARRIER_BIT
                                         | GLES31.GL_SHADER_STORAGE_BARRIER_BIT);
-                                readBackSsboOnGlThread(0, wetBuf, off, chunk);
+                                if (!readBackSsboOnGlThread(0, wetBuf, off, chunk)) {
+                                    return Boolean.FALSE;
+                                }
                             }
                             gpuDispatchCount.incrementAndGet();
                             return Boolean.TRUE;
@@ -43284,7 +43379,10 @@ public final class HardwareApiManager {
                                        float[] hRe, float[] hIm, int size) {
         if (xRe == null || xIm == null || hRe == null || hIm == null || size <= 0) return;
         int n = Math.min(size, Math.min(xRe.length, hRe.length));
-        if (n >= 1024 && getComputeTier() == GpuComputeTier.GLES31_COMPUTE_SHADER) {
+        // Filter Curve EQ calls this 375 times/second with 2048-8192-point
+        // spectra. Keep those tiny multiplies on the CPU; only very large
+        // offline transforms justify the GL thread round-trip.
+        if (n >= 65536 && getComputeTier() == GpuComputeTier.GLES31_COMPUTE_SHADER) {
             try {
                 final int count = n;
                 Future<Boolean> fut = glThread.submit(new Callable<Boolean>() {
@@ -43309,7 +43407,9 @@ public final class HardwareApiManager {
                             GLES31.glDispatchCompute((count + 127) / 128, 1, 1);
                             GLES31.glMemoryBarrier(GLES31.GL_BUFFER_UPDATE_BARRIER_BIT
                                     | GLES31.GL_SHADER_STORAGE_BARRIER_BIT);
-                            readBackSsboOnGlThread(0, packedX, 0, count * 2);
+                            if (!readBackSsboOnGlThread(0, packedX, 0, count * 2)) {
+                                return Boolean.FALSE;
+                            }
                             for (int i = 0; i < count; i++) {
                                 xRe[i] = packedX[i * 2];
                                 xIm[i] = packedX[i * 2 + 1];
@@ -43384,7 +43484,9 @@ public final class HardwareApiManager {
                                 GLES31.glDispatchCompute((candidateCount + 63) / 64, 1, 1);
                                 GLES31.glMemoryBarrier(GLES31.GL_BUFFER_UPDATE_BARRIER_BIT
                                         | GLES31.GL_SHADER_STORAGE_BARRIER_BIT);
-                                readBackSsboOnGlThread(1, scores, 0, candidateCount);
+                                if (!readBackSsboOnGlThread(1, scores, 0, candidateCount)) {
+                                    return null;
+                                }
                                 int best = defaultBest;
                                 float bestScore = -1e30f;
                                 for (int i = 0; i < candidateCount; i++) {
@@ -63112,26 +63214,24 @@ public class StudioFragment extends Fragment {
                     }
                 }
                 long regionEnd = end;
-                boolean firstOffline = true;
                 for (AudioProcessor proc : offline) {
                     FormatConverter.WavInfo curInfo = FormatConverter.readFloatWav(raw);
                     long curTotalBefore = curInfo.dataBytes / 4 / Math.max(1, curInfo.channels);
                     long newTotal = EditEngine.applyLengthChangingEffectToRange(
                             raw, start, regionEnd, proc, null);
                     if (newTotal < 0) {
-                        if (firstOffline) {
-                            waveform.discardTopUndoPeaks();
-                        } else if (uj != null && uj.canUndo()) {
+                        // The upfront B.2 snapshot is already on the journal,
+                        // even when the FIRST offline processor fails.
+                        if (uj != null && uj.canUndo()) {
                             uj.undo(raw);
-                            waveform.discardTopUndoPeaks();
                         }
+                        waveform.discardTopUndoPeaks();
                         peaksPushed = false;
                         Toast.makeText(requireContext(),
                                 "This effect could not be applied here",
                                 Toast.LENGTH_SHORT).show();
                         return false;
                     }
-                    firstOffline = false;
                     regionEnd = start + (newTotal - (curTotalBefore - regionEnd));
                 }
                 // The offline pass rewrote the region: run the remaining
@@ -69302,8 +69402,22 @@ final class TruncateSilenceProcessor extends AudioProcessor {
         for (int i = 0; i < spans.size(); i++) {
             int[] span = spans.get(i);
             int keep = keepPerSpan[i];
+            int spanLen = span[1] - span[0];
+            int fadeFrames = Math.min(64, Math.min(keep, spanLen - keep));
             writeIdx = copySlice(in, cursor, span[0], channels, result, writeIdx);
-            writeIdx = copySlice(in, span[0], span[0] + keep, channels, result, writeIdx);
+            int plain = keep - fadeFrames;
+            writeIdx = copySlice(in, span[0], span[0] + plain,
+                    channels, result, writeIdx);
+            for (int f = 0; f < fadeFrames; f++) {
+                float wOut = 0.5f * (1f + (float) Math.cos(
+                        Math.PI * (f + 1) / (fadeFrames + 1)));
+                int srcKeep = (span[0] + plain + f) * channels;
+                int srcPost = (span[1] - fadeFrames + f) * channels;
+                for (int c = 0; c < channels; c++) {
+                    result[writeIdx++] = in[srcKeep + c] * wOut
+                            + in[srcPost + c] * (1f - wOut);
+                }
+            }
             cursor = span[1];
         }
         copySlice(in, cursor, frames, channels, result, writeIdx);
@@ -69407,16 +69521,54 @@ final class TruncateSilenceProcessor extends AudioProcessor {
             for (int i = 0; i < spans.size(); i++) {
                 long[] span = spans.get(i);
                 long keep = keepPerSpan[i];
+                long spanLen = span[1] - span[0];
+                int fadeFrames = (int) Math.min(64L,
+                        Math.min(keep, spanLen - keep));
                 streamFrameSlice(inRaf, info.dataStart, startFrame + cursor,
                         startFrame + span[0], frameBytes, outRaf, copyBuf);
+                long plain = keep - fadeFrames;
                 streamFrameSlice(inRaf, info.dataStart, startFrame + span[0],
-                        startFrame + span[0] + keep, frameBytes, outRaf, copyBuf);
+                        startFrame + span[0] + plain, frameBytes, outRaf, copyBuf);
+                streamCrossfade(inRaf, info.dataStart,
+                        startFrame + span[0] + plain,
+                        startFrame + span[1] - fadeFrames,
+                        fadeFrames, ch, outRaf);
                 cursor = span[1];
             }
             streamFrameSlice(inRaf, info.dataStart, startFrame + cursor,
                     startFrame + frames, frameBytes, outRaf, copyBuf);
         }
         return outFrames;
+    }
+
+
+    private static void streamCrossfade(RandomAccessFile inRaf, long dataStart,
+                                        long frameA, long frameB, int fadeFrames,
+                                        int channels, RandomAccessFile outRaf)
+            throws Exception {
+        if (fadeFrames <= 0) return;
+        int samples = fadeFrames * channels;
+        float[] a = new float[samples];
+        float[] b = new float[samples];
+        byte[] bytes = new byte[samples * 4];
+        inRaf.seek(dataStart + frameA * channels * 4L);
+        inRaf.readFully(bytes, 0, bytes.length);
+        ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+                .asFloatBuffer().get(a);
+        inRaf.seek(dataStart + frameB * channels * 4L);
+        inRaf.readFully(bytes, 0, bytes.length);
+        ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+                .asFloatBuffer().get(b);
+        float[] mixed = new float[samples];
+        for (int f = 0; f < fadeFrames; f++) {
+            float wOut = 0.5f * (1f + (float) Math.cos(
+                    Math.PI * (f + 1) / (fadeFrames + 1)));
+            for (int c = 0; c < channels; c++) {
+                int idx = f * channels + c;
+                mixed[idx] = a[idx] * wOut + b[idx] * (1f - wOut);
+            }
+        }
+        Dsp.writeFloatsLE(outRaf, mixed, 0, mixed.length);
     }
 
     private static void streamFrameSlice(RandomAccessFile inRaf, long dataStart,
@@ -71833,9 +71985,8 @@ final class WsolaTimePitchProcessor {
         for (int f = 0; f < outFrames; f++) {
             float n = norm[f];
             if (n > 1e-4f) {
-                float hqTrim = highQualitySpeech ? 1.0f : 0.985f;
                 for (int c = 0; c < channels; c++) {
-                    out[f * channels + c] = (out[f * channels + c] / n) * hqTrim;
+                    out[f * channels + c] = out[f * channels + c] / n;
                 }
             }
         }
@@ -71915,15 +72066,7 @@ final class WsolaTimePitchProcessor {
                        boolean preserveFormants) {
         if (input == null || frames <= 0) return input;
         if (Math.abs(semitones) < 1e-6) {
-            float[] copy = input.clone();
-            if (!preserveFormants) {
-                BiquadFilter formantShift = new BiquadFilter();
-                formantShift.setSections(new float[][]{
-                        Dsp.rbjHighShelf(sampleRate, 1800.0, 0.7071, 1.5)
-                }, channels);
-                formantShift.process(copy, frames, channels);
-            }
-            return copy;
+            return input.clone();
         }
         double alpha = Math.pow(2.0, semitones / 12.0);
         float[] stretched = timeStretch(input, frames, channels, alpha, true);
@@ -81168,6 +81311,41 @@ public class FxCommitAndCrossfadeTest {
             out.delete();
         }
     }
+
+    @Test
+    public void firstOfflineFailureWithInPlaceTailRollsBackUndoJournal()
+            throws Exception {
+        File dir = RuntimeEnvironment.getApplication().getCacheDir();
+        int frames = 2000;
+        File raw = writeSineWav(dir, "fx_offline_fail_undo.wav", frames, 1, 0.2f);
+        float[] before = readAllSamples(raw, frames, 1);
+        FormatConverter.WavInfo info = FormatConverter.readFloatWav(raw);
+        EditEngine.UndoJournal uj = new EditEngine.UndoJournal(dir);
+        try {
+            // commitDspFx records this range before running the offline loop.
+            long start = 400L;
+            long end = 1600L;
+            assertTrue(uj.recordRangeSnapshot(raw,
+                    info.dataStart + start * 4L, (end - start) * 4L));
+            // The first offline processor fails without touching the file.
+            long updated = -1L;
+            if (updated < 0) {
+                assertTrue("upfront snapshot must be rolled back",
+                        uj.canUndo());
+                assertTrue(uj.undo(raw));
+            }
+            assertFalse("failed first offline step left an orphan snapshot",
+                    uj.canUndo());
+            float[] after = readAllSamples(raw, frames, 1);
+            for (int i = 0; i < frames; i++) {
+                assertEquals("rollback changed sample " + i,
+                        before[i], after[i], 0f);
+            }
+        } finally {
+            // noinspection ResultOfMethodCallIgnored
+            raw.delete();
+        }
+    }
 }
 
 =================================================================================
@@ -82727,6 +82905,92 @@ public class FxInteractionAndModeTest {
                 nrExpected, nrActual, 0f);
     }
 
+    @Test
+    public void changePitchAtZeroSemitonesIsBitExactBypassRegardlessOfPreserveFormants() {
+        int frames = 4800;
+        float[] input = sine(frames, 1, 440, 0.25f);
+        ChangePitchProcessor p = new ChangePitchProcessor();
+        p.prepare(SR, 1);
+        for (int formant = 0; formant <= 1; formant++) {
+            p.getParam("pitch_formant").setBoolean(formant == 1);
+            p.getParam("pitch_semitones").setFloat(0f);
+            p.getParam("pitch_cents").setCurrentRaw(0);
+            p.getParam("pitch_percent").setFloat(0f);
+            assertFalse("zero-semitone pitch shift must be silent", p.isAudible());
+            float[] out = p.processOfflineRegion(input.clone(), frames, 1);
+            assertArrayEquals("zero-semitone pitch shift must be bit-exact",
+                    input, out, 0f);
+        }
+    }
+
+    @Test
+    public void wsolaTimeStretchPreservesUnityGainWhenHqSpeechIsOff() {
+        int frames = 4800;
+        float[] input = new float[frames];
+        Arrays.fill(input, 0.25f);
+        WsolaTimePitchProcessor wsola = new WsolaTimePitchProcessor(SR);
+        float[] out = wsola.timeStretch(input, frames, 1, 1.0, false);
+        assertEquals(frames, out.length);
+        for (int i = 1200; i < 3600; i++) {
+            assertEquals("WSOLA off-HQ gain changed at " + i,
+                    0.25f, out[i], 1e-4f);
+        }
+    }
+
+    @Test
+    public void truncateSilenceCrossfadesSpliceBoundaryWithoutStepDiscontinuity()
+            throws Exception {
+        int frames = 38400;
+        float[] input = new float[frames];
+        int pauseStart = 9600;   // 0.20 s
+        int pauseEnd = 24000;    // 0.50 s
+        for (int f = 0; f < frames; f++) {
+            if (f < pauseStart) {
+                input[f] = (float) (0.20 * Math.sin(2.0 * Math.PI * 440.0 * f / SR));
+            } else if (f < pauseEnd) {
+                input[f] = (float) (0.03 * Math.sin(2.0 * Math.PI * 137.0 * f / SR));
+            } else {
+                input[f] = (float) (0.20 * Math.sin(2.0 * Math.PI * 137.0 * f / SR));
+            }
+        }
+        TruncateSilenceProcessor p = new TruncateSilenceProcessor();
+        p.getParam("ts_thresh").setFloat(-30f);
+        p.getParam("ts_min").setCurrentRaw(100);
+        p.getParam("ts_trunc").setCurrentRaw(100);
+        p.prepare(SR, 1);
+
+        float[] memory = p.processOfflineRegion(input.clone(), frames, 1);
+        // The detector closes a silent span at the END of the first non-silent
+        // 10 ms analysis window, so the detected pause includes that window.
+        int detectedSpan = (pauseEnd - pauseStart) + 480;
+        int expectedFrames = frames - (detectedSpan - 4800);
+        assertEquals(expectedFrames, memory.length);
+        int splice = pauseStart + 4800;
+        float memoryStep = Math.abs(memory[splice] - memory[splice - 1]);
+        assertTrue("in-memory splice step=" + memoryStep,
+                memoryStep < 0.01f);
+
+        File src = File.createTempFile("takeone-trunc-src", ".wav");
+        File dst = File.createTempFile("takeone-trunc-dst", ".wav");
+        try {
+            FxVerifySupport.writeFloatWav(src, input, 1, SR);
+            long fileFrames = p.processOfflineRangeToFile(
+                    src, 0, frames, dst, SR, 1);
+            assertEquals(expectedFrames, fileFrames);
+            FxVerifySupport.WavData rendered = FxVerifySupport.readFloatWav(dst);
+            assertEquals(memory.length, rendered.samples.length);
+            assertArrayEquals(memory, rendered.samples, 1e-6f);
+            float fileStep = Math.abs(rendered.samples[splice]
+                    - rendered.samples[splice - 1]);
+            assertTrue("file splice step=" + fileStep, fileStep < 0.01f);
+        } finally {
+            // noinspection ResultOfMethodCallIgnored
+            src.delete();
+            // noinspection ResultOfMethodCallIgnored
+            dst.delete();
+        }
+    }
+
     private static void streamChunks(AudioProcessor processor, float[] input,
                                      float[] actual, int frames, int latency) {
         int cur = 0;
@@ -83334,6 +83598,15 @@ public class FxParamMatrixDumpTest {
             float[] in = FxVerifySupport.buildProbe(c.probe, n, ch, clip);
 
             JSONObject o = c.toJson();
+            // Preserve-Formants only has a meaning during an actual pitch
+            // shift. Keep the matrix case at a real +4 st operating point.
+            if ("changepitch".equals(effectId)
+                    && "pitch_formant".equals(c.param)
+                    && p.getParam("pitch_semitones") != null
+                    && Math.abs(p.getParam("pitch_semitones").getFloat()) < 1e-4f) {
+                p.getParam("pitch_semitones").setFloat(4f);
+                o.put("pitchShiftForFormant", 4.0);
+            }
             o.put("channels", ch);
             o.put("inFrames", n);
             o.put("dry", "dry/" + c.probe + ".wav");
