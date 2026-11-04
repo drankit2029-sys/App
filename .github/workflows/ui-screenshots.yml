@@ -80,6 +80,14 @@ jobs:
           - { id: api30_tablet_1600x2560, api: 30, arch: x86_64, target: google_apis, profile: 'Nexus 10', width: 1600, height: 2560, density: 320, orientation: landscape }
           - { id: api33_tablet_1200x2000, api: 33, arch: x86_64, target: google_apis, profile: 'Nexus 10', width: 1200, height: 2000, density: 280, orientation: landscape }
           - { id: api35_tablet_2560x1600, api: 35, arch: x86_64, target: google_apis, profile: 'Nexus 10', width: 2560, height: 1600, density: 320, orientation: landscape }
+    env:
+      APK_PATH: build-outputs/app-debug.apk
+      TEST_APK_PATH: build-outputs/app-debug-androidTest.apk
+      DEVICE_ID: ${{ matrix.id }}
+      UI_WIDTH: ${{ matrix.width }}
+      UI_HEIGHT: ${{ matrix.height }}
+      UI_DENSITY: ${{ matrix.density }}
+      UI_ORIENTATION: ${{ matrix.orientation }}
     steps:
       - uses: actions/checkout@v4
       - name: Download APK pair
@@ -105,13 +113,6 @@ jobs:
             -no-boot-anim -camera-back none
           script: |
             set -e
-            APK_PATH=build-outputs/app-debug.apk \
-            TEST_APK_PATH=build-outputs/app-debug-androidTest.apk \
-            DEVICE_ID=${{ matrix.id }} \
-            UI_WIDTH=${{ matrix.width }} \
-            UI_HEIGHT=${{ matrix.height }} \
-            UI_DENSITY=${{ matrix.density }} \
-            UI_ORIENTATION=${{ matrix.orientation }} \
             bash tools/ui-screens/run_device.sh
       - name: Upload device screenshots
         if: always()
