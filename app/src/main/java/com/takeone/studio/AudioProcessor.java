@@ -84,14 +84,6 @@ public abstract class AudioProcessor {
     }
 
     /**
-     * True when this offline effect must see the whole selected region in one
-     * call (e.g. STFT overlap-add) instead of chunk-by-chunk renders.
-     */
-    public boolean requiresFullBuffer() {
-        return false;
-    }
-
-    /**
      * Renders an entire region offline and returns the interleaved result.
      *
      * <p>The returned array may be longer or shorter than the input when the
@@ -133,8 +125,7 @@ public abstract class AudioProcessor {
         float mix = getWetDryMix();
         prepare(sr, ch);
 
-        if (selFrames <= (requiresFullBuffer() ? Long.MAX_VALUE
-                : MAX_IN_MEMORY_OFFLINE_FRAMES)) {
+        if (selFrames <= MAX_IN_MEMORY_OFFLINE_FRAMES) {
             float[] region = EditEngine.readFloatSelection(srcWav, startFrame, endFrame);
             if (region == null || region.length == 0) return -1L;
             int regionFrames = region.length / ch;

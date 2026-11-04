@@ -11,6 +11,7 @@ final class SpectralEditProcessor extends AudioProcessor {
 
     private static final String[] MODE_LABELS = {"Spectral Parametric EQ",
             "Spectral Shelf", "Spectral Delete / Notch"};
+    private static final int FFT_SIZE = 2048;
 
     private final FxParameter mode = addParameter(FxParameter.enumParam(
             "se_mode", "Mode", MODE_LABELS, 0));
@@ -23,6 +24,43 @@ final class SpectralEditProcessor extends AudioProcessor {
 
     private int sampleRate = DspChain.SAMPLE_RATE;
     private int channels = 2;
+    private volatile int streamMode;
+    private volatile float streamF1;
+    private volatile float streamF2;
+    private volatile float streamGain;
+
+    private final StftProcessor stft = new StftProcessor(FFT_SIZE, 4) {
+        @Override
+        protected void processSpectrum(float[] re, float[] im,
+                                       int binCount, int channel) {
+            float centre = (float) Math.sqrt(streamF1 * streamF2);
+            float width = (streamF2 - streamF1) / centre;
+            for (int b = 0; b < binCount; b++) {
+                float hz = (float) b * sampleRate / FFT_SIZE;
+                if ((streamMode == 1 || streamMode == 2)
+                        && (hz < streamF1 || hz > streamF2)) continue;
+                float weight = 1f;
+                if (streamMode == 0) {
+                    float d = (hz - centre) / (centre * Math.max(0.05f, width));
+                    weight = (float) Math.exp(-d * d);
+                } else if (streamMode == 1) {
+                    float u = Math.min(1f,
+                            (hz - streamF1) / Math.max(1f, streamF2 - streamF1));
+                    weight = 0.5f * (1f - (float) Math.cos(Math.PI * u));
+                }
+                float targetDb = streamMode == 2 ? -48.0f : streamGain;
+                float factor = (float) Math.pow(10.0,
+                        targetDb * weight / 20.0);
+                re[b] *= factor;
+                im[b] *= factor;
+                if (b > 0 && b < binCount - 1) {
+                    int mirror = FFT_SIZE - b;
+                    re[mirror] = re[b];
+                    im[mirror] = -im[b];
+                }
+            }
+        }
+    };
 
     SpectralEditProcessor() {
     }
@@ -72,6 +110,7 @@ final class SpectralEditProcessor extends AudioProcessor {
 
     @Override
     public void reset() {
+        stft.reset();
     }
 
     @Override
@@ -81,65 +120,23 @@ final class SpectralEditProcessor extends AudioProcessor {
     }
 
     @Override
-    public boolean isOfflineOnly() {
-        return true;
+    public int getLatencyFrames() {
+        return isAudible() ? FFT_SIZE : 0;
     }
 
     @Override
-    public boolean requiresFullBuffer() {
+    public boolean handlesOwnWetDryMix() {
         return true;
-    }
-
-    @Override
-    public float[] processOfflineRegion(float[] in, int frames, int channels) {
-        if (in == null || frames <= 0) return in;
-        float[] out = in.clone();
-        processInPlace(out, frames, channels);
-        return out;
     }
 
     @Override
     public void processInPlace(float[] buf, int frames, int channels) {
         if (!isEnabled() || buf == null || frames <= 0) return;
         int ch = Math.max(1, Math.min(2, channels));
-        float f1 = lowFreq.getCurrentRaw();
-        float f2 = Math.max(f1 + 10f, highFreq.getCurrentRaw());
-        float rawG = gain.getFloat();
-        int modeIdx = mode.getEnumIndex();
-        final float g = rawG;
-
-        StftProcessor stft = new StftProcessor(2048, 4) {
-            @Override
-            protected void processSpectrum(float[] re, float[] im,
-                                           int binCount, int channel) {
-                float centre = (float) Math.sqrt(f1 * f2);
-                float width = (f2 - f1) / centre;
-                for (int b = 0; b < binCount; b++) {
-                    float hz = (float) b * sampleRate / 2048f;
-                    // Mode 0 evaluates the Gaussian across the whole spectrum so
-                    // the bell tapers smoothly instead of stepping to zero at f1/f2.
-                    if ((modeIdx == 1 || modeIdx == 2) && (hz < f1 || hz > f2)) continue;
-                    float weight = 1f;
-                    if (modeIdx == 0) {
-                        float d = (hz - centre) / (centre * Math.max(0.05f, width));
-                        weight = (float) Math.exp(-d * d);
-                    } else if (modeIdx == 1) {
-                        float u = Math.min(1f, (hz - f1) / Math.max(1f, f2 - f1));
-                        weight = 0.5f * (1f - (float) Math.cos(Math.PI * u));
-                    }
-                    float targetDb = modeIdx == 2 ? -48.0f : g;
-                    float factor = (float) Math.pow(10.0,
-                            targetDb * weight / 20.0);
-                    re[b] *= factor;
-                    im[b] *= factor;
-                    if (b > 0 && b < binCount - 1) {
-                        int mirror = 2048 - b;
-                        re[mirror] = re[b];
-                        im[mirror] = -im[b];
-                    }
-                }
-            }
-        };
-        stft.process(buf, frames, ch);
+        streamF1 = lowFreq.getCurrentRaw();
+        streamF2 = Math.max(streamF1 + 10f, highFreq.getCurrentRaw());
+        streamGain = gain.getFloat();
+        streamMode = mode.getEnumIndex();
+        stft.processStreaming(buf, frames, ch, getWetDryMix());
     }
 }

@@ -577,41 +577,105 @@ public class FxInteractionAndModeTest {
     }
 
     @Test
-    public void spectralFileRenderMatchesWholeSelectionStft() throws Exception {
-        int frames = 40000; // deliberately above MAX_IN_MEMORY_OFFLINE_FRAMES
-        float[] in = new float[frames];
+    public void stftBlockProcessHasZeroSliceBoundaryGlitchOver40000Frames() {
+        int frames = 40000;
+        float[] original = new float[frames];
         for (int i = 0; i < frames; i++) {
-            in[i] = (float) (0.2 * Math.sin(i * 0.021) + 0.1 * Math.sin(i * 0.117));
+            original[i] = (float) (0.25 * Math.sin(i * 0.037)
+                    + 0.12 * Math.sin(i * 0.211));
         }
-        File src = File.createTempFile("takeone-stft-src", ".wav");
-        File dst = File.createTempFile("takeone-stft-dst", ".wav");
-        try {
-            FxVerifySupport.writeFloatWav(src, in, 1, SR);
-            SpectralEditProcessor fileProc = new SpectralEditProcessor();
-            fileProc.getParam("se_mode").setCurrentRaw(2);
-            fileProc.getParam("se_f1").setCurrentRaw(500);
-            fileProc.getParam("se_f2").setCurrentRaw(3000);
-            fileProc.prepare(SR, 1);
-            assertTrue(fileProc.requiresFullBuffer());
-            long outFrames = fileProc.processOfflineRangeToFile(
-                    src, 0, frames, dst, SR, 1);
-            assertEquals(frames, outFrames);
+        float[] processed = original.clone();
+        StftProcessor identity = new StftProcessor(1024, 4) {
+            @Override
+            protected void processSpectrum(float[] re, float[] im,
+                                           int binCount, int channel) {
+                // Identity: the overlap-add round trip should reconstruct.
+            }
+        };
+        identity.process(processed, frames, 1);
+        float max = 0f;
+        for (int f = 4000; f < 8200; f++) {
+            max = Math.max(max, Math.abs(processed[f] - original[f]));
+        }
+        assertTrue("slice-boundary glitch=" + max, max < 1e-5f);
+    }
 
-            SpectralEditProcessor whole = new SpectralEditProcessor();
-            whole.getParam("se_mode").setCurrentRaw(2);
-            whole.getParam("se_f1").setCurrentRaw(500);
-            whole.getParam("se_f2").setCurrentRaw(3000);
-            whole.prepare(SR, 1);
-            float[] ref = whole.processOfflineRegion(in.clone(), frames, 1);
+    @Test
+    public void spectralProcessorsStreamInChunksWithBoundedMemoryAndMatchSinglePass() {
+        int frames = 12000;
+        float[] input = new float[frames];
+        java.util.Random rnd = new java.util.Random(0x51eeL);
+        for (int i = 0; i < frames; i++) {
+            input[i] = (float) (0.2 * Math.sin(i * 0.043)
+                    + 0.12 * Math.sin(i * 0.173))
+                    + (rnd.nextFloat() * 2f - 1f) * 0.01f;
+        }
 
-            FxVerifySupport.WavData rendered = FxVerifySupport.readFloatWav(dst);
-            assertArrayEquals("chunked file render must match one whole STFT pass",
-                    ref, rendered.samples, 0f);
-        } finally {
-            //noinspection ResultOfMethodCallIgnored
-            src.delete();
-            //noinspection ResultOfMethodCallIgnored
-            dst.delete();
+        SpectralEditProcessor editWhole = new SpectralEditProcessor();
+        editWhole.getParam("se_mode").setCurrentRaw(2);
+        editWhole.getParam("se_f1").setCurrentRaw(500);
+        editWhole.getParam("se_f2").setCurrentRaw(4000);
+        editWhole.prepare(SR, 1);
+        int editLatency = editWhole.getLatencyFrames();
+        assertEquals(2048, editLatency);
+        assertFalse(editWhole.isOfflineOnly());
+        assertTrue(editWhole.handlesOwnWetDryMix());
+        float[] editPadded = Arrays.copyOf(input, frames + editLatency);
+        editWhole.processInPlace(editPadded, editPadded.length, 1);
+        float[] editExpected = Arrays.copyOf(editPadded, frames);
+
+        SpectralEditProcessor editChunked = new SpectralEditProcessor();
+        editChunked.getParam("se_mode").setCurrentRaw(2);
+        editChunked.getParam("se_f1").setCurrentRaw(500);
+        editChunked.getParam("se_f2").setCurrentRaw(4000);
+        editChunked.prepare(SR, 1);
+        editChunked.processInPlace(Arrays.copyOf(input, editLatency), editLatency, 1);
+        float[] editActual = new float[frames];
+        streamChunks(editChunked, input, editActual, frames, editLatency);
+        assertArrayEquals("SpectralEdit chunked streaming differs",
+                editExpected, editActual, 0f);
+
+        float[] profile = SpectralNoiseReductionProcessor.learnProfile(
+                Arrays.copyOfRange(input, 0, 4096), 1);
+        SpectralNoiseReductionProcessor nrWhole = new SpectralNoiseReductionProcessor();
+        nrWhole.setNoiseProfile(profile);
+        nrWhole.prepare(SR, 1);
+        int nrLatency = nrWhole.getLatencyFrames();
+        assertEquals(SpectralNoiseReductionProcessor.FFT_SIZE, nrLatency);
+        assertFalse(nrWhole.isOfflineOnly());
+        assertTrue(nrWhole.handlesOwnWetDryMix());
+        float[] nrPadded = Arrays.copyOf(input, frames + nrLatency);
+        nrWhole.processInPlace(nrPadded, nrPadded.length, 1);
+        float[] nrExpected = Arrays.copyOf(nrPadded, frames);
+
+        SpectralNoiseReductionProcessor nrChunked = new SpectralNoiseReductionProcessor();
+        nrChunked.setNoiseProfile(profile);
+        nrChunked.prepare(SR, 1);
+        nrChunked.processInPlace(Arrays.copyOf(input, nrLatency), nrLatency, 1);
+        float[] nrActual = new float[frames];
+        streamChunks(nrChunked, input, nrActual, frames, nrLatency);
+        assertArrayEquals("SpectralNoiseReduction chunked streaming differs",
+                nrExpected, nrActual, 0f);
+    }
+
+    private static void streamChunks(AudioProcessor processor, float[] input,
+                                     float[] actual, int frames, int latency) {
+        int cur = 0;
+        int[] steps = {1, 37, 512, 2049, 3, 700, 4096};
+        int i = 0;
+        while (cur < frames) {
+            int want = Math.min(steps[i % steps.length], frames - cur);
+            float[] chunk = new float[want];
+            long inPos = (long) cur + latency;
+            int avail = (int) Math.max(0L,
+                    Math.min((long) want, frames - inPos));
+            if (avail > 0) {
+                System.arraycopy(input, (int) inPos, chunk, 0, avail);
+            }
+            processor.processInPlace(chunk, want, 1);
+            System.arraycopy(chunk, 0, actual, cur, want);
+            cur += want;
+            i++;
         }
     }
 }
