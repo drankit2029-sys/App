@@ -42,11 +42,11 @@ if [ "$UI_DENSITY" != "0" ]; then
   adb shell wm density "$UI_DENSITY" || true
 fi
 adb shell settings put system accelerometer_rotation 0 || true
-if [ "$UI_ORIENTATION" = "landscape" ]; then
-  adb shell settings put system user_rotation 1 || true
-else
-  adb shell settings put system user_rotation 0 || true
-fi
+ROTATION=0
+if [ "$UI_ORIENTATION" = "landscape" ]; then ROTATION=1; fi
+adb shell settings put system user_rotation "$ROTATION" || true
+adb shell cmd window user-rotation lock "$ROTATION" >/dev/null 2>&1 \
+  || adb shell wm user-rotation lock "$ROTATION" >/dev/null 2>&1 || true
 sleep 1
 
 # Best-effort display-cutout and navigation-bar emulation. AOSP images vary;
@@ -68,6 +68,10 @@ adb install -r -g "$TEST_APK_PATH"
 adb shell pm grant "$APP_PACKAGE" android.permission.RECORD_AUDIO || true
 adb shell pm grant "$APP_PACKAGE" android.permission.POST_NOTIFICATIONS || true
 adb shell pm grant "$APP_PACKAGE" android.permission.WRITE_EXTERNAL_STORAGE || true
+adb shell settings put system user_rotation "$ROTATION" || true
+adb shell cmd window user-rotation lock "$ROTATION" >/dev/null 2>&1 \
+  || adb shell wm user-rotation lock "$ROTATION" >/dev/null 2>&1 || true
+sleep 1
 
 SDK="$(adb shell getprop ro.build.version.sdk | tr -d '\r')"
 {
