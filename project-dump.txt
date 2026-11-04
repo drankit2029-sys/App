@@ -1,10 +1,10 @@
 PROJECT DUMP — TakeOne
-Generated: 2026-11-04T17:57:39
+Generated: 2026-11-04T18:27:09
 Root: /mnt/sdcard/Download/App
 APK md5: e18dd3aec306ef67b6ef3929a6e01302
-HEAD: 9da4b66 Fix FX commit splicing, latency priming, and live-rack races
+HEAD: fa10feb Fix final timeline, normalize, profile, and Graphic EQ oversights
 Branch: ut/fx-gpu-undo
-Files: 371 source files
+Files: 372 source files
 =================================================================================
 =================================================================================
 FILE: .github/workflows/build-apk.yml
@@ -17699,6 +17699,76 @@ FILE: Task (3).md
 - [x] **File**: `app/src/main/java/com/takeone/studio/StudioFragment.java`
   - **Root Cause**: `PlotSpectrumDialog.java` and `AudioDiagnosticsTool.java` exist in `src/main/java/com/takeone/studio/` and are unit-tested in `Stage7TimeToolsTest`, but have zero UI entry points in `StudioFragment`!
   - **Fix**: Add `"Plot Spectrum"` and `"Audio Diagnostics"` actions (e.g., in the Studio options sheet / FX header tools or analyzer section) that read up to `65,536` frames from the current selection (or active take around the cursor) via `EditEngine.readFloatSelection`, run `PlotSpectrumDialog.analyze(...)` / `AudioDiagnosticsTool.analyze(...)`, and display the formatted summary in a clean modal dialog.
+
+=================================================================================
+FILE: Task (4).md
+=================================================================================
+# TakeOne Studio — Verification of `9da4b66` & Final 5 Polish Fixes `task.md`
+
+> **Verification Status of Commit `9da4b66`**:
+> - **Part A (STFT Neighbor-Context Block & Causal Streaming)**: **VERIFIED & COMPLETE (`[x]`)**. `StftProcessor`, `SpectralEditProcessor`, `SpectralNoiseReductionProcessor`, and `AudioProcessor` now stream in bounded memory (`< 64 KB`), support real-time preview (`isOfflineOnly() == false`), and pass both `stftBlockProcessHasZeroSliceBoundaryGlitchOver40000Frames` and `spectralProcessorsStreamInChunksWithBoundedMemoryAndMatchSinglePass`.
+> - **Part B (`B.1` – `B.7` Pipeline, Splice, Latency, Thread-Safety & Analyzer UI Fixes)**: **VERIFIED & COMPLETE (`[x]`)**.
+> - **Part C (5 Final Oversights Discovered in Deep Codebase Audit)**: Listed below with exact file/line fixes.
+
+## Part C: 5 Final Oversights to Fix
+
+### C.1 Fix `TimelineUtilityProcessor.processOfflineRangeToFile()` Repeat Count & Fake `-0.5 dB` Gain Divergence
+- [x] **File**: `app/src/main/java/com/takeone/studio/TimelineUtilityProcessor.java` (lines 135 & 189–215)
+  - **Root Cause**:
+    - In `processOfflineRegion()` (the in-memory method, line 104), `Repeat` mode uses `int count = 1 + Math.max(1, repRaw);` at unity gain (`1.0f`).
+    - However, `processOfflineRangeToFile()` (the file-streaming method used by `EditEngine`, `DspChain.renderRegionToFile`, and `FxPreviewPeaks` in the app, lines 135 & 189–215) was never updated:
+      ```java
+      int repCount = Math.max(1, repeats.getCurrentRaw());
+      ...
+      long outTotalFrames = regionFrames * repCount;
+      outRaf.write(Dsp.wavFloatHeader(ch, sr, outTotalFrames * frameBytes));
+      float gain = (repCount == 1) ? 0.944f : 1.0f;
+      ```
+    - When `Number of Repeats = 1`, the file path does not repeat the audio at all (`outTotalFrames = regionFrames * 1`) and still applies the fake `0.944f` (`-0.5 dB`) gain drop!
+  - **Fix**:
+    - In `processOfflineRangeToFile()`, set `int repCount = 1 + Math.max(1, repeats.getCurrentRaw());` (matching `processOfflineRegion()`), and remove `float gain = (repCount == 1) ? 0.944f : 1.0f;` so all copies are written at `1.0f` unity gain (scaled only by `mix` on repeated copies `r > 0` when `mix < 0.999f`).
+    - Add a unit test in `FxInteractionAndModeTest` verifying that `TimelineUtilityProcessor.processOfflineRangeToFile()` in `Repeat` mode with `tl_repeats = 1` produces `2 * regionFrames` at exact unity gain, matching `processOfflineRegion()`.
+
+### C.2 Fix `StudioFragment.learnNoiseProfile()` Calling `prefix.reset()` After `prefix.prepareOffline()`
+- [x] **File**: `app/src/main/java/com/takeone/studio/StudioFragment.java` (lines 4131–4134)
+  - **Root Cause**:
+    ```java
+    if (prefixActive) {
+        prefix.prepareOffline(rawFile, start, end, info.sampleRate, ch);
+        prefix.reset();
+    }
+    ```
+    Calling `prefix.reset()` *after* `prefix.prepareOffline()` wipes out the two-pass measurements (`scannedPeak`, `measuredLufs`, `scanned`, `autoProfile`) that `prepareOffline()` just computed on upstream processors!
+  - **Fix**: Swap the two lines so `prefix.reset();` is called first and `prefix.prepareOffline(rawFile, start, end, info.sampleRate, ch);` is called second (matching `EditEngine`, `RawFloatPlayer`, and `FxPreviewPeaks`).
+
+### C.3 Fix `NormalizeProcessor` Per-Chunk DC Filter Reset, Live `removeDc` Toggle & Fake `0.985f` Stereo/Mono Trim
+- [x] **File**: `app/src/main/java/com/takeone/studio/NormalizeProcessor.java` (lines 60–64, 99–101, 163–175, 187–188)
+  - **Root Cause**:
+    1. Lines 187–188 declare `float prevX0 = 0f, prevY0 = 0f, prevX1 = 0f, prevY1 = 0f;` as local variables inside `processInPlace()`, resetting the 4.5 Hz subsonic DC-blocker filter state on every 4,096-frame chunk.
+    2. Lines 163–165 (`if (Math.abs(measuredPeak[0] - measuredPeak[1]) < 1e-5f) gain[0] *= 0.985f;`) and lines 172–174 (`if (indepStereo.getBoolean() && ch == 1) g *= 0.985f;`) skew centered stereo (`L == R`) to the right and attenuate mono when `Normalize Stereo Channels Independently` is enabled.
+    3. Line 100 (`dcOffset[c] = removeDc.getBoolean() ? (float) (sum[c] / totalFrames) : 0f;`): if `removeDc` was `Off` when `prepareOffline()` ran and is then toggled `On` during live playback, `dcOffset[c]` is `0f`.
+  - **Fix**:
+    1. Move `prevX0, prevY0, prevX1, prevY1` to instance fields on `NormalizeProcessor` and zero them in `reset()`.
+    2. Remove the `0.985f` gain hacks on lines 163–165 and 172–174 (and check `Stage4DynamicsTest` / `DspBugFixesTest` if any test asserted that fake `0.985f` mono/dual-mono trim; test `norm_indep` on a stereo signal with asymmetric channel peaks `L != R`, e.g. `L = 0.25f`, `R = 0.50f`).
+    3. Always store `dcOffset[c] = (float) (sum[c] / totalFrames)` in `prepareOffline()` and `measure()`, and in `processInPlace()` apply `float dc = removeDc.getBoolean() ? dcOffset[c] : 0f;`.
+
+### C.4 Cache `autoProfile` on First Unprepared Chunk in `SpectralNoiseReductionProcessor`
+- [x] **File**: `app/src/main/java/com/takeone/studio/SpectralNoiseReductionProcessor.java` (lines 147–152)
+  - **Root Cause**:
+    ```java
+    float[] prof = learnedProfile;
+    if (prof == null) prof = autoProfile;
+    if (prof == null && frames >= FFT_SIZE) {
+        prof = StftProcessor.welchSpectrum(buf, frames, ch, FFT_SIZE, 0.55f);
+    }
+    ```
+    When `SpectralNoiseReductionProcessor` is enabled mid-playback (or called in chunked tests without `prepareOffline()` and without a learned profile), `autoProfile` stays `null`, so every chunk computes a different `welchSpectrum()` from its own audio.
+  - **Fix**: Cache `autoProfile = prof;` inside the `if (prof == null && frames >= FFT_SIZE)` block so the fallback profile is locked on the first chunk until `reset()`.
+
+### C.5 Remove Leftover `layout != defaultRaw` Check in `GraphicEqProcessor.isAudible()`
+- [x] **File**: `app/src/main/java/com/takeone/studio/GraphicEqProcessor.java` (lines 109–117)
+  - **Root Cause**: Line 112 (`if (layout.getCurrentRaw() != layout.defaultRaw) return true;`) marks a completely flat 31-band Graphic EQ (`out = 0 dB`, all bands `= 0 dB`) as audible even though `buildSections()` returns an empty `float[0][]` cascade!
+  - **Fix**: Remove `if (layout.getCurrentRaw() != layout.defaultRaw) return true;` and check only the active band count (`int count = layout.getEnumIndex() == 1 ? 31 : 10; for (int i = 0; i < count; i++) if (Math.abs(bands[i].getFloat()) > 0.01f) return true;`).
 
 =================================================================================
 FILE: app/build.gradle
@@ -42458,8 +42528,8 @@ final class GraphicEqProcessor extends AudioProcessor {
     public boolean isAudible() {
         if (!isEnabled()) return false;
         if (Math.abs(outGain.getFloat()) > 0.01f) return true;
-        if (layout.getCurrentRaw() != layout.defaultRaw) return true;
-        for (int i = 0; i < 31; i++) {
+        int count = layout.getEnumIndex() == 1 ? 31 : 10;
+        for (int i = 0; i < count; i++) {
             if (Math.abs(bands[i].getFloat()) > 0.01f) return true;
         }
         return false;
@@ -47790,6 +47860,8 @@ final class NormalizeProcessor extends AudioProcessor {
     private final float[] measuredRms = new float[2];
     private boolean scanned = false;
     private int sampleRate = DspChain.SAMPLE_RATE;
+    private float prevX0 = 0f, prevY0 = 0f;
+    private float prevX1 = 0f, prevY1 = 0f;
 
     NormalizeProcessor() {
     }
@@ -47825,6 +47897,7 @@ final class NormalizeProcessor extends AudioProcessor {
         dcOffset[0] = dcOffset[1] = 0f;
         measuredPeak[0] = measuredPeak[1] = 0f;
         measuredRms[0] = measuredRms[1] = 0f;
+        prevX0 = prevY0 = prevX1 = prevY1 = 0f;
     }
 
     @Override
@@ -47862,7 +47935,7 @@ final class NormalizeProcessor extends AudioProcessor {
         if (totalFrames <= 0) return;
         int ch = chHolder[0];
         for (int c = 0; c < ch; c++) {
-            dcOffset[c] = removeDc.getBoolean() ? (float) (sum[c] / totalFrames) : 0f;
+            dcOffset[c] = (float) (sum[c] / totalFrames);
         }
 
         final double[] sq = new double[2];
@@ -47873,7 +47946,8 @@ final class NormalizeProcessor extends AudioProcessor {
                     for (int f = 0; f < frames; f++) {
                         int base = f * cCount;
                         for (int c = 0; c < cCount; c++) {
-                            float v = chunk[base + c] - dcOffset[c];
+                            float v = chunk[base + c]
+                                    - (removeDc.getBoolean() ? dcOffset[c] : 0f);
                             float a = Math.abs(v);
                             if (a > measuredPeak[c]) measuredPeak[c] = a;
                             sq[c] += (double) v * v;
@@ -47896,12 +47970,13 @@ final class NormalizeProcessor extends AudioProcessor {
             for (int c = 0; c < ch; c++) sum[c] += buf[f * ch + c];
         }
         for (int c = 0; c < ch; c++) {
-            dcOffset[c] = removeDc.getBoolean() ? (float) (sum[c] / frames) : 0f;
+            dcOffset[c] = (float) (sum[c] / frames);
         }
         double[] sq = new double[ch];
         for (int f = 0; f < frames; f++) {
             for (int c = 0; c < ch; c++) {
-                float v = buf[f * ch + c] - dcOffset[c];
+                float v = buf[f * ch + c]
+                    - (removeDc.getBoolean() ? dcOffset[c] : 0f);
                 float a = Math.abs(v);
                 if (a > measuredPeak[c]) measuredPeak[c] = a;
                 sq[c] += (double) v * v;
@@ -47931,18 +48006,12 @@ final class NormalizeProcessor extends AudioProcessor {
                     float ref = rmsMode ? measuredRms[c] : measuredPeak[c];
                     gain[c] = ref > 1e-6f ? (targetLin / ref) : 1f;
                 }
-                if (Math.abs(measuredPeak[0] - measuredPeak[1]) < 1e-5f) {
-                    gain[0] *= 0.985f;
-                }
             } else {
                 float ref = rmsMode
                         ? (ch == 2 ? (float) Math.sqrt(0.5 * (measuredRms[0] * measuredRms[0]
                                 + measuredRms[1] * measuredRms[1])) : measuredRms[0])
                         : (ch == 2 ? Math.max(measuredPeak[0], measuredPeak[1]) : measuredPeak[0]);
                 float g = ref > 1e-6f ? (targetLin / ref) : 1f;
-                if (indepStereo.getBoolean() && ch == 1) {
-                    g *= 0.985f;
-                }
                 gain[0] = gain[1] = g;
             }
         }
@@ -47955,13 +48024,13 @@ final class NormalizeProcessor extends AudioProcessor {
                 && Math.abs(dcOffset[0]) < 1e-4f
                 && (ch < 2 || Math.abs(dcOffset[1]) < 1e-4f);
         float hpR = (float) Math.exp(-2.0 * Math.PI * 4.5 / Math.max(8000, sampleRate));
-        float prevX0 = 0f, prevY0 = 0f;
-        float prevX1 = 0f, prevY1 = 0f;
+        float dc0 = removeDc.getBoolean() ? dcOffset[0] : 0f;
+        float dc1 = removeDc.getBoolean() ? dcOffset[1] : 0f;
 
         for (int f = 0; f < frames; f++) {
             int base = f * ch;
             for (int c = 0; c < ch; c++) {
-                float v = buf[base + c] - dcOffset[c];
+                float v = buf[base + c] - (c == 0 ? dc0 : dc1);
                 if (subsonicDcBlock) {
                     if (c == 0) {
                         float y = v - prevX0 + hpR * prevY0;
@@ -55447,6 +55516,7 @@ final class SpectralNoiseReductionProcessor extends AudioProcessor {
         if (prof == null) prof = autoProfile;
         if (prof == null && frames >= FFT_SIZE) {
             prof = StftProcessor.welchSpectrum(buf, frames, ch, FFT_SIZE, 0.55f);
+            autoProfile = prof;
         }
         streamProfile = prof;
         streamFloor = Dsp.dbToLin(-Math.max(0f, reduction.getFloat()));
@@ -61037,8 +61107,8 @@ public class StudioFragment extends Fragment {
             final DspChain prefix = new DspChain(ch, prefixConfigFor(dspConfig, slot));
             final boolean prefixActive = prefix.isActive();
             if (prefixActive) {
-                prefix.prepareOffline(rawFile, start, end, info.sampleRate, ch);
                 prefix.reset();
+                prefix.prepareOffline(rawFile, start, end, info.sampleRate, ch);
             }
             final double[] accumProfile = new double[bins];
             final int[] chunkCount = {0};
@@ -68021,7 +68091,7 @@ final class TimelineUtilityProcessor extends AudioProcessor {
         if (regionFrames <= 0) return -1L;
 
         int actIdx = effectiveAction();
-        int repCount = Math.max(1, repeats.getCurrentRaw());
+        int repCount = 1 + Math.max(1, repeats.getCurrentRaw());
         float mix = getWetDryMix();
         int chunkFrames = DEFAULT_DSP_CHUNK_FRAMES;
         byte[] rawBuf = new byte[chunkFrames * ch * 4];
@@ -68087,7 +68157,6 @@ final class TimelineUtilityProcessor extends AudioProcessor {
             } else { // Repeat
                 long outTotalFrames = regionFrames * repCount;
                 outRaf.write(Dsp.wavFloatHeader(ch, sr, outTotalFrames * frameBytes));
-                float gain = (repCount == 1) ? 0.944f : 1.0f;
                 for (int r = 0; r < repCount; r++) {
                     long cur = 0L;
                     while (cur < regionFrames) {
@@ -68100,9 +68169,9 @@ final class TimelineUtilityProcessor extends AudioProcessor {
                         if (r == 0 && dryBuf != null) {
                             System.arraycopy(fBuf, 0, dryBuf, 0, want * ch);
                             HardwareApiManager.get().processGainClipMixChunked(
-                                    fBuf, dryBuf, want * ch, gain, 0f, mix);
+                                    fBuf, dryBuf, want * ch, 1.0f, 0f, mix);
                         } else {
-                            float effGain = (r > 0 && mix < 0.999f) ? (gain * mix) : gain;
+                            float effGain = (r > 0 && mix < 0.999f) ? mix : 1.0f;
                             if (Math.abs(effGain - 1.0f) > 1e-5f) {
                                 HardwareApiManager.get().processGainClipMixChunked(
                                         fBuf, null, want * ch, effGain, 0f, 1.0f);
@@ -82100,6 +82169,42 @@ public class FxInteractionAndModeTest {
         assertFalse(p.isParamApplicable("tl_repeats"));
         p.getParam("tl_action").setEnumIndex(2);
         assertTrue(p.isParamApplicable("tl_repeats"));
+    }
+
+    @Test
+    public void timelineRepeatFileRenderMatchesInMemoryAndUnityGain()
+            throws Exception {
+        int frames = 1000;
+        float[] input = new float[frames];
+        Arrays.fill(input, 0.125f);
+        File src = File.createTempFile("takeone-tl-src", ".wav");
+        File dst = File.createTempFile("takeone-tl-dst", ".wav");
+        try {
+            FxVerifySupport.writeFloatWav(src, input, 1, SR);
+            TimelineUtilityProcessor p = new TimelineUtilityProcessor();
+            p.getParam("tl_action").setEnumIndex(2);
+            p.getParam("tl_repeats").setCurrentRaw(1);
+            p.prepare(SR, 1);
+
+            float[] memory = p.processOfflineRegion(input.clone(), frames, 1);
+            assertEquals(frames * 2, memory.length);
+            long fileFrames = p.processOfflineRangeToFile(
+                    src, 0, frames, dst, SR, 1);
+            assertEquals(frames * 2L, fileFrames);
+
+            FxVerifySupport.WavData rendered = FxVerifySupport.readFloatWav(dst);
+            assertEquals(memory.length, rendered.samples.length);
+            assertArrayEquals(memory, rendered.samples, 1e-6f);
+            for (float sample : rendered.samples) {
+                assertEquals("repeat must use unity gain",
+                        0.125f, sample, 1e-6f);
+            }
+        } finally {
+            // noinspection ResultOfMethodCallIgnored
+            src.delete();
+            // noinspection ResultOfMethodCallIgnored
+            dst.delete();
+        }
     }
 
     @Test
