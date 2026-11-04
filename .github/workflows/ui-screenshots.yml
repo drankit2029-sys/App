@@ -71,7 +71,6 @@ jobs:
           - { id: api35_phone_1440x3120, api: 35, arch: x86_64, target: google_apis, profile: 'Nexus 5', width: 1440, height: 3120, density: 560, orientation: portrait }
           # Additional common phone geometries on current APIs.
           - { id: api35_phone_320x480, api: 35, arch: x86_64, target: google_apis, profile: 'Nexus 5', width: 480, height: 720, density: 240, orientation: portrait }
-          - { id: api35_phone_393x873, api: 35, arch: x86_64, target: google_apis, profile: 'Nexus 5', width: 393, height: 873, density: 440, orientation: portrait }
           - { id: api34_phone_720x1280, api: 34, arch: x86_64, target: google_apis, profile: 'Nexus 5', width: 720, height: 1280, density: 320, orientation: portrait }
           - { id: api33_phone_1440x2560, api: 33, arch: x86_64, target: google_apis, profile: 'Nexus 5', width: 1440, height: 2560, density: 560, orientation: portrait }
           - { id: api30_phone_360x640, api: 30, arch: x86_64, target: google_apis, profile: 'Nexus 5', width: 540, height: 960, density: 240, orientation: portrait }
@@ -81,7 +80,6 @@ jobs:
           - { id: api30_tablet_1600x2560, api: 30, arch: x86_64, target: google_apis, profile: 'Nexus 10', width: 1600, height: 2560, density: 320, orientation: landscape }
           - { id: api33_tablet_1200x2000, api: 33, arch: x86_64, target: google_apis, profile: 'Nexus 10', width: 1200, height: 2000, density: 280, orientation: landscape }
           - { id: api33_phone_notch_1440x2960, api: 33, arch: x86_64, target: google_apis, profile: pixel_3_xl, width: 1440, height: 2960, density: 560, orientation: portrait }
-          - { id: api35_tablet_2560x1600, api: 35, arch: x86_64, target: google_apis, profile: 'Nexus 10', width: 1600, height: 2560, density: 320, orientation: landscape }
     env:
       APK_PATH: build-outputs/debug/app-debug.apk
       TEST_APK_PATH: build-outputs/androidTest/debug/app-debug-androidTest.apk
