@@ -71,6 +71,22 @@ adb shell cmd overlay enable-exclusive --category \
 
 adb install -r -g "$APK_PATH"
 adb install -r -g "$TEST_APK_PATH"
+
+current_rotation() {
+  adb shell dumpsys input 2>/dev/null \
+    | awk '/SurfaceOrientation/{print $2; exit}' | tr -d '\r'
+}
+# Some API 28 images ignore Settings user_rotation. Force the emulator's
+# hardware rotation until the reported surface orientation matches.
+CUR="$(current_rotation)"
+if [ -n "$CUR" ] && [ "$CUR" != "$ROTATION" ]; then
+  for i in 1 2 3 4; do
+    adb emu rotate >/dev/null 2>&1 || break
+    sleep 1
+    CUR="$(current_rotation)"
+    [ "$CUR" = "$ROTATION" ] && break
+  done
+fi
 adb shell pm grant "$APP_PACKAGE" android.permission.RECORD_AUDIO || true
 adb shell pm grant "$APP_PACKAGE" android.permission.POST_NOTIFICATIONS || true
 adb shell pm grant "$APP_PACKAGE" android.permission.WRITE_EXTERNAL_STORAGE || true
