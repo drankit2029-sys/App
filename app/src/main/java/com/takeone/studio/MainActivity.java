@@ -1,6 +1,7 @@
 package com.takeone.studio;
 
 import android.content.Intent;
+import android.content.res.Configuration;
 import android.os.Bundle;
 import android.os.SystemClock;
 import android.view.MotionEvent;
@@ -36,13 +37,7 @@ public class MainActivity extends AppCompatActivity {
         CrashLog.install(this);
         AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES);
         super.onCreate(savedInstanceState);
-        // Phones stay portrait; tablets are large enough for the same
-        // single-column layout to expand horizontally in landscape.
-        boolean largeScreen = getResources().getConfiguration()
-                .smallestScreenWidthDp >= 600;
-        setRequestedOrientation(largeScreen
-                ? android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-                : android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
+        applyOrientationPolicy(getResources().getConfiguration());
         setContentView(R.layout.activity_main);
 
         fabWrap = findViewById(R.id.fabWrap);
@@ -484,4 +479,22 @@ public class MainActivity extends AppCompatActivity {
                         .setDuration(220).start())
                 .start();
     }
+    @Override
+    public void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        applyOrientationPolicy(newConfig);
+    }
+
+    private void applyOrientationPolicy(Configuration configuration) {
+        // Phones stay portrait. Tablets, unfolded foldables, and multi-window
+        // panes use one full-width column and may rotate freely.
+        boolean largeScreen = configuration.smallestScreenWidthDp >= 600;
+        int requested = largeScreen
+                ? android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                : android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT;
+        if (getRequestedOrientation() != requested) {
+            setRequestedOrientation(requested);
+        }
+    }
+
 }
