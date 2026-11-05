@@ -43,9 +43,12 @@ if [ "$UI_DENSITY" != "0" ]; then
 fi
 adb shell settings put system accelerometer_rotation 0 || true
 ROTATION=0
-# Native-landscape tablet profiles (no wm size override) stay at rotation 0.
-if [ "$UI_ORIENTATION" = "landscape" ] && [ "$UI_WIDTH" != "0" ] && [ "$UI_HEIGHT" != "0" ]; then
-  ROTATION=1
+# Nexus 10 is native-landscape: rotate to portrait when no size override is
+# used. For override-based devices, landscape is rotation 1 and portrait 0.
+if [ "$UI_WIDTH" = "0" ] || [ "$UI_HEIGHT" = "0" ]; then
+  [ "$UI_ORIENTATION" = "portrait" ] && ROTATION=1
+else
+  [ "$UI_ORIENTATION" = "landscape" ] && ROTATION=1
 fi
 adb shell settings put system user_rotation "$ROTATION" || true
 adb shell cmd window user-rotation lock "$ROTATION" >/dev/null 2>&1 \
