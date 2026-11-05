@@ -80,7 +80,7 @@ jobs:
           - { id: api30_tablet_1600x2560, api: 30, arch: x86_64, target: google_apis, profile: 'Nexus 10', width: 1600, height: 2560, density: 320, orientation: landscape }
           - { id: api33_tablet_1200x2000, api: 33, arch: x86_64, target: google_apis, profile: 'Nexus 10', width: 1200, height: 2000, density: 280, orientation: landscape }
           - { id: api33_phone_notch_1440x2960, api: 33, arch: x86_64, target: google_apis, profile: pixel_3_xl, width: 1440, height: 2960, density: 560, orientation: portrait }
-          - { id: api34_foldable_1840x2208, api: 34, arch: x86_64, target: google_apis, profile: pixel_fold, width: 1840, height: 2208, density: 420, orientation: portrait }
+          - { id: api34_foldable_unfolded_1840x2208, api: 34, arch: x86_64, target: google_apis, profile: 'Nexus 5', width: 1840, height: 2208, density: 420, orientation: portrait }
     env:
       APK_PATH: build-outputs/debug/app-debug.apk
       TEST_APK_PATH: build-outputs/androidTest/debug/app-debug-androidTest.apk
@@ -111,7 +111,7 @@ jobs:
           disable-animations: true
           emulator-options: >-
             -no-window -no-snapshot -gpu swiftshader_indirect
-            -no-boot-anim -camera-back none ${{ matrix.profile == 'pixel_fold' && '-feature Foldable' || '' }}
+            -no-boot-anim -camera-back none
           script: |
             set -e
             bash tools/ui-screens/run_device.sh
