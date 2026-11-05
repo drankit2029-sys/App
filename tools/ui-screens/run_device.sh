@@ -43,7 +43,10 @@ if [ "$UI_DENSITY" != "0" ]; then
 fi
 adb shell settings put system accelerometer_rotation 0 || true
 ROTATION=0
-if [ "$UI_ORIENTATION" = "landscape" ]; then ROTATION=1; fi
+# Native-landscape tablet profiles (no wm size override) stay at rotation 0.
+if [ "$UI_ORIENTATION" = "landscape" ] && [ "$UI_WIDTH" != "0" ] && [ "$UI_HEIGHT" != "0" ]; then
+  ROTATION=1
+fi
 adb shell settings put system user_rotation "$ROTATION" || true
 adb shell cmd window user-rotation lock "$ROTATION" >/dev/null 2>&1 \
   || adb shell wm user-rotation lock "$ROTATION" >/dev/null 2>&1 || true
@@ -74,24 +77,6 @@ adb shell cmd window user-rotation lock "$ROTATION" >/dev/null 2>&1 \
 sleep 1
 
 SDK="$(adb shell getprop ro.build.version.sdk | tr -d '\r')"
-# Android 7/9 tablets initialize their display projection before a post-boot
-# wm size override is applied, which renders the whole system into a small
-# compatibility viewport. Reboot so SurfaceFlinger starts at the override.
-if [ "$UI_ORIENTATION" = "landscape" ] && [ "${SDK:-99}" -lt 29 ]; then
-  echo "Rebooting API $SDK tablet to apply display override"
-  adb reboot || true
-  adb wait-for-device
-  for i in $(seq 1 180); do
-    [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] && break
-    sleep 1
-  done
-  adb shell wm dismiss-keyguard >/dev/null 2>&1 || true
-  adb shell input keyevent 82 >/dev/null 2>&1 || true
-  adb shell cmd window user-rotation lock "$ROTATION" >/dev/null 2>&1 \
-    || adb shell wm user-rotation lock "$ROTATION" >/dev/null 2>&1 || true
-  adb shell settings put system user_rotation "$ROTATION" || true
-  sleep 2
-fi
 {
   echo "device=$DEVICE_ID"
   echo "sdk=$SDK"

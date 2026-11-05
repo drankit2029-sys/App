@@ -75,8 +75,8 @@ jobs:
           - { id: api33_phone_1440x2560, api: 33, arch: x86_64, target: google_apis, profile: 'Nexus 5', width: 1440, height: 2560, density: 560, orientation: portrait }
           - { id: api30_phone_360x640, api: 30, arch: x86_64, target: google_apis, profile: 'Nexus 5', width: 540, height: 960, density: 240, orientation: portrait }
           # Tablets: landscape allowed and exercised.
-          - { id: api24_tablet_800x1280, api: 24, arch: x86, target: default, profile: 'Nexus 10', width: 800, height: 1280, density: 213, orientation: landscape }
-          - { id: api28_tablet_1200x1920, api: 28, arch: x86_64, target: default, profile: 'Nexus 10', width: 1200, height: 1920, density: 240, orientation: landscape }
+          - { id: api24_tablet_native_2560x1600, api: 24, arch: x86, target: default, profile: 'Nexus 10', width: 0, height: 0, density: 0, orientation: landscape }
+          - { id: api28_tablet_native_2560x1600, api: 28, arch: x86_64, target: default, profile: 'Nexus 10', width: 0, height: 0, density: 0, orientation: landscape }
           - { id: api30_tablet_1600x2560, api: 30, arch: x86_64, target: google_apis, profile: 'Nexus 10', width: 1600, height: 2560, density: 320, orientation: landscape }
           - { id: api33_tablet_1200x2000, api: 33, arch: x86_64, target: google_apis, profile: 'Nexus 10', width: 1200, height: 2000, density: 280, orientation: landscape }
           - { id: api33_phone_notch_1440x2960, api: 33, arch: x86_64, target: google_apis, profile: pixel_3_xl, width: 1440, height: 2960, density: 560, orientation: portrait }
@@ -111,7 +111,7 @@ jobs:
           disable-animations: true
           emulator-options: >-
             -no-window -no-snapshot -gpu swiftshader_indirect
-            -no-boot-anim -camera-back none
+            -no-boot-anim -camera-back none ${{ matrix.profile == 'pixel_fold' && '-feature Foldable' || '' }}
           script: |
             set -e
             bash tools/ui-screens/run_device.sh
