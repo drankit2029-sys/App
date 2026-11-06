@@ -1,10 +1,10 @@
 PROJECT DUMP — TakeOne
-Generated: 2026-11-04T19:16:28
+Generated: 2026-11-06T06:05:30
 Root: /mnt/sdcard/Download/App
-APK md5: e18dd3aec306ef67b6ef3929a6e01302
-HEAD: e093235 Account for detector window closure in truncate-silence test
+APK md5: 2c768387f8b8a26845550963e4423319
+HEAD: bc2d281 Refresh APKs and project dump
 Branch: ut/fx-gpu-undo
-Files: 374 source files
+Files: 378 source files
 =================================================================================
 =================================================================================
 FILE: .github/workflows/build-apk.yml
@@ -756,6 +756,148 @@ jobs:
           path: fx-report/
           if-no-files-found: warn
           retention-days: 14
+
+=================================================================================
+FILE: .github/workflows/ui-screenshots.yml
+=================================================================================
+name: UI Screenshot Matrix
+
+# Generic emulator UI verification: every supported API level, representative
+# phone resolutions in portrait, and tablets run in both orientations.
+# Screenshots are uploaded as one artifact per device.
+
+on:
+  workflow_dispatch:
+  push:
+    branches-ignore: [master, main]
+    paths:
+      - 'tools/ui-screens/**'
+      - 'app/src/androidTest/java/com/takeone/studio/UiScreenshotTourTest.java'
+      - 'app/src/main/java/com/takeone/studio/MainActivity.java'
+      - 'app/src/main/AndroidManifest.xml'
+      - 'app/src/main/res/layout-land/**'
+      - '.github/workflows/ui-screenshots.yml'
+
+concurrency:
+  group: ui-screens-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  build-ui-apks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+      - name: Setup Android SDK
+        run: |
+          sdkmanager --install "platform-tools" "platforms;android-35" "build-tools;35.0.0" || true
+          yes | sdkmanager --licenses || true
+      - name: Build debug and instrumentation APKs
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleDebug assembleDebugAndroidTest --stacktrace
+      - name: Upload APK pair
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-apks
+          path: |
+            app/build/outputs/apk/debug/app-debug.apk
+            app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+          if-no-files-found: error
+
+  screenshots:
+    needs: build-ui-apks
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      max-parallel: 40
+      matrix:
+        include:
+          # Every supported API level, phones locked to portrait.
+          - { id: api24_phone_320x480, api: 24, arch: x86, target: default, profile: 'Nexus 5', width: 320, height: 480, density: 160, orientation: portrait }
+          - { id: api25_phone_360x640, api: 25, arch: x86_64, target: default, profile: 'Nexus 5', width: 540, height: 960, density: 240, orientation: portrait }
+          - { id: api26_phone_360x740, api: 26, arch: x86_64, target: default, profile: 'Nexus 5', width: 720, height: 1480, density: 320, orientation: portrait }
+          - { id: api27_phone_393x786, api: 27, arch: x86_64, target: default, profile: 'Nexus 5', width: 688, height: 1376, density: 280, orientation: portrait }
+          - { id: api28_phone_412x732, api: 28, arch: x86_64, target: default, profile: 'Nexus 5', width: 1080, height: 1920, density: 420, orientation: portrait }
+          - { id: api29_phone_360x800, api: 29, arch: x86_64, target: default, profile: 'Nexus 5', width: 900, height: 2000, density: 400, orientation: portrait }
+          - { id: api30_phone_412x915, api: 30, arch: x86_64, target: google_apis, profile: 'Nexus 5', width: 1080, height: 2400, density: 420, orientation: portrait }
+          - { id: api31_phone_393x873, api: 31, arch: x86_64, target: google_apis, profile: 'Nexus 5', width: 1080, height: 2400, density: 440, orientation: portrait }
+          - { id: api32_phone_480x800, api: 32, arch: x86_64, target: google_apis, profile: 'Nexus 5', width: 720, height: 1200, density: 240, orientation: portrait }
+          - { id: api33_phone_1080x2340, api: 33, arch: x86_64, target: google_apis, profile: 'Nexus 5', width: 1080, height: 2340, density: 440, orientation: portrait }
+          - { id: api34_phone_1080x2400, api: 34, arch: x86_64, target: google_apis, profile: 'Nexus 5', width: 1080, height: 2400, density: 420, orientation: portrait }
+          - { id: api35_phone_1440x3120, api: 35, arch: x86_64, target: google_apis, profile: 'Nexus 5', width: 1440, height: 3120, density: 560, orientation: portrait }
+          # Additional common phone geometries on current APIs.
+          - { id: api35_phone_320x480, api: 35, arch: x86_64, target: google_apis, profile: 'Nexus 5', width: 480, height: 720, density: 240, orientation: portrait }
+          - { id: api34_phone_720x1280, api: 34, arch: x86_64, target: google_apis, profile: 'Nexus 5', width: 720, height: 1280, density: 320, orientation: portrait }
+          - { id: api33_phone_1440x2560, api: 33, arch: x86_64, target: google_apis, profile: 'Nexus 5', width: 1440, height: 2560, density: 560, orientation: portrait }
+          - { id: api30_phone_360x640, api: 30, arch: x86_64, target: google_apis, profile: 'Nexus 5', width: 540, height: 960, density: 240, orientation: portrait }
+          # Tablets: landscape allowed and exercised.
+          - { id: api24_tablet_native_2560x1600, api: 24, arch: x86, target: default, profile: 'Nexus 10', width: 0, height: 0, density: 0, orientation: landscape }
+          - { id: api24_tablet_native_portrait_1600x2560, api: 24, arch: x86, target: default, profile: 'Nexus 10', width: 0, height: 0, density: 0, orientation: portrait }
+          - { id: api28_tablet_native_2560x1600, api: 28, arch: x86_64, target: default, profile: 'Nexus 10', width: 0, height: 0, density: 0, orientation: landscape }
+          - { id: api28_tablet_native_portrait_1600x2560, api: 28, arch: x86_64, target: default, profile: 'Nexus 10', width: 0, height: 0, density: 0, orientation: portrait }
+          - { id: api30_tablet_1600x2560, api: 30, arch: x86_64, target: google_apis, profile: 'Nexus 10', width: 1600, height: 2560, density: 320, orientation: landscape }
+          - { id: api30_tablet_1600x2560_portrait, api: 30, arch: x86_64, target: google_apis, profile: 'Nexus 10', width: 1600, height: 2560, density: 320, orientation: portrait }
+          - { id: api33_tablet_1200x2000, api: 33, arch: x86_64, target: google_apis, profile: 'Nexus 10', width: 1200, height: 2000, density: 280, orientation: landscape }
+          - { id: api33_tablet_1200x2000_portrait, api: 33, arch: x86_64, target: google_apis, profile: 'Nexus 10', width: 1200, height: 2000, density: 280, orientation: portrait }
+          - { id: api33_phone_notch_1440x2960, api: 33, arch: x86_64, target: google_apis, profile: pixel_3_xl, width: 1440, height: 2960, density: 560, orientation: portrait }
+          - { id: api34_foldable_unfolded_1840x2208, api: 34, arch: x86_64, target: google_apis, profile: 'Nexus 5', width: 1840, height: 2208, density: 420, orientation: portrait }
+    env:
+      APK_PATH: build-outputs/debug/app-debug.apk
+      TEST_APK_PATH: build-outputs/androidTest/debug/app-debug-androidTest.apk
+      DEVICE_ID: ${{ matrix.id }}
+      UI_WIDTH: ${{ matrix.width }}
+      UI_HEIGHT: ${{ matrix.height }}
+      UI_DENSITY: ${{ matrix.density }}
+      UI_ORIENTATION: ${{ matrix.orientation }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download APK pair
+        uses: actions/download-artifact@v4
+        with:
+          name: ui-apks
+          path: build-outputs
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Run UI tour on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api }}
+          target: ${{ matrix.target }}
+          arch: ${{ matrix.arch }}
+          profile: ${{ matrix.profile }}
+          disable-animations: true
+          emulator-options: >-
+            -no-window -no-snapshot -gpu swiftshader_indirect
+            -no-boot-anim -camera-back none
+          script: |
+            set -e
+            bash tools/ui-screens/run_device.sh
+      - name: Upload device screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-screens-${{ matrix.id }}
+          path: ui-screens/${{ matrix.id }}/
+          if-no-files-found: warn
+      - name: Upload emulator log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-log-${{ matrix.id }}
+          path: |
+            ui-screens/${{ matrix.id }}/instrumentation.txt
+            ui-screens/${{ matrix.id }}/driver.txt
+            ui-screens/${{ matrix.id }}/device-info.txt
+          if-no-files-found: ignore
 
 =================================================================================
 FILE: .github/workflows/verify.yml
@@ -17866,6 +18008,236 @@ Add regression tests in `FxInteractionAndModeTest.java` and `FxCommitAndCrossfad
 - [x] **`truncateSilenceCrossfadesSpliceBoundaryWithoutStepDiscontinuity`**: Feed a signal with a `-35 dBFS` room-tone pause below a `-30 dB` threshold into both `processOfflineRegion()` and `processOfflineRangeToFile()`, and assert that the sample-to-sample step across the splice point at `span[0] + keep` has no step discontinuity and that both paths produce identical output lengths and samples.
 
 =================================================================================
+FILE: Task (6).md
+=================================================================================
+# AI Agent Task — Fix Studio In-Place Replace Mode & Verify Part D (`task.md`)
+
+## Status Overview — Verification of `project.tar.gz` (Part D)
+All **4 Part D fixes (`D.1` – `D.4`)** from the previous audit were verified in `project.tar.gz`:
+- [x] **D.1 (`StudioFragment.java:6143–6149`)**: `commitDspFx()` now rolls back `uj.undo(raw)` alongside `waveform.discardTopUndoPeaks()` even when the first offline processor fails (`newTotal < 0`). Verified by `FxCommitAndCrossfadeTest.firstOfflineFailureWithInPlaceTailRollsBackUndoJournal()`.
+- [x] **D.2 (`HardwareApiManager.java:434–443 & 574–682`)**: `readBackSsboOnGlThread()` now returns `boolean` and falls back to CPU on `mapped == null` or `glUnmapBuffer` failure, and `complexMultiplyInPlace()` keeps `n < 65536` (`FilterCurveEqProcessor`) on the CPU without stalling the real-time audio thread.
+- [x] **D.3 (`WsolaTimePitchProcessor.java`, `ChangePitchProcessor.java`, `FxParamMatrixDumpTest.java`)**: Removed the `0.985f` `hqTrim` attenuation and the `0.0 st` `+1.5 dB` high-shelf hack, fixed `ChangePitchProcessor.isAudible()` at `0.0 st`, and updated `FxParamMatrixDumpTest` to test `pitch_formant` at `+4.0 st`. Verified by `changePitchAtZeroSemitonesIsBitExactBypassRegardlessOfPreserveFormants()` and `wsolaTimeStretchPreservesUnityGainWhenHqSpeechIsOff()`.
+- [x] **D.4 (`TruncateSilenceProcessor.java`)**: Added raised-cosine splice crossfading (`fadeFrames <= 64`) to both `processOfflineRegion()` and `processOfflineRangeToFile()`. Verified by `truncateSilenceCrossfadesSpliceBoundaryWithoutStepDiscontinuity()`.
+
+---
+
+## Part E — Root Cause Analysis & Fixes for the Studio "Replace" Button
+
+### Why Replace Mode Stopped Working (Root Cause Summary)
+Two recent changes for 60 FPS VSYNC live append scrolling broke mid-take Replace mode:
+1. **`RecordingEngine.liveInterpolatedFrames()` (`RecordingEngine.java:188–202`) returned `totalFrames` (`dataBytes / (ch * 4L)`) instead of `cursorFrame` whenever `cursorFrame < base`**:
+   ```java
+   long base = dataBytes / (Math.max(1, channels) * 4L);
+   if (state != State.RECORDING || lastChunkElapsedNanos <= 0L
+           || cursorFrame < base) {
+       return base;
+   }
+   ```
+   - During in-place Replace mode, `cursorFrame` is mid-take (`cursorFrame < base`, where `base` is `totalFrames` at the end of the recording).
+   - Because `cursorFrame < base` was `true`, `engine.liveInterpolatedFrames()` immediately returned **`base` (`totalFrames`, the end of the recording)** on the very first VSYNC frame (`StudioFragment.waveFrameCallback`, line `244`).
+   - `waveFrameCallback` passed `cur = totalFrames` into `waveform.updateLiveFromFrames(peak, cur, replaceTargetEndFrame)`.
+   - Inside `WaveformView.updateLiveFromFrames()`, the Replace branch condition `if (replaceEndFrame > 0 && curFrames < replaceEndFrame && count > 0)` evaluated to **`false`** (`totalFrames < totalFrames` is false!), so it skipped the in-place Replace branch and set `playheadPos = count` — **instantly snapping the waveform playhead to the end of the recording**.
+   - On every subsequent VSYNC frame while `cursorFrame < totalFrames`, `liveInterpolatedFrames()` kept returning `totalFrames`, which equaled `lastPushedCursorFrame` (`if (cur > 0 && cur != lastPushedCursorFrame)` was always `false`), so **`waveform.updateLiveFromFrames()` was never called again for the entire Replace pass** and none of the waveform bars were replaced, while `timerText` (`engine.cursorMs()`) counted up from `cursorFrame`.
+   - When the user pressed Pause (`pauseTake()`), `waveform.setPlayheadFraction(target / (float) total)` moved the playhead from the end of the recording back to `cursorFrame`, revealing the un-replaced waveform bars.
+2. **`WaveformView.onDraw()` (`WaveformView.java:1874–1879`) hid all bars ahead of the playhead during live Replace**:
+   ```java
+   if (isLive && savedReplaceTailPeaks == null) {
+       kEnd = Math.min(kEnd, (long) Math.floor(headPos / bucketsPerBar));
+   }
+   ```
+   Because `savedReplaceTailPeaks` is `null` during in-place Replace mode, setting `isLive = true` clamped `kEnd` to `headPos / bucketsPerBar`, hiding all upcoming bars of the existing recording to the right of the center playhead during Replace and making them pop back into view on Pause.
+3. **Mic Warmup & Pause Seam Synchronization (`RecordingEngine.java:710, 832, 1112–1273`, `StudioFragment.java:2253–2288`)**:
+   - `startCapture()` and `resumeCapture()` set `lastChunkElapsedNanos = SystemClock.elapsedRealtimeNanos()` immediately before `capLoop()` finished `micWarmupActive`, causing VSYNC interpolation to advance before the mics finished warming up.
+   - In `capLoop()`, `lastChunkElapsedNanos` was updated at line `1223` *outside* `synchronized (lock)` before `cursorFrame += frames` at line `1264`, allowing a race where `liveInterpolatedFrames()` saw a reset `lastChunkElapsedNanos` with a stale `cursorFrame`.
+   - In `StudioFragment.pauseTake()`, `long pausedAtFrame = engine.cursorFrames();` was read *before* `engine.pauseCapture()` joined `capThread`, so `engine.seekCursorFrame(target)` rewound `cursorFrame` behind the last chunk written by `capThread` and behind the 240-frame fade-in applied by `crossfadeOutOnPauseLocked()`.
+
+---
+
+### E.1. Fix `RecordingEngine.liveInterpolatedFrames()` & Mic Warmup Lockstep (`RecordingEngine.java`)
+- **File**: `app/src/main/java/com/takeone/studio/RecordingEngine.java`
+- **Changes**:
+  1. Add a package-private field `private int punchInFadeOffset = 0;` alongside `punchInFadeBuf` (line `98`) and reset `punchInFadeOffset = 0;` wherever `punchInFadeBuf = null;` is set.
+  2. Replace `liveInterpolatedFrames()` (lines `188–202`) so it interpolates from `cursorFrame` (which is the mid-take playhead during Replace and equals `totalFrames` when appending) and stays stationary (`lastChunkElapsedNanos == 0L`) while the mics are warming up:
+     ```java
+     public long liveInterpolatedFrames() {
+         synchronized (lock) {
+             long base = cursorFrame;
+             if (state != State.RECORDING || lastChunkElapsedNanos <= 0L) {
+                 return base;
+             }
+             long elapsedNs = Math.max(0L,
+                     android.os.SystemClock.elapsedRealtimeNanos()
+                             - lastChunkElapsedNanos);
+             long extraFrames = (elapsedNs * SAMPLE_RATE) / 1_000_000_000L;
+             long maxExtra = Math.max(1L, SAMPLE_RATE / 50L);
+             long interp = base + Math.min(extraFrames, maxExtra);
+             if (punchOutFrame > 0 && interp > punchOutFrame) {
+                 interp = punchOutFrame;
+             }
+             return interp;
+         }
+     }
+     ```
+  3. In `startCapture()` (around line `710`) and `resumeCapture()` (around line `832`), initialize:
+     ```java
+     lastChunkElapsedNanos = 0L;
+     lastSmoothedPeak = 0f;
+     level = 0f;
+     ```
+     so `liveInterpolatedFrames()` waits at `cursorFrame` until `micWarmupActive` finishes in `capLoop()`.
+  4. In `capLoop()` (lines `1223–1273`):
+     - Blend `punchInFadeBuf` using `punchInFadeOffset` so that even if the first post-warmup read has `frames < 240`, the 240-frame punch-in crossfade completes across consecutive reads without dropping the remaining fade samples:
+       ```java
+       if (punchInFadeBuf != null) {
+           int totalFadeFrames = punchInFadeBuf.length / outCh;
+           int remFade = totalFadeFrames - punchInFadeOffset;
+           int fadeN = Math.min(remFade, frames);
+           if (fadeN > 0) {
+               bb.position(0);
+               java.nio.FloatBuffer fb = bb.asFloatBuffer();
+               for (int f = 0; f < fadeN; f++) {
+                   int fadeIdx = punchInFadeOffset + f;
+                   float wIn = (fadeIdx + 0.5f) / totalFadeFrames;
+                   float wOut = 1.0f - wIn;
+                   for (int c = 0; c < outCh; c++) {
+                       int bufIdx = f * outCh + c;
+                       int srcIdx = fadeIdx * outCh + c;
+                       fb.put(bufIdx, punchInFadeBuf[srcIdx] * wOut
+                               + fb.get(bufIdx) * wIn);
+                   }
+               }
+               punchInFadeOffset += fadeN;
+           }
+           if (punchInFadeOffset >= totalFadeFrames) {
+               punchInFadeBuf = null;
+               punchInFadeOffset = 0;
+           }
+       }
+       ```
+     - Move `lastChunkElapsedNanos = android.os.SystemClock.elapsedRealtimeNanos();` inside `synchronized (lock)` right after `cursorFrame += frames;` (lines `1260–1273`) so `(cursorFrame, lastChunkElapsedNanos)` updates atomically:
+       ```java
+       synchronized (lock) {
+           if (raf != null && capRun) {
+               try {
+                   raf.write(out, 0, bytes);
+                   cursorFrame += frames;
+                   long endBytes = cursorFrame * outCh * 4L;
+                   if (endBytes > dataBytes) dataBytes = endBytes;
+                   lastChunkElapsedNanos =
+                           android.os.SystemClock.elapsedRealtimeNanos();
+               } catch (Exception e) {
+                   break;
+               }
+           } else {
+               break;
+           }
+       }
+       ```
+
+---
+
+### E.2. Fix `WaveformView` In-Place Replace Rendering & Bucket Peak Morphing (`WaveformView.java`)
+- **File**: `app/src/main/java/com/takeone/studio/WaveformView.java`
+- **Changes**:
+  1. Add `private boolean replacingInPlace = false;` and `private float lastMorphPeak = 0f;` next to `lastMorphIdx` (around line `97`), along with:
+     ```java
+     public synchronized void setReplacingInPlace(boolean replacing) {
+         if (this.replacingInPlace != replacing) {
+             this.replacingInPlace = replacing;
+             if (!replacing) {
+                 lastMorphIdx = -1;
+                 lastMorphPeak = 0f;
+                 morphAlpha = 0f;
+             }
+             postInvalidateOnAnimation();
+         }
+     }
+     ```
+  2. In `updateLiveFromFrames(float v, long curFrames, long replaceEndFrame)` (lines `1154–1201`):
+     - When `replaceEndFrame > 0 && curFrames < replaceEndFrame && count > 0`:
+       Set `replacingInPlace = true;`, track `lastMorphPeak` as the max peak observed within the current bucket `idx` (filling any skipped intermediate buckets if `lastMorphIdx >= 0 && idx > lastMorphIdx + 1`), and blend `history[idx]` toward `lastMorphPeak`:
+       ```java
+       if (replaceEndFrame > 0 && curFrames < replaceEndFrame && count > 0) {
+           // In-place Replace before the original end of the take:
+           replacingInPlace = true;
+           float exactPos = Math.max(0f,
+                   Math.min(count, (curFrames / (float) replaceEndFrame) * count));
+           int idx = Math.min(count - 1, Math.max(0, (int) Math.floor(exactPos)));
+           if (idx != lastMorphIdx) {
+               if (lastMorphIdx >= 0 && idx > lastMorphIdx + 1) {
+                   for (int skip = lastMorphIdx + 1; skip < idx && skip < count; skip++) {
+                       history[skip] = clampedV;
+                   }
+               }
+               lastMorphIdx = idx;
+               lastMorphPeak = clampedV;
+               morphAlpha = 0.62f;
+           } else {
+               if (clampedV > lastMorphPeak) {
+                   lastMorphPeak = clampedV;
+               }
+               morphAlpha = Math.min(1.0f, morphAlpha + 0.20f);
+           }
+           history[idx] = history[idx] * (1.0f - morphAlpha) + lastMorphPeak * morphAlpha;
+           playheadPos = exactPos;
+           playheadIndex = Math.round(playheadPos);
+           postInvalidateOnAnimation();
+           return;
+       }
+       replacingInPlace = false;
+       ```
+  3. In `setLive(boolean live)` (line `1271`) and `clear()` (line `1326`):
+     Reset `replacingInPlace = false;` and `lastMorphPeak = 0f;` when `!live` or `clear()` is called.
+  4. In `onDraw(Canvas canvas)` (lines `1820–1880`):
+     Read `boolean repInPlace = replacingInPlace;` inside the `synchronized (this)` block, and only clamp `kEnd` when appending (`!repInPlace && savedReplaceTailPeaks == null`):
+     ```java
+     if (isLive && !repInPlace && savedReplaceTailPeaks == null) {
+         // Live append capture only has buckets up to the interpolated head;
+         // never draw bars ahead of the centre playhead.
+         kEnd = Math.min(kEnd,
+                 (long) Math.floor(headPos / bucketsPerBar));
+     }
+     ```
+     This keeps all upcoming bars of the existing recording to the right of the center playhead visible in dimmed translucent red during Replace mode while they are progressively overwritten.
+
+---
+
+### E.3. Fix Replace Mode Lifecycle, Button Disabling While Recording, and Seamless Post-Pause Playback (`StudioFragment.java`)
+- **File**: `app/src/main/java/com/takeone/studio/StudioFragment.java`
+- **Changes**:
+  1. **Arm / Disarm Replace Button (`btnPreviewPlay.setOnClickListener`, lines `452–471`)**:
+     - When `replaceModeArmed` is toggled ON (`true`): keep selection cleared and locked, release warm speaker, and call `engine.warmUpMic(requireContext(), preset.audioSource, engine.channels);`.
+     - When `replaceModeArmed` is toggled OFF (`false`): unlock selection, warm up speaker (`RawFloatPlayer.warmUpSpeaker(engine.channels)`), keep `engine.cursorFrames()` parked at the current playhead (`userScrolledWhilePaused = engine.cursorFrames() < engine.totalFrames() - 480`), and morph the main FAB icon back to Play (`ic_play`) via `syncStudioFabIcon()` so pressing Resume immediately plays seamlessly from that point forward of the previous recording.
+  2. **Start In-Place Replace (`startOrResumeCapture()`, lines `2173–2214`)**:
+     - When `replaceModeArmed && curFrames < totalFrames - 480`:
+       Call `waveform.setReplacingInPlace(true);` right after setting `replacePassStartFrame = curFrames;` and `replaceTargetEndFrame = totalFrames;`.
+     - In the `else` branches (appending at end or fresh session):
+       Call `if (waveform != null) waveform.setReplacingInPlace(false);`.
+  3. **Auto-Transition From Replace to Append at End of Take (`tick`, lines `2685–2695`)**:
+     - When `replaceModeArmed` reaches `replaceTargetEndFrame` (`cur >= replaceTargetEndFrame || cur >= total`):
+       Also call `if (waveform != null) waveform.setReplacingInPlace(false);`.
+  4. **Pause During Replace Mode (`pauseTake()`, lines `2252–2288`)**:
+     - Call `engine.pauseCapture();` **before** reading `long pausedAtFrame = engine.cursorFrames();` so `pausedAtFrame` reflects the exact frame after `capThread` finishes its final chunk and after `crossfadeOutOnPauseLocked()` has faded in the surviving audio at `cursorFrame`.
+     - Clear `if (waveform != null) waveform.setReplacingInPlace(false);`.
+     - Set `userScrolledWhilePaused = (target < total - 480);` (instead of unconditionally `false`) so that when the user pauses mid-take and turns the `Replace` button off, the playhead and timer stay at `target` and pressing Resume plays seamlessly from `target` through the remaining previous recording.
+  5. **Disable Replace Button While Recording (`paintEditorStrip()`, lines `3261–3277`)**:
+     - Change `boolean tapAllowed = !proUnlocked || replaceEnabled;` to:
+       ```java
+       boolean tapAllowed = canEdit && (!proUnlocked || replaceEnabled);
+       ```
+       so pressing `Replace` is completely disabled while recording (`!canEdit`) until the user pauses.
+
+---
+
+## Verification Test Checklist
+Add regression tests in `PunchInTest.java` and `WaveformTimelineTest.java`:
+- [x] **`PunchInTest.liveInterpolatedFramesStartsAtMidTakeCursorDuringReplace`**: Attach a 48,000-frame WAV, seek to frame `12,000` (`cursorFrame < totalFrames`), set `state = State.RECORDING`, and verify that `liveInterpolatedFrames()` returns `12,000` (not `48,000` / `totalFrames`) during mic warmup (`lastChunkElapsedNanos == 0L`) and interpolates forward from `12,000` once `lastChunkElapsedNanos` is set.
+- [x] **`WaveformTimelineTest.inPlaceReplaceReplacesMidTakeBarsAndKeepsFutureBarsVisible`**: Load a 100-bar waveform (`240,000` frames) with initial peak `0.5f`, seek playhead to `0.5f` (bar `50`, frame `120,000`), set `setReplacingInPlace(true)` and `setLive(true)`, feed `updateLiveFromFrames(0.9f, 120_000L + f * 800L, 240_000L)` across bars `50..59`, and verify:
+  1. Playhead advances smoothly from `0.50f` to `0.60f` without ever snapping to `1.0f` (`count`).
+  2. Bars `50..59` are replaced with `~0.9f` (and replacing with `0.0f` reduces them toward `0.0f`), while bars `0..49` and `60..99` remain at `0.5f`.
+  3. On `setLive(false)` and `setReplacingInPlace(false)`, the playhead remains at `0.60f` and the replaced bars `50..59` retain their new values.
+
+=================================================================================
 FILE: app/build.gradle
 =================================================================================
 plugins {
@@ -25295,6 +25667,593 @@ public class TempKillTest {
 }
 
 =================================================================================
+FILE: app/src/androidTest/java/com/takeone/studio/UiScreenshotTourTest.java
+=================================================================================
+package com.takeone.studio;
+
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
+
+import android.app.Activity;
+import android.app.Instrumentation;
+import android.content.Context;
+import android.content.Intent;
+import android.content.res.Configuration;
+import android.graphics.Rect;
+import android.os.Build;
+import android.os.SystemClock;
+import android.view.DisplayCutout;
+import android.view.View;
+import android.view.WindowInsets;
+
+import androidx.test.ext.junit.runners.AndroidJUnit4;
+import androidx.test.platform.app.InstrumentationRegistry;
+import androidx.test.rule.GrantPermissionRule;
+import androidx.test.uiautomator.By;
+import androidx.test.uiautomator.Direction;
+import androidx.test.uiautomator.UiDevice;
+import androidx.test.uiautomator.UiObject2;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+import org.junit.BeforeClass;
+import org.junit.Rule;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+
+import java.io.File;
+import java.io.RandomAccessFile;
+
+/**
+ * UI screenshot tour used by the emulator matrix.
+ *
+ * <p>The generic adb driver in {@code tools/ui-screens/ui_driver.py} can drive
+ * any tap/key/screenshot sequence from the outside. This test seeds a real
+ * take and visits the app's own dialogs and menus, which cannot be reached
+ * from a cold launch without a session. Screenshots are written to
+ * {@code files/ui-screens/<device>/<category>/} so the workflow can pull one
+ * dedicated folder per emulator.
+ *
+ * <p>Run with:
+ * {@code -e class com.takeone.studio.UiScreenshotTourTest -e uiScreensDevice <id>}.
+ */
+@RunWith(AndroidJUnit4.class)
+public class UiScreenshotTourTest {
+
+    private static final long SETTLE_MS = 650L;
+
+    @Rule
+    public GrantPermissionRule mic = GrantPermissionRule.grant(
+            android.Manifest.permission.RECORD_AUDIO);
+
+    @BeforeClass
+    public static void grantNotificationPermission() {
+        if (Build.VERSION.SDK_INT < 33) return;
+        try {
+            Context ctx = InstrumentationRegistry.getInstrumentation()
+                    .getTargetContext();
+            InstrumentationRegistry.getInstrumentation().getUiAutomation()
+                    .executeShellCommand("pm grant " + ctx.getPackageName()
+                            + " android.permission.POST_NOTIFICATIONS").close();
+        } catch (Throwable ignored) {
+        }
+    }
+
+    @Test(timeout = 300000L)
+    public void captureEveryReachableUiSurface() throws Exception {
+        Instrumentation instr = InstrumentationRegistry.getInstrumentation();
+        Context ctx = instr.getTargetContext();
+        UiDevice device = UiDevice.getInstance(instr);
+        String deviceId = arg("uiScreensDevice");
+        if (deviceId == null || deviceId.isEmpty()) {
+            deviceId = (Build.MANUFACTURER + "_" + Build.MODEL + "_API"
+                    + Build.VERSION.SDK_INT + "_" + device.getDisplayWidth()
+                    + "x" + device.getDisplayHeight())
+                    .replaceAll("[^A-Za-z0-9_.-]", "_");
+        }
+        File outRoot = new File(ctx.getExternalFilesDir(null),
+                "ui-screens/" + deviceId);
+        deleteRecursively(outRoot);
+        //noinspection ResultOfMethodCallIgnored
+        outRoot.mkdirs();
+
+        JSONObject report = new JSONObject();
+        JSONArray screenshots = new JSONArray();
+        JSONArray issues = new JSONArray();
+        report.put("deviceId", deviceId);
+        report.put("manufacturer", Build.MANUFACTURER);
+        report.put("model", Build.MODEL);
+        report.put("sdk", Build.VERSION.SDK_INT);
+        report.put("displayWidth", device.getDisplayWidth());
+        report.put("displayHeight", device.getDisplayHeight());
+        report.put("displayRotation", device.getDisplayRotation());
+        report.put("densityDpi", ctx.getResources().getDisplayMetrics().densityDpi);
+        Configuration cfg = ctx.getResources().getConfiguration();
+        report.put("screenWidthDp", cfg.screenWidthDp);
+        report.put("screenHeightDp", cfg.screenHeightDp);
+        report.put("smallestScreenWidthDp", cfg.smallestScreenWidthDp);
+        report.put("orientation", cfg.orientation == Configuration.ORIENTATION_LANDSCAPE
+                ? "landscape" : "portrait");
+        report.put("screenshots", screenshots);
+        report.put("issues", issues);
+
+        Activity activity = null;
+        RecordingEngine engine = RecordingEngine.get();
+        try {
+            TrialAndBillingManager.setTestOverridePro(Boolean.TRUE);
+
+            File takes = RecordingEngine.takesDir(ctx);
+            //noinspection ResultOfMethodCallIgnored
+            takes.mkdirs();
+            File raw = new File(takes, "ui_screenshot_" + System.nanoTime() + ".wav");
+            writeTake(raw, 3, 2);
+            engine.abortAndDelete();
+            engine.attachExisting(ctx, raw, "UI Screenshot Take", 2,
+                    RecordingEngine.payloadBytesOf(raw));
+
+            activity = launch(instr);
+            assertNotNull("MainActivity did not start", activity);
+            sleep(1200);
+            shoot(device, outRoot, "library", "01_library", screenshots, issues);
+
+            click(activity, R.id.sortBtn);
+            sleep(SETTLE_MS);
+            shoot(device, outRoot, "library", "02_sort_menu", screenshots, issues);
+            UiObject2 newest = find(device, By.textContains("Newest first"));
+            if (newest != null) {
+                try {
+                    newest.click();
+                } catch (Throwable stale) {
+                    device.pressBack();
+                }
+            } else {
+                device.pressBack();
+            }
+            sleep(300);
+
+            click(activity, R.id.searchToggle);
+            sleep(SETTLE_MS);
+            shoot(device, outRoot, "library", "03_search", screenshots, issues);
+            // Close search through its own toggle instead of a system BACK;
+            // BACK can close the activity when the keyboard is already gone.
+            click(activity, R.id.searchToggle);
+            sleep(300);
+
+            shoot(device, outRoot, "library", "04_before_studio",
+                    screenshots, issues);
+            if (activity.isFinishing()) {
+                issues.put("library activity finished before studio launch");
+            }
+            final Activity act = activity;
+            act.runOnUiThread(() -> ((MainActivity) act).openStudioWithEdit(
+                    raw, 991L, "UI Screenshot Take"));
+            StudioFragment studio = awaitStudio(activity);
+            assertNotNull("Studio fragment never appeared", studio);
+            StudioFragment frag = studio;
+            View root = awaitRoot(frag);
+            assertNotNull("Studio root missing", root);
+
+            // Wait for the waveform bars loaded off the working file.
+            WaveformView waveform = root.findViewById(R.id.waveform);
+            for (int i = 0; i < 80 && waveform.historyCount() <= 1; i++) {
+                sleep(100);
+            }
+            sleep(SETTLE_MS);
+            shoot(device, outRoot, "studio", "01_main", screenshots, issues);
+
+            // Display cutout/status/navigation safe-area evidence.
+            recordInsets(activity, report, issues);
+            assertBackButtonClearsCutout(activity, issues);
+
+            click(activity, R.id.settingsRow);
+            sleep(SETTLE_MS);
+            shoot(device, outRoot, "studio", "02_recording_settings",
+                    screenshots, issues);
+            device.pressBack();
+            sleep(300);
+
+            click(activity, R.id.teleEditBtn);
+            sleep(SETTLE_MS);
+            shoot(device, outRoot, "studio", "03_teleprompter_editor",
+                    screenshots, issues);
+            device.pressBack();
+            sleep(300);
+
+            // Finish-take confirmation, dismissed without mutating the take.
+            act.runOnUiThread(frag::onStopPressed);
+            sleep(SETTLE_MS);
+            shoot(device, outRoot, "studio", "04_finish_take_modal",
+                    screenshots, issues);
+            if (device.hasObject(By.textContains("Finish take"))) {
+                device.pressBack();
+                sleep(300);
+            }
+
+            // Select the whole take, then open the FX rack.
+            act.runOnUiThread(() -> {
+                waveform.selectRange(0f, 1f);
+                if (!waveform.hasSelection()) {
+                    waveform.toggleSelectionAtPlayhead();
+                    waveform.selectRange(0f, 1f);
+                }
+            });
+            sleep(300);
+            click(activity, R.id.btnDspFx);
+            for (int i = 0; i < 30 && !frag.isFxPanelOpen(); i++) sleep(100);
+            sleep(SETTLE_MS);
+            shoot(device, outRoot, "fx", "01_rack", screenshots, issues);
+
+            click(activity, R.id.fxPresetDropdown);
+            sleep(SETTLE_MS);
+            shoot(device, outRoot, "fx", "02_presets_menu",
+                    screenshots, issues);
+            device.pressBack();
+            sleep(250);
+
+            click(activity, R.id.fxToolsBtn);
+            sleep(SETTLE_MS);
+            shoot(device, outRoot, "fx", "03_tools_menu", screenshots, issues);
+            device.pressBack();
+            sleep(250);
+
+            // Open the production Add Effect dialog directly: on very short
+            // screens the rack action row is clipped, and UiAutomator's
+            // scroll/idle handshake can wedge inside the scroll view.
+            boolean addDialogOpened = invokeAddEffectDialog(act, frag);
+            if (addDialogOpened) {
+                sleep(SETTLE_MS);
+                shoot(device, outRoot, "fx", "04_add_effect_dialog",
+                        screenshots, issues);
+                device.pressBack();
+                sleep(300);
+            } else {
+                issues.put("Add Effect dialog could not be opened");
+            }
+
+            // Add the effect through the app's own config/rebuild path so the
+            // rack/inspector images exist even when the list row is below the
+            // fold or the dialog itself is clipped on a 320x480 screen.
+            if (addAmplifyProgrammatically(act, frag)) {
+                sleep(SETTLE_MS);
+                shoot(device, outRoot, "fx", "05_effect_added",
+                        screenshots, issues);
+                if (invokeEffectDetailDialog(act, frag)) {
+                    sleep(SETTLE_MS);
+                    shoot(device, outRoot, "fx", "06_effect_detail",
+                            screenshots, issues);
+                    UiObject2 close = find(device, By.text("Close"));
+                    if (close != null) close.click();
+                    else device.pressBack();
+                    sleep(300);
+                } else {
+                    issues.put("inspector could not open");
+                }
+            } else {
+                issues.put("effect could not be added programmatically");
+            }
+
+            // Notification shade over the live activity.
+            try {
+                device.openNotification();
+                sleep(1000);
+                shoot(device, outRoot, "system", "01_notification_overlay",
+                        screenshots, issues);
+                device.pressBack();
+                sleep(500);
+                report.put("notificationShadeOpened", true);
+                assertTrue("activity finished after notification shade",
+                        !activity.isFinishing());
+            } catch (Throwable t) {
+                issues.put("notification overlay: " + t.getClass().getSimpleName());
+            }
+
+            // Back navigation from the rack/studio.
+            if (frag.isFxPanelOpen()) {
+                click(activity, R.id.fxCloseBtn);
+                sleep(300);
+            }
+            device.pressBack();
+            sleep(800);
+            shoot(device, outRoot, "system", "02_navigation_back",
+                    screenshots, issues);
+            report.put("passedBackNavigation", true);
+        } catch (Throwable t) {
+            issues.put("fatal: " + t.getClass().getSimpleName() + ": "
+                    + t.getMessage());
+            throw t;
+        } finally {
+            try {
+                write(new File(outRoot, "report.json"), report.toString(2));
+            } catch (Throwable ignored) {
+            }
+            try {
+                engine.abortAndDelete();
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    private static Activity launch(Instrumentation instr) {
+        Context ctx = instr.getTargetContext();
+        Intent i = new Intent(ctx, MainActivity.class);
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+        Activity activity = instr.startActivitySync(i);
+        instr.waitForIdleSync();
+        return activity;
+    }
+
+    private static StudioFragment awaitStudio(Activity activity) throws Exception {
+        for (int i = 0; i < 80; i++) {
+            StudioFragment f = (StudioFragment) ((MainActivity) activity)
+                    .getSupportFragmentManager().findFragmentByTag("STU");
+            if (f != null && f.isAdded()) return f;
+            sleep(100);
+        }
+        return null;
+    }
+
+    private static View awaitRoot(StudioFragment frag) throws Exception {
+        for (int i = 0; i < 50; i++) {
+            final View[] holder = new View[1];
+            Activity host = frag.getActivity();
+            if (host == null) {
+                sleep(100);
+                continue;
+            }
+            host.runOnUiThread(() -> {
+                try {
+                    ((MainActivity) host).getSupportFragmentManager()
+                            .executePendingTransactions();
+                } catch (Throwable ignored) {
+                }
+                holder[0] = frag.getView();
+            });
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+            if (holder[0] != null) return holder[0];
+            sleep(100);
+        }
+        return null;
+    }
+
+    private static void click(Activity activity, int id) {
+        View v = activity.findViewById(id);
+        if (v == null) return;
+        activity.runOnUiThread(v::performClick);
+        InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+    }
+
+
+
+
+
+    private static boolean addAmplifyProgrammatically(Activity activity,
+                                                       StudioFragment fragment) {
+        final boolean[] added = {false};
+        activity.runOnUiThread(() -> {
+            try {
+                java.lang.reflect.Field configField = StudioFragment.class
+                        .getDeclaredField("dspConfig");
+                configField.setAccessible(true);
+                DspChain.Config config =
+                        (DspChain.Config) configField.get(fragment);
+                if (config == null) return;
+                config.addOrFocusSlot(DspChain.EffectType.AMPLIFY);
+                config.save(fragment.requireContext());
+                java.lang.reflect.Method rebuild = StudioFragment.class
+                        .getDeclaredMethod("rebuildFxRackList");
+                rebuild.setAccessible(true);
+                rebuild.invoke(fragment);
+                added[0] = true;
+            } catch (Throwable ignored) {
+            }
+        });
+        InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+        return added[0];
+    }
+
+    private static boolean invokeEffectDetailDialog(Activity activity,
+                                                     StudioFragment fragment) {
+        final boolean[] opened = {false};
+        activity.runOnUiThread(() -> {
+            try {
+                java.lang.reflect.Field configField = StudioFragment.class
+                        .getDeclaredField("dspConfig");
+                configField.setAccessible(true);
+                DspChain.Config config =
+                        (DspChain.Config) configField.get(fragment);
+                if (config == null || config.slots.isEmpty()) return;
+                DspChain.EffectSlot slot =
+                        config.slots.get(config.slots.size() - 1);
+                java.lang.reflect.Method m = StudioFragment.class
+                        .getDeclaredMethod("showEffectDetailModal",
+                                DspChain.EffectSlot.class);
+                m.setAccessible(true);
+                m.invoke(fragment, slot);
+                opened[0] = true;
+            } catch (Throwable ignored) {
+            }
+        });
+        InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+        return opened[0];
+    }
+
+    private static boolean invokeAddEffectDialog(Activity activity,
+                                                  StudioFragment fragment) {
+        final boolean[] opened = {false};
+        activity.runOnUiThread(() -> {
+            try {
+                java.lang.reflect.Method m = StudioFragment.class
+                        .getDeclaredMethod("showAddEffectSearchDialog");
+                m.setAccessible(true);
+                m.invoke(fragment);
+                opened[0] = true;
+            } catch (Throwable ignored) {
+            }
+        });
+        InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+        return opened[0];
+    }
+
+    private static UiObject2 findScrolling(UiDevice device,
+                                           androidx.test.uiautomator.BySelector by) {
+        for (int i = 0; i < 10; i++) {
+            UiObject2 found = find(device, by);
+            if (found != null) return found;
+            boolean scrolled = false;
+            java.util.List<UiObject2> scrollables =
+                    device.findObjects(By.scrollable(true));
+            for (UiObject2 scrollable : scrollables) {
+                try {
+                    scrollable.scroll(Direction.DOWN, 0.7f);
+                    scrolled = true;
+                } catch (Throwable ignored) {
+                }
+            }
+            if (!scrolled) {
+                int w = device.getDisplayWidth();
+                int h = device.getDisplayHeight();
+                device.swipe(w / 2, (int) (h * 0.72), w / 2,
+                        (int) (h * 0.32), 20);
+            }
+            sleep(220);
+        }
+        return find(device, by);
+    }
+
+    private static UiObject2 find(UiDevice device, androidx.test.uiautomator.BySelector by) {
+        return device.findObject(by);
+    }
+
+    private static void recordInsets(Activity activity, JSONObject report,
+                                     JSONArray issues) {
+        try {
+            View decor = activity.getWindow().getDecorView();
+            WindowInsets insets = decor.getRootWindowInsets();
+            if (insets == null) {
+                issues.put("window insets unavailable");
+                return;
+            }
+            int top = insets.getSystemWindowInsetTop();
+            int bottom = insets.getSystemWindowInsetBottom();
+            int left = insets.getSystemWindowInsetLeft();
+            int right = insets.getSystemWindowInsetRight();
+            if (Build.VERSION.SDK_INT >= 28) {
+                DisplayCutout cutout = insets.getDisplayCutout();
+                if (cutout != null) {
+                    Rect safe = new Rect(cutout.getSafeInsetLeft(),
+                            cutout.getSafeInsetTop(),
+                            cutout.getSafeInsetRight(),
+                            cutout.getSafeInsetBottom());
+                    report.put("cutoutSafeInsets", safe.toShortString());
+                    top = Math.max(top, cutout.getSafeInsetTop());
+                    bottom = Math.max(bottom, cutout.getSafeInsetBottom());
+                    left = Math.max(left, cutout.getSafeInsetLeft());
+                    right = Math.max(right, cutout.getSafeInsetRight());
+                }
+            }
+            report.put("systemWindowInsets",
+                    new JSONObject().put("left", left).put("top", top)
+                            .put("right", right).put("bottom", bottom));
+        } catch (Throwable t) {
+            issues.put("insets: " + t.getClass().getSimpleName());
+        }
+    }
+
+    private static void assertBackButtonClearsCutout(Activity activity,
+                                                      JSONArray issues) {
+        try {
+            View back = activity.findViewById(R.id.backBtn);
+            if (back == null) {
+                issues.put("back button not found");
+                return;
+            }
+            int[] loc = new int[2];
+            back.getLocationOnScreen(loc);
+            WindowInsets insets = back.getRootWindowInsets();
+            int safeTop = insets == null ? 0 : insets.getSystemWindowInsetTop();
+            if (Build.VERSION.SDK_INT >= 28 && insets != null
+                    && insets.getDisplayCutout() != null) {
+                safeTop = Math.max(safeTop,
+                        insets.getDisplayCutout().getSafeInsetTop());
+            }
+            if (loc[1] < safeTop) {
+                issues.put("back button starts under the cutout/status area: y="
+                        + loc[1] + " safeTop=" + safeTop);
+            }
+        } catch (Throwable t) {
+            issues.put("back button inset check: "
+                    + t.getClass().getSimpleName());
+        }
+    }
+
+    private static void shoot(UiDevice device, File root, String folder,
+                              String name, JSONArray screenshots,
+                              JSONArray issues) {
+        File dir = new File(root, folder);
+        //noinspection ResultOfMethodCallIgnored
+        dir.mkdirs();
+        File file = new File(dir, name + ".png");
+        try {
+            if (device.takeScreenshot(file) && file.length() > 0) {
+                screenshots.put(folder + "/" + name + ".png");
+            } else {
+                issues.put("screenshot failed: " + folder + "/" + name);
+            }
+        } catch (Throwable t) {
+            issues.put("screenshot " + folder + "/" + name + ": "
+                    + t.getClass().getSimpleName());
+        }
+    }
+
+    private static void writeTake(File raw, int seconds, int channels)
+            throws Exception {
+        int frames = RecordingEngine.SAMPLE_RATE * seconds;
+        long bytes = (long) frames * channels * 4L;
+        try (RandomAccessFile w = new RandomAccessFile(raw, "rw")) {
+            w.setLength(0);
+            w.write(Dsp.wavFloatHeader(channels, RecordingEngine.SAMPLE_RATE,
+                    bytes));
+            float[] buf = new float[frames * channels];
+            for (int f = 0; f < frames; f++) {
+                float v = (float) (0.18 * Math.sin(
+                        2.0 * Math.PI * 220.0 * f / RecordingEngine.SAMPLE_RATE)
+                        + 0.07 * Math.sin(
+                        2.0 * Math.PI * 660.0 * f / RecordingEngine.SAMPLE_RATE));
+                for (int c = 0; c < channels; c++) {
+                    buf[f * channels + c] = v;
+                }
+            }
+            Dsp.writeFloatsLE(w, buf, 0, buf.length);
+        }
+    }
+
+    private static String arg(String key) {
+        return InstrumentationRegistry.getArguments().getString(key);
+    }
+
+    private static void sleep(long ms) {
+        SystemClock.sleep(ms);
+    }
+
+    private static void write(File file, String text) throws Exception {
+        try (java.io.FileWriter w = new java.io.FileWriter(file)) {
+            w.write(text);
+        }
+    }
+
+    private static void deleteRecursively(File f) {
+        if (f == null || !f.exists()) return;
+        File[] children = f.listFiles();
+        if (children != null) {
+            for (File child : children) deleteRecursively(child);
+        }
+        //noinspection ResultOfMethodCallIgnored
+        f.delete();
+    }
+}
+
+=================================================================================
 FILE: app/src/main/AndroidManifest.xml
 =================================================================================
 <?xml version="1.0" encoding="utf-8"?>
@@ -25338,9 +26297,8 @@ FILE: app/src/main/AndroidManifest.xml
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTask"
-            android:screenOrientation="portrait"
-            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
-            tools:ignore="LockedOrientationActivity,DiscouragedApi">
+            android:resizeableActivity="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -46527,6 +47485,7 @@ FILE: app/src/main/java/com/takeone/studio/MainActivity.java
 package com.takeone.studio;
 
 import android.content.Intent;
+import android.content.res.Configuration;
 import android.os.Bundle;
 import android.os.SystemClock;
 import android.view.MotionEvent;
@@ -46562,7 +47521,7 @@ public class MainActivity extends AppCompatActivity {
         CrashLog.install(this);
         AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES);
         super.onCreate(savedInstanceState);
-        setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
+        applyOrientationPolicy(getResources().getConfiguration());
         setContentView(R.layout.activity_main);
 
         fabWrap = findViewById(R.id.fabWrap);
@@ -47004,6 +47963,24 @@ public class MainActivity extends AppCompatActivity {
                         .setDuration(220).start())
                 .start();
     }
+    @Override
+    public void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        applyOrientationPolicy(newConfig);
+    }
+
+    private void applyOrientationPolicy(Configuration configuration) {
+        // Phones stay portrait. Tablets, unfolded foldables, and multi-window
+        // panes use one full-width column and may rotate freely.
+        boolean largeScreen = configuration.smallestScreenWidthDp >= 600;
+        int requested = largeScreen
+                ? android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                : android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT;
+        if (getRequestedOrientation() != requested) {
+            setRequestedOrientation(requested);
+        }
+    }
+
 }
 
 =================================================================================
@@ -52039,6 +53016,7 @@ public final class RecordingEngine {
      */
     private volatile boolean fxBakeRequired = false;
     private float[] punchInFadeBuf;
+    private int punchInFadeOffset = 0;
     private float[] punchOutFadeBuf;
 
     /**
@@ -52130,9 +53108,8 @@ public final class RecordingEngine {
      */
     public long liveInterpolatedFrames() {
         synchronized (lock) {
-            long base = dataBytes / (Math.max(1, channels) * 4L);
-            if (state != State.RECORDING || lastChunkElapsedNanos <= 0L
-                    || cursorFrame < base) {
+            long base = cursorFrame;
+            if (state != State.RECORDING || lastChunkElapsedNanos <= 0L) {
                 return base;
             }
             long elapsedNs = Math.max(0L,
@@ -52140,7 +53117,11 @@ public final class RecordingEngine {
                             - lastChunkElapsedNanos);
             long extraFrames = (elapsedNs * SAMPLE_RATE) / 1_000_000_000L;
             long maxExtra = Math.max(1L, SAMPLE_RATE / 50L);
-            return base + Math.min(extraFrames, maxExtra);
+            long interp = base + Math.min(extraFrames, maxExtra);
+            if (punchOutFrame > 0 && interp > punchOutFrame) {
+                interp = punchOutFrame;
+            }
+            return interp;
         }
     }
 
@@ -52392,6 +53373,7 @@ public final class RecordingEngine {
             inPlaceEdited = false;
             fxBakeRequired = false;
             punchInFadeBuf = null;
+                punchInFadeOffset = 0;
             punchOutFadeBuf = null;
             fellBackToMono = false;
             state = State.IDLE;
@@ -52432,6 +53414,7 @@ public final class RecordingEngine {
             inPlaceEdited = false;
             fxBakeRequired = false;
             punchInFadeBuf = null;
+                punchInFadeOffset = 0;
             punchOutFadeBuf = null;
             if (!pendingFor(raw).exists()) writePending(raw, takeName, channels);
             state = State.IDLE;
@@ -52481,6 +53464,7 @@ public final class RecordingEngine {
             inPlaceEdited = false;
             fxBakeRequired = false;
             punchInFadeBuf = null;
+                punchInFadeOffset = 0;
             punchOutFadeBuf = null;
             level = 0f;
             parentRawFile = null;
@@ -52593,6 +53577,7 @@ public final class RecordingEngine {
                     truncateTailOnWrite = false;
                 }
                 punchInFadeBuf = null;
+                punchInFadeOffset = 0;
                 punchOutFadeBuf = null;
                 if (cursorFrame < totalFrames) {
                     inPlaceEdited = true;
@@ -52650,7 +53635,10 @@ public final class RecordingEngine {
             capThread.setPriority(Thread.MAX_PRIORITY);
             capThread.start();
             state = State.RECORDING;
-            lastChunkElapsedNanos = android.os.SystemClock.elapsedRealtimeNanos();
+            // Stay parked at cursorFrame until capLoop writes its first chunk.
+            lastChunkElapsedNanos = 0L;
+            lastSmoothedPeak = 0f;
+            level = 0f;
             lastHeaderPatch = System.currentTimeMillis();
         }
         ConversionService.onRecordingStateChanged();
@@ -52715,6 +53703,7 @@ public final class RecordingEngine {
                     truncateTailOnWrite = false;
                 }
                 punchInFadeBuf = null;
+                punchInFadeOffset = 0;
                 punchOutFadeBuf = null;
                 if (cursorFrame < totalFrames) {
                     inPlaceEdited = true;
@@ -52772,7 +53761,10 @@ public final class RecordingEngine {
             capThread.setPriority(Thread.MAX_PRIORITY);
             capThread.start();
             state = State.RECORDING;
-            lastChunkElapsedNanos = android.os.SystemClock.elapsedRealtimeNanos();
+            // Stay parked at cursorFrame until capLoop writes its first chunk.
+            lastChunkElapsedNanos = 0L;
+            lastSmoothedPeak = 0f;
+            level = 0f;
             lastHeaderPatch = System.currentTimeMillis();
         }
         ConversionService.onRecordingStateChanged();
@@ -52892,6 +53884,7 @@ public final class RecordingEngine {
             inPlaceEdited = false;
             fxBakeRequired = false;
             punchInFadeBuf = null;
+                punchInFadeOffset = 0;
             punchOutFadeBuf = null;
             level = 0f;
         }
@@ -53163,23 +54156,32 @@ public final class RecordingEngine {
                     }
                 }
                 if (frames <= 0) break;
-                lastChunkElapsedNanos =
-                        android.os.SystemClock.elapsedRealtimeNanos();
-
-                // Blend first 240 frames on mid-file punch-in
+                // Blend the 240-frame punch-in across consecutive reads; the
+                // first post-warmup read can be shorter than the fade.
                 if (punchInFadeBuf != null) {
-                    int fadeN = Math.min(punchInFadeBuf.length / outCh, frames);
-                    bb.position(0);
-                    java.nio.FloatBuffer fb = bb.asFloatBuffer();
-                    for (int f = 0; f < fadeN; f++) {
-                        float wIn = (f + 0.5f) / fadeN;
-                        float wOut = 1.0f - wIn;
-                        for (int c = 0; c < outCh; c++) {
-                            int idx = f * outCh + c;
-                            fb.put(idx, punchInFadeBuf[idx] * wOut + fb.get(idx) * wIn);
+                    int totalFadeFrames = punchInFadeBuf.length / outCh;
+                    int remFade = totalFadeFrames - punchInFadeOffset;
+                    int fadeN = Math.min(remFade, frames);
+                    if (fadeN > 0) {
+                        bb.position(0);
+                        java.nio.FloatBuffer fb = bb.asFloatBuffer();
+                        for (int f = 0; f < fadeN; f++) {
+                            int fadeIdx = punchInFadeOffset + f;
+                            float wIn = (fadeIdx + 0.5f) / totalFadeFrames;
+                            float wOut = 1.0f - wIn;
+                            for (int c = 0; c < outCh; c++) {
+                                int bufIdx = f * outCh + c;
+                                int srcIdx = fadeIdx * outCh + c;
+                                fb.put(bufIdx, punchInFadeBuf[srcIdx] * wOut
+                                        + fb.get(bufIdx) * wIn);
+                            }
                         }
+                        punchInFadeOffset += fadeN;
                     }
-                    punchInFadeBuf = null;
+                    if (punchInFadeOffset >= totalFadeFrames) {
+                        punchInFadeBuf = null;
+                        punchInFadeOffset = 0;
+                    }
                 }
                 // Blend last 240 frames on range punch-out
                 if (reachedPunchOut && punchOutFadeBuf != null) {
@@ -53207,6 +54209,8 @@ public final class RecordingEngine {
                             cursorFrame += frames;
                             long endBytes = cursorFrame * outCh * 4L;
                             if (endBytes > dataBytes) dataBytes = endBytes;
+                            lastChunkElapsedNanos =
+                                    android.os.SystemClock.elapsedRealtimeNanos();
                         } catch (Exception e) {
                             break;
                         }
@@ -57539,11 +58543,16 @@ public class StudioFragment extends Fragment {
                         setFxPanelVisible(false);
                     }
                     RawFloatPlayer.releaseWarmSpeaker();
+                    engine.warmUpMic(requireContext(), preset.audioSource,
+                            engine.channels);
                 } else {
                     if (waveform != null) {
                         waveform.setSelectionLocked(false);
                     }
                     RawFloatPlayer.warmUpSpeaker(engine.channels);
+                    long cur = engine.cursorFrames();
+                    userScrolledWhilePaused =
+                            cur < engine.totalFrames() - 480;
                 }
                 paintEditorStrip();
                 paintFxPanelControls();
@@ -59257,6 +60266,7 @@ public class StudioFragment extends Fragment {
                     // the waveform bars as new audio is recorded!
                     replacePassStartFrame = curFrames;
                     replaceTargetEndFrame = totalFrames;
+                    waveform.setReplacingInPlace(true);
                     FormatConverter.WavInfo repInfo =
                             FormatConverter.readFloatWav(engine.rawFile);
                     long repFrameBytes = Math.max(1, repInfo.channels) * 4L;
@@ -59284,11 +60294,13 @@ public class StudioFragment extends Fragment {
                     lastEditWasSubRangeBake = false;
                     replacePassStartFrame = -1L;
                     replaceTargetEndFrame = -1L;
+                    if (waveform != null) waveform.setReplacingInPlace(false);
                 }
             } else {
                 replacePassStartFrame = -1L;
                 replaceTargetEndFrame = -1L;
                 if (waveform != null) {
+                    waveform.setReplacingInPlace(false);
                     waveform.syncFramesPerBar(0L);
                 }
             }
@@ -59331,10 +60343,10 @@ public class StudioFragment extends Fragment {
 
     private void pauseTake(boolean fromInterruption) {
         if (engine.state != RecordingEngine.State.RECORDING) return;
-        long pausedAtFrame = engine.cursorFrames();
         engine.pauseCapture();
+        long pausedAtFrame = engine.cursorFrames();
         setTelePaused(true);
-        userScrolledWhilePaused = false;
+        if (waveform != null) waveform.setReplacingInPlace(false);
         if (replacingSelectionActive) {
             replaceModeArmed = false;
             if (waveform != null) waveform.setSelectionLocked(false);
@@ -59343,6 +60355,7 @@ public class StudioFragment extends Fragment {
             long total = Math.max(1L, engine.totalFrames());
             long target = (pausedAtFrame >= 0 && pausedAtFrame <= total)
                     ? pausedAtFrame : total;
+            userScrolledWhilePaused = (target < total - 480);
             // If the user was in Replace mode and reached the end of the take,
             // Replace auto-deactivates; if they paused mid-take before the end,
             // keep Replace active so the user can disable it manually after pausing!
@@ -59769,6 +60782,7 @@ public class StudioFragment extends Fragment {
                         replaceTargetEndFrame = -1L;
                         if (waveform != null) {
                             waveform.setSelectionLocked(false);
+                            waveform.setReplacingInPlace(false);
                         }
                         paintEditorStrip();
                         paintFxPanelControls();
@@ -60342,7 +61356,7 @@ public class StudioFragment extends Fragment {
         if (btnPreviewPlay != null) {
             boolean showReplaceActive = proUnlocked && replaceModeArmed
                     && (canEdit || engine.state == RecordingEngine.State.RECORDING);
-            boolean tapAllowed = !proUnlocked || replaceEnabled;
+            boolean tapAllowed = canEdit && (!proUnlocked || replaceEnabled);
             btnPreviewPlay.setText("Replace");
             btnPreviewPlay.setEnabled(tapAllowed);
             btnPreviewPlay.setClickable(tapAllowed);
@@ -69984,6 +70998,8 @@ public class WaveformView extends View {
 
     // Smooth morphing state for in-place Replace & frame-locked live speed
     private int lastMorphIdx = -1;
+    private boolean replacingInPlace = false;
+    private float lastMorphPeak = 0f;
     private float morphAlpha = 0f;
     private float framesPerBar = 2400f; // 2400 frames @ 48 kHz = 50 ms (20 bars/sec)
 
@@ -71040,6 +72056,19 @@ public class WaveformView extends View {
      * and seamlessly transitions into appending, the waveform continues at the
      * exact same speed without any abrupt jump or shape distortion on Pause!
      */
+
+    public synchronized void setReplacingInPlace(boolean replacing) {
+        if (this.replacingInPlace != replacing) {
+            this.replacingInPlace = replacing;
+            if (!replacing) {
+                lastMorphIdx = -1;
+                lastMorphPeak = 0f;
+                morphAlpha = 0f;
+            }
+            postInvalidateOnAnimation();
+        }
+    }
+
     public synchronized void updateLiveFromFrames(float v, long curFrames,
                                                   long replaceEndFrame) {
         float clampedV = Math.max(0f, Math.min(1f, v));
@@ -71048,22 +72077,33 @@ public class WaveformView extends View {
 
         if (replaceEndFrame > 0 && curFrames < replaceEndFrame && count > 0) {
             // In-place Replace before the original end of the take:
+            replacingInPlace = true;
             float exactPos = Math.max(0f,
                     Math.min(count, (curFrames / (float) replaceEndFrame) * count));
             int idx = Math.min(count - 1, Math.max(0, (int) Math.floor(exactPos)));
             if (idx != lastMorphIdx) {
+                if (lastMorphIdx >= 0 && idx > lastMorphIdx + 1) {
+                    for (int skip = lastMorphIdx + 1; skip < idx && skip < count; skip++) {
+                        history[skip] = clampedV;
+                    }
+                }
                 lastMorphIdx = idx;
+                lastMorphPeak = clampedV;
                 morphAlpha = 0.62f;
             } else {
+                if (clampedV > lastMorphPeak) {
+                    lastMorphPeak = clampedV;
+                }
                 morphAlpha = Math.min(1.0f, morphAlpha + 0.20f);
             }
-            history[idx] = history[idx] * (1.0f - morphAlpha) + clampedV * morphAlpha;
+            history[idx] = history[idx] * (1.0f - morphAlpha)
+                    + lastMorphPeak * morphAlpha;
             playheadPos = exactPos;
             playheadIndex = Math.round(playheadPos);
             postInvalidateOnAnimation();
             return;
         }
-
+        replacingInPlace = false;
         // Appending (either a fresh recording or Replace after passing replaceEndFrame):
         // Advance strictly by audio frame position (curFrames / framesPerBar)
         // so the speed is 100% identical to pre-end Replace and independent of UI tick rate!
@@ -71163,7 +72203,9 @@ public class WaveformView extends View {
             selectionActive = false;
         } else {
             lastMorphIdx = -1;
+            lastMorphPeak = 0f;
             morphAlpha = 0f;
+            replacingInPlace = false;
         }
         invalidate();
     }
@@ -71223,7 +72265,9 @@ public class WaveformView extends View {
         followMinZoom = false;
         savedReplaceTailPeaks = null;
         lastMorphIdx = -1;
+        lastMorphPeak = 0f;
         morphAlpha = 0f;
+        replacingInPlace = false;
         framesPerBar = 2400f;
         invalidate();
     }
@@ -71694,6 +72738,7 @@ public class WaveformView extends View {
 
         int n;
         boolean isLive;
+        boolean repInPlace;
         float headPos;
         int pIdx;
         boolean selOn;
@@ -71709,6 +72754,7 @@ public class WaveformView extends View {
         synchronized (this) {
             n = count;
             isLive = live;
+            repInPlace = replacingInPlace;
             pIdx = playheadIndex;
             headPos = (playheadPos >= 0f && playheadPos <= n)
                     ? playheadPos
@@ -71760,9 +72806,9 @@ public class WaveformView extends View {
             long kMax = (long) Math.ceil((headPos + (w - centerX + barW) / gap) / bucketsPerBar) + 1L;
             long kStart = Math.max(0L, kMin);
             long kEnd = Math.min((long) Math.ceil(n / (double) bucketsPerBar), kMax);
-            if (isLive && savedReplaceTailPeaks == null) {
-                // Live capture only has buckets up to the interpolated head;
-                // never draw bars ahead of the centre playhead.
+            if (isLive && !repInPlace && savedReplaceTailPeaks == null) {
+                // Live append capture only has buckets up to the interpolated
+                // head; in-place Replace keeps the future bars visible.
                 kEnd = Math.min(kEnd,
                         (long) Math.floor(headPos / bucketsPerBar));
             }
@@ -75355,721 +76401,6 @@ FILE: app/src/main/res/layout/item_take.xml
                     android:textSize="13sp" />
             </LinearLayout>
         </LinearLayout>
-    </LinearLayout>
-
-</LinearLayout>
-
-=================================================================================
-FILE: app/src/main/res/layout-land/activity_main.xml
-=================================================================================
-<?xml version="1.0" encoding="utf-8"?>
-<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:id="@+id/root"
-    android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    android:background="@color/bg"
-    android:fitsSystemWindows="true">
-
-    <!-- Screens -->
-    <FrameLayout
-        android:id="@+id/container"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent" />
-
-    <!-- Shared record controls moved slightly downwards (18dp bottom margin) -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_gravity="bottom|center_horizontal"
-        android:layout_marginBottom="18dp"
-        android:gravity="center"
-        android:orientation="horizontal">
-
-        <FrameLayout
-            android:id="@+id/fabWrap"
-            android:layout_width="88dp"
-            android:layout_height="88dp"
-            android:clickable="true"
-            android:contentDescription="@string/cd_mic"
-            android:focusable="true">
-
-            <View
-                android:id="@+id/fabHalo"
-                android:layout_width="88dp"
-                android:layout_height="88dp"
-                android:layout_gravity="center"
-                android:background="@drawable/fab_halo" />
-
-            <FrameLayout
-                android:id="@+id/fabCore"
-                android:layout_width="64dp"
-                android:layout_height="64dp"
-                android:layout_gravity="center"
-                android:background="@drawable/fab_core"
-                android:elevation="6dp">
-
-                <ImageView
-                    android:id="@+id/fabIcon"
-                    android:layout_width="28dp"
-                    android:layout_height="28dp"
-                    android:layout_gravity="center"
-                    android:src="@drawable/ic_mic" />
-            </FrameLayout>
-        </FrameLayout>
-
-        <FrameLayout
-            android:id="@+id/fabStopWrap"
-            android:layout_width="64dp"
-            android:layout_height="64dp"
-            android:layout_gravity="center_vertical"
-            android:layout_marginStart="14dp"
-            android:background="@drawable/bg_round_btn"
-            android:clickable="true"
-            android:contentDescription="@string/action_stop"
-            android:focusable="true"
-            android:visibility="gone">
-
-            <ImageView
-                android:id="@+id/fabStopIcon"
-                android:layout_width="26dp"
-                android:layout_height="26dp"
-                android:layout_gravity="center"
-                android:src="@drawable/ic_circle_stop" />
-        </FrameLayout>
-    </LinearLayout>
-
-</FrameLayout>
-
-=================================================================================
-FILE: app/src/main/res/layout-land/fragment_studio.xml
-=================================================================================
-<?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    android:background="@color/bg"
-    android:orientation="vertical"
-    android:paddingBottom="114dp">
-
-    <!-- Unified Top Bar:
-         Left = Back + Studio/Take | Center = Compact State + 32-bit Streaming | Right = Preset Button -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:gravity="center_vertical"
-        android:orientation="horizontal"
-        android:paddingLeft="6dp"
-        android:paddingTop="6dp"
-        android:paddingRight="12dp"
-        android:paddingBottom="4dp">
-
-        <ImageView
-            android:id="@+id/backBtn"
-            android:layout_width="40dp"
-            android:layout_height="36dp"
-            android:contentDescription="@string/cd_back"
-            android:padding="10dp"
-            android:src="@drawable/ic_arrow_left" />
-
-        <LinearLayout
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:orientation="vertical">
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:fontFamily="sans-serif-medium"
-                android:text="@string/studio_title"
-                android:textColor="@color/text_primary"
-                android:textSize="17sp" />
-
-            <TextView
-                android:id="@+id/statusText"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="1dp"
-                android:clickable="true"
-                android:ellipsize="end"
-                android:focusable="true"
-                android:maxLines="1"
-                android:maxWidth="92dp"
-                android:text="@string/studio_ready"
-                android:textColor="@color/text_secondary"
-                android:textSize="11.5sp" />
-        </LinearLayout>
-
-        <!-- Compact Center Cluster between Studio title and Preset Selector -->
-        <LinearLayout
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="6dp"
-            android:layout_marginEnd="6dp"
-            android:layout_weight="1"
-            android:gravity="center"
-            android:orientation="vertical">
-
-            <LinearLayout
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:gravity="center_vertical"
-                android:orientation="horizontal">
-
-                <View
-                    android:id="@+id/statusDot"
-                    android:layout_width="6dp"
-                    android:layout_height="6dp"
-                    android:background="@drawable/bg_round_btn" />
-
-                <TextView
-                    android:id="@+id/stateLabel"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="4dp"
-                    android:ellipsize="end"
-                    android:letterSpacing="0.06"
-                    android:maxLines="1"
-                    android:text="@string/studio_ready"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="9.5sp" />
-            </LinearLayout>
-
-            <TextView
-                android:id="@+id/draftBadge"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="2dp"
-                android:background="@drawable/bg_badge"
-                android:ellipsize="end"
-                android:maxLines="1"
-                android:paddingLeft="6dp"
-                android:paddingTop="1dp"
-                android:paddingRight="6dp"
-                android:paddingBottom="1dp"
-                android:text="@string/studio_streaming"
-                android:textColor="@color/record"
-                android:textSize="8sp"
-                android:visibility="gone" />
-        </LinearLayout>
-
-        <!-- Preset Changer Button on the top right -->
-        <LinearLayout
-            android:id="@+id/settingsRow"
-            android:layout_width="wrap_content"
-            android:layout_height="40dp"
-            android:background="@drawable/bg_search"
-            android:clickable="true"
-            android:focusable="true"
-            android:gravity="center_vertical"
-            android:orientation="horizontal"
-            android:paddingLeft="10dp"
-            android:paddingTop="3dp"
-            android:paddingRight="8dp"
-            android:paddingBottom="3dp">
-
-            <LinearLayout
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:orientation="vertical">
-
-                <TextView
-                    android:id="@+id/settingsName"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:ellipsize="end"
-                    android:fontFamily="sans-serif-medium"
-                    android:maxLines="1"
-                    android:text="@string/preset_memo"
-                    android:textColor="@color/text_primary"
-                    android:textSize="11sp" />
-
-                <TextView
-                    android:id="@+id/settingsSub"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:ellipsize="end"
-                    android:maxLines="1"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="9.5sp" />
-
-                <TextView
-                    android:id="@+id/formatBadge"
-                    android:layout_width="0dp"
-                    android:layout_height="0dp"
-                    android:visibility="gone" />
-            </LinearLayout>
-
-            <ImageView
-                android:layout_width="14dp"
-                android:layout_height="14dp"
-                android:layout_marginStart="5dp"
-                android:alpha="0.7"
-                android:src="@drawable/ic_chevron" />
-        </LinearLayout>
-    </LinearLayout>
-
-    <!-- Teleprompter: always present (switched with Effects screen via FX button) -->
-    <FrameLayout
-        android:id="@+id/telePanel"
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_marginLeft="14dp"
-        android:layout_marginTop="2dp"
-        android:layout_marginRight="14dp"
-        android:layout_weight="1"
-        android:background="@drawable/bg_search"
-        android:clipChildren="true"
-        android:minHeight="180dp">
-
-        <com.takeone.studio.TeleprompterView
-            android:id="@+id/teleView"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent" />
-
-        <LinearLayout
-            android:id="@+id/teleChrome"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:background="@drawable/bg_tele_chrome"
-            android:orientation="vertical"
-            android:paddingBottom="6dp">
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:gravity="center_vertical"
-                android:orientation="horizontal"
-                android:paddingLeft="12dp"
-                android:paddingTop="4dp"
-                android:paddingRight="8dp"
-                android:paddingBottom="2dp">
-
-                <TextView
-                    android:id="@+id/teleTitle"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:ellipsize="end"
-                    android:letterSpacing="0.1"
-                    android:maxLines="1"
-                    android:text="@string/teleprompter"
-                    android:textColor="@color/text_hint"
-                    android:textSize="10sp" />
-
-                <!-- Icon-only teleprompter action buttons (TextView kept for test compat) -->
-                <TextView
-                    android:id="@+id/teleEditBtn"
-                    android:layout_width="30dp"
-                    android:layout_height="30dp"
-                    android:background="@drawable/bg_round_btn"
-                    android:clickable="true"
-                    android:contentDescription="@string/tele_edit"
-                    android:drawableStart="@drawable/ic_tele_edit"
-                    android:focusable="true"
-                    android:gravity="center"
-                    android:paddingStart="7dp"
-                    android:paddingEnd="7dp"
-                    android:text="@string/tele_edit"
-                    android:textColor="#00000000"
-                    android:textSize="0sp" />
-
-                <TextView
-                    android:id="@+id/teleHideBtn"
-                    android:layout_width="0dp"
-                    android:layout_height="0dp"
-                    android:visibility="gone" />
-
-                <TextView
-                    android:id="@+id/telePauseBtn"
-                    android:layout_width="30dp"
-                    android:layout_height="30dp"
-                    android:layout_marginStart="6dp"
-                    android:background="@drawable/bg_round_btn"
-                    android:clickable="true"
-                    android:contentDescription="@string/tele_pause"
-                    android:drawableStart="@drawable/ic_tele_play"
-                    android:focusable="true"
-                    android:gravity="center"
-                    android:paddingStart="7dp"
-                    android:paddingEnd="7dp"
-                    android:text="@string/tele_resume_short"
-                    android:textColor="#00000000"
-                    android:textSize="0sp" />
-
-                <TextView
-                    android:id="@+id/teleMirrorBtn"
-                    android:layout_width="30dp"
-                    android:layout_height="30dp"
-                    android:layout_marginStart="6dp"
-                    android:background="@drawable/bg_round_btn"
-                    android:clickable="true"
-                    android:contentDescription="@string/tele_mirror"
-                    android:drawableStart="@drawable/ic_tele_mirror"
-                    android:focusable="true"
-                    android:gravity="center"
-                    android:paddingStart="7dp"
-                    android:paddingEnd="7dp"
-                    android:text="@string/tele_mirror_short"
-                    android:textColor="#00000000"
-                    android:textSize="0sp" />
-            </LinearLayout>
-
-            <!-- Inline prompter controls -->
-            <LinearLayout
-                android:id="@+id/teleControls"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:gravity="center_vertical"
-                android:orientation="horizontal"
-                android:paddingLeft="12dp"
-                android:paddingRight="12dp">
-
-                <com.takeone.studio.TeleValue
-                    android:id="@+id/teleSizeValue"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_marginEnd="6dp"
-                    android:layout_weight="1" />
-
-                <com.takeone.studio.TeleValue
-                    android:id="@+id/teleSpeedValue"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_marginEnd="6dp"
-                    android:layout_weight="1" />
-
-                <com.takeone.studio.TeleValue
-                    android:id="@+id/teleWplValue"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1" />
-            </LinearLayout>
-        </LinearLayout>
-    </FrameLayout>
-
-    <!-- Pro Effects Rack Panel (switches with Teleprompter via pressing FX) -->
-    <LinearLayout
-        android:id="@+id/fxPanel"
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_marginLeft="14dp"
-        android:layout_marginTop="2dp"
-        android:layout_marginRight="14dp"
-        android:layout_weight="1"
-        android:background="@drawable/bg_search"
-        android:minHeight="180dp"
-        android:orientation="vertical"
-        android:padding="10dp"
-        android:visibility="gone">
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:gravity="center_vertical"
-            android:orientation="horizontal">
-
-            <TextView
-                android:id="@+id/fxTitle"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:fontFamily="sans-serif-medium"
-                android:letterSpacing="0.06"
-                android:text="Effects Rack"
-                android:textColor="@color/text_primary"
-                android:textSize="11sp" />
-
-            <TextView
-                android:id="@+id/fxPresetDropdown"
-                android:layout_width="0dp"
-                android:layout_height="28dp"
-                android:layout_marginStart="8dp"
-                android:layout_marginEnd="6dp"
-                android:layout_weight="1"
-                android:background="@drawable/bg_chip"
-                android:ellipsize="end"
-                android:gravity="center"
-                android:maxLines="1"
-                android:paddingLeft="10dp"
-                android:paddingRight="10dp"
-                android:text="Preset: Voice Polish ▾"
-                android:textColor="@color/text_primary"
-                android:textSize="11sp" />
-
-            <TextView
-                android:id="@+id/fxCloseBtn"
-                android:layout_width="wrap_content"
-                android:layout_height="28dp"
-                android:background="@drawable/bg_round_btn"
-                android:gravity="center"
-                android:paddingLeft="10dp"
-                android:paddingRight="10dp"
-                android:text="Close"
-                android:textColor="@color/text_secondary"
-                android:textSize="11sp" />
-        </LinearLayout>
-
-        <ScrollView
-            android:id="@+id/fxScroll"
-            android:layout_width="match_parent"
-            android:layout_height="0dp"
-            android:layout_marginTop="6dp"
-            android:layout_marginBottom="6dp"
-            android:layout_weight="1"
-            android:fillViewport="true">
-
-            <LinearLayout
-                android:id="@+id/fxListContainer"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical" />
-        </ScrollView>
-
-        <!-- Effects mode: the transport controls the rack, so the panel itself
-             only carries the effect list. Play/pause auditions the
-             effect-applied audio and Stop commits it to the selection. -->
-        <TextView
-            android:id="@+id/fxHint"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:paddingTop="4dp"
-            android:paddingBottom="2dp"
-            android:text="Play previews the effect-applied audio · Stop applies it to the selection"
-            android:textColor="@color/text_secondary"
-            android:textSize="10sp" />
-    </LinearLayout>
-
-    <!-- Recording strip moved downwards slightly with icons on all editing buttons -->
-    <LinearLayout
-        android:id="@+id/recStrip"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:gravity="center_vertical"
-        android:orientation="horizontal"
-        android:paddingLeft="16dp"
-        android:paddingRight="14dp">
-
-        <com.takeone.studio.DbMeterView
-            android:id="@+id/dbMeter"
-            android:layout_width="8dp"
-            android:layout_height="168dp" />
-
-        <LinearLayout
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="12dp"
-            android:layout_weight="1"
-            android:orientation="vertical">
-
-            <!-- Upper group: waveform with its zoom controls on the right -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:gravity="center_vertical"
-                android:orientation="horizontal">
-
-                <com.takeone.studio.WaveformView
-                    android:id="@+id/waveform"
-                    android:layout_width="0dp"
-                    android:layout_height="64dp"
-                    android:layout_weight="1" />
-
-                <LinearLayout
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="6dp"
-                    android:gravity="center"
-                    android:orientation="vertical">
-
-                    <com.takeone.studio.TeleValue
-                        android:id="@+id/zoomValue"
-                        android:layout_width="40dp"
-                        android:layout_height="wrap_content" />
-                </LinearLayout>
-            </LinearLayout>
-
-            <!-- Non-Linear Editor &amp; FX Console with Icons -->
-            <HorizontalScrollView
-                android:id="@+id/editorStrip"
-                android:layout_width="match_parent"
-                android:layout_height="32dp"
-                android:layout_marginTop="6dp"
-                android:scrollbars="none"
-                android:visibility="gone">
-
-                <LinearLayout
-                    android:layout_width="wrap_content"
-                    android:layout_height="match_parent"
-                    android:gravity="center_vertical"
-                    android:orientation="horizontal">
-
-                    <TextView
-                        android:id="@+id/btnPreviewPlay"
-                        android:layout_width="wrap_content"
-                        android:layout_height="28dp"
-                        android:background="@drawable/bg_chip"
-                        android:drawableStart="@drawable/ic_edit_replace"
-                        android:drawablePadding="5dp"
-                        android:gravity="center"
-                        android:paddingLeft="10dp"
-                        android:paddingRight="11dp"
-                        android:text="Replace"
-                        android:textColor="@color/text_secondary"
-                        android:textSize="11sp" />
-
-                    <TextView
-                        android:id="@+id/btnSelectRange"
-                        android:layout_width="wrap_content"
-                        android:layout_height="28dp"
-                        android:layout_marginStart="6dp"
-                        android:background="@drawable/bg_chip"
-                        android:drawableStart="@drawable/ic_edit_select"
-                        android:drawablePadding="5dp"
-                        android:gravity="center"
-                        android:paddingLeft="10dp"
-                        android:paddingRight="11dp"
-                        android:text="Select"
-                        android:textColor="@color/text_secondary"
-                        android:textSize="11sp" />
-
-                    <TextView
-                        android:id="@+id/btnReplaceSeg"
-                        android:layout_width="wrap_content"
-                        android:layout_height="28dp"
-                        android:layout_marginStart="6dp"
-                        android:background="@drawable/bg_chip"
-                        android:drawableStart="@drawable/ic_edit_select_replace"
-                        android:drawablePadding="5dp"
-                        android:gravity="center"
-                        android:paddingLeft="10dp"
-                        android:paddingRight="11dp"
-                        android:text="Select &amp; Replace"
-                        android:textColor="@color/text_secondary"
-                        android:textSize="11sp" />
-
-                    <TextView
-                        android:id="@+id/btnTrimCrop"
-                        android:layout_width="wrap_content"
-                        android:layout_height="28dp"
-                        android:layout_marginStart="6dp"
-                        android:background="@drawable/bg_chip"
-                        android:drawableStart="@drawable/ic_edit_trim"
-                        android:drawablePadding="5dp"
-                        android:gravity="center"
-                        android:paddingLeft="10dp"
-                        android:paddingRight="11dp"
-                        android:text="Trim"
-                        android:textColor="@color/text_secondary"
-                        android:textSize="11sp" />
-
-                    <TextView
-                        android:id="@+id/btnCutDelete"
-                        android:layout_width="0dp"
-                        android:layout_height="0dp"
-                        android:visibility="gone" />
-
-                    <TextView
-                        android:id="@+id/btnDspFx"
-                        android:layout_width="wrap_content"
-                        android:layout_height="28dp"
-                        android:layout_marginStart="6dp"
-                        android:background="@drawable/bg_chip"
-                        android:drawableStart="@drawable/ic_edit_fx"
-                        android:drawablePadding="5dp"
-                        android:gravity="center"
-                        android:paddingLeft="10dp"
-                        android:paddingRight="11dp"
-                        android:text="FX"
-                        android:textColor="@color/text_secondary"
-                        android:textSize="11sp" />
-
-                    <TextView
-                        android:id="@+id/btnEditUndo"
-                        android:layout_width="wrap_content"
-                        android:layout_height="28dp"
-                        android:layout_marginStart="6dp"
-                        android:background="@drawable/bg_chip"
-                        android:drawableStart="@drawable/ic_edit_undo"
-                        android:drawablePadding="5dp"
-                        android:gravity="center"
-                        android:paddingLeft="10dp"
-                        android:paddingRight="11dp"
-                        android:text="Undo"
-                        android:textColor="@color/text_hint"
-                        android:textSize="11sp" />
-
-                    <TextView
-                        android:id="@+id/btnEditRedo"
-                        android:layout_width="wrap_content"
-                        android:layout_height="28dp"
-                        android:layout_marginStart="6dp"
-                        android:background="@drawable/bg_chip"
-                        android:drawableStart="@drawable/ic_edit_redo"
-                        android:drawablePadding="5dp"
-                        android:gravity="center"
-                        android:paddingLeft="10dp"
-                        android:paddingRight="11dp"
-                        android:text="Redo"
-                        android:textColor="@color/text_hint"
-                        android:textSize="11sp" />
-                </LinearLayout>
-            </HorizontalScrollView>
-
-            <!-- Lower group: timer moved slightly downwards -->
-            <TextView
-                android:id="@+id/timerText"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:fontFamily="sans-serif-light"
-                android:gravity="center"
-                android:text="00:00.00"
-                android:textColor="@color/text_primary"
-                android:textSize="38sp" />
-
-            <!-- Retired teleToggle kept gone with matching 40dp layout params for compatibility -->
-            <LinearLayout
-                android:id="@+id/teleToggle"
-                android:layout_width="wrap_content"
-                android:layout_height="40dp"
-                android:gravity="center_vertical"
-                android:orientation="horizontal"
-                android:visibility="gone">
-
-                <ImageView
-                    android:id="@+id/teleToggleIcon"
-                    android:layout_width="16dp"
-                    android:layout_height="16dp"
-                    android:src="@drawable/ic_pencil" />
-
-                <TextView
-                    android:id="@+id/teleState"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="@string/tele_show" />
-            </LinearLayout>
-        </LinearLayout>
-    </LinearLayout>
-
-    <!-- Hidden 0dp stub row: IDs remain for layout tests. -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:orientation="horizontal"
-        android:visibility="gone">
-
-        <TextView
-            android:id="@+id/takeName"
-            android:layout_width="0dp"
-            android:layout_height="0dp"
-            android:layout_weight="1"
-            android:visibility="gone" />
-
-        <TextView
-            android:id="@+id/hintText"
-            android:layout_width="wrap_content"
-            android:layout_height="0dp"
-            android:visibility="gone" />
     </LinearLayout>
 
 </LinearLayout>
@@ -86982,6 +87313,34 @@ public class PunchInTest {
             e.abortAndDelete();
         }
     }
+
+    @Test
+    public void liveInterpolatedFramesStartsAtMidTakeCursorDuringReplace()
+            throws Exception {
+        RecordingEngine e = RecordingEngine.get();
+        e.abortAndDelete();
+        File raw = dcRaw("replace_live.wav", 48000, 1);
+        try {
+            e.attachExisting(ApplicationProvider.getApplicationContext(),
+                    raw, "Replace Live", 1, raw.length() - 44);
+            e.seekCursorFrame(12000);
+            e.state = RecordingEngine.State.RECORDING;
+
+            // Mic warmup: stay parked at the mid-take cursor, not totalFrames.
+            assertEquals(12000L, e.liveInterpolatedFrames());
+
+            java.lang.reflect.Field f = RecordingEngine.class
+                    .getDeclaredField("lastChunkElapsedNanos");
+            f.setAccessible(true);
+            f.setLong(e, 1L);
+            org.robolectric.shadows.ShadowSystemClock.advanceBy(
+                    java.time.Duration.ofMillis(100));
+            long live = e.liveInterpolatedFrames();
+            assertTrue("live=" + live, live > 12000L && live <= 12960L);
+        } finally {
+            e.abortAndDelete();
+        }
+    }
 }
 
 =================================================================================
@@ -93149,6 +93508,52 @@ public class WaveformTimelineTest {
         assertEquals("00:00.00", StudioFragment.formatTimer(shownMs));
 
         engine.abortAndDelete();
+    }
+
+    @Test
+    public void inPlaceReplaceReplacesMidTakeBarsAndKeepsFutureBarsVisible() {
+        WaveformView wv = loaded(activity(), 100);
+        wv.setPlayheadFraction(0.5f);
+        wv.setLive(true);
+        wv.setReplacingInPlace(true);
+        long end = 240000L;
+        for (int bar = 50; bar < 60; bar++) {
+            long frame = 120000L + (bar - 50) * 2400L + 1200L;
+            for (int n = 0; n < 5; n++) {
+                wv.updateLiveFromFrames(0.9f, frame, end);
+            }
+        }
+        float playhead = wv.playheadFraction();
+        assertTrue("playhead=" + playhead,
+                playhead >= 0.59f && playhead <= 0.61f);
+        for (int i = 50; i < 60; i++) {
+            float v = wv.peakAtForTest(i);
+            assertTrue("bar " + i + "=" + v, v > 0.8f);
+        }
+        for (int i = 0; i < 50; i++) {
+            assertEquals("future/preceding bar " + i,
+                    0.5f, wv.peakAtForTest(i), 0.001f);
+        }
+        for (int i = 60; i < 100; i++) {
+            assertEquals("future bar " + i, 0.5f,
+                    wv.peakAtForTest(i), 0.001f);
+        }
+
+        // Overwriting the same span with silence must pull the bars down.
+        for (int bar = 50; bar < 60; bar++) {
+            long frame = 120000L + (bar - 50) * 2400L + 1200L;
+            for (int n = 0; n < 10; n++) {
+                wv.updateLiveFromFrames(0f, frame, end);
+            }
+        }
+        assertTrue("silence overwrite did not reduce bar 55",
+                wv.peakAtForTest(55) < 0.3f);
+
+        wv.setLive(false);
+        wv.setReplacingInPlace(false);
+        assertEquals(playhead, wv.playheadFraction(), 0.01f);
+        assertTrue("bar 55 was not retained",
+                wv.peakAtForTest(55) < 0.5f);
     }
 }
 
@@ -104832,10 +105237,10 @@ from datetime import datetime
 from pathlib import Path
 
 SKIP_DIRS = {".git", ".gradle", ".idea", ".commandcode", "build",
-             "fx-verify-runs", ".cxx", "__pycache__"}
+             "fx-verify-runs", ".cxx", "__pycache__", "ui-screenshots"}
 SKIP_SUFFIXES = {".apk", ".aab", ".wav", ".mp3", ".m4a", ".mp4", ".png", ".jpg",
                  ".jpeg", ".webp", ".gif", ".zip", ".jar", ".so", ".aar",
-                 ".keystore", ".jks", ".pyc"}
+                 ".keystore", ".jks", ".pyc", ".gz", ".tgz", ".tar"}
 # The dump cannot contain itself; session transcripts and handoff notes are not
 # project sources.
 SKIP_NAMES = {"project-dump.txt", "session-ses_ed80.md",
@@ -104929,4 +105334,598 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+=================================================================================
+FILE: tools/ui-screens/.gitignore
+=================================================================================
+__pycache__/
+*.pyc
+
+=================================================================================
+FILE: tools/ui-screens/README.md
+=================================================================================
+# Emulator UI screenshot matrix
+
+This folder contains the reusable UI driver and the per-device runner used by
+`.github/workflows/ui-screenshots.yml`. Everything runs on GitHub-hosted
+emulators; nothing here needs a locally attached device.
+
+## Generic driver
+
+`ui_driver.py` runs declarative adb actions and takes screenshots a fixed time
+after each action:
+
+```bash
+python3 tools/ui-screens/ui_driver.py \
+  --out artifacts/nexus5 \
+  --scenario tools/ui-screens/scenarios/system.json
+```
+
+A scenario is JSON with a `steps` array. Any step can use:
+
+```json
+{"action":"tap","by":"text","value":"FX","delay_ms":750,
+ "folder":"studio","screenshot":"fx_opened"}
+```
+
+Supported actions: `launch`, `wait`, `tap`, `swipe`, `press_back`,
+`press_home`, `press_recents`, `press_key`, `open_notifications`,
+`collapse_notifications`, `screenshot`, `assert_visible`, `shell`, `rotate`.
+Selectors are `text`, `id`, `desc`, `contains`, or `xy`. `optional: true`
+records a failure but continues. The driver writes `driver-report.json`.
+
+## Full app tour
+
+`UiScreenshotTourTest` seeds a real take, opens the studio, and captures the
+reachable app surfaces that need session state: library, sort/search, studio,
+recording settings, teleprompter editor, finish-take confirmation, FX rack,
+presets, Tools, Add Effect, and the effect inspector. It also captures the
+notification shade and records WindowInsets/display-cutout information.
+
+`run_device.sh` installs the debug and androidTest APKs, applies the requested
+resolution/density/orientation, runs the tour, pulls the screenshots into
+`ui-screens/<device-id>/`, then runs the generic system scenario for
+home/recents/notification overlays.
+
+## Device matrix
+
+The workflow covers every supported API level (24–35) with all phones locked
+to portrait, plus tablet profiles allowed to rotate landscape. Phone jobs vary
+common widths/densities from 320x480 through 1440x3120; tablet jobs cover
+800x1280, 1200x1920, 1600x2560 and 1200x2000. Screenshots are uploaded as one
+artifact per device, with subfolders for `library`, `studio`, `fx`, and
+`system`.
+
+The landscape resource overrides have been removed: large screens now use the
+same single-column, full-width layout with elements expanding horizontally
+instead of a two-pane split.
+
+=================================================================================
+FILE: tools/ui-screens/run_device.sh
+=================================================================================
+#!/usr/bin/env bash
+# Runs the app on one CI emulator, executes the screenshot tour, and pulls a
+# device-specific screenshot tree. Called by .github/workflows/ui-screenshots.yml.
+set -u
+
+DEVICE_ID="${DEVICE_ID:-emulator}"
+UI_WIDTH="${UI_WIDTH:-0}"
+UI_HEIGHT="${UI_HEIGHT:-0}"
+UI_DENSITY="${UI_DENSITY:-0}"
+UI_ORIENTATION="${UI_ORIENTATION:-portrait}"
+APK_PATH="${APK_PATH:-app-debug.apk}"
+TEST_APK_PATH="${TEST_APK_PATH:-app-debug-androidTest.apk}"
+APP_PACKAGE="${APP_PACKAGE:-com.takeone.studio.debug}"
+TEST_RUNNER="${TEST_RUNNER:-com.takeone.studio.debug.test/androidx.test.runner.AndroidJUnitRunner}"
+OUT_ROOT="${OUT_ROOT:-ui-screens}"
+OUT="$OUT_ROOT/$DEVICE_ID"
+REMOTE="/sdcard/Android/data/$APP_PACKAGE/files/ui-screens/$DEVICE_ID"
+
+mkdir -p "$OUT" "$OUT_ROOT"
+adb wait-for-device
+
+# Wait until the framework is fully up even when the emulator runner returns.
+for i in $(seq 1 120); do
+  if [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; then
+    break
+  fi
+  sleep 2
+done
+
+adb shell settings put global window_animation_scale 0 || true
+adb shell settings put global transition_animation_scale 0 || true
+adb shell settings put global animator_duration_scale 0 || true
+adb shell settings put global stay_on_while_plugged_in 3 || true
+adb shell svc power stayon true || true
+adb shell wm dismiss-keyguard || true
+adb shell input keyevent 82 || true
+
+if [ "$UI_WIDTH" != "0" ] && [ "$UI_HEIGHT" != "0" ]; then
+  adb shell wm size "${UI_WIDTH}x${UI_HEIGHT}" || true
+fi
+if [ "$UI_DENSITY" != "0" ]; then
+  adb shell wm density "$UI_DENSITY" || true
+fi
+adb shell settings put system accelerometer_rotation 0 || true
+ROTATION=0
+# Nexus 10 is native-landscape: rotate to portrait when no size override is
+# used. For override-based devices, landscape is rotation 1 and portrait 0.
+if [ "$UI_WIDTH" = "0" ] || [ "$UI_HEIGHT" = "0" ]; then
+  [ "$UI_ORIENTATION" = "portrait" ] && ROTATION=1
+else
+  [ "$UI_ORIENTATION" = "landscape" ] && ROTATION=1
+fi
+adb shell settings put system user_rotation "$ROTATION" || true
+adb shell cmd window user-rotation lock "$ROTATION" >/dev/null 2>&1 \
+  || adb shell wm user-rotation lock "$ROTATION" >/dev/null 2>&1 || true
+sleep 1
+
+# Best-effort display-cutout and navigation-bar emulation. AOSP images vary;
+# the test records the real WindowInsets/cutout even when no overlay exists.
+for pkg in \
+  com.android.internal.display.cutout.emulation.corner \
+  com.android.internal.display.cutout.emulation.double \
+  com.android.internal.display.cutout.emulation.hole; do
+  if adb shell cmd overlay enable-exclusive --category "$pkg" >/dev/null 2>&1; then
+    echo "enabled cutout overlay: $pkg"
+    break
+  fi
+done
+adb shell cmd overlay enable-exclusive --category \
+  com.android.internal.systemui.navbar.threebutton >/dev/null 2>&1 || true
+
+adb install -r -g "$APK_PATH"
+adb install -r -g "$TEST_APK_PATH"
+
+current_rotation() {
+  adb shell dumpsys input 2>/dev/null \
+    | awk '/SurfaceOrientation/{print $2; exit}' | tr -d '\r'
+}
+# Some API 28 images ignore Settings user_rotation. Force the emulator's
+# hardware rotation until the reported surface orientation matches.
+CUR="$(current_rotation)"
+if [ -n "$CUR" ] && [ "$CUR" != "$ROTATION" ]; then
+  for i in 1 2 3 4; do
+    adb emu rotate >/dev/null 2>&1 || break
+    sleep 1
+    CUR="$(current_rotation)"
+    [ "$CUR" = "$ROTATION" ] && break
+  done
+fi
+adb shell pm grant "$APP_PACKAGE" android.permission.RECORD_AUDIO || true
+adb shell pm grant "$APP_PACKAGE" android.permission.POST_NOTIFICATIONS || true
+adb shell pm grant "$APP_PACKAGE" android.permission.WRITE_EXTERNAL_STORAGE || true
+adb shell settings put system user_rotation "$ROTATION" || true
+adb shell cmd window user-rotation lock "$ROTATION" >/dev/null 2>&1 \
+  || adb shell wm user-rotation lock "$ROTATION" >/dev/null 2>&1 || true
+sleep 1
+
+SDK="$(adb shell getprop ro.build.version.sdk | tr -d '\r')"
+{
+  echo "device=$DEVICE_ID"
+  echo "sdk=$SDK"
+  echo "requested_size=${UI_WIDTH}x${UI_HEIGHT}"
+  echo "requested_density=$UI_DENSITY"
+  echo "requested_orientation=$UI_ORIENTATION"
+  adb shell wm size
+  adb shell wm density
+  adb shell getprop ro.product.model
+  adb shell getprop ro.build.version.release
+} | tee "$OUT/device-info.txt"
+
+INSTR_FAILED=0
+set +e
+timeout 900 adb shell am instrument -w -r \
+  -e class com.takeone.studio.UiScreenshotTourTest \
+  -e uiScreensDevice "$DEVICE_ID" \
+  "$TEST_RUNNER" > "$OUT/instrumentation.txt" 2>&1
+INSTR_STATUS=$?
+set -e
+cat "$OUT/instrumentation.txt"
+if [ "$INSTR_STATUS" -ne 0 ] \
+   || grep -q -E "FAILURES!!!|INSTRUMENTATION_FAILED" \
+        "$OUT/instrumentation.txt"; then
+  INSTR_FAILED=1
+fi
+
+# The app writes report.json and its screenshots into external files.
+# API 30+ often blocks adb from /sdcard/Android/data directly; userdebug
+# emulator images allow root, and run-as is the fallback for test builds.
+adb root >>"$OUT/pull.txt" 2>&1 || true
+adb wait-for-device
+adb pull "$REMOTE/." "$OUT/" >>"$OUT/pull.txt" 2>&1 || true
+if [ ! -f "$OUT/report.json" ]; then
+  adb exec-out run-as "$APP_PACKAGE" sh -c     "cd /sdcard/Android/data/$APP_PACKAGE/files && tar cf - ui-screens/$DEVICE_ID"     > "$OUT/screens.tar" 2>>"$OUT/pull.txt" || true
+  if [ -s "$OUT/screens.tar" ]; then
+    tar xf "$OUT/screens.tar" -C "$OUT" --strip-components=2 >>"$OUT/pull.txt" 2>&1 || true
+  fi
+fi
+adb logcat -d -v threadtime > "$OUT/logcat.txt" 2>&1 || true
+adb shell dumpsys activity activities > "$OUT/activities.txt" 2>&1 || true
+
+# Drive raw adb-level system surfaces too (notification shade, home, recents).
+python3 tools/ui-screens/ui_driver.py \
+  --out "$OUT" \
+  --scenario tools/ui-screens/scenarios/system.json \
+  >>"$OUT/driver.txt" 2>&1 || DRIVER_FAILED=1
+
+SHOT_COUNT="$(find "$OUT" -type f -name '*.png' | wc -l | tr -d ' ')"
+EMPTY_COUNT=0
+for f in $(find "$OUT" -type f -name '*.png'); do
+  if [ "$(wc -c < "$f")" -lt 2048 ]; then
+    echo "suspiciously small screenshot: $f"
+    EMPTY_COUNT=$((EMPTY_COUNT + 1))
+  fi
+done
+echo "screenshots=$SHOT_COUNT empty_or_small=$EMPTY_COUNT" | tee -a "$OUT/device-info.txt"
+
+REPORT_FAILED=0
+if [ ! -f "$OUT/report.json" ]; then
+  echo "missing app report.json for $DEVICE_ID" >&2
+  REPORT_FAILED=1
+else
+  python3 - "$OUT/report.json" <<'PY' || REPORT_FAILED=1
+import json, sys
+r = json.load(open(sys.argv[1]))
+issues = r.get("issues", [])
+shots = len(r.get("screenshots", []))
+print("report screenshots=%d issues=%s" % (shots, issues))
+if issues or shots < 16:
+    sys.exit(1)
+PY
+fi
+
+if [ "$INSTR_FAILED" -ne 0 ] || [ "$SHOT_COUNT" -lt 16 ] \
+   || [ "${DRIVER_FAILED:-0}" -ne 0 ] || [ "$REPORT_FAILED" -ne 0 ]; then
+  echo "UI screenshot run failed for $DEVICE_ID (instrumentation=$INSTR_FAILED, shots=$SHOT_COUNT, report=$REPORT_FAILED)" >&2
+  exit 1
+fi
+
+=================================================================================
+FILE: tools/ui-screens/scenarios/system.json
+=================================================================================
+{
+  "steps": [
+    {
+      "action": "launch",
+      "package": "com.takeone.studio.debug",
+      "delay_ms": 1800,
+      "folder": "system",
+      "screenshot": "03_app_cold_launch"
+    },
+    {
+      "action": "open_notifications",
+      "delay_ms": 1200,
+      "folder": "system",
+      "screenshot": "04_notification_overlay_after_relaunch",
+      "optional": true
+    },
+    {
+      "action": "collapse_notifications",
+      "optional": true
+    },
+    {
+      "action": "press_home",
+      "delay_ms": 900,
+      "folder": "system",
+      "screenshot": "05_home",
+      "optional": true
+    },
+    {
+      "action": "press_recents",
+      "delay_ms": 900,
+      "folder": "system",
+      "screenshot": "06_recents",
+      "optional": true
+    },
+    {
+      "action": "press_back",
+      "optional": true
+    },
+    {
+      "action": "launch",
+      "package": "com.takeone.studio.debug",
+      "delay_ms": 1500,
+      "folder": "system",
+      "screenshot": "07_relaunch"
+    },
+    {
+      "action": "tap",
+      "by": "id",
+      "value": "sortBtn",
+      "delay_ms": 700,
+      "folder": "system",
+      "screenshot": "08_library_sort_menu",
+      "optional": true
+    },
+    {
+      "action": "press_back",
+      "optional": true
+    },
+    {
+      "action": "tap",
+      "by": "id",
+      "value": "searchToggle",
+      "delay_ms": 600,
+      "folder": "system",
+      "screenshot": "09_library_search",
+      "optional": true
+    }
+  ]
+}
+
+=================================================================================
+FILE: tools/ui-screens/ui_driver.py
+=================================================================================
+#!/usr/bin/env python3
+"""Generic adb UI driver: run declarative actions and screenshots on an emulator.
+
+Examples:
+  ui_driver.py --out shots/Nexus5 --scenario scenario.json
+  ui_driver.py --out shots/x --steps '[{"action":"launch","package":"com.app"}]'
+
+A scenario is {"steps": [...]} (or a bare list). Every step may define:
+  "action": launch | wait | tap | swipe | press_back | press_home |
+            press_recents | open_notifications | collapse_notifications |
+            press_key | screenshot | assert_visible | shell | rotate
+  "delay_ms": wait this long after the action before the screenshot (default 0)
+  "screenshot": file name (written under <out>/<folder>/<name>.png)
+  "folder": screenshot subfolder (default "steps")
+  "optional": true to continue when the target/action fails
+
+Selectors for tap/assert_visible:
+  "by": "text" | "id" | "desc" | "xy" | "contains"
+  "value": selector value, or "x,y" for xy
+  "timeout_ms": wait for the selector (default 3000)
+"""
+
+import argparse
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+import time
+import xml.etree.ElementTree as ET
+
+BOUNDS_RE = re.compile(r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]")
+
+
+def adb(args, binary=False, check=True):
+    cmd = ["adb"] + args
+    if binary:
+        return subprocess.run(cmd, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, check=check)
+    return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          text=True, check=check)
+
+
+def shell(*args, check=True):
+    return adb(["shell"] + list(args), check=check).stdout.strip()
+
+
+def dump_ui():
+    shell("uiautomator", "dump", "/sdcard/ui_driver.xml", check=False)
+    raw = adb(["exec-out", "cat", "/sdcard/ui_driver.xml"], binary=True).stdout
+    try:
+        return ET.fromstring(raw)
+    except ET.ParseError:
+        return None
+
+
+def center(node):
+    b = node.attrib.get("bounds", "")
+    m = BOUNDS_RE.search(b)
+    if not m:
+        return None
+    x1, y1, x2, y2 = map(int, m.groups())
+    return (x1 + x2) // 2, (y1 + y2) // 2
+
+
+def matches(node, by, value, contains=False):
+    if by == "id":
+        rid = node.attrib.get("resource-id", "")
+        return rid == value or rid.endswith("/" + value)
+    if by == "text":
+        text = node.attrib.get("text", "")
+        return value in text if contains else text == value
+    if by == "desc":
+        desc = node.attrib.get("content-desc", "")
+        return value in desc if contains else desc == value
+    if by == "contains":
+        return value in node.attrib.get("text", "") or value in node.attrib.get(
+            "content-desc", "")
+    return False
+
+
+def find_node(root, by, value, contains=False):
+    if root is None:
+        return None
+    for node in root.iter("node"):
+        if matches(node, by, value, contains):
+            if center(node):
+                return node
+    return None
+
+
+def wait_node(by, value, timeout_ms, contains=False):
+    deadline = time.time() + max(0, timeout_ms) / 1000.0
+    while True:
+        node = find_node(dump_ui(), by, value, contains)
+        if node is not None:
+            return node
+        if time.time() >= deadline:
+            return None
+        time.sleep(0.25)
+
+
+def take_screenshot(out_root, folder, name):
+    directory = os.path.join(out_root, folder or "steps")
+    os.makedirs(directory, exist_ok=True)
+    path = os.path.join(directory, name + ".png")
+    with open(path, "wb") as f:
+        proc = subprocess.run(["adb", "exec-out", "screencap", "-p"],
+                              stdout=f, stderr=subprocess.PIPE)
+    if proc.returncode != 0 or not os.path.exists(path) or os.path.getsize(path) == 0:
+        raise RuntimeError("screencap failed: " + path)
+    return path
+
+
+def device_info():
+    info = {}
+    for key, prop in (("sdk", "ro.build.version.sdk"),
+                      ("model", "ro.product.model"),
+                      ("manufacturer", "ro.product.manufacturer"),
+                      ("release", "ro.build.version.release")):
+        try:
+            info[key] = shell("getprop", prop)
+        except Exception:
+            info[key] = ""
+    for key, cmd in (("wmSize", ["wm", "size"]),
+                     ("wmDensity", ["wm", "density"]),
+                     ("rotation", ["settings", "get", "system", "user_rotation"])):
+        try:
+            info[key] = shell(*cmd)
+        except Exception:
+            info[key] = ""
+    return info
+
+
+def run_step(step, out_root, report):
+    action = step.get("action", "wait")
+    delay = int(step.get("delay_ms", 0))
+    by = step.get("by", "text")
+    value = str(step.get("value", ""))
+    timeout = int(step.get("timeout_ms", 3000))
+    contains = bool(step.get("contains", False))
+    optional = bool(step.get("optional", False))
+    entry = {"action": action, "by": by, "value": value}
+
+    try:
+        if action == "launch":
+            package = step.get("package") or value
+            shell("am", "force-stop", package, check=False)
+            if step.get("activity"):
+                shell("am", "start", "-n", package + "/" + step["activity"],
+                      check=False)
+            else:
+                shell("monkey", "-p", package, "-c",
+                      "android.intent.category.LAUNCHER", "1", check=False)
+        elif action == "wait":
+            pass
+        elif action == "tap":
+            if by == "xy":
+                x, y = [int(v.strip()) for v in value.split(",")[:2]]
+                shell("input", "tap", str(x), str(y))
+            else:
+                node = wait_node(by, value, timeout, contains)
+                if node is None:
+                    raise RuntimeError("target not found: %s=%s" % (by, value))
+                x, y = center(node)
+                shell("input", "tap", str(x), str(y))
+        elif action == "swipe":
+            parts = value.split(",")
+            if len(parts) != 4:
+                raise RuntimeError("swipe value must be x1,y1,x2,y2")
+            shell("input", "swipe", *[p.strip() for p in parts],
+                  str(step.get("duration_ms", 300)))
+        elif action == "press_back":
+            shell("input", "keyevent", "KEYCODE_BACK")
+        elif action == "press_home":
+            shell("input", "keyevent", "KEYCODE_HOME")
+        elif action == "press_recents":
+            shell("input", "keyevent", "KEYCODE_APP_SWITCH")
+        elif action == "press_key":
+            key = value or step.get("key", "KEYCODE_ENTER")
+            shell("input", "keyevent", key)
+        elif action == "open_notifications":
+            ok = shell("cmd", "statusbar", "expand-notifications", check=False)
+            time.sleep(0.2)
+            if not ok:
+                shell("input", "swipe", "540", "0", "540", "1600", "250",
+                      check=False)
+        elif action == "collapse_notifications":
+            ok = shell("cmd", "statusbar", "collapse", check=False)
+            if not ok:
+                shell("input", "keyevent", "KEYCODE_BACK", check=False)
+        elif action == "screenshot":
+            pass
+        elif action == "assert_visible":
+            node = wait_node(by, value, timeout, contains)
+            if node is None:
+                raise AssertionError("not visible: %s=%s" % (by, value))
+        elif action == "shell":
+            args = step.get("args") or shlex.split(value)
+            shell(*args)
+        elif action == "rotate":
+            rotation = str(step.get("rotation", value or "0"))
+            shell("settings", "put", "system", "accelerometer_rotation", "0")
+            shell("settings", "put", "system", "user_rotation", rotation)
+            time.sleep(0.8)
+        else:
+            raise RuntimeError("unknown action: " + action)
+
+        entry["ok"] = True
+    except Exception as exc:
+        entry["ok"] = False
+        entry["error"] = str(exc)
+        report["failures"].append(entry)
+        if not optional:
+            raise
+
+    if delay > 0:
+        time.sleep(delay / 1000.0)
+    name = step.get("screenshot")
+    if name:
+        folder = step.get("folder", "steps")
+        path = take_screenshot(out_root, folder, name)
+        entry["screenshot"] = os.path.relpath(path, out_root)
+        report["screenshots"].append(entry["screenshot"])
+    report["steps"].append(entry)
+    return entry
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--out", required=True, help="device screenshot root")
+    parser.add_argument("--scenario", help="JSON scenario file")
+    parser.add_argument("--steps", help="inline JSON steps array")
+    parser.add_argument("--strict", action="store_true",
+                        help="fail if any optional action also fails")
+    args = parser.parse_args()
+
+    os.makedirs(args.out, exist_ok=True)
+    if args.scenario:
+        with open(args.scenario, "r", encoding="utf-8") as f:
+            scenario = json.load(f)
+    elif args.steps:
+        scenario = json.loads(args.steps)
+    else:
+        scenario = {"steps": [{"action": "wait"}]}
+    steps = scenario.get("steps", scenario) if isinstance(scenario, dict) else scenario
+
+    report = {"device": device_info(), "steps": [], "screenshots": [],
+              "failures": []}
+    status = 0
+    try:
+        for step in steps:
+            run_step(step, args.out, report)
+    except Exception as exc:
+        report["fatal"] = str(exc)
+        status = 1
+    finally:
+        report_path = os.path.join(args.out, "driver-report.json")
+        with open(report_path, "w", encoding="utf-8") as f:
+            json.dump(report, f, indent=2)
+        print("ui driver: %d screenshot(s), %d failure(s) -> %s"
+              % (len(report["screenshots"]), len(report["failures"]),
+                 report_path))
+    if args.strict and report["failures"]:
+        status = 1
+    return status
+
+
+if __name__ == "__main__":
+    sys.exit(main())
 

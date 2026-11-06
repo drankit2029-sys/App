@@ -19,10 +19,10 @@ from datetime import datetime
 from pathlib import Path
 
 SKIP_DIRS = {".git", ".gradle", ".idea", ".commandcode", "build",
-             "fx-verify-runs", ".cxx", "__pycache__"}
+             "fx-verify-runs", ".cxx", "__pycache__", "ui-screenshots"}
 SKIP_SUFFIXES = {".apk", ".aab", ".wav", ".mp3", ".m4a", ".mp4", ".png", ".jpg",
                  ".jpeg", ".webp", ".gif", ".zip", ".jar", ".so", ".aar",
-                 ".keystore", ".jks", ".pyc"}
+                 ".keystore", ".jks", ".pyc", ".gz", ".tgz", ".tar"}
 # The dump cannot contain itself; session transcripts and handoff notes are not
 # project sources.
 SKIP_NAMES = {"project-dump.txt", "session-ses_ed80.md",
