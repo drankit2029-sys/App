@@ -2,7 +2,7 @@ PROJECT DUMP — TakeOne
 Generated: 2026-11-06T06:05:30
 Root: /mnt/sdcard/Download/App
 APK md5: 2c768387f8b8a26845550963e4423319
-HEAD: bc2d281 Refresh APKs and project dump
+HEAD: 4ba7d79 Use a foldable-unfolded geometry on the standard AVD image
 Branch: ut/fx-gpu-undo
 Files: 378 source files
 =================================================================================
