@@ -25,8 +25,11 @@ import java.util.Set;
  *
  * <p>Runs one effect (selected by {@code FX_EFFECT}) through every parameter it
  * exposes, at the parameter's minimum, default and maximum (or every enum
- * label / both boolean states), with all other parameters left at their
- * defaults. Each case is rendered against the probes that can actually show
+ * label / both boolean states). Secondary parameters are exercised at an
+ * active primary operating point, and the mode parameters are switched to a
+ * state where the parameter applies, so a secondary control that only works
+ * once its effect is actually engaged is measured honestly. Each case is
+ * rendered against the probes that can actually show
  * the parameter's effect, and every render is written out as a 32-bit float
  * WAV next to a JSON manifest, so the analysis side never has to guess what a
  * file contains.
@@ -150,9 +153,11 @@ public class FxParamMatrixDumpTest {
             String[] probes = probesFor(effectId, p.id, primary);
             for (String probe : probes) probesUsed.add(probe);
             int[] values = valuesFor(p);
+            Map<String, Integer> context =
+                    activeContext(proto, p, primary, defaultValues);
             for (int i = 0; i < values.length; i++) {
                 Map<String, Integer> candidateValues =
-                        new HashMap<>(defaultValues);
+                        new HashMap<>(context);
                 candidateValues.put(p.id, values[i]);
                 if (!proto.isParamApplicable(p.id, candidateValues)) continue;
                 String[] modes = profiled
@@ -172,6 +177,7 @@ public class FxParamMatrixDumpTest {
                         c.probe = probe;
                         c.mode = mode;
                         c.kind = "param";
+                        c.context = context;
                         c.id = sanitize(p.id + "_" + values[i] + "_" + probe
                                 + ("plain".equals(mode) ? "" : "_" + mode));
                         cases.add(c);
@@ -189,9 +195,11 @@ public class FxParamMatrixDumpTest {
             String probe = probesFor(effectId, p.id, primary)[0];
             probesUsed.add(probe);
             int[] vals = fiveSteps(p);
+            Map<String, Integer> context =
+                    activeContext(proto, p, primary, defaultValues);
             for (int i = 0; i < vals.length; i++) {
                 Map<String, Integer> candidateValues =
-                        new HashMap<>(defaultValues);
+                        new HashMap<>(context);
                 candidateValues.put(p.id, vals[i]);
                 if (!proto.isParamApplicable(p.id, candidateValues)) continue;
                 Case c = new Case();
@@ -207,6 +215,7 @@ public class FxParamMatrixDumpTest {
                 c.mode = profiled ? "profiled" : "plain";
                 c.kind = "series";
                 c.seriesIndex = i;
+                c.context = context;
                 c.id = sanitize("series_" + p.id + "_" + i);
                 series.add(c);
             }
@@ -250,6 +259,12 @@ public class FxParamMatrixDumpTest {
             AudioProcessor p = FxRackChain.createProcessor(effectId);
             if (p == null) throw new IllegalStateException("No processor " + effectId);
             for (FxParameter fp : p.getParameters()) fp.resetToDefault();
+            if (c.context != null) {
+                for (Map.Entry<String, Integer> e : c.context.entrySet()) {
+                    FxParameter cp = p.getParam(e.getKey());
+                    if (cp != null) cp.setCurrentRaw(e.getValue());
+                }
+            }
             String profileNote = "";
             if (profiled && "profiled".equals(c.mode)) {
                 profileNote = installProfile(p, frames, clip);
@@ -271,7 +286,7 @@ public class FxParamMatrixDumpTest {
             if ("changepitch".equals(effectId)
                     && "pitch_formant".equals(c.param)
                     && p.getParam("pitch_semitones") != null
-                    && Math.abs(p.getParam("pitch_semitones").getFloat()) < 1e-4f) {
+                    && Math.abs(p.getParam("pitch_semitones").getFloat()) < 1f) {
                 p.getParam("pitch_semitones").setFloat(4f);
                 o.put("pitchShiftForFormant", 4.0);
             }
@@ -408,6 +423,90 @@ public class FxParamMatrixDumpTest {
         }
     }
 
+    /**
+     * Builds the context a case is rendered in: the tested control applies in
+     * the selected mode, and the primary dial sits at an operating point where
+     * the effect actually does something. Without this, secondary controls of
+     * an effect whose primary defaults to zero (mix, amount, gain) measure no
+     * movement even when they work correctly.
+     */
+    private static Map<String, Integer> activeContext(
+            AudioProcessor proto, FxParameter tested, String primary,
+            Map<String, Integer> defaults) {
+        Map<String, Integer> context = new HashMap<>(defaults);
+        if (!proto.isParamApplicable(tested.id, context)) {
+            for (FxParameter mode : proto.getParameters()) {
+                if (mode.type != FxParameter.Type.ENUM
+                        && mode.type != FxParameter.Type.BOOLEAN) {
+                    continue;
+                }
+                int states = mode.type == FxParameter.Type.ENUM
+                        ? (mode.enumLabels == null ? 0 : mode.enumLabels.length)
+                        : 2;
+                for (int mi = 0; mi < states; mi++) {
+                    Map<String, Integer> trial = new HashMap<>(context);
+                    trial.put(mode.id, mi);
+                    if (proto.isParamApplicable(tested.id, trial)) {
+                        context = trial;
+                        break;
+                    }
+                }
+                if (proto.isParamApplicable(tested.id, context)) break;
+            }
+        }
+        if (primary != null && !primary.equals(tested.id)
+                && context.containsKey(primary)) {
+            FxParameter dial = proto.getParam(primary);
+            if (dial != null && dial.type != FxParameter.Type.ENUM
+                    && dial.type != FxParameter.Type.BOOLEAN
+                    && dial.type != FxParameter.Type.ACTION
+                    && dial.type != FxParameter.Type.CURVE_NODES) {
+                Map<String, Integer> withDial = new HashMap<>(context);
+                withDial.put(primary, activeValue(dial));
+                if (proto.isParamApplicable(tested.id, withDial)) {
+                    context = withDial;
+                }
+            }
+        }
+        return context;
+    }
+
+    /** An audible operating point for the effect's primary dial. */
+    private static int activeValue(FxParameter p) {
+        if (p.type == FxParameter.Type.ENUM
+                || p.type == FxParameter.Type.BOOLEAN
+                || p.type == FxParameter.Type.ACTION
+                || p.type == FxParameter.Type.CURVE_NODES) {
+            return p.defaultRaw;
+        }
+        // A zero-centred modulation primary hides every secondary control
+        // until it is moved; give the two time/pitch primaries a real shift.
+        if ("pitch_semitones".equals(p.id)) return p.clampRaw(400);
+        if ("tempo_percent".equals(p.id)) return p.clampRaw(2000);
+        String name = p.name.toLowerCase(java.util.Locale.US);
+        boolean amountLike = name.contains("amount") || name.contains("mix")
+                || name.contains("depth") || name.contains("drive")
+                || name.contains("gain") || name.contains("warmth")
+                || name.contains("presence") || name.contains("amplif")
+                || name.contains("reduction") || name.contains("compression");
+        if (!amountLike) return p.defaultRaw;
+        int span = p.maxRaw - p.minRaw;
+        if (span <= 0) return p.defaultRaw;
+        int value;
+        if (" dB".equals(p.unit)) {
+            int up = p.defaultRaw + 600;
+            value = up <= p.maxRaw ? up : p.defaultRaw - 600;
+        } else {
+            value = p.minRaw + Math.round(span * 0.5f);
+        }
+        value = p.clampRaw(value);
+        if (value == p.defaultRaw) {
+            value = p.clampRaw(p.defaultRaw
+                    + Math.max(1, p.interactionStepRaw()));
+        }
+        return value;
+    }
+
     /** Candidate values for one parameter: bounds, plus every enum state. */
     private static int[] valuesFor(FxParameter p) {
         switch (p.type) {
@@ -482,6 +581,7 @@ public class FxParamMatrixDumpTest {
         String probe;
         String mode;
         int seriesIndex = -1;
+        Map<String, Integer> context;
 
         JSONObject toJson() throws Exception {
             JSONObject o = new JSONObject();
@@ -497,6 +597,13 @@ public class FxParamMatrixDumpTest {
             o.put("isDefaultValue", isDefaultValue);
             o.put("probe", probe);
             o.put("mode", mode);
+            if (context != null) {
+                JSONObject ctx = new JSONObject();
+                for (Map.Entry<String, Integer> e : context.entrySet()) {
+                    ctx.put(e.getKey(), e.getValue());
+                }
+                o.put("context", ctx);
+            }
             if (seriesIndex >= 0) o.put("seriesIndex", seriesIndex);
             return o;
         }
