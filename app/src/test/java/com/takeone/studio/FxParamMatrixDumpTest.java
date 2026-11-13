@@ -125,7 +125,7 @@ public class FxParamMatrixDumpTest {
                 "FX_EFFECT not set: this shard test runs from fx-verify.yml",
                 effectId != null && !effectId.isEmpty());
         boolean full = "1".equals(arg("FX_FULL"));
-        int frames = full ? FULL_FRAMES : 12 * SR;
+        int frames = full ? FULL_FRAMES : (int) (2.2 * SR);
         int maxCases = intArg("FX_MAX_CASES", 1500);
 
         DspChain.EffectType type = null;

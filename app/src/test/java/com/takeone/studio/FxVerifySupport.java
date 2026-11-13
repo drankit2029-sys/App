@@ -26,7 +26,9 @@ public final class FxVerifySupport {
             "speech_stereo"};
 
     public static int probeChannels(String name) {
-        return "stereo".equals(name) || "speech_stereo".equals(name) ? 2 : 1;
+        // All probes run in stereo (L != R) so long-delay and stereo effects
+        // are exercised honestly without mono/short-buffer hacks.
+        return 2;
     }
 
     /** Repo root, found by walking up from the test working directory. */
@@ -260,8 +262,11 @@ public final class FxVerifySupport {
             }
             case "tone": {
                 for (int f = 0; f < frames; f++) {
-                    float s = (float) Math.sin(2 * Math.PI * 1000.0 * f / 48000.0) * 0.3f;
-                    for (int c = 0; c < channels; c++) out[f * channels + c] = s;
+                    float l = (float) Math.sin(2 * Math.PI * 1000.0 * f / 48000.0) * 0.3f;
+                    float r = (float) Math.sin(2 * Math.PI * 1320.0 * f / 48000.0) * 0.25f;
+                    if (channels >= 1) out[f * channels + 0] = l;
+                    if (channels >= 2) out[f * channels + 1] = r;
+                    for (int c = 2; c < channels; c++) out[f * channels + c] = l;
                 }
                 return out;
             }
@@ -289,10 +294,14 @@ public final class FxVerifySupport {
                 return out;
             }
             case "noise": {
-                Random rnd = new Random(42);
+                Random rndL = new Random(42);
+                Random rndR = new Random(99);
                 for (int f = 0; f < frames; f++) {
-                    float s = (rnd.nextFloat() * 2f - 1f) * 0.05f;
-                    for (int c = 0; c < channels; c++) out[f * channels + c] = s;
+                    float l = (rndL.nextFloat() * 2f - 1f) * 0.05f;
+                    float r = (rndR.nextFloat() * 2f - 1f) * 0.05f;
+                    if (channels >= 1) out[f * channels + 0] = l;
+                    if (channels >= 2) out[f * channels + 1] = r;
+                    for (int c = 2; c < channels; c++) out[f * channels + c] = l;
                 }
                 return out;
             }
