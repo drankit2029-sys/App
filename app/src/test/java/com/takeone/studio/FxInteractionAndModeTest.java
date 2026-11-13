@@ -1194,14 +1194,18 @@ public class FxInteractionAndModeTest {
             if (proto == null) continue;
             // Profiled effects need a profile to become audible.
             if (proto instanceof NoiseSuppressionProcessor) {
-                float[] n = new float[NoiseSuppressionProcessor.BINS];
-                Arrays.fill(n, 1e-4f);
-                ((NoiseSuppressionProcessor) proto).setNoiseProfile(n);
+                float[] noise = new float[24000];
+                long x = 0x31L;
+                for (int i = 0; i < noise.length; i++) { x ^= x << 13; x ^= x >>> 7; x ^= x << 17; noise[i] = ((x >>> 40) / 8388608f - 1f) * 0.04f; }
+                float[] prof = NoiseSuppressionProcessor.learnProfile(noise, 1);
+                if (prof != null) ((NoiseSuppressionProcessor) proto).setNoiseProfile(prof);
             }
             if (proto instanceof SpectralNoiseReductionProcessor) {
-                float[] n = new float[SpectralNoiseReductionProcessor.BINS];
-                Arrays.fill(n, 1e-4f);
-                ((SpectralNoiseReductionProcessor) proto).setNoiseProfile(n);
+                float[] noise = new float[24000];
+                long x = 0x31L;
+                for (int i = 0; i < noise.length; i++) { x ^= x << 13; x ^= x >>> 7; x ^= x << 17; noise[i] = ((x >>> 40) / 8388608f - 1f) * 0.04f; }
+                float[] prof = SpectralNoiseReductionProcessor.learnProfile(noise, 1);
+                if (prof != null) ((SpectralNoiseReductionProcessor) proto).setNoiseProfile(prof);
             }
             try {
                 proto.prepare(SR, ch);
@@ -1391,14 +1395,18 @@ public class FxInteractionAndModeTest {
             }
             if (proto == null) continue;
             if (proto instanceof NoiseSuppressionProcessor) {
-                float[] n = new float[NoiseSuppressionProcessor.BINS];
-                Arrays.fill(n, 1e-4f);
-                ((NoiseSuppressionProcessor) proto).setNoiseProfile(n);
+                float[] noise = new float[24000];
+                long x = 0x31L;
+                for (int i = 0; i < noise.length; i++) { x ^= x << 13; x ^= x >>> 7; x ^= x << 17; noise[i] = ((x >>> 40) / 8388608f - 1f) * 0.04f; }
+                float[] prof = NoiseSuppressionProcessor.learnProfile(noise, 1);
+                if (prof != null) ((NoiseSuppressionProcessor) proto).setNoiseProfile(prof);
             }
             if (proto instanceof SpectralNoiseReductionProcessor) {
-                float[] n = new float[SpectralNoiseReductionProcessor.BINS];
-                Arrays.fill(n, 1e-4f);
-                ((SpectralNoiseReductionProcessor) proto).setNoiseProfile(n);
+                float[] noise = new float[24000];
+                long x = 0x31L;
+                for (int i = 0; i < noise.length; i++) { x ^= x << 13; x ^= x >>> 7; x ^= x << 17; noise[i] = ((x >>> 40) / 8388608f - 1f) * 0.04f; }
+                float[] prof = SpectralNoiseReductionProcessor.learnProfile(noise, 1);
+                if (prof != null) ((SpectralNoiseReductionProcessor) proto).setNoiseProfile(prof);
             }
             try {
                 proto.prepare(SR, ch);
