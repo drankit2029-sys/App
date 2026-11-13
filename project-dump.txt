@@ -1,8 +1,8 @@
 PROJECT DUMP — TakeOne
-Generated: 2026-11-06T06:05:30
+Generated: 2026-11-13T12:25:28
 Root: /mnt/sdcard/Download/App
-APK md5: 2c768387f8b8a26845550963e4423319
-HEAD: 4ba7d79 Use a foldable-unfolded geometry on the standard AVD image
+APK md5: 150202ac6a426b2a7495e0fb95c47071
+HEAD: 1588f31 Verify Echo and MultiDelay stream chunk-exactly
 Branch: ut/fx-gpu-undo
 Files: 378 source files
 =================================================================================
@@ -3644,6 +3644,79 @@ Focused tests:
   ./gradlew :app:testDebugUnitTest --tests '*Stage5RestorationTest'
 
 Final report file: TASK_REPORT.txt (plain text).
+
+
+12. ROUND 7 — REMAINING OPEN ITEMS (2026-11-13)
+----------------------------------------------
+Branch ut/fx-gpu-undo, source commit 1588f31.
+
+A. Amplify gain / New Peak coupling (task.md 3.3)                [DONE]
+   - FxParamCoupling.sync(slot, changedId, peakDb) keeps the two
+     Amplify controls consistent: amplification moves New Peak to
+     sourcePeak + gain; New Peak moves gain to target - sourcePeak.
+   - The coupling is inert while the peak is unknown, while Allow
+     Clipping makes New Peak inapplicable, and for non-Amplify effects.
+   - StudioFragment measures the frozen FX apply target's peak on a
+     background thread when the rack opens (bounded forEachFloatChunk
+     scan); the result is generation-guarded and never blocks the UI.
+   - FxParamCouplingTest.amplifyGainAndNewPeakStayConsistent covers both
+     directions plus the unknown-peak and clipping guards.
+
+B. FX matrix active operating point (task.md 5.2)               [DONE]
+   - FxParamMatrixDumpTest now plans each case with a context: mode
+     parameters switch to a state where the tested control applies, and
+     an amount/gain-style primary sits at an audible operating point.
+   - Contexts are applied before the swept value and written into each
+     manifest case for auditability. Frequencies, thresholds and times
+     keep their defaults so physical anchors stay meaningful.
+   - Validated by FX Parameter Verification run 43379263957: all 52
+     dsp-matrix shards, params and analyze succeeded.
+
+C. All-52 parameter sensitivity sweep (task.md 5.1)            [DONE]
+   - FxInteractionAndModeTest.all52EffectsReactToEveryApplicableParameter
+     renders every applicable parameter at min/mid/max (or every enum
+     state) in an active context and requires the samples or render
+     length to move. It complements the existing all-52 inertness sweep.
+   - The universal stereo probe carries a tone bed, chirp, deterministic
+     broadband noise, clicks, multi-level clipped plateaus, an 800 ms
+     room-tone pause, sibilance, a true-zero dropout, plosive bursts,
+     mains hum, DC offset and decorrelated channels.
+   - Context fixes for measurable cases: Filter Curve designs all 32
+     nodes with alternating gains; default-at-maximum controls move into
+     range; bass/treble are separated for the Link toggle; the
+     compressor floor case engages upward mode; truncate-silence runs on
+     a 10.5 s buffer so ts_min up to 5 s is honoured.
+   - All 73 initially inert cases were resolved; the final run
+     43378965935 is green in all six unit shards.
+
+D. Delay chunk continuity                                            [DONE]
+   - FxInteractionAndModeTest.echoAndMultiDelayStreamChunkExact renders
+     Echo and MultiDelay contiguously and in 4096-frame chunks on fresh
+     instances and requires bit-identical output. Together with the
+     existing vocoder, limiter and spectral chunk tests this covers the
+     task.md 5.3 continuity list.
+
+E. Remaining / deliberately not implemented
+   - The pairwise anchor sweep (task.md 5.1 item 2) is combinatorial
+     (hundreds of parameter pairs x three sweeps x five or more mode
+     states per effect) and cannot fit a unit shard. The active-context
+     sensitivity sweep covers the same class of defect: a secondary
+     control that is dead because the primary is neutral.
+   - Open product questions in FX Verification Bugs section 2 remain
+     decisions, not code defects: MultiDelay default loudness, Filter
+     Curve canvas-only node controls, the De-Esser legacy device tier,
+     and the AMR-NB documentation note.
+
+F. Verification
+   - Parallel Verify 43378965935 (1588f31): compile, lint, 6/6 unit
+     shards PASS.
+   - FX Parameter Verification 43379263957: params, all DSP matrix
+     shards and analyze PASS.
+   - Build Debug APK 43379269456: build, release APK/AAB, emulator
+     instrumentation PASS.
+   - Refreshed app-debug.apk (md5 150202ac6a426b2a7495e0fb95c47071)
+     and app-release.apk (md5 ffac939e7f4a323e1b388c70bed5f7fa),
+     project-dump.txt and project-dump.tar.gz.
 
 =================================================================================
 FILE: Takeone Admob And Paywall Removal.txt
@@ -41640,6 +41713,15 @@ final class FxParamCoupling {
     }
 
     static void sync(DspChain.EffectSlot slot, String changedId) {
+        sync(slot, changedId, Float.NaN);
+    }
+
+    /**
+     * @param peakDb currently selected audio peak in dBFS, used to keep
+     *               Amplify's gain and New Peak controls consistent. Pass
+     *               {@link Float#NaN} while the peak has not been measured.
+     */
+    static void sync(DspChain.EffectSlot slot, String changedId, float peakDb) {
         if (slot == null || changedId == null) return;
         if (slot.type == DspChain.EffectType.CHANGE_TEMPO) {
             int from = slot.extraParams.containsKey("tempo_bpmfrom")
@@ -41670,6 +41752,22 @@ final class FxParamCoupling {
                 int rawSpeed = (int) Math.round(
                         100.0 * (1.0 + rawPct / 10000.0));
                 slot.value = Math.max(25, Math.min(400, rawSpeed));
+            }
+        } else if (slot.type == DspChain.EffectType.AMPLIFY) {
+            // amp_peak is inactive while Allow Clipping is on, and the pair can
+            // only be kept consistent once the source peak is known.
+            Integer clip = slot.extraParams.get("amp_clip");
+            if (clip != null && clip != 0) return;
+            if (Float.isNaN(peakDb) || peakDb <= -119.9f) return;
+            int peakRaw = Math.round(peakDb * 100f);
+            if ("amp_gain".equals(changedId)) {
+                slot.extraParams.put("amp_peak",
+                        Math.max(-4000, Math.min(0, peakRaw + slot.value)));
+            } else if ("amp_peak".equals(changedId)) {
+                Integer target = slot.extraParams.get("amp_peak");
+                int targetRaw = target != null ? target : 0;
+                slot.value = Math.max(-5000,
+                        Math.min(5000, targetRaw - peakRaw));
             }
         }
     }
@@ -58185,6 +58283,12 @@ public class StudioFragment extends Fragment {
      * painting stale bars.
      */
     private int fxPreviewGeneration = 0;
+    /**
+     * Peak (dBFS) of the frozen FX apply target, measured off the UI thread
+     * when the rack opens. Amplify uses it to keep Gain and New Peak in step.
+     */
+    private volatile float fxSelectionPeakDb = Float.NaN;
+    private int fxSelectionPeakScanGeneration = 0;
     private final java.util.Set<DspChain.EffectSlot> fxAdvancedOpen =
             java.util.Collections.newSetFromMap(
                     new java.util.IdentityHashMap<DspChain.EffectSlot, Boolean>());
@@ -59515,9 +59619,9 @@ public class StudioFragment extends Fragment {
      * processors also handle unsynced programmatic values defensively, but the
      * UI should never present two contradictory tempo/speed readings.
      */
-    private static void syncCoupledFxParams(DspChain.EffectSlot slot,
-                                            String changedId) {
-        FxParamCoupling.sync(slot, changedId);
+    private void syncCoupledFxParams(DspChain.EffectSlot slot,
+                                     String changedId) {
+        FxParamCoupling.sync(slot, changedId, fxSelectionPeakDb);
     }
 
     /** Inline size / speed / words-per-line controls, plus zoom. */
@@ -61718,6 +61822,7 @@ public class StudioFragment extends Fragment {
             rebuildFxRackList();
             paintFxPanelControls();
             refreshFxPreviewPeaks();
+            scanFxSelectionPeakAsync();
         } else {
             // Cancel any in-flight render and put the dry waveform back: the
             // effect-applied bars only exist inside effects mode.
@@ -61732,6 +61837,51 @@ public class StudioFragment extends Fragment {
             if (waveform != null) waveform.clearFxRegion();
         }
         paintEditorStrip();
+    }
+
+    /**
+     * Measures the peak of the frozen FX apply target in the background.
+     *
+     * <p>Amplify exposes the same gain two ways (Amplification and New Peak
+     * Amplitude). Keeping the pair consistent needs the source peak, and
+     * scanning a long take must never block the UI thread. The result is only
+     * published while this rack session is still open and unobsoleted.
+     */
+    private void scanFxSelectionPeakAsync() {
+        final int gen = ++fxSelectionPeakScanGeneration;
+        fxSelectionPeakDb = Float.NaN;
+        if (engine == null) return;
+        final File raw = engine.rawFile;
+        final long total = engine.totalFrames();
+        if (raw == null || !raw.exists() || total <= 0) return;
+        final long start = Math.max(0L,
+                Math.min(total, Math.round(fxApplyTargetStart * total)));
+        final long end = Math.max(start,
+                Math.min(total, Math.round(fxApplyTargetEnd * total)));
+        if (end <= start) return;
+        new Thread(() -> {
+            final float[] peak = {0f};
+            try {
+                EditEngine.forEachFloatChunk(raw, start, end,
+                        AudioProcessor.DEFAULT_DSP_CHUNK_FRAMES,
+                        (chunk, frames, ch, frameOffset) -> {
+                            float p = HardwareApiManager.get()
+                                    .computeChunkPeak(chunk, frames * ch);
+                            if (p > peak[0]) peak[0] = p;
+                        });
+            } catch (Exception ignored) {
+                return;
+            }
+            final float db = peak[0] > 1e-7f
+                    ? Dsp.linToDb(peak[0]) : -120f;
+            handler.post(() -> {
+                if (!isAdded() || !fxPanelOpen
+                        || gen != fxSelectionPeakScanGeneration) {
+                    return;
+                }
+                fxSelectionPeakDb = db;
+            });
+        }, "fx-selection-peak").start();
     }
 
     /**
@@ -82550,9 +82700,14 @@ import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import java.io.File;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Locks in the task.md interaction/audibility rules: mode-exclusive controls
@@ -83154,6 +83309,365 @@ public class FxInteractionAndModeTest {
         return out;
     }
 
+    /**
+     * Every parameter that applies in some mode must move the audio when it is
+     * swept at an active operating point. This is the sensitivity half of the
+     * interaction sweep: the inertness test above proves mode-exclusive
+     * controls are ignored, this one proves the remaining controls are not.
+     */
+    @Test
+    public void all52EffectsReactToEveryApplicableParameter() {
+        int frames = (int) (2.2 * SR);
+        int ch = 2;
+        float[] input = universalProbe(frames, ch);
+        float[] longInput = null;
+        List<String> inert = new ArrayList<>();
+        int checked = 0;
+        for (DspChain.EffectType type : DspChain.EffectType.values()) {
+            AudioProcessor proto = FxRackChain.createProcessor(type.id);
+            if (proto == null || proto.getParameters().isEmpty()) continue;
+            if (type.requiresLearnedProfile()) continue;
+            int effectFrames = frames;
+            float[] effectInput = input;
+            if ("truncsil".equals(type.id)) {
+                // ts_min is only honoured when the buffer is at least twice
+                // the requested minimum; 10.5 s covers its 5 s maximum.
+                effectFrames = (int) (10.5 * SR);
+                if (longInput == null) longInput = universalProbe(effectFrames, ch);
+                effectInput = longInput;
+            }
+            Map<String, Integer> defaults = new HashMap<>();
+            for (FxParameter q : proto.getParameters()) {
+                defaults.put(q.id, q.defaultRaw);
+            }
+            String primary = DspChain.primaryParamId(type);
+            for (FxParameter p : proto.getParameters()) {
+                if (p.type == FxParameter.Type.ACTION) continue;
+                Map<String, Integer> context =
+                        activeContext(proto, p, primary, defaults);
+                List<Integer> values = applicableSweep(proto, p, context);
+                if (values.size() < 2) continue;
+                checked++;
+                boolean moved = false;
+                float[] first = renderWithContext(type.id, context, p.id,
+                        values.get(0), effectInput, effectFrames, ch);
+                for (int vi = 1; vi < values.size(); vi++) {
+                    float[] next = renderWithContext(type.id, context, p.id,
+                            values.get(vi), effectInput, effectFrames, ch);
+                    if (differs(first, next)) {
+                        moved = true;
+                        break;
+                    }
+                }
+                if (!moved) inert.add(type.id + "." + p.id);
+            }
+        }
+        assertTrue("checked " + checked + " parameters", checked >= 100);
+        assertEquals("parameters did not change the audio: " + inert,
+                0, inert.size());
+    }
+
+    /** A stereo probe carrying every kind of damage the effects look for. */
+    private static float[] universalProbe(int frames, int ch) {
+        float[] out = new float[frames * ch];
+        double duration = frames / (double) SR;
+        double chirpK = Math.log(2000.0 / 100.0);
+        long rng = 0x123456789ABCDEFL;
+        for (int f = 0; f < frames; f++) {
+            double t = f / (double) SR;
+            rng = rng * 6364136223846793005L + 1442695040888963407L;
+            double white = (((rng >>> 11) & 0x1FFFFF)
+                    / (double) 0x1FFFFF - 0.5) * 0.06;
+            double l = 0.16 * Math.sin(2 * Math.PI * 440 * t)
+                    + 0.07 * Math.sin(2 * Math.PI * 880 * t)
+                    + 0.05 * Math.sin(2 * Math.PI * 50 * t)
+                    + 0.03 * Math.sin(2 * Math.PI * 100 * t)
+                    + 0.02 * Math.sin(2 * Math.PI * 150 * t);
+            double r = 0.16 * Math.sin(2 * Math.PI * 660 * t)
+                    + 0.07 * Math.sin(2 * Math.PI * 1320 * t)
+                    + 0.05 * Math.sin(2 * Math.PI * 50 * t)
+                    + 0.03 * Math.sin(2 * Math.PI * 100 * t)
+                    + 0.02 * Math.sin(2 * Math.PI * 150 * t);
+            double phase = 2 * Math.PI * 100
+                    * (Math.exp(chirpK * t / duration) - 1)
+                    / (chirpK / duration);
+            l += 0.10 * Math.sin(phase) + white;
+            r += 0.09 * Math.sin(phase * 1.01) + 0.9 * white;
+            if (t >= 0.20 && t < 0.30) {
+                double burst = 0.45 * Math.sin(2 * Math.PI * 90 * t)
+                        * Math.exp(-(t - 0.20) / 0.02);
+                l += burst;
+                r += burst;
+            }
+            if (Math.abs(t - 0.40) < 0.5 / SR
+                    || Math.abs(t - 1.82) < 0.5 / SR) {
+                l += 0.45;
+                r -= 0.45;
+            }
+            if (t >= 0.60 && t < 0.70) {
+                // Several flat-topped levels around the clip threshold, so a
+                // threshold sweep selects different plateaus.
+                double raw = 0.9 * Math.sin(2 * Math.PI * 200 * t);
+                double quant = Math.round(raw * 20.0) / 20.0;
+                l = quant;
+                r = -0.8 * quant;
+            }
+            double roomNoise = 0.003 * Math.sin(2 * Math.PI * 997 * t + 0.4)
+                    + 0.0015 * Math.sin(2 * Math.PI * 1237 * t + 1.1);
+            if (t >= 0.80 && t < 1.60) {
+                // A long room-tone pause: gates, expanders, ducking and
+                // silence truncation all need a floor to act on, not zeros.
+                l = roomNoise;
+                r = 0.8 * roomNoise;
+            } else {
+                l += 0.01;
+                r -= 0.01;
+            }
+            if (t >= 1.62 && t < 1.70) {
+                l += 0.25 * Math.sin(2 * Math.PI * 7000 * t);
+                r += 0.20 * Math.sin(2 * Math.PI * 8400 * t);
+            }
+            if (t >= 1.72 && t < 1.80) {
+                // A true digital dropout for Repair's LPC interpolation.
+                l = 0;
+                r = 0;
+            }
+            if (t >= 2.00 && t < 2.15) {
+                l = l * 0.05 + roomNoise;
+                r = r * 0.04 + 0.8 * roomNoise;
+            }
+            out[f * ch] = (float) Math.max(-1.0, Math.min(1.0, l));
+            if (ch > 1) {
+                out[f * ch + 1] = (float) Math.max(-1.0, Math.min(1.0, r));
+            }
+        }
+        return out;
+    }
+
+    /** Active context for one parameter sweep. */
+    private static Map<String, Integer> activeContext(
+            AudioProcessor proto, FxParameter tested, String primary,
+            Map<String, Integer> defaults) {
+        Map<String, Integer> context = new HashMap<>(defaults);
+        for (FxParameter q : proto.getParameters()) {
+            if (q.id.equals(tested.id)) continue;
+            if (q.type == FxParameter.Type.ENUM
+                    || q.type == FxParameter.Type.BOOLEAN
+                    || q.type == FxParameter.Type.ACTION
+                    || q.type == FxParameter.Type.CURVE_NODES) {
+                continue;
+            }
+            context.put(q.id, activeParamValue(q));
+        }
+        // The Link toggle only has work to do when the two bands differ.
+        if ("basstreble".equals(proto.getId()) && "link".equals(tested.id)) {
+            context.put("bass", 600);
+            context.put("treble", -600);
+        }
+        // Filter Curve only designs the first npts nodes. Expose every node
+        // when one of them is under test, and alternate the node gains so the
+        // point count itself changes the interpolated curve.
+        if ("fcurve".equals(proto.getId())) {
+            if (tested.id.startsWith("pf") || tested.id.startsWith("pg")) {
+                context.put("npts", 32);
+            }
+            for (int i = 0; i < 32; i++) {
+                String node = "pg" + i;
+                if (!node.equals(tested.id)) {
+                    context.put(node, i % 2 == 0 ? 600 : -600);
+                }
+            }
+        }
+        // The noise floor only changes behaviour when upward compression is
+        // using it as the lower bound of the expansion range.
+        if ("dyncomp".equals(proto.getId())
+                && "dyncomp_floor".equals(tested.id)) {
+            context.put("dyncomp_upward", 1);
+        }
+        if (!proto.isParamApplicable(tested.id, context)) {
+            boolean found = false;
+            for (FxParameter mode : proto.getParameters()) {
+                if (mode.type != FxParameter.Type.ENUM
+                        && mode.type != FxParameter.Type.BOOLEAN) {
+                    continue;
+                }
+                int states = mode.type == FxParameter.Type.ENUM
+                        ? (mode.enumLabels == null ? 0 : mode.enumLabels.length)
+                        : 2;
+                for (int mi = 0; mi < states; mi++) {
+                    Map<String, Integer> trial = new HashMap<>(context);
+                    trial.put(mode.id, mi);
+                    if (proto.isParamApplicable(tested.id, trial)) {
+                        context = trial;
+                        found = true;
+                        break;
+                    }
+                }
+                if (found) break;
+            }
+        }
+        return context;
+    }
+
+    /**
+     * Moves a neutral secondary control to an audible operating point. Targets
+     * such as thresholds, frequencies and times keep their defaults so the
+     * probe still has the feature they detect.
+     */
+    private static int activeParamValue(FxParameter p) {
+        String id = p.id;
+        if ("pitch_semitones".equals(id)) return p.clampRaw(400);
+        if ("tempo_percent".equals(id)) return p.clampRaw(2000);
+        if ("slide_init".equals(id)) return p.clampRaw(2000);
+        if ("se_gain".equals(id)) return p.clampRaw(600);
+        String name = p.name.toLowerCase(Locale.US);
+        boolean amount = name.contains("amount") || name.contains("mix")
+                || name.contains("depth") || name.contains("drive")
+                || name.contains("gain") || name.contains("warmth")
+                || name.contains("presence") || name.contains("amplitude")
+                || name.contains("reduction") || name.contains("compression")
+                || name.contains("level") || name.contains("feedback");
+        int span = p.maxRaw - p.minRaw;
+        if (span <= 0) return p.defaultRaw;
+        // A control parked at its maximum is often switching a stage off
+        // (a high-cut at 20 kHz, a dry mix at 100%). Move it into range so the
+        // parameters that depend on it can show their effect.
+        if (p.defaultRaw == p.maxRaw) {
+            int mid = p.clampRaw(p.minRaw + Math.round(span * 0.5f));
+            if (mid != p.defaultRaw) return mid;
+        }
+        boolean neutral = p.defaultRaw == p.minRaw
+                || Math.abs(p.defaultRaw) <= 1;
+        if (" dB".equals(p.unit)) {
+            if (!amount && !neutral) return p.defaultRaw;
+            int up = p.defaultRaw + 600;
+            int v = p.clampRaw(up <= p.maxRaw ? up : p.defaultRaw - 600);
+            return v != p.defaultRaw ? v : p.defaultRaw;
+        }
+        if ("%".equals(p.unit) || amount) {
+            if (!amount && !neutral) return p.defaultRaw;
+            int v = p.clampRaw(p.minRaw + Math.round(span * 0.5f));
+            return v != p.defaultRaw ? v : p.defaultRaw;
+        }
+        return p.defaultRaw;
+    }
+
+    /** Distinct parameter values that apply in the given context. */
+    private static List<Integer> applicableSweep(AudioProcessor proto,
+                                                 FxParameter p,
+                                                 Map<String, Integer> context) {
+        int[] candidates = sweepValues(p);
+        Set<Integer> unique = new LinkedHashSet<>();
+        for (int value : candidates) {
+            Map<String, Integer> values = new HashMap<>(context);
+            values.put(p.id, value);
+            if (proto.isParamApplicable(p.id, values)) unique.add(value);
+        }
+        return new ArrayList<>(unique);
+    }
+
+    private static int[] sweepValues(FxParameter p) {
+        switch (p.type) {
+            case BOOLEAN:
+                return new int[]{0, 1};
+            case ENUM: {
+                int n = p.enumLabels == null ? 1 : p.enumLabels.length;
+                int[] out = new int[n];
+                for (int i = 0; i < n; i++) out[i] = p.clampRaw(i);
+                return out;
+            }
+            case ACTION:
+                return new int[]{1};
+            default: {
+                // Keep the duration-exploding controls inside a sane render
+                // budget; the point is to prove movement, not the endpoint.
+                if ("paul_factor".equals(p.id)) {
+                    return new int[]{p.clampRaw(200), p.clampRaw(800),
+                            p.clampRaw(1600)};
+                }
+                if ("gen_dur".equals(p.id)) {
+                    return new int[]{p.clampRaw(100), p.clampRaw(200),
+                            p.clampRaw(400)};
+                }
+                int span = p.maxRaw - p.minRaw;
+                int[] out = {
+                        p.clampRaw(p.minRaw),
+                        p.clampRaw(p.minRaw + Math.round(span * 0.5f)),
+                        p.clampRaw(p.maxRaw)
+                };
+                return out;
+            }
+        }
+    }
+
+    private static float[] renderWithContext(String effectId,
+                                             Map<String, Integer> context,
+                                             String paramId, int raw,
+                                             float[] input, int frames, int ch) {
+        AudioProcessor p = FxRackChain.createProcessor(effectId);
+        for (FxParameter q : p.getParameters()) {
+            Integer v = context.get(q.id);
+            q.setCurrentRaw(v != null ? v : q.defaultRaw);
+        }
+        FxParameter target = p.getParam(paramId);
+        if (target != null) target.setCurrentRaw(raw);
+        p.prepare(SR, ch);
+        if (p.isOfflineOnly()) {
+            float[] out = p.processOfflineRegion(input.clone(), frames, ch);
+            return out == null ? new float[0] : out;
+        }
+        float[] out = input.clone();
+        p.processInPlace(out, frames, ch);
+        return out;
+    }
+
+    private static boolean differs(float[] a, float[] b) {
+        if (a.length != b.length) return true;
+        for (int i = 0; i < a.length; i++) {
+            if (Math.abs(a[i] - b[i]) > 1e-6f) return true;
+        }
+        return false;
+    }
+
+    @Test
+    public void echoAndMultiDelayStreamChunkExact() {
+        int frames = 24000;
+        int ch = 2;
+        float[] input = universalProbe(frames, ch);
+        for (String id : new String[]{"echo", "multidelay"}) {
+            AudioProcessor contiguous = FxRackChain.createProcessor(id);
+            configureDelay(contiguous);
+            contiguous.prepare(SR, ch);
+            float[] expected = input.clone();
+            contiguous.processInPlace(expected, frames, ch);
+
+            AudioProcessor streamed = FxRackChain.createProcessor(id);
+            configureDelay(streamed);
+            streamed.prepare(SR, ch);
+            float[] actual = input.clone();
+            for (int off = 0; off < frames; off += 4096) {
+                int n = Math.min(4096, frames - off);
+                float[] chunk = Arrays.copyOfRange(actual, off * ch,
+                        (off + n) * ch);
+                streamed.processInPlace(chunk, n, ch);
+                System.arraycopy(chunk, 0, actual, off * ch, n * ch);
+            }
+            assertSame(expected, actual, 0f);
+        }
+    }
+
+    private static void configureDelay(AudioProcessor p) {
+        if ("echo".equals(p.getId())) {
+            p.getParam("echo_time").setFloat(250f);
+            p.getParam("echo_decay").setCurrentRaw(50);
+        } else {
+            p.getParam("md_time").setCurrentRaw(250);
+            p.getParam("md_echoes").setCurrentRaw(5);
+            p.getParam("md_level").setFloat(-6f);
+            p.getParam("md_tchange").setCurrentRaw(20);
+        }
+    }
+
     @Test
     public void stftBlockProcessHasZeroSliceBoundaryGlitchOver40000Frames() {
         int frames = 40000;
@@ -83540,6 +84054,32 @@ public class FxParamCouplingTest {
         FxParamCoupling.sync(slot, "speed_percent");
         assertEquals(75, slot.value);
     }
+
+    @Test
+    public void amplifyGainAndNewPeakStayConsistent() {
+        DspChain.EffectSlot slot = new DspChain.EffectSlot(
+                DspChain.EffectType.AMPLIFY, false, 600, false);
+        slot.extraParams.put("amp_peak", -1200);
+
+        // +6 dB on a -12 dBFS source targets -6 dBFS.
+        FxParamCoupling.sync(slot, "amp_gain", -12.0f);
+        assertEquals(-600, (int) slot.extraParams.get("amp_peak"));
+
+        // The other direction: -6 dBFS target on a -12 dBFS source is +6 dB.
+        slot.value = 0;
+        FxParamCoupling.sync(slot, "amp_peak", -12.0f);
+        assertEquals(600, slot.value);
+
+        // Nothing happens before the source peak is measured.
+        slot.value = 300;
+        FxParamCoupling.sync(slot, "amp_gain", Float.NaN);
+        assertEquals(-600, (int) slot.extraParams.get("amp_peak"));
+
+        // Nor while Allow Clipping makes New Peak inapplicable.
+        slot.extraParams.put("amp_clip", 1);
+        FxParamCoupling.sync(slot, "amp_gain", -12.0f);
+        assertEquals(-600, (int) slot.extraParams.get("amp_peak"));
+    }
 }
 
 =================================================================================
@@ -83688,8 +84228,11 @@ import java.util.Set;
  *
  * <p>Runs one effect (selected by {@code FX_EFFECT}) through every parameter it
  * exposes, at the parameter's minimum, default and maximum (or every enum
- * label / both boolean states), with all other parameters left at their
- * defaults. Each case is rendered against the probes that can actually show
+ * label / both boolean states). Secondary parameters are exercised at an
+ * active primary operating point, and the mode parameters are switched to a
+ * state where the parameter applies, so a secondary control that only works
+ * once its effect is actually engaged is measured honestly. Each case is
+ * rendered against the probes that can actually show
  * the parameter's effect, and every render is written out as a 32-bit float
  * WAV next to a JSON manifest, so the analysis side never has to guess what a
  * file contains.
@@ -83813,9 +84356,11 @@ public class FxParamMatrixDumpTest {
             String[] probes = probesFor(effectId, p.id, primary);
             for (String probe : probes) probesUsed.add(probe);
             int[] values = valuesFor(p);
+            Map<String, Integer> context =
+                    activeContext(proto, p, primary, defaultValues);
             for (int i = 0; i < values.length; i++) {
                 Map<String, Integer> candidateValues =
-                        new HashMap<>(defaultValues);
+                        new HashMap<>(context);
                 candidateValues.put(p.id, values[i]);
                 if (!proto.isParamApplicable(p.id, candidateValues)) continue;
                 String[] modes = profiled
@@ -83835,6 +84380,7 @@ public class FxParamMatrixDumpTest {
                         c.probe = probe;
                         c.mode = mode;
                         c.kind = "param";
+                        c.context = context;
                         c.id = sanitize(p.id + "_" + values[i] + "_" + probe
                                 + ("plain".equals(mode) ? "" : "_" + mode));
                         cases.add(c);
@@ -83852,9 +84398,11 @@ public class FxParamMatrixDumpTest {
             String probe = probesFor(effectId, p.id, primary)[0];
             probesUsed.add(probe);
             int[] vals = fiveSteps(p);
+            Map<String, Integer> context =
+                    activeContext(proto, p, primary, defaultValues);
             for (int i = 0; i < vals.length; i++) {
                 Map<String, Integer> candidateValues =
-                        new HashMap<>(defaultValues);
+                        new HashMap<>(context);
                 candidateValues.put(p.id, vals[i]);
                 if (!proto.isParamApplicable(p.id, candidateValues)) continue;
                 Case c = new Case();
@@ -83870,6 +84418,7 @@ public class FxParamMatrixDumpTest {
                 c.mode = profiled ? "profiled" : "plain";
                 c.kind = "series";
                 c.seriesIndex = i;
+                c.context = context;
                 c.id = sanitize("series_" + p.id + "_" + i);
                 series.add(c);
             }
@@ -83913,6 +84462,12 @@ public class FxParamMatrixDumpTest {
             AudioProcessor p = FxRackChain.createProcessor(effectId);
             if (p == null) throw new IllegalStateException("No processor " + effectId);
             for (FxParameter fp : p.getParameters()) fp.resetToDefault();
+            if (c.context != null) {
+                for (Map.Entry<String, Integer> e : c.context.entrySet()) {
+                    FxParameter cp = p.getParam(e.getKey());
+                    if (cp != null) cp.setCurrentRaw(e.getValue());
+                }
+            }
             String profileNote = "";
             if (profiled && "profiled".equals(c.mode)) {
                 profileNote = installProfile(p, frames, clip);
@@ -83934,7 +84489,7 @@ public class FxParamMatrixDumpTest {
             if ("changepitch".equals(effectId)
                     && "pitch_formant".equals(c.param)
                     && p.getParam("pitch_semitones") != null
-                    && Math.abs(p.getParam("pitch_semitones").getFloat()) < 1e-4f) {
+                    && Math.abs(p.getParam("pitch_semitones").getFloat()) < 1f) {
                 p.getParam("pitch_semitones").setFloat(4f);
                 o.put("pitchShiftForFormant", 4.0);
             }
@@ -84071,6 +84626,90 @@ public class FxParamMatrixDumpTest {
         }
     }
 
+    /**
+     * Builds the context a case is rendered in: the tested control applies in
+     * the selected mode, and the primary dial sits at an operating point where
+     * the effect actually does something. Without this, secondary controls of
+     * an effect whose primary defaults to zero (mix, amount, gain) measure no
+     * movement even when they work correctly.
+     */
+    private static Map<String, Integer> activeContext(
+            AudioProcessor proto, FxParameter tested, String primary,
+            Map<String, Integer> defaults) {
+        Map<String, Integer> context = new HashMap<>(defaults);
+        if (!proto.isParamApplicable(tested.id, context)) {
+            for (FxParameter mode : proto.getParameters()) {
+                if (mode.type != FxParameter.Type.ENUM
+                        && mode.type != FxParameter.Type.BOOLEAN) {
+                    continue;
+                }
+                int states = mode.type == FxParameter.Type.ENUM
+                        ? (mode.enumLabels == null ? 0 : mode.enumLabels.length)
+                        : 2;
+                for (int mi = 0; mi < states; mi++) {
+                    Map<String, Integer> trial = new HashMap<>(context);
+                    trial.put(mode.id, mi);
+                    if (proto.isParamApplicable(tested.id, trial)) {
+                        context = trial;
+                        break;
+                    }
+                }
+                if (proto.isParamApplicable(tested.id, context)) break;
+            }
+        }
+        if (primary != null && !primary.equals(tested.id)
+                && context.containsKey(primary)) {
+            FxParameter dial = proto.getParam(primary);
+            if (dial != null && dial.type != FxParameter.Type.ENUM
+                    && dial.type != FxParameter.Type.BOOLEAN
+                    && dial.type != FxParameter.Type.ACTION
+                    && dial.type != FxParameter.Type.CURVE_NODES) {
+                Map<String, Integer> withDial = new HashMap<>(context);
+                withDial.put(primary, activeValue(dial));
+                if (proto.isParamApplicable(tested.id, withDial)) {
+                    context = withDial;
+                }
+            }
+        }
+        return context;
+    }
+
+    /** An audible operating point for the effect's primary dial. */
+    private static int activeValue(FxParameter p) {
+        if (p.type == FxParameter.Type.ENUM
+                || p.type == FxParameter.Type.BOOLEAN
+                || p.type == FxParameter.Type.ACTION
+                || p.type == FxParameter.Type.CURVE_NODES) {
+            return p.defaultRaw;
+        }
+        // A zero-centred modulation primary hides every secondary control
+        // until it is moved; give the two time/pitch primaries a real shift.
+        if ("pitch_semitones".equals(p.id)) return p.clampRaw(400);
+        if ("tempo_percent".equals(p.id)) return p.clampRaw(2000);
+        String name = p.name.toLowerCase(java.util.Locale.US);
+        boolean amountLike = name.contains("amount") || name.contains("mix")
+                || name.contains("depth") || name.contains("drive")
+                || name.contains("gain") || name.contains("warmth")
+                || name.contains("presence") || name.contains("amplif")
+                || name.contains("reduction") || name.contains("compression");
+        if (!amountLike) return p.defaultRaw;
+        int span = p.maxRaw - p.minRaw;
+        if (span <= 0) return p.defaultRaw;
+        int value;
+        if (" dB".equals(p.unit)) {
+            int up = p.defaultRaw + 600;
+            value = up <= p.maxRaw ? up : p.defaultRaw - 600;
+        } else {
+            value = p.minRaw + Math.round(span * 0.5f);
+        }
+        value = p.clampRaw(value);
+        if (value == p.defaultRaw) {
+            value = p.clampRaw(p.defaultRaw
+                    + Math.max(1, p.interactionStepRaw()));
+        }
+        return value;
+    }
+
     /** Candidate values for one parameter: bounds, plus every enum state. */
     private static int[] valuesFor(FxParameter p) {
         switch (p.type) {
@@ -84145,6 +84784,7 @@ public class FxParamMatrixDumpTest {
         String probe;
         String mode;
         int seriesIndex = -1;
+        Map<String, Integer> context;
 
         JSONObject toJson() throws Exception {
             JSONObject o = new JSONObject();
@@ -84160,6 +84800,13 @@ public class FxParamMatrixDumpTest {
             o.put("isDefaultValue", isDefaultValue);
             o.put("probe", probe);
             o.put("mode", mode);
+            if (context != null) {
+                JSONObject ctx = new JSONObject();
+                for (Map.Entry<String, Integer> e : context.entrySet()) {
+                    ctx.put(e.getKey(), e.getValue());
+                }
+                o.put("context", ctx);
+            }
             if (seriesIndex >= 0) o.put("seriesIndex", seriesIndex);
             return o;
         }
