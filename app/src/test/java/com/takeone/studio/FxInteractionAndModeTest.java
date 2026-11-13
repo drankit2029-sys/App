@@ -938,6 +938,45 @@ public class FxInteractionAndModeTest {
     }
 
     @Test
+    public void echoAndMultiDelayStreamChunkExact() {
+        int frames = 24000;
+        int ch = 2;
+        float[] input = universalProbe(frames, ch);
+        for (String id : new String[]{"echo", "multidelay"}) {
+            AudioProcessor contiguous = FxRackChain.createProcessor(id);
+            configureDelay(contiguous);
+            contiguous.prepare(SR, ch);
+            float[] expected = input.clone();
+            contiguous.processInPlace(expected, frames, ch);
+
+            AudioProcessor streamed = FxRackChain.createProcessor(id);
+            configureDelay(streamed);
+            streamed.prepare(SR, ch);
+            float[] actual = input.clone();
+            for (int off = 0; off < frames; off += 4096) {
+                int n = Math.min(4096, frames - off);
+                float[] chunk = Arrays.copyOfRange(actual, off * ch,
+                        (off + n) * ch);
+                streamed.processInPlace(chunk, n, ch);
+                System.arraycopy(chunk, 0, actual, off * ch, n * ch);
+            }
+            assertSame(expected, actual, 0f);
+        }
+    }
+
+    private static void configureDelay(AudioProcessor p) {
+        if ("echo".equals(p.getId())) {
+            p.getParam("echo_time").setFloat(250f);
+            p.getParam("echo_decay").setCurrentRaw(50);
+        } else {
+            p.getParam("md_time").setCurrentRaw(250);
+            p.getParam("md_echoes").setCurrentRaw(5);
+            p.getParam("md_level").setFloat(-6f);
+            p.getParam("md_tchange").setCurrentRaw(20);
+        }
+    }
+
+    @Test
     public void stftBlockProcessHasZeroSliceBoundaryGlitchOver40000Frames() {
         int frames = 40000;
         float[] original = new float[frames];
