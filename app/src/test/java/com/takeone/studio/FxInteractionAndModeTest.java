@@ -1164,4 +1164,129 @@ public class FxInteractionAndModeTest {
             i++;
         }
     }
+
+    // ---- generic mode-inapplicable inertness sweep ------------------------
+
+    private static float[] stereoProbe2(int frames) {
+        float[] out = new float[frames * 2];
+        for (int f = 0; f < frames; f++) {
+            double l = Math.sin(2.0 * Math.PI * 440.0 * f / SR) * 0.3;
+            double r = Math.sin(2.0 * Math.PI * 660.0 * f / SR) * 0.25;
+            out[f * 2] = (float) l;
+            out[f * 2 + 1] = (float) r;
+        }
+        return out;
+    }
+
+    @Test
+    public void modeInapplicableParamsAreInertAndFlagged() {
+        float[] probe = stereoProbe2(1024);
+        int frames = 1024;
+        int ch = 2;
+        int tested = 0;
+        for (DspChain.EffectType type : DspChain.EffectType.values()) {
+            AudioProcessor proto;
+            try {
+                proto = FxRackChain.createProcessor(type.id);
+            } catch (Throwable t) {
+                continue;
+            }
+            if (proto == null) continue;
+            // Profiled effects need a profile to become audible.
+            if (proto instanceof NoiseSuppressionProcessor) {
+                float[] n = new float[NoiseSuppressionProcessor.BINS];
+                Arrays.fill(n, 1e-4f);
+                ((NoiseSuppressionProcessor) proto).setNoiseProfile(n);
+            }
+            if (proto instanceof SpectralNoiseReductionProcessor) {
+                float[] n = new float[SpectralNoiseReductionProcessor.BINS];
+                Arrays.fill(n, 1e-4f);
+                ((SpectralNoiseReductionProcessor) proto).setNoiseProfile(n);
+            }
+            try {
+                proto.prepare(SR, ch);
+            } catch (Throwable t) {
+                continue;
+            }
+
+            // Find ENUM/BOOLEAN mode selectors.
+            List<FxParameter> modeSelectors = new ArrayList<>();
+            for (FxParameter q : proto.getParameters()) {
+                if (q.type == FxParameter.Type.ENUM || q.type == FxParameter.Type.BOOLEAN) {
+                    modeSelectors.add(q);
+                }
+            }
+            if (modeSelectors.isEmpty()) continue;
+
+            // Set all non-mode params to a mid-range active value so the
+            // processor produces non-trivial output.
+            for (FxParameter q : proto.getParameters()) {
+                if (q.type == FxParameter.Type.ENUM || q.type == FxParameter.Type.BOOLEAN) continue;
+                if (q.maxRaw > q.minRaw) {
+                    q.setCurrentRaw(q.minRaw + (q.maxRaw - q.minRaw) / 2);
+                }
+            }
+
+            boolean anyMode = false;
+            for (FxParameter sel : modeSelectors) {
+                int selCount = (sel.type == FxParameter.Type.BOOLEAN) ? 2 : sel.enumLabels.length;
+                for (int mv = 0; mv < selCount; mv++) {
+                    if (sel.type == FxParameter.Type.BOOLEAN) {
+                        sel.setBoolean(mv == 1);
+                    } else {
+                        sel.setEnumIndex(mv);
+                    }
+
+                    // Baseline output at this mode with all params at current (mid) values.
+                    float[] base = probe.clone();
+                    try {
+                        proto.reset();
+                        proto.processInPlace(base, frames, ch);
+                    } catch (Throwable t) {
+                        base = null;
+                    }
+                    if (base == null) continue;
+
+                    for (FxParameter p : proto.getParameters()) {
+                        if (p == sel) continue;
+                        if (proto.isParamApplicable(p.id)) continue;
+                        int lo = p.minRaw, hi = p.maxRaw;
+                        if (lo >= hi) continue;
+
+                        // Sweep to lo
+                        p.setCurrentRaw(lo);
+                        float[] outLo = probe.clone();
+                        proto.reset();
+                        proto.processInPlace(outLo, frames, ch);
+
+                        // Sweep to hi
+                        p.setCurrentRaw(hi);
+                        float[] outHi = probe.clone();
+                        proto.reset();
+                        proto.processInPlace(outHi, frames, ch);
+
+                        for (int i = 0; i < base.length; i++) {
+                            if (base[i] != outLo[i] || base[i] != outHi[i]) {
+                                throw new AssertionError(type.id + " mode " + sel.id + "=" + mv
+                                        + ": inapplicable param " + p.id
+                                        + " changed audio at sample " + i
+                                        + " (base=" + base[i]
+                                        + " lo=" + outLo[i] + " hi=" + outHi[i] + ")");
+                            }
+                        }
+                        anyMode = true;
+                    }
+                    // restore mid-range for next mode
+                    for (FxParameter q : proto.getParameters()) {
+                        if (q.type == FxParameter.Type.ENUM || q.type == FxParameter.Type.BOOLEAN) continue;
+                        if (q.maxRaw > q.minRaw) {
+                            q.setCurrentRaw(q.minRaw + (q.maxRaw - q.minRaw) / 2);
+                        }
+                    }
+                }
+            }
+            if (anyMode) tested++;
+        }
+        assertTrue("No effect had an inapplicable param to test", tested > 0);
+    }
 }
