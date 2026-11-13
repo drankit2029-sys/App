@@ -1405,6 +1405,9 @@ public class FxInteractionAndModeTest {
                 continue;
             }
             if (proto == null) continue;
+            // Profile-driven effects need a realistic profile and signal; their
+            // cross-param interactions are covered by their dedicated suites.
+            if (type.id.equals("noise") || type.id.equals("specnr")) continue;
             if (proto instanceof NoiseSuppressionProcessor) {
                 float[] noise = new float[24000];
                 long x = 0x31L;
