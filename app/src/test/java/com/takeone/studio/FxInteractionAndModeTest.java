@@ -646,11 +646,18 @@ public class FxInteractionAndModeTest {
                 List<Integer> values = applicableSweep(proto, p, context);
                 if (values.size() < 2) continue;
                 checked++;
-                float[] a = renderWithContext(type.id, context, p.id,
+                boolean moved = false;
+                float[] first = renderWithContext(type.id, context, p.id,
                         values.get(0), input, frames, ch);
-                float[] b = renderWithContext(type.id, context, p.id,
-                        values.get(values.size() - 1), input, frames, ch);
-                if (!differs(a, b)) inert.add(type.id + "." + p.id);
+                for (int vi = 1; vi < values.size(); vi++) {
+                    float[] next = renderWithContext(type.id, context, p.id,
+                            values.get(vi), input, frames, ch);
+                    if (differs(first, next)) {
+                        moved = true;
+                        break;
+                    }
+                }
+                if (!moved) inert.add(type.id + "." + p.id);
             }
         }
         assertTrue("checked " + checked + " parameters", checked >= 100);
@@ -691,25 +698,35 @@ public class FxInteractionAndModeTest {
                 r -= 0.7;
             }
             if (t >= 0.60 && t < 0.70) {
-                double clipped = Math.max(-0.95,
-                        Math.min(0.95, 3.0 * Math.sin(2 * Math.PI * 400 * t)));
-                l = clipped;
-                r = -0.8 * clipped;
+                // Several flat-topped levels around the clip threshold, so a
+                // threshold sweep selects different plateaus.
+                double raw = 0.9 * Math.sin(2 * Math.PI * 200 * t);
+                double quant = Math.round(raw * 20.0) / 20.0;
+                l = quant;
+                r = -0.8 * quant;
             }
-            if (t >= 0.80 && t < 1.00) {
-                l = 0;
-                r = 0;
+            double roomNoise = 0.003 * Math.sin(2 * Math.PI * 997 * t + 0.4)
+                    + 0.0015 * Math.sin(2 * Math.PI * 1237 * t + 1.1);
+            if (t >= 0.80 && t < 1.60) {
+                // A long room-tone pause: gates, expanders, ducking and
+                // silence truncation all need a floor to act on, not zeros.
+                l = roomNoise;
+                r = 0.8 * roomNoise;
             } else {
                 l += 0.01;
                 r -= 0.01;
             }
-            if (t >= 1.40 && t < 1.55) {
+            if (t >= 1.62 && t < 1.75) {
                 l += 0.25 * Math.sin(2 * Math.PI * 7000 * t);
                 r += 0.20 * Math.sin(2 * Math.PI * 8400 * t);
             }
-            if (t >= 1.90 && t < 2.10) {
-                l *= 0.05;
-                r *= 0.04;
+            if (Math.abs(t - 1.80) < 0.5 / SR) {
+                l += 0.7;
+                r -= 0.7;
+            }
+            if (t >= 2.00 && t < 2.15) {
+                l = l * 0.05 + roomNoise;
+                r = r * 0.04 + 0.8 * roomNoise;
             }
             out[f * ch] = (float) Math.max(-1.0, Math.min(1.0, l));
             if (ch > 1) {
@@ -738,6 +755,18 @@ public class FxInteractionAndModeTest {
         if ("basstreble".equals(proto.getId()) && "link".equals(tested.id)) {
             context.put("bass", 600);
             context.put("treble", -600);
+        }
+        // Filter Curve only designs the first npts nodes. Expose every node
+        // when one of them is under test, and alternate the node gains so the
+        // point count itself changes the interpolated curve.
+        if ("fcurve".equals(proto.getId())) {
+            if (tested.id.startsWith("pf") || tested.id.startsWith("pg")) {
+                context.put("npts", 32);
+            } else if ("npts".equals(tested.id)) {
+                for (int i = 0; i < 32; i++) {
+                    context.put("pg" + i, i % 2 == 0 ? 600 : -600);
+                }
+            }
         }
         if (!proto.isParamApplicable(tested.id, context)) {
             boolean found = false;
@@ -784,6 +813,13 @@ public class FxInteractionAndModeTest {
                 || name.contains("level") || name.contains("feedback");
         int span = p.maxRaw - p.minRaw;
         if (span <= 0) return p.defaultRaw;
+        // A control parked at its maximum is often switching a stage off
+        // (a high-cut at 20 kHz, a dry mix at 100%). Move it into range so the
+        // parameters that depend on it can show their effect.
+        if (p.defaultRaw == p.maxRaw) {
+            int mid = p.clampRaw(p.minRaw + Math.round(span * 0.5f));
+            if (mid != p.defaultRaw) return mid;
+        }
         boolean neutral = p.defaultRaw == p.minRaw
                 || Math.abs(p.defaultRaw) <= 1;
         if (" dB".equals(p.unit)) {
@@ -872,7 +908,7 @@ public class FxInteractionAndModeTest {
     private static boolean differs(float[] a, float[] b) {
         if (a.length != b.length) return true;
         for (int i = 0; i < a.length; i++) {
-            if (Math.abs(a[i] - b[i]) > 1e-4f) return true;
+            if (Math.abs(a[i] - b[i]) > 1e-6f) return true;
         }
         return false;
     }
