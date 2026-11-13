@@ -161,7 +161,7 @@
     <string name="save_wav32">WAV • 32-bit float</string>
     <string name="save_wav32_sub">Raw capture • no conversion</string>
     <string name="save_amr_nb">AMR-NB • voice</string>
-    <string name="save_amr_nb_sub">Tiny files • phone-call quality</string>
+    <string name="save_amr_nb_sub">Tiny files • phone-call quality (lossy 8 kHz, not for music)</string>
     <string name="save_amr_wb">AMR-WB • HD voice</string>
     <string name="save_amr_wb_sub">Small files • wideband voice</string>
     <string name="save_flac">FLAC</string>

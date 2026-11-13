@@ -18,9 +18,9 @@ final class MultiDelayProcessor extends AudioProcessor {
     private final FxParameter timeChange = addParameter(FxParameter.intParam(
             "md_tchange", "Time Change / Echo", " ms", -200, 200, 5, 0));
     private final FxParameter levelChange = addParameter(FxParameter.dbParam(
-            "md_level", "Level / Echo", -24f, 1f, -6f));
+            "md_level", "Level / Echo", -24f, 1f, -9f));
     private final FxParameter numEchoes = addParameter(FxParameter.intParam(
-            "md_echoes", "Echo Count", "", 1, 30, 1, 4));
+            "md_echoes", "Echo Count", "", 1, 30, 1, 3));
 
     private int sampleRate = DspChain.SAMPLE_RATE;
     private float[][] ring = new float[2][DspChain.SAMPLE_RATE * 6];

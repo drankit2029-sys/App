@@ -28,6 +28,9 @@ public enum SaveFormat {
     WAV32("wav32", R.string.save_wav32, R.string.save_wav32_sub, "WAV32"),
     FLAC("flac", R.string.save_flac, R.string.save_flac_sub, "FLAC"),
     OPUS("opus", R.string.save_opus, R.string.save_opus_sub, "OPUS"),
+    // AMR-NB: 8 kHz, 12.2 kbps adaptive multi-rate speech codec. Lossy and
+    // narrowband - intended for voice memos only; not suitable for music or
+    // high-fidelity content. See FormatConverter AMR encoder path.
     AMR_NB("amr_nb", R.string.save_amr_nb, R.string.save_amr_nb_sub, "AMR"),
     AMR_WB("amr_wb", R.string.save_amr_wb, R.string.save_amr_wb_sub, "AMR-WB");
 
