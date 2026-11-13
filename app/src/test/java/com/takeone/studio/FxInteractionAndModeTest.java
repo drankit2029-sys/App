@@ -1373,4 +1373,115 @@ public class FxInteractionAndModeTest {
         }
         assertTrue("No real-time processor was tested", tested > 0);
     }
+
+    // ---- generic pairwise anchor invariance sweep -----------------------
+
+    @Test
+    public void pairwiseAnchorInvarianceAllEffects() {
+        float[] probe = stereoProbe2(1024);
+        int frames = 1024;
+        int ch = 2;
+        int tested = 0;
+        for (DspChain.EffectType type : DspChain.EffectType.values()) {
+            AudioProcessor proto;
+            try {
+                proto = FxRackChain.createProcessor(type.id);
+            } catch (Throwable t) {
+                continue;
+            }
+            if (proto == null) continue;
+            if (proto instanceof NoiseSuppressionProcessor) {
+                float[] n = new float[NoiseSuppressionProcessor.BINS];
+                Arrays.fill(n, 1e-4f);
+                ((NoiseSuppressionProcessor) proto).setNoiseProfile(n);
+            }
+            if (proto instanceof SpectralNoiseReductionProcessor) {
+                float[] n = new float[SpectralNoiseReductionProcessor.BINS];
+                Arrays.fill(n, 1e-4f);
+                ((SpectralNoiseReductionProcessor) proto).setNoiseProfile(n);
+            }
+            try {
+                proto.prepare(SR, ch);
+            } catch (Throwable t) {
+                continue;
+            }
+
+            List<FxParameter> tunable = new ArrayList<>();
+            for (FxParameter q : proto.getParameters()) {
+                if (q.type == FxParameter.Type.ENUM || q.type == FxParameter.Type.BOOLEAN
+                        || q.type == FxParameter.Type.ACTION || q.type == FxParameter.Type.CURVE_NODES) continue;
+                if (q.maxRaw <= q.minRaw) continue;
+                tunable.add(q);
+            }
+            if (tunable.size() < 2) continue;
+
+            // Activate all non-mode params to mid-range.
+            for (FxParameter q : proto.getParameters()) {
+                if (q.type == FxParameter.Type.ENUM || q.type == FxParameter.Type.BOOLEAN) continue;
+                if (q.maxRaw > q.minRaw) q.setCurrentRaw(q.minRaw + (q.maxRaw - q.minRaw) / 2);
+            }
+
+            for (FxParameter P : tunable) {
+                for (FxParameter Q : tunable) {
+                    if (P == Q) continue;
+                    // Three Q anchors: default, 25%, 75% of range.
+                    int[] qAnchors = new int[]{
+                            Q.defaultRaw,
+                            Q.minRaw + (Q.maxRaw - Q.minRaw) / 4,
+                            Q.minRaw + 3 * (Q.maxRaw - Q.minRaw) / 4
+                    };
+                    for (int qa : qAnchors) {
+                        Q.setCurrentRaw(qa);
+                        // Sweep P at 20%, 50%, 80% of range.
+                        int[] pVals = new int[]{
+                                P.minRaw + (P.maxRaw - P.minRaw) / 5,
+                                P.minRaw + (P.maxRaw - P.minRaw) / 2,
+                                P.minRaw + 4 * (P.maxRaw - P.minRaw) / 5
+                        };
+                        float[][] outs = new float[3][];
+                        boolean ok = true;
+                        for (int pi = 0; pi < 3; pi++) {
+                            P.setCurrentRaw(pVals[pi]);
+                            float[] o = probe.clone();
+                            try {
+                                proto.reset();
+                                proto.processInPlace(o, frames, ch);
+                            } catch (Throwable t) {
+                                ok = false; break;
+                            }
+                            boolean bad = false;
+                            for (int i = 0; i < frames * ch; i++) {
+                                if (Float.isNaN(o[i]) || Float.isInfinite(o[i])) { bad = true; break; }
+                            }
+                            if (bad) { ok = false; break; }
+                            outs[pi] = o;
+                        }
+                        if (!ok || outs[0] == null || outs[1] == null || outs[2] == null) continue;
+                        // At least two of the three must differ.
+                        boolean anyDiff = false;
+                        for (int a = 0; a < 3 && !anyDiff; a++) {
+                            for (int b = a + 1; b < 3; b++) {
+                                for (int i = 0; i < frames * ch; i++) {
+                                    if (Math.abs(outs[a][i] - outs[b][i]) > 1e-5f) { anyDiff = true; break; }
+                                }
+                                if (anyDiff) break;
+                            }
+                        }
+                        if (!anyDiff) {
+                            throw new AssertionError(type.id + " param " + P.id
+                                    + " produced identical output across all sweep points"
+                                    + " (Q=" + Q.id + " at " + qa + ")");
+                        }
+                    }
+                    // restore mid-range
+                    for (FxParameter q : proto.getParameters()) {
+                        if (q.type == FxParameter.Type.ENUM || q.type == FxParameter.Type.BOOLEAN) continue;
+                        if (q.maxRaw > q.minRaw) q.setCurrentRaw(q.minRaw + (q.maxRaw - q.minRaw) / 2);
+                    }
+                }
+            }
+            tested++;
+        }
+        assertTrue("No effect was tested", tested > 0);
+    }
 }
