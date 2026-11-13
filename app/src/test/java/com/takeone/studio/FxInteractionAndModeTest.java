@@ -1289,4 +1289,81 @@ public class FxInteractionAndModeTest {
         }
         assertTrue("No effect had an inapplicable param to test", tested > 0);
     }
+
+    // ---- generic chunked-streaming continuity sweep ----------------------
+
+    @Test
+    public void chunkedStreamingContinuityAllRealtime() {
+        int chunk = 4096;
+        int frames = chunk * 2;
+        float[] probe = new float[frames];
+        for (int f = 0; f < frames; f++) {
+            probe[f] = (float) (Math.sin(2.0 * Math.PI * 440.0 * f / SR) * 0.3);
+        }
+        int tested = 0;
+        for (DspChain.EffectType type : DspChain.EffectType.values()) {
+            AudioProcessor cont, chunked;
+            try {
+                cont = FxRackChain.createProcessor(type.id);
+                chunked = FxRackChain.createProcessor(type.id);
+            } catch (Throwable t) {
+                continue;
+            }
+            if (cont == null || chunked == null) continue;
+            if (cont instanceof NoiseSuppressionProcessor) {
+                float[] n = new float[NoiseSuppressionProcessor.BINS];
+                Arrays.fill(n, 1e-4f);
+                ((NoiseSuppressionProcessor) cont).setNoiseProfile(n);
+                ((NoiseSuppressionProcessor) chunked).setNoiseProfile(n);
+            }
+            if (cont instanceof SpectralNoiseReductionProcessor) {
+                float[] n = new float[SpectralNoiseReductionProcessor.BINS];
+                Arrays.fill(n, 1e-4f);
+                ((SpectralNoiseReductionProcessor) cont).setNoiseProfile(n);
+                ((SpectralNoiseReductionProcessor) chunked).setNoiseProfile(n);
+            }
+            try {
+                cont.prepare(SR, 1);
+                chunked.prepare(SR, 1);
+            } catch (Throwable t) {
+                continue;
+            }
+            for (AudioProcessor pp : new AudioProcessor[]{cont, chunked}) {
+                for (FxParameter q : pp.getParameters()) {
+                    if (q.type == FxParameter.Type.ENUM || q.type == FxParameter.Type.BOOLEAN) continue;
+                    if (q.maxRaw > q.minRaw) q.setCurrentRaw(q.minRaw + (q.maxRaw - q.minRaw) / 2);
+                }
+            }
+            float[] full = probe.clone();
+            float[] joined = new float[frames];
+            try {
+                cont.processInPlace(full, frames, 1);
+                float[] first = Arrays.copyOfRange(probe, 0, chunk);
+                float[] second = Arrays.copyOfRange(probe, chunk, frames);
+                chunked.processInPlace(first, chunk, 1);
+                chunked.processInPlace(second, chunk, 1);
+                System.arraycopy(first, 0, joined, 0, chunk);
+                System.arraycopy(second, 0, joined, chunk, chunk);
+            } catch (Throwable t) {
+                continue;
+            }
+            boolean bad = false;
+            for (int i = 0; i < frames; i++) {
+                if (Float.isNaN(full[i]) || Float.isInfinite(full[i])
+                        || Float.isNaN(joined[i]) || Float.isInfinite(joined[i])) {
+                    bad = true; break;
+                }
+            }
+            if (bad) continue;
+            float maxDiff = 0f;
+            for (int i = 0; i < frames; i++) {
+                maxDiff = Math.max(maxDiff, Math.abs(full[i] - joined[i]));
+            }
+            if (maxDiff >= 1e-4f) {
+                throw new AssertionError(type.id + " chunked vs contiguous maxDiff=" + maxDiff);
+            }
+            tested++;
+        }
+        assertTrue("No real-time processor was tested", tested > 0);
+    }
 }
