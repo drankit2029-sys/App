@@ -1454,6 +1454,16 @@ public class FxInteractionAndModeTest {
                     };
                     for (int qa : qAnchors) {
                         Q.setCurrentRaw(qa);
+                        // If the effect is inactive at this anchor (e.g. amount=0),
+                        // secondary params cannot produce a change; skip.
+                        float[] probeCheck = probe.clone();
+                        proto.reset();
+                        proto.processInPlace(probeCheck, frames, ch);
+                        boolean inactive = true;
+                        for (int i = 0; i < frames * ch; i++) {
+                            if (Math.abs(probeCheck[i] - probe[i]) > 1e-6f) { inactive = false; break; }
+                        }
+                        if (inactive) continue;
                         // Sweep P at 20%, 50%, 80% of range.
                         int[] pVals = new int[]{
                                 P.minRaw + (P.maxRaw - P.minRaw) / 5,
