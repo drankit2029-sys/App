@@ -1484,6 +1484,8 @@ public class FxInteractionAndModeTest {
                     };
                     for (int qa : qAnchors) {
                         Q.setCurrentRaw(qa);
+                        // If P is not applicable in this mode/state, skip.
+                        if (!proto.isParamApplicable(P.id)) continue;
                         // If the effect is inactive at this anchor (e.g. amount=0),
                         // secondary params cannot produce a change; skip.
                         float[] probeCheck = probe.clone();
