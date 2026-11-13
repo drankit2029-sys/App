@@ -683,8 +683,8 @@ public class FxInteractionAndModeTest {
                     + 0.02 * Math.sin(2 * Math.PI * 150 * t);
             double phase = 2 * Math.PI * 100
                     * (Math.exp(chirpK * t / 2.2) - 1) / (chirpK / 2.2);
-            l += 0.05 * Math.sin(phase);
-            r += 0.04 * Math.sin(phase);
+            l += 0.10 * Math.sin(phase);
+            r += 0.09 * Math.sin(phase * 1.01);
             if (t >= 0.20 && t < 0.30) {
                 double burst = 0.45 * Math.sin(2 * Math.PI * 90 * t)
                         * Math.exp(-(t - 0.20) / 0.02);
@@ -692,10 +692,9 @@ public class FxInteractionAndModeTest {
                 r += burst;
             }
             if (Math.abs(t - 0.40) < 0.5 / SR
-                    || Math.abs(t - 1.20) < 0.5 / SR
-                    || Math.abs(t - 1.80) < 0.5 / SR) {
-                l += 0.7;
-                r -= 0.7;
+                    || Math.abs(t - 1.82) < 0.5 / SR) {
+                l += 0.45;
+                r -= 0.45;
             }
             if (t >= 0.60 && t < 0.70) {
                 // Several flat-topped levels around the clip threshold, so a
@@ -716,13 +715,14 @@ public class FxInteractionAndModeTest {
                 l += 0.01;
                 r -= 0.01;
             }
-            if (t >= 1.62 && t < 1.75) {
+            if (t >= 1.62 && t < 1.70) {
                 l += 0.25 * Math.sin(2 * Math.PI * 7000 * t);
                 r += 0.20 * Math.sin(2 * Math.PI * 8400 * t);
             }
-            if (Math.abs(t - 1.80) < 0.5 / SR) {
-                l += 0.7;
-                r -= 0.7;
+            if (t >= 1.72 && t < 1.80) {
+                // A true digital dropout for Repair's LPC interpolation.
+                l = 0;
+                r = 0;
             }
             if (t >= 2.00 && t < 2.15) {
                 l = l * 0.05 + roomNoise;
@@ -762,11 +762,19 @@ public class FxInteractionAndModeTest {
         if ("fcurve".equals(proto.getId())) {
             if (tested.id.startsWith("pf") || tested.id.startsWith("pg")) {
                 context.put("npts", 32);
-            } else if ("npts".equals(tested.id)) {
-                for (int i = 0; i < 32; i++) {
-                    context.put("pg" + i, i % 2 == 0 ? 600 : -600);
+            }
+            for (int i = 0; i < 32; i++) {
+                String node = "pg" + i;
+                if (!node.equals(tested.id)) {
+                    context.put(node, i % 2 == 0 ? 600 : -600);
                 }
             }
+        }
+        // The noise floor only changes behaviour when upward compression is
+        // using it as the lower bound of the expansion range.
+        if ("dyncomp".equals(proto.getId())
+                && "dyncomp_floor".equals(tested.id)) {
+            context.put("dyncomp_upward", 1);
         }
         if (!proto.isParamApplicable(tested.id, context)) {
             boolean found = false;
@@ -875,9 +883,9 @@ public class FxInteractionAndModeTest {
                 }
                 int span = p.maxRaw - p.minRaw;
                 int[] out = {
-                        p.clampRaw(p.minRaw + Math.round(span * 0.20f)),
-                        p.clampRaw(p.minRaw + Math.round(span * 0.55f)),
-                        p.clampRaw(p.minRaw + Math.round(span * 0.85f))
+                        p.clampRaw(p.minRaw),
+                        p.clampRaw(p.minRaw + Math.round(span * 0.5f)),
+                        p.clampRaw(p.maxRaw)
                 };
                 return out;
             }
