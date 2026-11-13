@@ -8,9 +8,14 @@ import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import java.io.File;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Locks in the task.md interaction/audibility rules: mode-exclusive controls
@@ -610,6 +615,266 @@ public class FxInteractionAndModeTest {
         float[] out = input.clone();
         p.processInPlace(out, frames, 1);
         return out;
+    }
+
+    /**
+     * Every parameter that applies in some mode must move the audio when it is
+     * swept at an active operating point. This is the sensitivity half of the
+     * interaction sweep: the inertness test above proves mode-exclusive
+     * controls are ignored, this one proves the remaining controls are not.
+     */
+    @Test
+    public void all52EffectsReactToEveryApplicableParameter() {
+        int frames = (int) (2.2 * SR);
+        int ch = 2;
+        float[] input = universalProbe(frames, ch);
+        List<String> inert = new ArrayList<>();
+        int checked = 0;
+        for (DspChain.EffectType type : DspChain.EffectType.values()) {
+            AudioProcessor proto = FxRackChain.createProcessor(type.id);
+            if (proto == null || proto.getParameters().isEmpty()) continue;
+            if (type.requiresLearnedProfile()) continue;
+            Map<String, Integer> defaults = new HashMap<>();
+            for (FxParameter q : proto.getParameters()) {
+                defaults.put(q.id, q.defaultRaw);
+            }
+            String primary = DspChain.primaryParamId(type);
+            for (FxParameter p : proto.getParameters()) {
+                if (p.type == FxParameter.Type.ACTION) continue;
+                Map<String, Integer> context =
+                        activeContext(proto, p, primary, defaults);
+                List<Integer> values = applicableSweep(proto, p, context);
+                if (values.size() < 2) continue;
+                checked++;
+                float[] a = renderWithContext(type.id, context, p.id,
+                        values.get(0), input, frames, ch);
+                float[] b = renderWithContext(type.id, context, p.id,
+                        values.get(values.size() - 1), input, frames, ch);
+                if (!differs(a, b)) inert.add(type.id + "." + p.id);
+            }
+        }
+        assertTrue("checked " + checked + " parameters", checked >= 100);
+        assertEquals("parameters did not change the audio: " + inert,
+                0, inert.size());
+    }
+
+    /** A stereo probe carrying every kind of damage the effects look for. */
+    private static float[] universalProbe(int frames, int ch) {
+        float[] out = new float[frames * ch];
+        double chirpK = Math.log(2000.0 / 100.0);
+        for (int f = 0; f < frames; f++) {
+            double t = f / (double) SR;
+            double l = 0.16 * Math.sin(2 * Math.PI * 440 * t)
+                    + 0.07 * Math.sin(2 * Math.PI * 880 * t)
+                    + 0.05 * Math.sin(2 * Math.PI * 50 * t)
+                    + 0.03 * Math.sin(2 * Math.PI * 100 * t)
+                    + 0.02 * Math.sin(2 * Math.PI * 150 * t);
+            double r = 0.16 * Math.sin(2 * Math.PI * 660 * t)
+                    + 0.07 * Math.sin(2 * Math.PI * 1320 * t)
+                    + 0.05 * Math.sin(2 * Math.PI * 50 * t)
+                    + 0.03 * Math.sin(2 * Math.PI * 100 * t)
+                    + 0.02 * Math.sin(2 * Math.PI * 150 * t);
+            double phase = 2 * Math.PI * 100
+                    * (Math.exp(chirpK * t / 2.2) - 1) / (chirpK / 2.2);
+            l += 0.05 * Math.sin(phase);
+            r += 0.04 * Math.sin(phase);
+            if (t >= 0.20 && t < 0.30) {
+                double burst = 0.45 * Math.sin(2 * Math.PI * 90 * t)
+                        * Math.exp(-(t - 0.20) / 0.02);
+                l += burst;
+                r += burst;
+            }
+            if (Math.abs(t - 0.40) < 0.5 / SR
+                    || Math.abs(t - 1.20) < 0.5 / SR
+                    || Math.abs(t - 1.80) < 0.5 / SR) {
+                l += 0.7;
+                r -= 0.7;
+            }
+            if (t >= 0.60 && t < 0.70) {
+                double clipped = Math.max(-0.95,
+                        Math.min(0.95, 3.0 * Math.sin(2 * Math.PI * 400 * t)));
+                l = clipped;
+                r = -0.8 * clipped;
+            }
+            if (t >= 0.80 && t < 1.00) {
+                l = 0;
+                r = 0;
+            } else {
+                l += 0.01;
+                r -= 0.01;
+            }
+            if (t >= 1.40 && t < 1.55) {
+                l += 0.25 * Math.sin(2 * Math.PI * 7000 * t);
+                r += 0.20 * Math.sin(2 * Math.PI * 8400 * t);
+            }
+            if (t >= 1.90 && t < 2.10) {
+                l *= 0.05;
+                r *= 0.04;
+            }
+            out[f * ch] = (float) Math.max(-1.0, Math.min(1.0, l));
+            if (ch > 1) {
+                out[f * ch + 1] = (float) Math.max(-1.0, Math.min(1.0, r));
+            }
+        }
+        return out;
+    }
+
+    /** Active context for one parameter sweep. */
+    private static Map<String, Integer> activeContext(
+            AudioProcessor proto, FxParameter tested, String primary,
+            Map<String, Integer> defaults) {
+        Map<String, Integer> context = new HashMap<>(defaults);
+        for (FxParameter q : proto.getParameters()) {
+            if (q.id.equals(tested.id)) continue;
+            if (q.type == FxParameter.Type.ENUM
+                    || q.type == FxParameter.Type.BOOLEAN
+                    || q.type == FxParameter.Type.ACTION
+                    || q.type == FxParameter.Type.CURVE_NODES) {
+                continue;
+            }
+            context.put(q.id, activeParamValue(q));
+        }
+        // The Link toggle only has work to do when the two bands differ.
+        if ("basstreble".equals(proto.getId()) && "link".equals(tested.id)) {
+            context.put("bass", 600);
+            context.put("treble", -600);
+        }
+        if (!proto.isParamApplicable(tested.id, context)) {
+            boolean found = false;
+            for (FxParameter mode : proto.getParameters()) {
+                if (mode.type != FxParameter.Type.ENUM
+                        && mode.type != FxParameter.Type.BOOLEAN) {
+                    continue;
+                }
+                int states = mode.type == FxParameter.Type.ENUM
+                        ? (mode.enumLabels == null ? 0 : mode.enumLabels.length)
+                        : 2;
+                for (int mi = 0; mi < states; mi++) {
+                    Map<String, Integer> trial = new HashMap<>(context);
+                    trial.put(mode.id, mi);
+                    if (proto.isParamApplicable(tested.id, trial)) {
+                        context = trial;
+                        found = true;
+                        break;
+                    }
+                }
+                if (found) break;
+            }
+        }
+        return context;
+    }
+
+    /**
+     * Moves a neutral secondary control to an audible operating point. Targets
+     * such as thresholds, frequencies and times keep their defaults so the
+     * probe still has the feature they detect.
+     */
+    private static int activeParamValue(FxParameter p) {
+        String id = p.id;
+        if ("pitch_semitones".equals(id)) return p.clampRaw(400);
+        if ("tempo_percent".equals(id)) return p.clampRaw(2000);
+        if ("slide_init".equals(id)) return p.clampRaw(2000);
+        if ("se_gain".equals(id)) return p.clampRaw(600);
+        String name = p.name.toLowerCase(Locale.US);
+        boolean amount = name.contains("amount") || name.contains("mix")
+                || name.contains("depth") || name.contains("drive")
+                || name.contains("gain") || name.contains("warmth")
+                || name.contains("presence") || name.contains("amplitude")
+                || name.contains("reduction") || name.contains("compression")
+                || name.contains("level") || name.contains("feedback");
+        int span = p.maxRaw - p.minRaw;
+        if (span <= 0) return p.defaultRaw;
+        boolean neutral = p.defaultRaw == p.minRaw
+                || Math.abs(p.defaultRaw) <= 1;
+        if (" dB".equals(p.unit)) {
+            if (!amount && !neutral) return p.defaultRaw;
+            int up = p.defaultRaw + 600;
+            int v = p.clampRaw(up <= p.maxRaw ? up : p.defaultRaw - 600);
+            return v != p.defaultRaw ? v : p.defaultRaw;
+        }
+        if ("%".equals(p.unit) || amount) {
+            if (!amount && !neutral) return p.defaultRaw;
+            int v = p.clampRaw(p.minRaw + Math.round(span * 0.5f));
+            return v != p.defaultRaw ? v : p.defaultRaw;
+        }
+        return p.defaultRaw;
+    }
+
+    /** Distinct parameter values that apply in the given context. */
+    private static List<Integer> applicableSweep(AudioProcessor proto,
+                                                 FxParameter p,
+                                                 Map<String, Integer> context) {
+        int[] candidates = sweepValues(p);
+        Set<Integer> unique = new LinkedHashSet<>();
+        for (int value : candidates) {
+            Map<String, Integer> values = new HashMap<>(context);
+            values.put(p.id, value);
+            if (proto.isParamApplicable(p.id, values)) unique.add(value);
+        }
+        return new ArrayList<>(unique);
+    }
+
+    private static int[] sweepValues(FxParameter p) {
+        switch (p.type) {
+            case BOOLEAN:
+                return new int[]{0, 1};
+            case ENUM: {
+                int n = p.enumLabels == null ? 1 : p.enumLabels.length;
+                int[] out = new int[n];
+                for (int i = 0; i < n; i++) out[i] = p.clampRaw(i);
+                return out;
+            }
+            case ACTION:
+                return new int[]{1};
+            default: {
+                // Keep the duration-exploding controls inside a sane render
+                // budget; the point is to prove movement, not the endpoint.
+                if ("paul_factor".equals(p.id)) {
+                    return new int[]{p.clampRaw(200), p.clampRaw(800),
+                            p.clampRaw(1600)};
+                }
+                if ("gen_dur".equals(p.id)) {
+                    return new int[]{p.clampRaw(100), p.clampRaw(200),
+                            p.clampRaw(400)};
+                }
+                int span = p.maxRaw - p.minRaw;
+                int[] out = {
+                        p.clampRaw(p.minRaw + Math.round(span * 0.20f)),
+                        p.clampRaw(p.minRaw + Math.round(span * 0.55f)),
+                        p.clampRaw(p.minRaw + Math.round(span * 0.85f))
+                };
+                return out;
+            }
+        }
+    }
+
+    private static float[] renderWithContext(String effectId,
+                                             Map<String, Integer> context,
+                                             String paramId, int raw,
+                                             float[] input, int frames, int ch) {
+        AudioProcessor p = FxRackChain.createProcessor(effectId);
+        for (FxParameter q : p.getParameters()) {
+            Integer v = context.get(q.id);
+            q.setCurrentRaw(v != null ? v : q.defaultRaw);
+        }
+        FxParameter target = p.getParam(paramId);
+        if (target != null) target.setCurrentRaw(raw);
+        p.prepare(SR, ch);
+        if (p.isOfflineOnly()) {
+            float[] out = p.processOfflineRegion(input.clone(), frames, ch);
+            return out == null ? new float[0] : out;
+        }
+        float[] out = input.clone();
+        p.processInPlace(out, frames, ch);
+        return out;
+    }
+
+    private static boolean differs(float[] a, float[] b) {
+        if (a.length != b.length) return true;
+        for (int i = 0; i < a.length; i++) {
+            if (Math.abs(a[i] - b[i]) > 1e-4f) return true;
+        }
+        return false;
     }
 
     @Test
