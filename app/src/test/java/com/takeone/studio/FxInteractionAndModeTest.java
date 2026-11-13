@@ -1382,7 +1382,18 @@ public class FxInteractionAndModeTest {
 
     @Test
     public void pairwiseAnchorInvarianceAllEffects() {
-        float[] probe = stereoProbe2(1024);
+        // Richer probe: tone + broadband noise + clicks so every effect has
+        // something to act on (noise suppression, click removal, etc.).
+        float[] probe = new float[1024 * 2];
+        long nx = 0x42L;
+        for (int f = 0; f < 1024; f++) {
+            double t = Math.sin(2.0 * Math.PI * 440.0 * f / SR) * 0.25;
+            nx ^= nx << 13; nx ^= nx >>> 7; nx ^= nx << 17;
+            double n = ((nx >>> 40) / 8388608.0 - 1.0) * 0.05;
+            double click = (f % 256 == 0) ? 0.6 : 0.0;
+            probe[f * 2] = (float) (t + n + click);
+            probe[f * 2 + 1] = (float) (t * 0.9 + n * 0.8);
+        }
         int frames = 1024;
         int ch = 2;
         int tested = 0;
