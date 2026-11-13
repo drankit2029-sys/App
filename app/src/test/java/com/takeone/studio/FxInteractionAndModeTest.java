@@ -1226,7 +1226,20 @@ public class FxInteractionAndModeTest {
             // processor produces non-trivial output.
             for (FxParameter q : proto.getParameters()) {
                 if (q.type == FxParameter.Type.ENUM || q.type == FxParameter.Type.BOOLEAN) continue;
-                if (q.maxRaw > q.minRaw) {
+                if (q.maxRaw <= q.minRaw) continue;
+                String nm = q.name.toLowerCase(java.util.Locale.US);
+                boolean gainLike = nm.contains("gain") || nm.contains("amount")
+                        || nm.contains("mix") || nm.contains("depth")
+                        || nm.contains("drive") || nm.contains("reduction")
+                        || nm.contains("compression") || nm.contains("warmth")
+                        || nm.contains("presence") || nm.contains("amplif")
+                        || nm.contains("boost") || nm.contains("level");
+                if (gainLike && " dB".equals(q.unit)) {
+                    int v = q.defaultRaw + 600;
+                    if (v > q.maxRaw) v = q.defaultRaw - 600;
+                    if (v < q.minRaw) v = q.minRaw + (q.maxRaw - q.minRaw) / 2;
+                    q.setCurrentRaw(q.clampRaw(v));
+                } else {
                     q.setCurrentRaw(q.minRaw + (q.maxRaw - q.minRaw) / 2);
                 }
             }
@@ -1342,7 +1355,24 @@ public class FxInteractionAndModeTest {
             for (AudioProcessor pp : new AudioProcessor[]{cont, chunked}) {
                 for (FxParameter q : pp.getParameters()) {
                     if (q.type == FxParameter.Type.ENUM || q.type == FxParameter.Type.BOOLEAN) continue;
-                    if (q.maxRaw > q.minRaw) q.setCurrentRaw(q.minRaw + (q.maxRaw - q.minRaw) / 2);
+                    if (q.maxRaw <= q.minRaw) continue;
+                    String nm = q.name.toLowerCase(java.util.Locale.US);
+                    boolean gainLike = nm.contains("gain") || nm.contains("amount")
+                            || nm.contains("mix") || nm.contains("depth")
+                            || nm.contains("drive") || nm.contains("reduction")
+                            || nm.contains("compression") || nm.contains("warmth")
+                            || nm.contains("presence") || nm.contains("amplif")
+                            || nm.contains("boost") || nm.contains("level");
+                    if (gainLike && " dB".equals(q.unit)) {
+                        int v = q.defaultRaw + 600;
+                        if (v > q.maxRaw) v = q.defaultRaw - 600;
+                        if (v < q.minRaw) v = q.minRaw + (q.maxRaw - q.minRaw) / 2;
+                        q.setCurrentRaw(q.clampRaw(v));
+                    } else if (gainLike) {
+                        q.setCurrentRaw(q.minRaw + (q.maxRaw - q.minRaw) / 2);
+                    } else {
+                        q.setCurrentRaw(q.minRaw + (q.maxRaw - q.minRaw) / 2);
+                    }
                 }
             }
             float[] full = probe.clone();
@@ -1505,10 +1535,25 @@ public class FxInteractionAndModeTest {
                                     + " (Q=" + Q.id + " at " + qa + ")");
                         }
                     }
-                    // restore mid-range
+                    // restore active operating point
                     for (FxParameter q : proto.getParameters()) {
                         if (q.type == FxParameter.Type.ENUM || q.type == FxParameter.Type.BOOLEAN) continue;
-                        if (q.maxRaw > q.minRaw) q.setCurrentRaw(q.minRaw + (q.maxRaw - q.minRaw) / 2);
+                        if (q.maxRaw <= q.minRaw) continue;
+                        String nm = q.name.toLowerCase(java.util.Locale.US);
+                        boolean gainLike = nm.contains("gain") || nm.contains("amount")
+                                || nm.contains("mix") || nm.contains("depth")
+                                || nm.contains("drive") || nm.contains("reduction")
+                                || nm.contains("compression") || nm.contains("warmth")
+                                || nm.contains("presence") || nm.contains("amplif")
+                                || nm.contains("boost") || nm.contains("level");
+                        if (gainLike && " dB".equals(q.unit)) {
+                            int v = q.defaultRaw + 600;
+                            if (v > q.maxRaw) v = q.defaultRaw - 600;
+                            if (v < q.minRaw) v = q.minRaw + (q.maxRaw - q.minRaw) / 2;
+                            q.setCurrentRaw(q.clampRaw(v));
+                        } else {
+                            q.setCurrentRaw(q.minRaw + (q.maxRaw - q.minRaw) / 2);
+                        }
                     }
                 }
             }
