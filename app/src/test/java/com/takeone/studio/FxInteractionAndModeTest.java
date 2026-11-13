@@ -628,12 +628,22 @@ public class FxInteractionAndModeTest {
         int frames = (int) (2.2 * SR);
         int ch = 2;
         float[] input = universalProbe(frames, ch);
+        float[] longInput = null;
         List<String> inert = new ArrayList<>();
         int checked = 0;
         for (DspChain.EffectType type : DspChain.EffectType.values()) {
             AudioProcessor proto = FxRackChain.createProcessor(type.id);
             if (proto == null || proto.getParameters().isEmpty()) continue;
             if (type.requiresLearnedProfile()) continue;
+            int effectFrames = frames;
+            float[] effectInput = input;
+            if ("truncsil".equals(type.id)) {
+                // ts_min is only honoured when the buffer is at least twice
+                // the requested minimum; 10.5 s covers its 5 s maximum.
+                effectFrames = (int) (10.5 * SR);
+                if (longInput == null) longInput = universalProbe(effectFrames, ch);
+                effectInput = longInput;
+            }
             Map<String, Integer> defaults = new HashMap<>();
             for (FxParameter q : proto.getParameters()) {
                 defaults.put(q.id, q.defaultRaw);
@@ -648,10 +658,10 @@ public class FxInteractionAndModeTest {
                 checked++;
                 boolean moved = false;
                 float[] first = renderWithContext(type.id, context, p.id,
-                        values.get(0), input, frames, ch);
+                        values.get(0), effectInput, effectFrames, ch);
                 for (int vi = 1; vi < values.size(); vi++) {
                     float[] next = renderWithContext(type.id, context, p.id,
-                            values.get(vi), input, frames, ch);
+                            values.get(vi), effectInput, effectFrames, ch);
                     if (differs(first, next)) {
                         moved = true;
                         break;
@@ -668,9 +678,14 @@ public class FxInteractionAndModeTest {
     /** A stereo probe carrying every kind of damage the effects look for. */
     private static float[] universalProbe(int frames, int ch) {
         float[] out = new float[frames * ch];
+        double duration = frames / (double) SR;
         double chirpK = Math.log(2000.0 / 100.0);
+        long rng = 0x123456789ABCDEFL;
         for (int f = 0; f < frames; f++) {
             double t = f / (double) SR;
+            rng = rng * 6364136223846793005L + 1442695040888963407L;
+            double white = (((rng >>> 11) & 0x1FFFFF)
+                    / (double) 0x1FFFFF - 0.5) * 0.06;
             double l = 0.16 * Math.sin(2 * Math.PI * 440 * t)
                     + 0.07 * Math.sin(2 * Math.PI * 880 * t)
                     + 0.05 * Math.sin(2 * Math.PI * 50 * t)
@@ -682,9 +697,10 @@ public class FxInteractionAndModeTest {
                     + 0.03 * Math.sin(2 * Math.PI * 100 * t)
                     + 0.02 * Math.sin(2 * Math.PI * 150 * t);
             double phase = 2 * Math.PI * 100
-                    * (Math.exp(chirpK * t / 2.2) - 1) / (chirpK / 2.2);
-            l += 0.10 * Math.sin(phase);
-            r += 0.09 * Math.sin(phase * 1.01);
+                    * (Math.exp(chirpK * t / duration) - 1)
+                    / (chirpK / duration);
+            l += 0.10 * Math.sin(phase) + white;
+            r += 0.09 * Math.sin(phase * 1.01) + 0.9 * white;
             if (t >= 0.20 && t < 0.30) {
                 double burst = 0.45 * Math.sin(2 * Math.PI * 90 * t)
                         * Math.exp(-(t - 0.20) / 0.02);
