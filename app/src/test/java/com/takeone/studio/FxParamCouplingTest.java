@@ -34,4 +34,30 @@ public class FxParamCouplingTest {
         FxParamCoupling.sync(slot, "speed_percent");
         assertEquals(75, slot.value);
     }
+
+    @Test
+    public void amplifyGainAndNewPeakStayConsistent() {
+        DspChain.EffectSlot slot = new DspChain.EffectSlot(
+                DspChain.EffectType.AMPLIFY, false, 600, false);
+        slot.extraParams.put("amp_peak", -1200);
+
+        // +6 dB on a -12 dBFS source targets -6 dBFS.
+        FxParamCoupling.sync(slot, "amp_gain", -12.0f);
+        assertEquals(-600, (int) slot.extraParams.get("amp_peak"));
+
+        // The other direction: -6 dBFS target on a -12 dBFS source is +6 dB.
+        slot.value = 0;
+        FxParamCoupling.sync(slot, "amp_peak", -12.0f);
+        assertEquals(600, slot.value);
+
+        // Nothing happens before the source peak is measured.
+        slot.value = 300;
+        FxParamCoupling.sync(slot, "amp_gain", Float.NaN);
+        assertEquals(-600, (int) slot.extraParams.get("amp_peak"));
+
+        // Nor while Allow Clipping makes New Peak inapplicable.
+        slot.extraParams.put("amp_clip", 1);
+        FxParamCoupling.sync(slot, "amp_gain", -12.0f);
+        assertEquals(-600, (int) slot.extraParams.get("amp_peak"));
+    }
 }

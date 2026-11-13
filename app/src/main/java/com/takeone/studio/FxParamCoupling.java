@@ -10,6 +10,15 @@ final class FxParamCoupling {
     }
 
     static void sync(DspChain.EffectSlot slot, String changedId) {
+        sync(slot, changedId, Float.NaN);
+    }
+
+    /**
+     * @param peakDb currently selected audio peak in dBFS, used to keep
+     *               Amplify's gain and New Peak controls consistent. Pass
+     *               {@link Float#NaN} while the peak has not been measured.
+     */
+    static void sync(DspChain.EffectSlot slot, String changedId, float peakDb) {
         if (slot == null || changedId == null) return;
         if (slot.type == DspChain.EffectType.CHANGE_TEMPO) {
             int from = slot.extraParams.containsKey("tempo_bpmfrom")
@@ -40,6 +49,22 @@ final class FxParamCoupling {
                 int rawSpeed = (int) Math.round(
                         100.0 * (1.0 + rawPct / 10000.0));
                 slot.value = Math.max(25, Math.min(400, rawSpeed));
+            }
+        } else if (slot.type == DspChain.EffectType.AMPLIFY) {
+            // amp_peak is inactive while Allow Clipping is on, and the pair can
+            // only be kept consistent once the source peak is known.
+            Integer clip = slot.extraParams.get("amp_clip");
+            if (clip != null && clip != 0) return;
+            if (Float.isNaN(peakDb) || peakDb <= -119.9f) return;
+            int peakRaw = Math.round(peakDb * 100f);
+            if ("amp_gain".equals(changedId)) {
+                slot.extraParams.put("amp_peak",
+                        Math.max(-4000, Math.min(0, peakRaw + slot.value)));
+            } else if ("amp_peak".equals(changedId)) {
+                Integer target = slot.extraParams.get("amp_peak");
+                int targetRaw = target != null ? target : 0;
+                slot.value = Math.max(-5000,
+                        Math.min(5000, targetRaw - peakRaw));
             }
         }
     }

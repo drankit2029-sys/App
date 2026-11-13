@@ -101,6 +101,12 @@ public class StudioFragment extends Fragment {
      * painting stale bars.
      */
     private int fxPreviewGeneration = 0;
+    /**
+     * Peak (dBFS) of the frozen FX apply target, measured off the UI thread
+     * when the rack opens. Amplify uses it to keep Gain and New Peak in step.
+     */
+    private volatile float fxSelectionPeakDb = Float.NaN;
+    private int fxSelectionPeakScanGeneration = 0;
     private final java.util.Set<DspChain.EffectSlot> fxAdvancedOpen =
             java.util.Collections.newSetFromMap(
                     new java.util.IdentityHashMap<DspChain.EffectSlot, Boolean>());
@@ -1431,9 +1437,9 @@ public class StudioFragment extends Fragment {
      * processors also handle unsynced programmatic values defensively, but the
      * UI should never present two contradictory tempo/speed readings.
      */
-    private static void syncCoupledFxParams(DspChain.EffectSlot slot,
-                                            String changedId) {
-        FxParamCoupling.sync(slot, changedId);
+    private void syncCoupledFxParams(DspChain.EffectSlot slot,
+                                     String changedId) {
+        FxParamCoupling.sync(slot, changedId, fxSelectionPeakDb);
     }
 
     /** Inline size / speed / words-per-line controls, plus zoom. */
@@ -3634,6 +3640,7 @@ public class StudioFragment extends Fragment {
             rebuildFxRackList();
             paintFxPanelControls();
             refreshFxPreviewPeaks();
+            scanFxSelectionPeakAsync();
         } else {
             // Cancel any in-flight render and put the dry waveform back: the
             // effect-applied bars only exist inside effects mode.
@@ -3648,6 +3655,51 @@ public class StudioFragment extends Fragment {
             if (waveform != null) waveform.clearFxRegion();
         }
         paintEditorStrip();
+    }
+
+    /**
+     * Measures the peak of the frozen FX apply target in the background.
+     *
+     * <p>Amplify exposes the same gain two ways (Amplification and New Peak
+     * Amplitude). Keeping the pair consistent needs the source peak, and
+     * scanning a long take must never block the UI thread. The result is only
+     * published while this rack session is still open and unobsoleted.
+     */
+    private void scanFxSelectionPeakAsync() {
+        final int gen = ++fxSelectionPeakScanGeneration;
+        fxSelectionPeakDb = Float.NaN;
+        if (engine == null) return;
+        final File raw = engine.rawFile;
+        final long total = engine.totalFrames();
+        if (raw == null || !raw.exists() || total <= 0) return;
+        final long start = Math.max(0L,
+                Math.min(total, Math.round(fxApplyTargetStart * total)));
+        final long end = Math.max(start,
+                Math.min(total, Math.round(fxApplyTargetEnd * total)));
+        if (end <= start) return;
+        new Thread(() -> {
+            final float[] peak = {0f};
+            try {
+                EditEngine.forEachFloatChunk(raw, start, end,
+                        AudioProcessor.DEFAULT_DSP_CHUNK_FRAMES,
+                        (chunk, frames, ch, frameOffset) -> {
+                            float p = HardwareApiManager.get()
+                                    .computeChunkPeak(chunk, frames * ch);
+                            if (p > peak[0]) peak[0] = p;
+                        });
+            } catch (Exception ignored) {
+                return;
+            }
+            final float db = peak[0] > 1e-7f
+                    ? Dsp.linToDb(peak[0]) : -120f;
+            handler.post(() -> {
+                if (!isAdded() || !fxPanelOpen
+                        || gen != fxSelectionPeakScanGeneration) {
+                    return;
+                }
+                fxSelectionPeakDb = db;
+            });
+        }, "fx-selection-peak").start();
     }
 
     /**
