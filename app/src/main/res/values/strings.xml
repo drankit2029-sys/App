@@ -6,6 +6,7 @@
     <string name="library_empty_title">No takes yet</string>
     <string name="library_empty_sub">Tap the mic button to record your first take in the studio.</string>
     <string name="studio_title">Studio</string>
+    <string name="studio_empty_hint">Pick a take from the library to edit it, or tap the record button to start a new take.</string>
     <string name="studio_ready">Ready to record</string>
     <string name="studio_recording">Recording</string>
     <string name="studio_paused">Paused</string>

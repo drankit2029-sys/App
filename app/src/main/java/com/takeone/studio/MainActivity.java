@@ -31,6 +31,10 @@ public class MainActivity extends AppCompatActivity {
     private long lastFabPress;
     private long lastStopPress;
     private OnBackPressedCallback backCallback;
+    /** Non-null on sw600dp+ tablets: second pane hosting the studio. */
+    private FrameLayout studioContainer;
+    private View studioEmpty;
+    private boolean twoPane;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -39,6 +43,13 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         applyOrientationPolicy(getResources().getConfiguration());
         setContentView(R.layout.activity_main);
+        studioContainer = findViewById(R.id.studioContainer);
+        studioEmpty = findViewById(R.id.studioEmpty);
+        twoPane = studioContainer != null;
+        if (twoPane && studioEmpty != null
+                && getSupportFragmentManager().findFragmentByTag("STU") != null) {
+            studioEmpty.setVisibility(View.GONE);
+        }
 
         fabWrap = findViewById(R.id.fabWrap);
         fabHalo = findViewById(R.id.fabHalo);
@@ -285,11 +296,7 @@ public class MainActivity extends AppCompatActivity {
         inStudio = true;
         AdMobManager.get(this).preloadInterstitial();
         syncFabWithEngine();
-        getSupportFragmentManager().beginTransaction()
-                .setCustomAnimations(R.anim.slide_in_right, R.anim.fade_out,
-                        R.anim.fade_in, R.anim.slide_out_right)
-                .replace(R.id.container, new StudioFragment(), "STU")
-                .commit();
+        showStudio(new StudioFragment());
     }
 
     public void openStudioWithRecovery(File rawFile) {
@@ -316,6 +323,19 @@ public class MainActivity extends AppCompatActivity {
             b.putString("edit_source_title", editSourceTitle);
         }
         f.setArguments(b);
+        showStudio(f);
+    }
+
+    private void showStudio(StudioFragment f) {
+        if (twoPane && studioContainer != null) {
+            if (studioEmpty != null) studioEmpty.setVisibility(View.GONE);
+            getSupportFragmentManager().beginTransaction()
+                    .setCustomAnimations(R.anim.fade_in, R.anim.fade_out,
+                            R.anim.fade_in, R.anim.fade_out)
+                    .replace(R.id.studioContainer, f, "STU")
+                    .commitAllowingStateLoss();
+            return;
+        }
         getSupportFragmentManager().beginTransaction()
                 .setCustomAnimations(R.anim.slide_in_right, R.anim.fade_out,
                         R.anim.fade_in, R.anim.slide_out_right)
@@ -326,6 +346,17 @@ public class MainActivity extends AppCompatActivity {
     public void exitStudio() {
         inStudio = false;
         syncFabWithEngine();
+        if (twoPane) {
+            Fragment stu = getSupportFragmentManager().findFragmentByTag("STU");
+            androidx.fragment.app.FragmentTransaction tx =
+                    getSupportFragmentManager().beginTransaction()
+                            .setCustomAnimations(R.anim.fade_in, R.anim.fade_out,
+                                    R.anim.fade_in, R.anim.fade_out);
+            if (stu != null) tx.remove(stu);
+            tx.commitAllowingStateLoss();
+            if (studioEmpty != null) studioEmpty.setVisibility(View.VISIBLE);
+            return;
+        }
         getSupportFragmentManager().beginTransaction()
                 .setCustomAnimations(R.anim.fade_in, R.anim.slide_out_right,
                         R.anim.slide_in_right, R.anim.fade_out)
