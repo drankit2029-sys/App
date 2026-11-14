@@ -128,4 +128,20 @@ final class MultiDelayProcessor extends AudioProcessor {
             if (++writePos >= cap) writePos = 0;
         }
     }
+
+    @Override
+    public boolean isParamApplicable(String paramId,
+                                     java.util.Map<String, Integer> values) {
+        if ("md_type".equals(paramId) || "md_tchange".equals(paramId)) {
+            int echoes = values != null && values.containsKey("md_echoes")
+                    ? values.get("md_echoes") : 3;
+            if (echoes <= 1) {
+                if ("md_type".equals(paramId)) return false;
+                int mode = values != null && values.containsKey("md_type")
+                        ? values.get("md_type") : 0;
+                return mode != 0;
+            }
+        }
+        return true;
+    }
 }

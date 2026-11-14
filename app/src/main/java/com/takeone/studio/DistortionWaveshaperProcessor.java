@@ -155,4 +155,15 @@ final class DistortionWaveshaperProcessor extends AudioProcessor {
         }
         toneLp.process(buf, frames, ch);
     }
+
+    @Override
+    public boolean isParamApplicable(String paramId,
+                                     java.util.Map<String, Integer> values) {
+        if ("dist_param".equals(paramId)) {
+            int curve = values != null && values.containsKey("dist_type")
+                    ? values.get("dist_type") : 1;
+            if (curve == 0 || curve == 2) return false;
+        }
+        return true;
+    }
 }

@@ -6,6 +6,8 @@ package com.takeone.studio;
  */
 final class DeEsserProcessor extends AudioProcessor {
 
+    private float[] sibScratch;
+
     private static final String[] MODE_LABELS = {"Split-Band", "Broadband"};
 
     private final FxParameter freq = addParameter(FxParameter.intParam(
@@ -77,7 +79,11 @@ final class DeEsserProcessor extends AudioProcessor {
         if (!isEnabled() || buf == null || frames <= 0) return;
         int ch = Math.max(1, Math.min(2, channels));
         rebuild(ch);
-        float[] sib = buf.clone();
+        if (sibScratch == null || sibScratch.length < buf.length) {
+            sibScratch = new float[buf.length];
+        }
+        float[] sib = sibScratch;
+        System.arraycopy(buf, 0, sib, 0, buf.length);
         bp.process(sib, frames, ch);
 
         float threshLin = Dsp.dbToLin(threshold.getFloat());

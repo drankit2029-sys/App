@@ -481,7 +481,8 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
         }
         h.formatBadge.setText(t.format);
         h.play.setImageResource((playing && !paused) ? R.drawable.ic_pause : R.drawable.ic_play);
-        h.play.setContentDescription(h.itemView.getContext().getString(R.string.cd_play));
+        h.play.setContentDescription(h.itemView.getContext().getString(
+                playing && !paused ? R.string.cd_pause : R.string.cd_play));
 
         // Professional heart: outline idle, filled red favorite, with a pop on tap.
         // Converting rows have no stored row to favorite: hide the control.

@@ -42,8 +42,8 @@
 
         <ImageView
             android:id="@+id/importBtn"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
             android:layout_marginEnd="8dp"
             android:background="@drawable/bg_icon_circle"
             android:clickable="true"
@@ -54,8 +54,8 @@
 
         <ImageView
             android:id="@+id/searchToggle"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
             android:background="@drawable/bg_icon_circle"
             android:clickable="true"
             android:focusable="true"
@@ -65,8 +65,8 @@
 
         <ImageView
             android:id="@+id/sortBtn"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
             android:layout_marginStart="8dp"
             android:background="@drawable/bg_icon_circle"
             android:clickable="true"
@@ -74,6 +74,18 @@
             android:contentDescription="@string/sort_by"
             android:padding="11dp"
             android:src="@drawable/ic_sort" />
+
+        <ImageView
+            android:id="@+id/infoBtn"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_marginStart="8dp"
+            android:background="@drawable/bg_icon_circle"
+            android:clickable="true"
+            android:focusable="true"
+            android:contentDescription="@string/cd_info"
+            android:padding="10dp"
+            android:src="@drawable/ic_info" />
     </LinearLayout>
 
     <!-- Selection action bar -->
@@ -91,8 +103,8 @@
 
         <ImageView
             android:id="@+id/selClose"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
             android:background="@drawable/bg_icon_circle"
             android:clickable="true"
             android:focusable="true"
@@ -125,8 +137,8 @@
 
         <ImageView
             android:id="@+id/selExport"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
             android:background="@drawable/bg_icon_circle"
             android:clickable="true"
             android:focusable="true"
@@ -136,8 +148,8 @@
 
         <ImageView
             android:id="@+id/selDelete"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
             android:layout_marginStart="4dp"
             android:background="@drawable/bg_icon_danger"
             android:clickable="true"
@@ -171,7 +183,7 @@
         <EditText
             android:id="@+id/searchInput"
             android:layout_width="0dp"
-            android:layout_height="44dp"
+            android:layout_height="48dp"
             android:layout_marginStart="8dp"
             android:layout_weight="1"
             android:background="@null"
@@ -185,8 +197,8 @@
 
         <ImageView
             android:id="@+id/searchClear"
-            android:layout_width="36dp"
-            android:layout_height="36dp"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
             android:contentDescription="@string/clear_search"
             android:padding="9dp"
             android:src="@drawable/ic_close"
@@ -213,7 +225,7 @@
             <TextView
                 android:id="@+id/chipAll"
                 android:layout_width="wrap_content"
-                android:layout_height="36dp"
+                android:layout_height="48dp"
                 android:background="@drawable/bg_chip"
                 android:clickable="true"
                 android:focusable="true"
@@ -228,7 +240,7 @@
             <TextView
                 android:id="@+id/chipFav"
                 android:layout_width="wrap_content"
-                android:layout_height="36dp"
+                android:layout_height="48dp"
                 android:layout_marginStart="8dp"
                 android:background="@drawable/bg_chip"
                 android:clickable="true"
@@ -243,7 +255,7 @@
             <TextView
                 android:id="@+id/chipDay"
                 android:layout_width="wrap_content"
-                android:layout_height="36dp"
+                android:layout_height="48dp"
                 android:layout_marginStart="8dp"
                 android:background="@drawable/bg_chip"
                 android:clickable="true"
@@ -258,7 +270,7 @@
             <TextView
                 android:id="@+id/chipWeek"
                 android:layout_width="wrap_content"
-                android:layout_height="36dp"
+                android:layout_height="48dp"
                 android:layout_marginStart="8dp"
                 android:background="@drawable/bg_chip"
                 android:clickable="true"
@@ -273,7 +285,7 @@
             <TextView
                 android:id="@+id/chipShort"
                 android:layout_width="wrap_content"
-                android:layout_height="36dp"
+                android:layout_height="48dp"
                 android:layout_marginStart="8dp"
                 android:background="@drawable/bg_chip"
                 android:clickable="true"
@@ -288,7 +300,7 @@
             <TextView
                 android:id="@+id/chipWav"
                 android:layout_width="wrap_content"
-                android:layout_height="36dp"
+                android:layout_height="48dp"
                 android:layout_marginStart="8dp"
                 android:background="@drawable/bg_chip"
                 android:clickable="true"
@@ -303,7 +315,7 @@
             <TextView
                 android:id="@+id/chipFlac"
                 android:layout_width="wrap_content"
-                android:layout_height="36dp"
+                android:layout_height="48dp"
                 android:layout_marginStart="8dp"
                 android:background="@drawable/bg_chip"
                 android:clickable="true"
@@ -318,7 +330,7 @@
             <TextView
                 android:id="@+id/chipOpus"
                 android:layout_width="wrap_content"
-                android:layout_height="36dp"
+                android:layout_height="48dp"
                 android:layout_marginStart="8dp"
                 android:background="@drawable/bg_chip"
                 android:clickable="true"
@@ -333,7 +345,7 @@
             <TextView
                 android:id="@+id/chipAmr"
                 android:layout_width="wrap_content"
-                android:layout_height="36dp"
+                android:layout_height="48dp"
                 android:layout_marginStart="8dp"
                 android:background="@drawable/bg_chip"
                 android:clickable="true"
@@ -348,7 +360,7 @@
             <TextView
                 android:id="@+id/chipM4a"
                 android:layout_width="wrap_content"
-                android:layout_height="36dp"
+                android:layout_height="48dp"
                 android:layout_marginStart="8dp"
                 android:background="@drawable/bg_chip"
                 android:clickable="true"

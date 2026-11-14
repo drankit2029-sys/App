@@ -660,16 +660,14 @@ public class TeleValue extends LinearLayout {
             input.setOnEditorActionListener((v2, actionId, ev) -> {
                 if (actionId == android.view.inputmethod.EditorInfo
                         .IME_ACTION_DONE) {
-                    commitTyped(input);
-                    d.dismiss();
+                    if (commitTyped(input)) d.dismiss();
                     return true;
                 }
                 return false;
             });
             cancelBtn.setOnClickListener(v -> d.dismiss());
             okBtn.setOnClickListener(v -> {
-                commitTyped(input);
-                d.dismiss();
+                if (commitTyped(input)) d.dismiss();
             });
             styleModalWindow(d);
             Window w = d.getWindow();
@@ -697,18 +695,28 @@ public class TeleValue extends LinearLayout {
         }
     }
 
-    /** Parses and commits the typed value exactly once. */
-    private void commitTyped(EditText input) {
+    /** Parses and commits the typed value exactly once.
+     * @return true when the dialog may close */
+    private boolean commitTyped(EditText input) {
         try {
             String raw = input.getText().toString().trim();
-            if (raw.isEmpty()) return;
+            if (raw.isEmpty()) {
+                input.setError(null);
+                return true;
+            }
             int v = valueScale > 1
                     ? (int) Math.round(Double.parseDouble(raw) * valueScale)
                     : Integer.parseInt(raw);
             // Typed entry must honor the same step grid as scrubbing.
             if (step > 1) v = Math.round(v / (float) step) * step;
             setValue(v, true);
-        } catch (Exception ignored) {
+            input.setError(null);
+            return true;
+        } catch (Exception e) {
+            input.setError(getContext() != null
+                    ? getContext().getString(R.string.tele_value_invalid)
+                    : "Enter a number");
+            return false;
         }
     }
 

@@ -71,16 +71,14 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
     private static final String KEY_ENTITLED_PLAN       = "entitled_pro_plan";
 
     /**
-     * ADS-SUPPORTED FREE RELEASE SWITCH: while {@code false}, the Google Play
-     * Billing paywall is disabled across the app and all currently implemented
-     * Studio editing and DSP tools are unlocked for free (monetized via
-     * {@link AdMobManager}). Flip {@link #PAYWALL_ENABLED} to {@code true} and
-     * {@link #DEBUG_FORCE_PRO} to {@code false} in future releases to gate
-     * upcoming Pro features (hardware mic switching, multi-channel editing).
+     * ADS-SUPPORTED FREE RELEASE: while {@link #PAYWALL_ENABLED} is false,
+     * the Google Play Billing paywall is disabled across the app and all
+     * Studio editing and DSP tools are unlocked for free. Debug builds always
+     * force Pro on so internal testing is never blocked by a paywall.
      */
-    public static final boolean PAYWALL_ENABLED = false;
+    public static final boolean PAYWALL_ENABLED = !BuildConfig.DEBUG;
 
-    private static final boolean DEBUG_FORCE_PRO = true;
+    private static final boolean DEBUG_FORCE_PRO = BuildConfig.DEBUG;
 
     public static boolean isPaywallEnabled() {
         return PAYWALL_ENABLED;
@@ -670,6 +668,15 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
         });
     }
 
+    /** True when the purchase concerns one of the entitlement SKUs. */
+    private static boolean isEntitlementSku(Purchase p) {
+        if (p == null) return false;
+        for (String sku : p.getProducts()) {
+            if (SKU_MONTHLY.equals(sku) || SKU_LIFETIME.equals(sku)) return true;
+        }
+        return false;
+    }
+
     public void refreshPurchasesAsync() {
         try {
             if (billingClient == null || !billingClient.isReady()) return;
@@ -701,7 +708,8 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
                         if (res.getResponseCode() == BillingClient.BillingResponseCode.OK
                                 && list != null) {
                             for (Purchase p : list) {
-                                if (p.getPurchaseState() == Purchase.PurchaseState.PURCHASED) {
+                                if (p.getPurchaseState() == Purchase.PurchaseState.PURCHASED
+                                        && isEntitlementSku(p)) {
                                     foundSub[0] = true;
                                     if (!p.getProducts().isEmpty()) {
                                         activeSku[0] = p.getProducts().get(0);
@@ -723,7 +731,7 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
                         if (res.getResponseCode() == BillingClient.BillingResponseCode.OK
                                 && list != null) {
                             for (Purchase p : list) {
-                                if (p.getPurchaseState() == Purchase.PurchaseState.PURCHASED) {
+                                if (p.getPurchaseState() == Purchase.PurchaseState.PURCHASED && isEntitlementSku(p)) {
                                     foundInApp[0] = true;
                                     if (!p.getProducts().isEmpty()) {
                                         activeSku[0] = p.getProducts().get(0);
@@ -782,7 +790,8 @@ public final class TrialAndBillingManager implements PurchasesUpdatedListener {
         if (res.getResponseCode() == BillingClient.BillingResponseCode.OK
                 && purchases != null) {
             for (Purchase p : purchases) {
-                if (p.getPurchaseState() == Purchase.PurchaseState.PURCHASED) {
+                if (p.getPurchaseState() == Purchase.PurchaseState.PURCHASED
+                        && isEntitlementSku(p)) {
                     String sku = p.getProducts().isEmpty()
                             ? SKU_LIFETIME : p.getProducts().get(0);
                     setEntitledPro(true, sku);

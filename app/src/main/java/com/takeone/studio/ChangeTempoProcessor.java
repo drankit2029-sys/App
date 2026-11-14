@@ -73,10 +73,8 @@ final class ChangeTempoProcessor extends AudioProcessor {
         int from = bpmFrom.getCurrentRaw();
         int to = bpmTo.getCurrentRaw();
         double rPct = 1.0 + (pct / 100.0);
-        double rBpm = (from > 1 && to > 1) ? ((double) to / from) : 1.0;
-        double ratio = Math.abs(rPct - rBpm) < 1e-3
-                ? rPct
-                : rPct * rBpm;
+        boolean bpmPair = from > 1 && to > 1 && from != to;
+        double ratio = bpmPair ? ((double) to / from) : rPct;
         return Math.max(0.05, Math.min(20.0, 1.0 / Math.max(0.05, ratio)));
     }
 

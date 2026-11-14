@@ -269,6 +269,10 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
 
         v.findViewById(R.id.searchToggle).setOnClickListener(view -> toggleSearch());
         v.findViewById(R.id.sortBtn).setOnClickListener(this::showSortMenu);
+        v.findViewById(R.id.infoBtn).setOnClickListener(btn ->
+                OptionsSheet.showInfo(requireContext(),
+                        getString(R.string.privacy_title),
+                        getString(R.string.privacy_body)));
         View importBtn = v.findViewById(R.id.importBtn);
         if (importBtn != null) {
             importBtn.setOnClickListener(view -> {
@@ -1113,44 +1117,61 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                 return;
             }
             try {
-                player = new MediaPlayer();
-                player.setDataSource(take.filePath);
-                player.prepare();
-                if (startPos > 0) {
-                    try {
-                        player.seekTo((int) Math.min(startPos, player.getDuration()));
-                    } catch (Exception ignored) {}
-                }
+                MediaPlayer p = new MediaPlayer();
+                player = p;
+                p.setDataSource(take.filePath);
+                // Async prepare: the synchronous call blocks the UI for files
+                // on removable/slow storage (ANR).
+                p.setOnErrorListener((mp, what, extra) -> {
+                    snackText(getString(R.string.couldnt_play));
+                    stopPlayback();
+                    return true;
+                });
                 final long id = take.id;
-                player.setOnCompletionListener(mp -> {
-                    // Loop while the user is still scrubbing; otherwise finish.
-                    if (adapter.isTracking(id, list)) {
+                final boolean[] started = {false};
+                p.setOnPreparedListener(mp -> {
+                    if (player != mp) return;
+                    started[0] = true;
+                    if (startPos > 0) {
                         try {
-                            mp.seekTo(0);
-                            mp.start();
-                        } catch (Exception e) {
+                            mp.seekTo((int) Math.min(startPos, mp.getDuration()));
+                        } catch (Exception ignored) {}
+                    }
+                    mp.setOnCompletionListener(done -> {
+                        if (adapter.isTracking(id, list)) {
+                            try {
+                                done.seekTo(0);
+                                done.start();
+                            } catch (Exception e) {
+                                completePlayback(id);
+                            }
+                        } else {
                             completePlayback(id);
                         }
-                    } else {
-                        completePlayback(id);
-                    }
+                    });
+                    mp.start();
+                    simMode = false;
+                    finalizePlaybackStart(id, startPos);
                 });
-                player.start();
-                simMode = false;
+                p.prepareAsync();
             } catch (Exception e) {
                 stopPlayback();
                 return;
             }
+            return;
         } else {
-            simMode = true;
-            simBase = Math.min(startPos, take.durationMs);
-            simStartedAt = SystemClock.elapsedRealtime();
+            snackText(getString(R.string.no_audio_file));
+            return;
         }
-        playingId = take.id;
+        finalizePlaybackStart(take.id, startPos);
+    }
+
+    private void finalizePlaybackStart(long takeId, long startPos) {
+        playingId = takeId;
         playPaused = false;
         // Drop any stale near-end position so replay starts exactly at startPos
         // instead of snapping to where the last playthrough left off.
-        adapter.setProgress(list, take.id, startPos);
+        adapter.setProgress(list, takeId, startPos);
         adapter.expandDirectIfNeeded(list, take.id);
         adapter.paintPlayState(list, playingId, false);
         AdMobManager.get(requireContext()).setAudioPlaybackActive(true);
@@ -2000,8 +2021,13 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             String authority = requireContext().getPackageName() + ".fileprovider";
             ArrayList<Uri> uris = new ArrayList<>();
             for (Take t : takes) {
-                uris.add(FileProvider.getUriForFile(requireContext(), authority,
-                        new File(t.filePath)));
+                File f = new File(t.filePath);
+                if (!f.exists() || f.length() == 0) continue;
+                uris.add(FileProvider.getUriForFile(requireContext(), authority, f));
+            }
+            if (uris.isEmpty()) {
+                snackText(getString(R.string.no_audio_file));
+                return;
             }
             Intent intent;
             if (uris.size() == 1) {

@@ -166,6 +166,10 @@ final class PaulstretchProcessor extends AudioProcessor {
         int outHop = Math.max(128, activeWin / 2);
         double inStep = outHop / Math.max(0.1, stretch);
         long outFrames = Math.max(1L, Math.round(frames * stretch));
+        long maxOutFrames = (sr > 0 ? sr : 48000L) * 3600L * 4L;
+        if (outFrames > maxOutFrames) {
+            return -1L;
+        }
         long frameBytes = ch * 4L;
         int winPad = (fftSize - activeWin) / 2;
 
@@ -234,9 +238,35 @@ final class PaulstretchProcessor extends AudioProcessor {
                 }
 
                 int emit = (int) Math.min((long) outHop, outFrames - outPos);
+                float[] dryWin = mix < 1f ? new float[(emit + 2) * ch] : null;
+                if (dryWin != null) {
+                    long d0 = startFrame + (long) (outPos / Math.max(0.1, stretch));
+                    long d1 = startFrame
+                            + (long) ((outPos + emit - 1) / Math.max(0.1, stretch)) + 1;
+                    int dLen = (int) Math.min(frames, Math.max(0L, d1 - d0 + 1));
+                    if (dLen > 0) {
+                        byte[] db = new byte[dLen * ch * 4];
+                        inRaf.seek(info.dataStart + d0 * frameBytes);
+                        inRaf.readFully(db, 0, dLen * ch * 4);
+                        ByteBuffer.wrap(db, 0, dLen * ch * 4)
+                                .order(ByteOrder.LITTLE_ENDIAN)
+                                .asFloatBuffer()
+                                .get(dryWin, 0, Math.min(dLen * ch, dryWin.length));
+                    }
+                }
                 for (int f = 0; f < emit; f++) {
                     for (int c = 0; c < ch; c++) {
-                        hopOut[f * ch + c] = ola[c][f] * mix;
+                        float drySample = 0f;
+                        if (dryWin != null) {
+                            double p = (outPos + f) / Math.max(0.1, stretch)
+                                    - (outPos / Math.max(0.1, stretch));
+                            int i0 = (int) p;
+                            float frac = (float) (p - i0);
+                            int a = Math.max(0, Math.min((emit + 1), i0)) * ch + c;
+                            int b = Math.max(0, Math.min((emit + 1), i0 + 1)) * ch + c;
+                            drySample = dryWin[a] * (1f - frac) + dryWin[b] * frac;
+                        }
+                        hopOut[f * ch + c] = ola[c][f] * mix + drySample * (1f - mix);
                     }
                 }
                 Dsp.writeFloatsLE(outRaf, hopOut, 0, emit * ch);

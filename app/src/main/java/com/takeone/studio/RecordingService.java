@@ -76,6 +76,31 @@ public class RecordingService extends Service {
     private long lastChronoBaseMs = 0L;
 
     private AudioManager audioManager;
+    private android.os.PowerManager.WakeLock wakeLock;
+
+    private void acquireWakeLock() {
+        if (wakeLock != null && wakeLock.isHeld()) return;
+        try {
+            android.os.PowerManager pm = (android.os.PowerManager)
+                    getSystemService(Context.POWER_SERVICE);
+            if (pm == null) return;
+            android.os.PowerManager.WakeLock wl = pm.newWakeLock(
+                    android.os.PowerManager.PARTIAL_WAKE_LOCK,
+                    "takeone:recording");
+            wl.setReferenceCounted(false);
+            wl.acquire();
+            wakeLock = wl;
+        } catch (Throwable ignored) {}
+    }
+
+    private void releaseWakeLock() {
+        android.os.PowerManager.WakeLock wl = wakeLock;
+        wakeLock = null;
+        if (wl == null) return;
+        try {
+            if (wl.isHeld()) wl.release();
+        } catch (Throwable ignored) {}
+    }
     private AudioManager.OnAudioFocusChangeListener focusListener;
 
     public static void start(Context ctx, String presetId) {
@@ -157,6 +182,7 @@ public class RecordingService extends Service {
             registerFocus();
             startFg();
             startTick();
+            acquireWakeLock();
         } else if (ACTION_TOGGLE.equals(a)) {
             doToggle();
         } else if (ACTION_SAVE.equals(a)) {
@@ -170,6 +196,16 @@ public class RecordingService extends Service {
     @Override
     public void onDestroy() {
         if (activeInstance == this) activeInstance = null;
+        // The system may tear the FGS down mid-take (OEM process manager,
+        // FGS timeout racing a trim): pause cleanly before leaving so the
+        // WAV header and the .pending recovery marker stay consistent.
+        try {
+            RecordingEngine e = RecordingEngine.get();
+            if (e.state == RecordingEngine.State.RECORDING) {
+                e.pauseCapture();
+            }
+        } catch (Throwable ignored) {}
+        releaseWakeLock();
         stopTick();
         abandonFocus();
         super.onDestroy();
@@ -201,6 +237,7 @@ public class RecordingService extends Service {
                 e.pauseCapture();
             }
         } catch (Throwable ignored) {}
+        releaseWakeLock();
         stopTick();
         abandonFocus();
         HardwareApiManager.get().stopForegroundCompat(this, true);

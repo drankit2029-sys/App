@@ -468,6 +468,19 @@ public final class ConversionJobs {
                                                      long explicitRecordingId) {
         ConversionJob existing = forRaw(raw.getAbsolutePath());
         if (existing != null) return existing;
+        // Refuse early with the size estimate instead of dying three hours
+        // into an encoder on a full disk.
+        SaveFormat fmt = SaveFormat.of(
+                format != null ? format.id : SaveFormat.AUTO.id);
+        RecordPreset effPreset = preset != null ? preset : RecordPreset.MEMO;
+        long estBytes = (Math.max(durationMs, 1000) / 60000L + 1)
+                * fmt.bytesPerMinute(effPreset);
+        File effDir = RecordingEngine.takesDir(ctx);
+        if (!RecordingEngine.hasDiskRoom(effDir, estBytes + estBytes / 4)) {
+            throw new IllegalStateException(
+                    "Not enough free storage to save (need about "
+                            + ((estBytes * 5 / 4) / (1024L * 1024L)) + " MB)");
+        }
         RecordingEngine e = RecordingEngine.get();
         // AUDIT-3-02 fix: read the geometry from the `raw` file itself.
         // The engine may be idle/cleared (dataBytes 0, channels back to its
@@ -656,6 +669,16 @@ public final class ConversionJobs {
         fireChanged();
     }
 
+    /** Toast posted to the UI thread from the save worker. */
+    private static void postSaveToast(Context ctx, String text) {
+        if (ctx == null || text == null) return;
+        try {
+            new android.os.Handler(android.os.Looper.getMainLooper()).post(() ->
+                    android.widget.Toast.makeText(ctx, text,
+                            android.widget.Toast.LENGTH_LONG).show());
+        } catch (Throwable ignored) {}
+    }
+
     static synchronized void markDone(ConversionJob job) {
         job.state = ConversionJob.DONE;
         job.progress = 100;
@@ -672,6 +695,24 @@ public final class ConversionJobs {
         ACTIVE.remove(job.jobId);
         job.deleteSidecar();
         fireChanged();
+    }
+
+    /**
+     * Records that the raw's sidecar job already produced `fin` (part→final
+     * rename completed). The sweep drops such jobs silently instead of
+     * re-encoding the whole take into a duplicate file.
+     */
+    public static void recordAdopted(File raw, File fin) {
+        if (raw == null || fin == null) return;
+        ConversionJob job = ConversionJob.read(ConversionJob.sidecarFor(raw));
+        if (job == null) return;
+        job.adoptedPath = fin.getAbsolutePath();
+        job.state = ConversionJob.DONE;
+        job.progress = 100;
+        job.updatedAt = System.currentTimeMillis();
+        try {
+            job.write();
+        } catch (Exception ignored) {}
     }
 
     /**
@@ -732,6 +773,16 @@ public final class ConversionJobs {
                 continue;
             }
             liveParts.add(job.partPath);
+            // A completed-but-crashed adoption must not re-encode.
+            if (job.adoptedPath != null) {
+                try {
+                    // noinspection ResultOfMethodCallIgnored
+                    new File(job.partPath).delete();
+                } catch (Exception ignored) {}
+                // noinspection ResultOfMethodCallIgnored
+                f.delete();
+                continue;
+            }
             // Already tracked in memory (RUNNING or QUEUED): keep the live
             // instance. Replacing it reset progress to 0 and let the queue run
             // the same jobId twice, the second run reporting a false failure
@@ -757,6 +808,13 @@ public final class ConversionJobs {
             }
             if (job.recordingId <= 0) {
                 job.recordingId = TakesRepository.allocateId();
+            }
+            job.attempts++;
+            if (job.attempts >= 3) {
+                // Three native crashes is a broken codec, not a bad file:
+                // stop the loop and surface the failure.
+                markFailed(job, "conversion crashed repeatedly");
+                continue;
             }
             job.state = ConversionJob.QUEUED;
             job.cancelled = false;
@@ -892,6 +950,14 @@ public final class ConversionJobs {
                     }
                 } catch (Exception ex) {
                     CrashLog.breadcrumb(ctx, "dispatchSave wav32 fx bake failed: " + ex);
+                    try {
+                        RecordingEngine.writePendingMarker(raw, title,
+                                Math.max(1, e.channels));
+                    } catch (Exception ignored2) {}
+                    e.setFxBakeRequired(false);
+                    throw new IllegalStateException(
+                            "effect chain could not be applied; take was not saved",
+                            ex);
                 }
                 e.setFxBakeRequired(false);
             }
@@ -902,6 +968,8 @@ public final class ConversionJobs {
                 if (!fin.getAbsolutePath().equals(rawOrigPath)) {
                     if (!raw.renameTo(fin)) {
                         fin = raw;
+                    } else {
+                        ConversionJobs.recordAdopted(raw, fin);
                     }
                 } else {
                     fin = raw;
@@ -932,11 +1000,8 @@ public final class ConversionJobs {
                 } catch (Exception ignored) {}
                 sess = null;
             }
-            // Enqueue the background job FIRST so the Library shows the
-            // converting card at 0% immediately instead of staying blank
-            // while the full-file DSP bake runs.
-            ConversionJob prequeued = enqueue(ctx, raw, title, preset, format,
-                    dur, replaceTakeId, replaceTitle, recordingId);
+            // Bake FIRST; only then enqueue the job. The worker can never
+            // convert the unbaked raw, even if the process dies mid-bake.
             try {
                 if (ctx != null) {
                     DspChain.Config cfg = DspChain.Config.load(ctx);
@@ -967,8 +1032,19 @@ public final class ConversionJobs {
                 }
             } catch (Exception ex) {
                 CrashLog.breadcrumb(ctx, "dispatchSave fx bake failed: " + ex);
+                try {
+                    RecordingEngine.writePendingMarker(raw, title,
+                            Math.max(1, e.channels));
+                } catch (Exception ignored2) {}
+                e.setFxBakeRequired(false);
+                throw new IllegalStateException(
+                        "effect chain could not be applied; take was not saved",
+                        ex);
             }
             e.setFxBakeRequired(false);
+            ConversionJob prequeued = enqueue(ctx, raw, title, preset, format,
+                    Math.max(e.durationMs(), 1000), replaceTakeId,
+                    replaceTitle, recordingId);
             // noinspection ResultOfMethodCallIgnored
             new File(raw.getAbsolutePath() + ".pending").delete();
             if (cb != null) cb.onProgress(0);
@@ -997,6 +1073,8 @@ public final class ConversionJobs {
                     if (eff == SaveFormat.FLAC
                             && TakeSaver.flacLooksIneffective(part.length(),
                             raw.length())) {
+                        postSaveToast(ctx,
+                                "FLAC unavailable on this device; saved as 24-bit WAV instead");
                         throw new IllegalStateException(
                                 "flac ineffective; fallback to worker");
                     }
@@ -1006,6 +1084,7 @@ public final class ConversionJobs {
                     if (!part.renameTo(fin)) {
                         throw new IllegalStateException("adopt failed");
                     }
+                    ConversionJobs.recordAdopted(raw, fin);
                     // Maintain the 32-bit float file in storage linked to
                     // recordingId (or delete raw if fin is already WAV32).
                     TakesRepository.adoptFloatMaster(recordingId, raw, fin);

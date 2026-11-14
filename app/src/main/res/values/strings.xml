@@ -22,6 +22,8 @@
     <string name="cd_mic">Record</string>
     <string name="cd_back">Back to Library</string>
     <string name="cd_play">Play take</string>
+    <string name="cd_pause">Pause take</string>
+    <string name="cd_scrub">Seek within take</string>
     <string name="cd_fav">Favorite</string>
     <string name="cd_more">More options</string>
     <string name="cd_search">Search takes</string>
@@ -96,6 +98,28 @@
     <string name="convert_crash_msg">The %1$s encoder crashed on this device, so saves were switched to %2$s. Please record again.</string>
     <string name="take_saved">Take saved</string>
     <string name="couldnt_save">Couldn\'t save take</string>
+    <string name="couldnt_play">Couldn\'t play this take</string>
+    <string name="no_audio_file">Take file is missing on this device</string>
+    <string name="tele_value_invalid">Enter a number</string>
+    <string name="tele_editor_open">The script editor is already open</string>
+    <string name="close">Close</string>
+    <string name="cd_info">Privacy &amp; data</string>
+    <string name="privacy_title">Privacy &amp; Data</string>
+    <string name="privacy_body">TakeOne keeps your audio on this device. Recordings, edits and exports are played and processed on-device only; TakeOne does not upload your audio to any server.
+
+The teleprompter script you save is stored on this device and is never uploaded or included in device backups. Access to the script editor and the script text is local to the app.
+
+Crash diagnostics stay on this device. Sharing a crash report is always your choice - the share sheet shows you the full contents first, and breadcrumbs are capped and overwritten on the next crash.
+
+TakeOne uses Google AdMob for free-tier ads. AdMob may use your advertising ID to serve and measure ads, and (in supported regions) may ask for consent before personalized advertising. You can reset or limit ad tracking in system settings.
+
+Optional TakeOne Pro purchases run entirely through Google Play Billing; TakeOne never sees your payment details. Restore from the paywall re-checks this Google account.
+
+Recorded files remain yours: deleting a take removes it from this device permanently. Android Auto Backup never includes your take files.</string>
+    <string name="tele_import_in_editor">Imported into the editor. Save to keep it.</string>
+    <string name="tele_import_replace_title">Replace saved script?</string>
+    <string name="tele_import_replace_msg">The imported script will replace the script stored on this device. Your stored copy cannot be recovered.</string>
+    <string name="tele_import_replace_ok">Replace</string>
     <string name="couldnt_export">Couldn\'t export</string>
     <string name="need_storage">Storage permission is needed to save files</string>
     <string name="export_current_location">Currently stored in: %1$s</string>
@@ -185,7 +209,6 @@
     <string name="tele_textsize">Text size</string>
     <string name="tele_auto">Auto-scroll while recording</string>
     <string name="tele_mirror">Mirror text</string>
-    <string name="tele_countdown">Start countdown</string>
     <string name="tele_words_format">%1$d words • about %2$s</string>
     <string name="tele_estimate_format">≈ %1$s at this speed</string>
     <string name="tele_clamped">Text is too large for %1$d words per line here — using %2$d.</string>

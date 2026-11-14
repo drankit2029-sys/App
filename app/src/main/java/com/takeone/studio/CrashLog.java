@@ -195,11 +195,38 @@ public final class CrashLog {
         } catch (Exception ignored) {}
     }
 
+    /**
+     * The share sheet leaks paths embedded in exception messages (take names
+     * can live in absolute paths); strip them, keeping classes and lines.
+     * Falls back to the raw file if the redacted copy cannot be written.
+     */
+    private static File redactForShare(Context ctx, File crash) {
+        try {
+            byte[] bytes = java.nio.file.Files.readAllBytes(crash.toPath());
+            String txt = new String(bytes, "UTF-8");
+            String redacted = txt.replaceAll(
+                    "(/[^\\s\\[]{1,160}/[^\\s\\]{1,160})",
+                    "<path>");
+            File out = new File(ctx.getFilesDir(),
+                    "takeone-crash-redacted.txt");
+            java.io.FileWriter w = new java.io.FileWriter(out, false);
+            try {
+                w.write(redacted);
+            } finally {
+                w.close();
+            }
+            return out;
+        } catch (Exception e) {
+            return crash;
+        }
+    }
+
     /** Share intent for the crash report (email, chat, …). */
     public static void share(Context ctx, File crash) {
         try {
+            File toSend = redactForShare(ctx, crash);
             Uri uri = FileProvider.getUriForFile(ctx,
-                    ctx.getPackageName() + ".fileprovider", crash);
+                    ctx.getPackageName() + ".fileprovider", toSend);
             android.content.Intent i = new android.content.Intent(
                     android.content.Intent.ACTION_SEND);
             i.setType("text/plain");

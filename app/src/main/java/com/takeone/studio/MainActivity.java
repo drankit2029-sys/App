@@ -106,7 +106,7 @@ public class MainActivity extends AppCompatActivity {
         } else {
             getSupportFragmentManager().beginTransaction()
                     .replace(R.id.container, new LibraryFragment(), "LIB")
-                    .commitAllowingStateLoss();
+                    .commit();
         }
 
         handleOpenStudioIntent(getIntent());
@@ -289,7 +289,7 @@ public class MainActivity extends AppCompatActivity {
                 .setCustomAnimations(R.anim.slide_in_right, R.anim.fade_out,
                         R.anim.fade_in, R.anim.slide_out_right)
                 .replace(R.id.container, new StudioFragment(), "STU")
-                .commitAllowingStateLoss();
+                .commit();
     }
 
     public void openStudioWithRecovery(File rawFile) {
@@ -320,7 +320,7 @@ public class MainActivity extends AppCompatActivity {
                 .setCustomAnimations(R.anim.slide_in_right, R.anim.fade_out,
                         R.anim.fade_in, R.anim.slide_out_right)
                 .replace(R.id.container, f, "STU")
-                .commitAllowingStateLoss();
+                .commit();
     }
 
     public void exitStudio() {
@@ -330,7 +330,7 @@ public class MainActivity extends AppCompatActivity {
                 .setCustomAnimations(R.anim.fade_in, R.anim.slide_out_right,
                         R.anim.slide_in_right, R.anim.fade_out)
                 .replace(R.id.container, new LibraryFragment(), "LIB")
-                .commitAllowingStateLoss();
+                .commit();
     }
 
     // ---- split record controls ----

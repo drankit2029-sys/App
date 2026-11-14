@@ -14,3 +14,8 @@ local.properties
 # Exhaustive per-effect outputs (reports/plans stay tracked)
 /fx-exhaustive/**/*.wav
 /fx-exhaustive/**/*.zip
+# Release signing material must never be committed
+keystore.properties
+*.keystore
+ci-release.keystore
+release.keystore

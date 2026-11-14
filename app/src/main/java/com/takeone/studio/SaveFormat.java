@@ -110,10 +110,10 @@ public enum SaveFormat {
     }
 
     /**
-     * Proves the device can actually instantiate and configure the encoder
-     * at our recording geometry — not merely that it lists the MIME in
-     * {@link MediaCodecList}. Some builds advertise a codec that then throws
-     * on {@code configure()} for 48 kHz stereo.
+     * True when {@link MediaCodecList} reports an encoder for the MIME.
+     * This does not prove the codec can actually be configured at our
+     * geometry — a device may list a codec and still throw on
+     * {@code configure()}; {@code fallbackAfterCrash()} covers that case.
      */
     private boolean hasEncoder(String mime) {
         if (mime == null) return true;

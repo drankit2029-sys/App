@@ -194,7 +194,7 @@ final class TimelineUtilityProcessor extends AudioProcessor {
                         }
                     }
                     if (dryBuf != null && dryRawBuf != null) {
-                        inRaf.seek(info.dataStart + (startFrame + cur) * frameBytes);
+                        inRaf.seek(info.dataStart + srcBlockStart * frameBytes);
                         inRaf.readFully(dryRawBuf, 0, want * ch * 4);
                         ByteBuffer.wrap(dryRawBuf, 0, want * ch * 4)
                                 .order(ByteOrder.LITTLE_ENDIAN)
@@ -207,7 +207,11 @@ final class TimelineUtilityProcessor extends AudioProcessor {
                 }
                 return regionFrames;
             } else { // Repeat
+                long maxOutFrames = (long) sr * 3600L * 4L;
                 long outTotalFrames = regionFrames * repCount;
+                if (outTotalFrames > maxOutFrames) {
+                    return -1L;
+                }
                 outRaf.write(Dsp.wavFloatHeader(ch, sr, outTotalFrames * frameBytes));
                 for (int r = 0; r < repCount; r++) {
                     long cur = 0L;

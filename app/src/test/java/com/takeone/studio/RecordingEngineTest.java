@@ -151,7 +151,11 @@ public class RecordingEngineTest {
         } finally {
             w.close();
         }
-        RecordingEngine.writePendingMarker(raw, "Adopted", 2);
+        try {
+            RecordingEngine.writePendingMarker(raw, "Adopted", 2);
+        } catch (java.io.IOException ex) {
+            throw new AssertionError("pending marker write failed", ex);
+        }
         try {
             e.attachExisting(ctx(), raw, "Adopted", 2, bytes);
             assertTrue(e.hasSession());

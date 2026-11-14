@@ -37,7 +37,9 @@ public abstract class TakeDatabase extends RoomDatabase {
                     db = Room.databaseBuilder(ctx.getApplicationContext(),
                                     TakeDatabase.class, NAME)
                             .addMigrations(MIGRATION_1_2)
-                            .fallbackToDestructiveMigrationOnDowngrade()
+                            // No destructive downgrade fallback: a Play
+                            // rollback must fail loudly, not silently wipe
+                            // the library and orphan the lossless masters.
                             .build();
                     instance = db;
                 }

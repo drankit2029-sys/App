@@ -96,7 +96,7 @@ final class AmplifyProcessor extends AudioProcessor {
     float computeEffectiveGainDb(float peakDb) {
         float requested = gain.getFloat();
         if (allowClip.getBoolean()) {
-            return Math.abs(requested) <= 0.01f ? 1.5f : requested;
+            return requested;
         }
         float ceiling = newPeak.getFloat();
         if (Math.abs(requested) <= 0.01f && Math.abs(ceiling) > 0.01f) {

@@ -19,6 +19,44 @@ import java.util.Locale;
  */
 public final class AudioImporter {
 
+    /** Refuse the copy up front when the SAF size is known and storage is short. */
+    private static void requireDiskRoom(android.content.Context ctx,
+                                        android.net.Uri uri, File dir,
+                                        long multiplier) {
+        long size = -1;
+        android.database.Cursor c = null;
+        try {
+            c = ctx.getContentResolver().query(uri,
+                    new String[]{android.provider.OpenableColumns.SIZE},
+                    null, null, null);
+            if (c != null && c.moveToFirst()) {
+                size = c.getLong(0);
+            }
+        } catch (Exception ignored) {
+            size = -1;
+        } finally {
+            if (c != null) {
+                try { c.close(); } catch (Exception ignored) {}
+            }
+        }
+        if (size <= 0) return;
+        try {
+            android.os.StatFs s =
+                    new android.os.StatFs(dir.getAbsolutePath());
+            if (s.getAvailableBytes() < size * multiplier) {
+                throw new IllegalStateException(
+                        "Not enough free storage to import (need about "
+                                + (size * multiplier / (1024L * 1024L))
+                                + " MB)");
+            }
+        } catch (IllegalStateException ise) {
+            throw ise;
+        } catch (Exception ignored) {
+            // StatFs failed: proceed and let the write fail with its own error.
+        }
+    }
+
+
     public interface Progress {
         void onProgress(int percent);
     }
@@ -90,6 +128,7 @@ public final class AudioImporter {
         String prettyTitle = Dsp.prettyFileTitle(cleanBase + "." + ext);
         if (prettyTitle.isEmpty()) prettyTitle = cleanBase;
 
+        requireDiskRoom(ctx, uri, targetDir, 2);
         File dst = uniqueImportedFile(targetDir, cleanBase, ext);
         try {
             try (java.io.InputStream in =
@@ -260,6 +299,7 @@ public final class AudioImporter {
         }
         String display = queryDisplayName(ctx, uri);
         String ext = extensionOf(display);
+        requireDiskRoom(ctx, uri, ctx.getCacheDir(), 2);
         File temp = File.createTempFile("takeone_import_",
                 ext.isEmpty() ? ".audio" : "." + ext, ctx.getCacheDir());
         try {

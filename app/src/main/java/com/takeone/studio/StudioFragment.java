@@ -101,6 +101,8 @@ public class StudioFragment extends Fragment {
      * painting stale bars.
      */
     private int fxPreviewGeneration = 0;
+    private volatile boolean fxPreviewRendering = false;
+    private volatile boolean fxPreviewRenderPending = false;
     /**
      * Peak (dBFS) of the frozen FX apply target, measured off the UI thread
      * when the rack opens. Amplify uses it to keep Gain and New Peak in step.
@@ -209,7 +211,8 @@ public class StudioFragment extends Fragment {
             }
             advanceTeleprompterFrame(frameTimeNanos);
             if (!telePaused && tele != null && tele.autoScroll
-                    && telePanel != null && telePanel.getVisibility() == View.VISIBLE) {
+                    && telePanel != null && telePanel.getVisibility() == View.VISIBLE
+                    && teleView != null && teleView.maxScroll() > 0f) {
                 scheduleTeleFrame();
             }
         }
@@ -1184,17 +1187,36 @@ public class StudioFragment extends Fragment {
                                 Toast.LENGTH_LONG).show();
                         return;
                     }
-                    persistTeleScript(r.text);
+                    boolean editorOpen = TeleDialogs.applyImported(
+                            requireContext(), r.text,
+                            scriptNameOf(r.text),
+                            tele != null ? tele.wordsPerMinute : 120);
                     teleView.setScript(r.text);
                     teleTitle.setText(scriptNameOf(r.text));
-                    // Reflect it in the editor too, if it is still open.
-                    TeleDialogs.applyImported(requireContext(), r.text,
-                            scriptNameOf(r.text), tele.wordsPerMinute);
-                    Toast.makeText(requireContext(),
-                            getString(R.string.tele_imported,
-                                    scriptNameOf(r.text),
-                                    TeleMath.wordCount(r.text)),
-                            Toast.LENGTH_SHORT).show();
+                    String stored = loadTeleScript();
+                    if (editorOpen) {
+                        // The editor's Save is the commit path; nothing is
+                        // persisted until the user saves.
+                        Toast.makeText(requireContext(),
+                                R.string.tele_import_in_editor,
+                                Toast.LENGTH_SHORT).show();
+                    } else if (stored == null || stored.trim().isEmpty()) {
+                        persistTeleScript(r.text);
+                        Toast.makeText(requireContext(),
+                                getString(R.string.tele_imported,
+                                        scriptNameOf(r.text),
+                                        TeleMath.wordCount(r.text)),
+                                Toast.LENGTH_SHORT).show();
+                    } else {
+                        final String imported = r.text;
+                        new android.app.AlertDialog.Builder(requireContext())
+                                .setTitle(R.string.tele_import_replace_title)
+                                .setMessage(R.string.tele_import_replace_msg)
+                                .setPositiveButton(R.string.tele_import_replace_ok,
+                                        (d, w) -> persistTeleScript(imported))
+                                .setNegativeButton(R.string.cancel, null)
+                                .show();
+                    }
                 });
     }
 
@@ -1278,13 +1300,31 @@ public class StudioFragment extends Fragment {
                 });
     }
 
+    private android.content.SharedPreferences scriptPrefs() {
+        return requireContext().getSharedPreferences("takeone_script",
+                Context.MODE_PRIVATE);
+    }
+
     private String loadTeleScript() {
         try {
-            return requireContext().getSharedPreferences("takeone",
-                            Context.MODE_PRIVATE)
-                    .getString("tele_script", TeleSettings.DEFAULT_SCRIPT);
+            String s = scriptPrefs().getString("tele_script", null);
+            if (s != null) return s;
+            String legacy = null;
+            try {
+                legacy = requireContext()
+                        .getSharedPreferences("takeone", Context.MODE_PRIVATE)
+                        .getString("tele_script", null);
+            } catch (Exception ignored) {}
+            if (legacy != null) {
+                scriptPrefs().edit().putString("tele_script", legacy).apply();
+                requireContext().getSharedPreferences("takeone",
+                                Context.MODE_PRIVATE)
+                        .edit().remove("tele_script").apply();
+                return legacy;
+            }
+            return TeleSettings.DEFAULT_SCRIPT;
         } catch (Exception e) {
-            return "";
+            return TeleSettings.DEFAULT_SCRIPT;
         }
     }
 
@@ -1294,8 +1334,8 @@ public class StudioFragment extends Fragment {
 
     private void persistTeleScript(String text) {
         try {
-            requireContext().getSharedPreferences("takeone", Context.MODE_PRIVATE)
-                    .edit().putString("tele_script", text == null ? "" : text)
+            scriptPrefs().edit()
+                    .putString("tele_script", text == null ? "" : text)
                     .apply();
         } catch (Exception ignored) {}
     }
@@ -1365,6 +1405,11 @@ public class StudioFragment extends Fragment {
         // scroll update so we never step at 20Hz on top of 60/120Hz.
         if (teleChoreographerActive && lastTeleFrameNanos > 0L
                 && (now - lastTeleAdvanceMs) < 40L) {
+            return;
+        }
+        if (teleView.maxScroll() <= 0f) {
+            // Blank script: do not spin the VSYNC loop or the 50 ms tick.
+            lastTeleAdvanceMs = now;
             return;
         }
         if (!teleChoreographerActive) {
@@ -1525,19 +1570,28 @@ public class StudioFragment extends Fragment {
     private void commitTeleSize(int textSizeSp) {
         TeleSettings.setTextSize(requireContext(), textSizeSp);
         tele = TeleSettings.load(requireContext());
-        applyTeleSettings();
+        applyTeleSettingsDebounced();
     }
 
     private void commitTeleSpeed(int wordsPerMinute) {
         TeleSettings.setWordsPerMinute(requireContext(), wordsPerMinute);
         tele = TeleSettings.load(requireContext());
+        // Words-per-minute does not rewrap: apply immediately.
         applyTeleSettings();
     }
 
     private void commitTeleWordsPerLine(int wordsPerLine) {
         TeleSettings.setWordsPerLine(requireContext(), wordsPerLine);
         tele = TeleSettings.load(requireContext());
-        applyTeleSettings();
+        applyTeleSettingsDebounced();
+    }
+
+    /** Coalesces rapid scrubber commits into one rewrap at gesture end. */
+    private final Runnable applyTeleRunnable = () -> applyTeleSettings();
+
+    private void applyTeleSettingsDebounced() {
+        handler.removeCallbacks(applyTeleRunnable);
+        handler.postDelayed(applyTeleRunnable, 150);
     }
 
     private void applyZoomValue(int bp) {
@@ -1878,6 +1932,8 @@ public class StudioFragment extends Fragment {
         act.exitStudio();
         if (wasRecording) {
             OptionsSheet.showTopPopup(act, "Background recording");
+        } else if (engine.dataBytes > 0) {
+            OptionsSheet.showTopPopup(act, "Take kept in background — unsaved");
         }
         return true;
     }
@@ -2418,7 +2474,8 @@ public class StudioFragment extends Fragment {
         // mid-save) to finish the save. Snapshot the title and raw too: the
         // failure path below must not read them off a cleared engine.
         final Context appCtx = requireContext().getApplicationContext();
-        final MainActivity hostAct = isAdded() ? activity() : null;
+        final java.lang.ref.WeakReference<MainActivity> hostActRef =
+                new java.lang.ref.WeakReference<>(isAdded() ? activity() : null);
         final String takeTitle =
                 engine.takeName != null ? engine.takeName : "";
         final File saveRaw = engine.rawFile;
@@ -2468,12 +2525,14 @@ public class StudioFragment extends Fragment {
                         onSaveAdopted(res,
                                 replacing ? res.recordingId : -1,
                                 replacing ? replaceTitle : null);
+                        MainActivity hostAct = hostActRef.get();
                         if (hostAct != null) {
                             hostAct.refreshLibraryIfShown();
                             hostAct.syncFabWithEngine();
                         }
                         return;
                     }
+                    MainActivity hostAct = hostActRef.get();
                     if (hostAct != null) {
                         hostAct.refreshLibraryIfShown();
                         hostAct.syncFabWithEngine();
@@ -2567,15 +2626,19 @@ public class StudioFragment extends Fragment {
             replaceSavedTailFile = null;
         }
         final Context appCtx = requireContext().getApplicationContext();
-        final MainActivity act = activity();
+        final java.lang.ref.WeakReference<MainActivity> actRef =
+                new java.lang.ref.WeakReference<>(activity());
         final boolean wasEdit = (editSourceId != -1);
         editSourceId = -1;
         editSourceTitle = null;
 
         // Leave Studio immediately; never wait for file cleanup or a popup.
-        act.exitStudio();
-        OptionsSheet.showTopPopup(act,
-                wasEdit ? "Edit discarded" : "Take discarded");
+        MainActivity act = actRef.get();
+        if (act != null) {
+            act.exitStudio();
+            OptionsSheet.showTopPopup(act,
+                    wasEdit ? "Edit discarded" : "Take discarded");
+        }
 
         new Thread(() -> {
             engine.abortAndDelete();
@@ -2584,7 +2647,8 @@ public class StudioFragment extends Fragment {
                 saving = false;
                 engine.setSaving(false);
                 RecordingService.stopService(appCtx);
-                act.syncFabWithEngine();
+                MainActivity live = actRef.get();
+                if (live != null) live.syncFabWithEngine();
             });
         }).start();
     }
@@ -2677,6 +2741,13 @@ public class StudioFragment extends Fragment {
         public void run() {
             if (getView() == null || !isAdded()) return;
             try {
+                String captureError = engine.consumeCaptureError();
+                if (captureError != null) {
+                    Toast.makeText(requireContext(), captureError,
+                            Toast.LENGTH_LONG).show();
+                    paint();
+                    syncStudioFabIcon();
+                }
                 boolean live = engine.state == RecordingEngine.State.RECORDING;
                 if (live != lastWaveLive) {
                     lastWaveLive = live;
@@ -2939,6 +3010,7 @@ public class StudioFragment extends Fragment {
         final float endFrac = fxApplyTargetEnd;
         final boolean hasRange = fxApplyTargetHasSelection;
         final int gen = ++fxPreviewRenderGen;
+        final int baseBuckets = waveform.getBaseHistoryCount();
         final File cacheDir = requireContext().getCacheDir();
         fxPreviewPreparing = true;
         paintEditorStrip();
@@ -2975,6 +3047,19 @@ public class StudioFragment extends Fragment {
                 final File rendered = temp;
                 final long renderedTotal = newTotal;
                 final long renderedEnd = regionEnd;
+                long rawTotal = Math.max(1L, engine.totalFrames());
+                long rFrames = Math.max(1L, regionEnd - start);
+                int regionBuckets = Math.max(1, Math.min(8192,
+                        Math.round((float) rFrames * baseBuckets / rawTotal)));
+                float[] peaks = null;
+                try {
+                    peaks = Dsp.loadPeaks(rendered,
+                            Math.max(regionBuckets * 2, baseBuckets));
+                } catch (Exception ignored) {
+                    peaks = null;
+                }
+                final float[] precomputedPeaks = peaks;
+                final int outBuckets = regionBuckets;
                 handler.post(() -> {
                     if (gen != fxPreviewRenderGen || !isAdded() || !fxPanelOpen) {
                         // noinspection ResultOfMethodCallIgnored
@@ -2983,7 +3068,7 @@ public class StudioFragment extends Fragment {
                     }
                     fxPreviewPreparing = false;
                     beginRenderedFxPreview(rendered, renderedTotal, start,
-                            renderedEnd);
+                            renderedEnd, precomputedPeaks, outBuckets);
                 });
             } catch (Throwable t) {
                 if (temp != null) {
@@ -3004,7 +3089,9 @@ public class StudioFragment extends Fragment {
     }
 
     private void beginRenderedFxPreview(File rendered, long totalFrames,
-                                        long startFrame, long regionEndFrame) {
+                                        long startFrame, long regionEndFrame,
+                                        float[] precomputedPeaks,
+                                        int regionBuckets) {
         if (!isAdded() || waveform == null || !fxPanelOpen) {
             // noinspection ResultOfMethodCallIgnored
             rendered.delete();
@@ -3019,13 +3106,10 @@ public class StudioFragment extends Fragment {
         fxRenderedPreviewStartFrame = startFrame;
         fxRenderedPreviewEndFrame = regionEndFrame;
         try {
-            int baseBuckets = waveform.getBaseHistoryCount();
             long rawTotal = Math.max(1L, engine.totalFrames());
             long rFrames = Math.max(1L, regionEndFrame - startFrame);
-            int regionBuckets = Math.max(1, Math.min(8192,
-                    Math.round((float) rFrames * baseBuckets / rawTotal)));
-            float[] fullPeaks = Dsp.loadPeaks(rendered,
-                    Math.max(regionBuckets * 2, baseBuckets));
+            float[] fullPeaks = precomputedPeaks != null
+                    ? precomputedPeaks : new float[0];
             float[] regionPeaks = new float[regionBuckets];
             if (fullPeaks.length > 0 && totalFrames > 0) {
                 for (int b = 0; b < regionBuckets; b++) {
@@ -3712,6 +3796,13 @@ public class StudioFragment extends Fragment {
      * covers the target region, which keeps it responsive on long takes.
      */
     private void refreshFxPreviewPeaks() {
+        // Coalesce: knob turns during an in-flight render schedule exactly
+        // one follow-up with the latest rack state instead of a pile of
+        // full-file renders.
+        if (fxPreviewRendering) {
+            fxPreviewRenderPending = true;
+            return;
+        }
         handler.removeCallbacks(fxPreviewRefresh);
         if (!isAdded() || waveform == null) return;
         if (previewPlaysRenderedFx && studioPreviewPlayer != null) {
@@ -3762,6 +3853,7 @@ public class StudioFragment extends Fragment {
         }
         final File cacheDir = requireContext().getCacheDir();
         final boolean hasOffline = !chain.offlineProcessors().isEmpty();
+        fxPreviewRendering = true;
         new Thread(() -> {
             File tempOut = null;
             if (hasOffline) {
@@ -3835,8 +3927,12 @@ public class StudioFragment extends Fragment {
                     refreshZoomValue();
                 }
             });
+            fxPreviewRendering = false;
+            if (fxPreviewRenderPending) {
+                fxPreviewRenderPending = false;
+                handler.post(this::refreshFxPreviewPeaks);
+            }
         }, "takeone-fx-region").start();
-    };
 
     private void paintFxPanelControls() {
         if (fxPanel == null || !isAdded()) return;

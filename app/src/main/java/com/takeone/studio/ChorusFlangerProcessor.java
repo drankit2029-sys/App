@@ -10,8 +10,9 @@ import java.util.Arrays;
 final class ChorusFlangerProcessor extends AudioProcessor {
 
     private static final String[] MODE_LABELS = {"Chorus", "Flanger", "Doubler (ADT)"};
-    private static final int RING_SIZE = 4096;
-    private static final int RING_MASK = RING_SIZE - 1;
+    private static final int MIN_RING_SIZE = 4096;
+    private int ringSize = MIN_RING_SIZE;
+    private int ringMask = MIN_RING_SIZE - 1;
 
     private final FxParameter mode = addParameter(FxParameter.enumParam(
             "ch_mode", "Mode", MODE_LABELS, 0));
@@ -27,7 +28,7 @@ final class ChorusFlangerProcessor extends AudioProcessor {
             "ch_mix", "Wet/Dry Mix", "%", 0, 100, 5, 50));
 
     private int sampleRate = DspChain.SAMPLE_RATE;
-    private final float[][] ring = new float[2][RING_SIZE];
+    private float[][] ring = new float[2][MIN_RING_SIZE];
     private int writePos = 0;
     private double lfoPhase = 0.0;
 
@@ -57,6 +58,14 @@ final class ChorusFlangerProcessor extends AudioProcessor {
     @Override
     public void prepare(int sampleRate, int channels) {
         if (sampleRate > 0) this.sampleRate = sampleRate;
+        int needed = Math.max(MIN_RING_SIZE,
+                (int) Math.pow(2, Math.ceil(Math.log(sampleRate * 0.055) / Math.log(2))));
+        if (needed != ringSize) {
+            ringSize = needed;
+            ringMask = needed - 1;
+            ring = new float[2][needed];
+            writePos = 0;
+        }
     }
 
     @Override
@@ -97,7 +106,7 @@ final class ChorusFlangerProcessor extends AudioProcessor {
         float fb = (feedback.getCurrentRaw() / 90.0f) * 0.62f;
         int rawMix = mix.getCurrentRaw();
         float wet = rawMix / 100f;
-        float dry = 1f - wet * 0.4f;
+        float dry = 1f - wet;
         double lfoInc = 2.0 * Math.PI * rate.getFloat() / sr;
 
         for (int f = 0; f < frames; f++) {
@@ -105,16 +114,16 @@ final class ChorusFlangerProcessor extends AudioProcessor {
             for (int c = 0; c < ch; c++) {
                 double ph = lfoPhase + (c == 1 ? Math.PI * 0.5 : 0.0);
                 float modMs = (float) Math.sin(ph) * depthMs;
-                float totalSamples = Math.max(2f, Math.min(RING_SIZE - 8f,
+                float totalSamples = Math.max(2f, Math.min(ringSize - 8f,
                         (baseDelayMs + modMs) * 0.001f * sr));
                 float readPos = writePos - totalSamples;
-                float delayed = Dsp.hermiteInterp(ring[c], RING_MASK, readPos);
+                float delayed = Dsp.hermiteInterp(ring[c], ringMask, readPos);
                 float in = buf[idx + c];
                 float fbIn = in + delayed * fb;
                 if (Math.abs(fbIn) > 1.2f) {
                     fbIn = (float) (1.2 * Math.tanh(fbIn / 1.2));
                 }
-                ring[c][writePos & RING_MASK] = fbIn;
+                ring[c][writePos & ringMask] = fbIn;
                 buf[idx + c] = in * dry + delayed * wet;
             }
             writePos++;

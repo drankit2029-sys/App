@@ -1378,7 +1378,7 @@ public final class EditEngine {
             ioBuf.clear();
             ioBuf.limit(samples * 4);
             ioBuf.asFloatBuffer().get(dry, 0, samples);
-            System.arraycopy(dry, 0, wet, 0, samples);
+            java.util.Arrays.fill(wet, 0f);
             chain.processInPlace(wet, want);
             for (int f = 0; f < want; f++) {
                 long absFrame = pos + f;
@@ -1390,7 +1390,7 @@ public final class EditEngine {
                 }
                 for (int c = 0; c < ch; c++) {
                     int idx = f * ch + c;
-                    wet[idx] = dry[idx] + (wet[idx] - dry[idx]) * ramp;
+                    wet[idx] = dry[idx] + wet[idx] * ramp;
                 }
             }
             raf.seek(info.dataStart + pos * frameBytes);

@@ -64,6 +64,8 @@ public final class RecordingEngine {
     public int channels = 2;
     public long dataBytes = 0;
     public volatile float level = 0f;
+    /** Set by capLoop when the take ends unexpectedly (disk full, mic lost). */
+    public volatile String captureError;
     private volatile long lastChunkElapsedNanos = 0L;
     private volatile float lastSmoothedPeak = 0.02f;
     /** Audio source used for the current capture (MIC or UNPROCESSED). */
@@ -118,6 +120,28 @@ public final class RecordingEngine {
         // noinspection ResultOfMethodCallIgnored
         dir.mkdirs();
         return dir;
+    }
+
+    /** Low water mark: enough for ~10 min of stereo 48 kHz 32-bit audio. */
+    private static final long MIN_FREE_RECORD_BYTES = 256L * 1024 * 1024;
+
+    static boolean hasDiskRoom(File dir, long neededBytes) {
+        try {
+            android.os.StatFs s = new android.os.StatFs(dir.getAbsolutePath());
+            return s.getAvailableBytes() >= Math.max(neededBytes,
+                    MIN_FREE_RECORD_BYTES);
+        } catch (Exception e) {
+            return true;
+        }
+    }
+
+    /** Returns and clears the unexpected-capture-stop reason, or null. */
+    public String consumeCaptureError() {
+        synchronized (lock) {
+            String e = captureError;
+            captureError = null;
+            return e;
+        }
     }
 
     /** Filename-safe take name. Pure logic lives in {@link Dsp} (unit-tested). */
@@ -467,7 +491,8 @@ public final class RecordingEngine {
     }
 
     /** Marker that a raw file is streamed but not yet finalised. */
-    public static void writePendingMarker(File raw, String name, int ch) {
+    public static void writePendingMarker(File raw, String name, int ch)
+            throws java.io.IOException {
         writePending(raw, name, ch);
     }
 
@@ -647,6 +672,12 @@ public final class RecordingEngine {
             }
             if (rawFile == null) throw new IllegalStateException("no session");
             if (state == State.RECORDING) return;
+            File diskDir = rawFile.getParentFile();
+            if (diskDir != null && !hasDiskRoom(diskDir, 0)) {
+                throw new java.io.IOException(
+                        "Not enough free storage to record (need at least 256 MB)");
+            }
+            captureError = null;
             raf = new RandomAccessFile(rawFile, "rw");
             try {
                 dataBytes = payloadBytesOf(rawFile);
@@ -1142,7 +1173,10 @@ public final class RecordingEngine {
                     if (n <= 0) {
                         // Tolerate brief HAL route-switch hiccups on initial reads
                         // instead of immediately aborting capLoop back to PAUSED!
-                        if (n < 0 && ++transientErrors > 8) break;
+                        if (n < 0 && ++transientErrors > 8) {
+                                captureError = "Microphone disconnected or unavailable; recording paused";
+                                break;
+                            }
                         try { Thread.sleep(10); } catch (InterruptedException ie) { break; }
                         continue;
                     }
@@ -1186,7 +1220,10 @@ public final class RecordingEngine {
                 } else {
                     int n = ar.read(sReadBuf, 0, sReadBuf.length, AudioRecord.READ_BLOCKING);
                     if (n <= 0) {
-                        if (n < 0 && ++transientErrors > 8) break;
+                        if (n < 0 && ++transientErrors > 8) {
+                                captureError = "Microphone disconnected or unavailable; recording paused";
+                                break;
+                            }
                         try { Thread.sleep(10); } catch (InterruptedException ie) { break; }
                         continue;
                     }
@@ -1292,6 +1329,7 @@ public final class RecordingEngine {
                             lastChunkElapsedNanos =
                                     android.os.SystemClock.elapsedRealtimeNanos();
                         } catch (Exception e) {
+                            captureError = "Could not write to storage (disk full or card removed); recording paused";
                             break;
                         }
                     } else {
@@ -1308,11 +1346,28 @@ public final class RecordingEngine {
                     sincePatch = 0;
                     synchronized (lock) {
                         patchHeaderLocked();
+                        if (rawFile != null
+                                && !hasDiskRoom(rawFile.getParentFile(), 0)) {
+                            captureError = "Storage full; recording paused. Save or free space, then resume.";
+                            try {
+                                CrashLog.breadcrumb(captureAppContext,
+                                        "capture stopped: low disk space");
+                            } catch (Exception ignored) {}
+                            break;
+                        }
                     }
                     lastHeaderPatch = System.currentTimeMillis();
                 }
             }
-        } catch (Exception ignored) {
+        } catch (Exception fatal) {
+            if (captureError == null) {
+                captureError = "Recording stopped unexpectedly ("
+                        + fatal.getClass().getSimpleName() + "); partial take kept";
+                try {
+                    CrashLog.breadcrumb(captureAppContext,
+                            "capture stopped: " + fatal);
+                } catch (Exception ignored) {}
+            }
         } finally {
             boolean unexpectedExit = false;
             AudioRecord deadRec = null;
@@ -1392,20 +1447,30 @@ public final class RecordingEngine {
         return Dsp.wavFloatHeader(ch, SAMPLE_RATE, bytes);
     }
 
-    private static void writePending(File raw, String name, int ch) {
+    private static void writePending(File raw, String name, int ch) throws java.io.IOException {
+        JSONObject o = new JSONObject();
         try {
-            JSONObject o = new JSONObject();
             o.put("name", name);
             o.put("sampleRate", SAMPLE_RATE);
             o.put("channels", ch);
             o.put("startedAt", System.currentTimeMillis());
-            java.io.FileWriter w = new java.io.FileWriter(pendingFor(raw));
-            try {
-                w.write(o.toString());
-            } finally {
-                w.close();
-            }
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            throw new java.io.IOException("pending marker unserializable", e);
+        }
+        java.io.FileWriter w = new java.io.FileWriter(pendingFor(raw) + ".tmp");
+        try {
+            w.write(o.toString());
+            w.flush();
+        } finally {
+            w.close();
+        }
+        File tmp = new File(pendingFor(raw) + ".tmp");
+        if (!tmp.renameTo(pendingFor(raw))) {
+            // noinspection ResultOfMethodCallIgnored
+            tmp.delete();
+            throw new java.io.IOException("pending marker rename failed: "
+                    + pendingFor(raw));
+        }
     }
 
     private static File uniqueRaw(File dir, String base) {
@@ -1435,6 +1500,12 @@ public final class RecordingEngine {
                 String rawName = f.getName().substring(
                         0, f.getName().length() - ".pending".length());
                 File raw = new File(dir, rawName);
+                // A raw with a live conversion sidecar belongs to the
+                // conversion sweep, not to interactive recovery: offering it
+                // in both places double-claims the file.
+                if (new File(raw.getAbsolutePath() + ".conv.json").exists()) {
+                    continue;
+                }
                 long payload = payloadBytesOf(raw);
                 if (!raw.exists() || payload <= 0) {
                     // noinspection ResultOfMethodCallIgnored

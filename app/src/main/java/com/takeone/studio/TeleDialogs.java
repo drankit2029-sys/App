@@ -35,19 +35,21 @@ public final class TeleDialogs {
     private static java.lang.ref.WeakReference<android.widget.EditText> openInput;
     private static java.lang.ref.WeakReference<TextView> openMeta;
 
-    /** Replaces the open editor's contents with imported text. */
-    public static void applyImported(Context ctx, String text, String name,
+    /** Replaces the open editor's contents with imported text.
+     * @return true when an editor was open and received the text */
+    public static boolean applyImported(Context ctx, String text, String name,
                                      int wpm) {
         android.widget.EditText input =
                 openInput != null ? openInput.get() : null;
         TextView meta = openMeta != null ? openMeta.get() : null;
-        if (input == null || text == null) return;
+        if (input == null || text == null) return false;
         input.setText(text);
         input.setSelection(input.getText().length());
         if (meta != null) {
             meta.setText(ctx.getString(R.string.tele_imported, name,
                     TeleMath.wordCount(text)));
         }
+        return true;
     }
 
     public interface ScriptCallback {
@@ -91,6 +93,14 @@ public final class TeleDialogs {
     public static Dialog showEditor(Context ctx, String script, int wpm,
                                     ScriptCallback onSave,
                                     ImportRequest onImport) {
+        // Single-instance: a second editor would fight the static refs used
+        // for import routing and confuse which copy is authoritative.
+        EditText already = openInput != null ? openInput.get() : null;
+        if (already != null && already.isAttachedToWindow()) {
+            android.widget.Toast.makeText(ctx,
+                    R.string.tele_editor_open, Toast.LENGTH_SHORT).show();
+            return null;
+        }
         Dialog d = new Dialog(ctx, R.style.TakeOneCenterDialog);
         // Must precede setContentView, or the framework throws
         // "requestFeature() must be called before adding content".
@@ -124,7 +134,7 @@ public final class TeleDialogs {
         Runnable updateMeta = () -> {
             String s = input.getText().toString();
             int words = TeleMath.wordCount(s);
-            int secs = TeleMath.estimatedSeconds(s, wpm);
+            int secs = TeleMath.estimatedSeconds(words, wpm);
             meta.setText(ctx.getString(R.string.tele_words_format, words,
                     secs + "s"));
         };

@@ -9,4 +9,10 @@
     <exclude domain="file" path="takes" />
     <exclude domain="file" path="takeone-crash.txt" />
     <exclude domain="file" path="takeone-breadcrumbs.txt" />
+    <!-- Do not restore library rows or shared prefs onto a device lacking
+         the excluded audio files: rows would point at missing files and the
+         library would silently empty itself on first launch. -->
+    <exclude domain="database" path="takeone-library.db" />
+    <exclude domain="sharedpref" path="takeone.xml" />
+    <exclude domain="sharedpref" path="takeone_script.xml" />
 </full-backup-content>

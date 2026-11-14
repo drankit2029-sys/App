@@ -9,11 +9,17 @@
         <exclude domain="file" path="takes" />
         <exclude domain="file" path="takeone-crash.txt" />
         <exclude domain="file" path="takeone-breadcrumbs.txt" />
+        <exclude domain="database" path="takeone-library.db" />
+        <exclude domain="sharedpref" path="takeone.xml" />
+        <exclude domain="sharedpref" path="takeone_script.xml" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="external" path="takes" />
         <exclude domain="file" path="takes" />
         <exclude domain="file" path="takeone-crash.txt" />
         <exclude domain="file" path="takeone-breadcrumbs.txt" />
+        <exclude domain="database" path="takeone-library.db" />
+        <exclude domain="sharedpref" path="takeone.xml" />
+        <exclude domain="sharedpref" path="takeone_script.xml" />
     </device-transfer>
 </data-extraction-rules>

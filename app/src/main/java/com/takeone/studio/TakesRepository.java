@@ -10,6 +10,7 @@ import java.io.FileOutputStream;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -1400,8 +1401,18 @@ public final class TakesRepository {
             Set<String> cur = p.getStringSet(KEY_PROBE_TRIED, null);
             Set<String> next = cur != null
                     ? new HashSet<>(cur) : new HashSet<String>();
-            if (tried) next.add(abs);
-            else next.remove(abs);
+            if (tried) {
+                next.add(abs);
+                // Bound the set: on a library with many native-probe deaths
+                // it grows without limit and is rewritten on every touch.
+                if (next.size() > 256) {
+                    Iterator<String> it = next.iterator();
+                    while (next.size() > 256 && it.hasNext()) {
+                        it.next();
+                        it.remove();
+                    }
+                }
+            } else next.remove(abs);
             SharedPreferences.Editor ed = p.edit();
             ed.putStringSet(KEY_PROBE_TRIED, next);
             // Synchronous: the mark must be on disk before the probe runs.

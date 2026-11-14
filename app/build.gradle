@@ -104,6 +104,7 @@ dependencies {
 
     // Google Mobile Ads SDK (AdMob) for ad-supported free release.
     implementation "com.google.android.gms:play-services-ads:$admobVersion"
+    implementation 'com.google.android.ump:user-messaging-platform:3.1.0'
     // play-services-ads constrains com.google.guava:listenablefuture to the
     // empty 9999.0 artifact (it assumes apps bring Guava), which otherwise
     // strips ListenableFuture off the classpath and breaks WorkManager's

@@ -24,6 +24,9 @@ import com.google.android.gms.ads.AdError;
 import com.google.android.gms.ads.AdListener;
 import com.google.android.gms.ads.AdLoader;
 import com.google.android.gms.ads.AdRequest;
+import com.google.android.ump.ConsentInformation;
+import com.google.android.ump.ConsentRequestParameters;
+import com.google.android.ump.UserMessagingPlatform;
 import com.google.android.gms.ads.AdSize;
 import com.google.android.gms.ads.AdView;
 import com.google.android.gms.ads.FullScreenContentCallback;
@@ -100,7 +103,7 @@ public final class AdMobManager {
      * interstitial. Set to 1 so every completed save, export, or share is
      * eligible (each workflow already involves multiple user actions).
      */
-    public static final int INTERSTITIAL_ACTION_INTERVAL = 1;
+    public static final int INTERSTITIAL_ACTION_INTERVAL = 3;
 
     /** Minimum 15-second cooldown between back-to-back full-screen ads. */
     public static final long INTERSTITIAL_COOLDOWN_MS = 15_000L;
@@ -272,6 +275,30 @@ public final class AdMobManager {
         }
         if (sdkInitInProgress) return;
         sdkInitInProgress = true;
+        android.app.Activity consentAct =
+                context instanceof android.app.Activity
+                        ? (android.app.Activity) context : null;
+        if (consentAct != null) {
+            requestConsentThenInitialize(consentAct);
+        } else {
+            initAdsSdk();
+        }
+    }
+
+    /** Gathers UMP consent (EEA/UK/CH); initializes the SDK when resolved. */
+    private void requestConsentThenInitialize(@NonNull Activity activity) {
+        ConsentRequestParameters params = new ConsentRequestParameters.Builder()
+                .setTagForUnderAgeOfConsent(false)
+                .build();
+        ConsentInformation consent = UserMessagingPlatform
+                .getConsentInformation(appCtx);
+        consent.requestConsentInfoUpdate(activity, params, () ->
+                UserMessagingPlatform.loadAndShowConsentFormIfRequired(activity,
+                        formError -> initAdsSdk()),
+                formError -> initAdsSdk());
+    }
+
+    private void initAdsSdk() {
         try {
             MobileAds.initialize(appCtx, initializationStatus -> {
                 sdkInitialized = true;
@@ -299,6 +326,24 @@ public final class AdMobManager {
      * Globally mutes AdMob video/rich-media audio so an ad never steals
      * Android AudioFocus or plays over the device speaker in an audio studio.
      */
+    /** NPA when consent was refused or is unknown; personalized otherwise. */
+    @NonNull
+    private static AdRequest buildAdRequest() {
+        boolean personalized = false;
+        try {
+            Context ctx = instance != null ? instance.appCtx : null;
+            if (ctx != null) {
+                ConsentInformation info =
+                        UserMessagingPlatform.getConsentInformation(ctx);
+                personalized = info.getConsentStatus()
+                        == ConsentInformation.ConsentStatus.OBTAINED;
+            }
+        } catch (Throwable ignored) {}
+        AdRequest.Builder b = new AdRequest.Builder();
+        if (!personalized) b.setRequestNonPersonalizedAds(true);
+        return b.build();
+    }
+
     public void applyAudioSafeSettings() {
         try {
             MobileAds.setAppMuted(true);
@@ -388,7 +433,7 @@ public final class AdMobManager {
                             .setRequestMultipleImages(false)
                             .build())
                     .build();
-            adLoader.loadAd(new AdRequest.Builder().build());
+            adLoader.loadAd(buildAdRequest());
         } catch (Throwable ignored) {
             loadAdaptiveBannerFallback(activity, container);
         }
@@ -526,7 +571,7 @@ public final class AdMobManager {
                 }
             });
             activeBannerAdView = adView;
-            adView.loadAd(new AdRequest.Builder().build());
+            adView.loadAd(buildAdRequest());
         } catch (Throwable ignored) {
             if (container.getChildCount() == 0) {
                 bindOfflineHouseAdFallback(activity, container);
@@ -605,7 +650,7 @@ public final class AdMobManager {
 
     private boolean isInterstitialAvailable() {
         if (cachedInterstitial == null) return false;
-        long age = System.currentTimeMillis() - interstitialLoadedAtMs;
+        long age = android.os.SystemClock.elapsedRealtime() - interstitialLoadedAtMs;
         if (age >= INTERSTITIAL_EXPIRY_MS) {
             cachedInterstitial = null;
             return false;
@@ -623,12 +668,12 @@ public final class AdMobManager {
         loadingInterstitial = true;
         try {
             InterstitialAd.load(appCtx, TEST_INTERSTITIAL_ID,
-                    new AdRequest.Builder().build(),
+                    buildAdRequest(),
                     new InterstitialAdLoadCallback() {
                         @Override
                         public void onAdLoaded(@NonNull InterstitialAd ad) {
                             cachedInterstitial = ad;
-                            interstitialLoadedAtMs = System.currentTimeMillis();
+                            interstitialLoadedAtMs = android.os.SystemClock.elapsedRealtime();
                             loadingInterstitial = false;
                             maybeDeliverPendingInterstitial();
                         }
@@ -649,7 +694,7 @@ public final class AdMobManager {
         pendingInterstitialActivityRef = null;
         if (ref == null) return;
         Activity act = ref.get();
-        long now = System.currentTimeMillis();
+        long now = android.os.SystemClock.elapsedRealtime();
         if (act == null || act.isFinishing() || act.isDestroyed()) return;
         if ((now - pendingInterstitialRequestedAtMs) > LATE_INTERSTITIAL_GRACE_MS) {
             return;
@@ -691,10 +736,17 @@ public final class AdMobManager {
         if (count % INTERSTITIAL_ACTION_INTERVAL != 0) {
             return false;
         }
-        if (lastShown > 0L && (nowMs - lastShown) < INTERSTITIAL_COOLDOWN_MS) {
+        if (withinCooldown(lastShown, nowMs, INTERSTITIAL_COOLDOWN_MS)) {
             return false;
         }
         return true;
+    }
+
+    /** True when the persisted timestamp is recent (clock-skew safe). */
+    private static boolean withinCooldown(long last, long nowMs, long cooldownMs) {
+        // A persisted wall-clock value from an older build is always in the
+        // far future relative to a fresh elapsedRealtime: treat it as expired.
+        return last > 0L && nowMs >= last && (nowMs - last) < cooldownMs;
     }
 
     /**
@@ -756,28 +808,22 @@ public final class AdMobManager {
 
     /**
      * Called when the user selects <b>Share</b> on the Export menu in
-     * {@link LibraryFragment}. If an Interstitial ad is preloaded and eligible,
-     * shows the ad first and launches the system Share sheet via
-     * {@code onProceedToShare} as soon as the user closes the ad; otherwise
-     * launches the system Share sheet immediately without blocking.
+     * {@link LibraryFragment}. The share sheet always launches immediately;
+     * a post-action interstitial may follow it at natural break-points
+     * (never before the user's action), subject to frequency capping.
      */
     public void onShareRequested(@Nullable Activity activity,
                                  @NonNull Runnable onProceedToShare) {
-        long now = System.currentTimeMillis();
-        boolean eligible = recordActionAndEvaluateInterstitialEligibility(now);
-        if (!eligible || activity == null
-                || activity.isFinishing() || activity.isDestroyed()
-                || !isInterstitialAvailable()) {
-            preloadInterstitial();
+        try {
             onProceedToShare.run();
-            return;
+        } finally {
+            maybeShowPostActionInterstitial(activity, null);
         }
-        showCachedInterstitialNow(activity, now, onProceedToShare);
     }
 
     private void maybeShowPostActionInterstitial(@Nullable Activity activity,
                                                  @Nullable Runnable onAfterAd) {
-        long now = System.currentTimeMillis();
+        long now = android.os.SystemClock.elapsedRealtime();
         boolean eligible = recordActionAndEvaluateInterstitialEligibility(now);
         if (!eligible || activity == null
                 || activity.isFinishing() || activity.isDestroyed()) {
@@ -862,12 +908,12 @@ public final class AdMobManager {
         loadingAppOpen = true;
         try {
             AppOpenAd.load(appCtx, TEST_APP_OPEN_ID,
-                    new AdRequest.Builder().build(),
+                    buildAdRequest(),
                     new AppOpenAd.AppOpenAdLoadCallback() {
                         @Override
                         public void onAdLoaded(@NonNull AppOpenAd ad) {
                             cachedAppOpenAd = ad;
-                            appOpenLoadedAtMs = System.currentTimeMillis();
+                            appOpenLoadedAtMs = android.os.SystemClock.elapsedRealtime();
                             loadingAppOpen = false;
                         }
 
@@ -884,7 +930,7 @@ public final class AdMobManager {
 
     private boolean isAppOpenAdAvailable() {
         if (cachedAppOpenAd == null) return false;
-        long age = System.currentTimeMillis() - appOpenLoadedAtMs;
+        long age = android.os.SystemClock.elapsedRealtime() - appOpenLoadedAtMs;
         if (age >= APP_OPEN_EXPIRY_MS) {
             cachedAppOpenAd = null;
             return false;
@@ -910,10 +956,10 @@ public final class AdMobManager {
                 PREFS, Context.MODE_PRIVATE);
         long lastFull = prefs.getLong(KEY_LAST_FULLSCREEN_AD_MS, 0L);
         long lastAppOpen = prefs.getLong(KEY_LAST_APP_OPEN_AD_MS, 0L);
-        if (lastFull > 0L && (nowMs - lastFull) < INTERSTITIAL_COOLDOWN_MS) {
+        if (withinCooldown(lastFull, nowMs, INTERSTITIAL_COOLDOWN_MS)) {
             return false;
         }
-        if (lastAppOpen > 0L && (nowMs - lastAppOpen) < APP_OPEN_COOLDOWN_MS) {
+        if (withinCooldown(lastAppOpen, nowMs, APP_OPEN_COOLDOWN_MS)) {
             return false;
         }
         return true;
@@ -926,7 +972,7 @@ public final class AdMobManager {
      */
     public void onMainActivityResumed(@NonNull Activity activity,
                                       boolean inStudio) {
-        long now = System.currentTimeMillis();
+        long now = android.os.SystemClock.elapsedRealtime();
         preloadInterstitial();
         if (!canShowAppOpenAd(inStudio, now)) {
             preloadAppOpenAd();

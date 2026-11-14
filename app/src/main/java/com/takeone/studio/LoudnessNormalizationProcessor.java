@@ -217,12 +217,12 @@ final class LoudnessNormalizationProcessor extends AudioProcessor {
         double lufs = Double.isNaN(measuredLufs)
                 ? measureLufs(buf, frames, ch, sampleRate)
                 : measuredLufs;
-        if (lufs <= -69.5) return;
-        // Dual-mono applies the +3.0 dB ITU-R BS.1770 dual-channel correlation law.
+        // Near-silence: keep the true-peak ceiling but use unity gain.
+        boolean nearSilence = lufs <= -69.5;
         double dualOffset = dualMono.getBoolean() ? 3.0 : 0.0;
         double gainDb = target.getFloat() - (lufs + dualOffset);
         gainDb = Math.max(-36.0, Math.min(36.0, gainDb));
-        float g = Dsp.dbToLin(gainDb);
+        float g = nearSilence ? 1f : Dsp.dbToLin(gainDb);
         float ceilLin = Dsp.dbToLin(ceiling.getFloat());
         float knee = ceilLin * 0.85f;
         float span = Math.max(1e-6f, ceilLin - knee);

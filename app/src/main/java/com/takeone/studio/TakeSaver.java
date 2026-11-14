@@ -74,6 +74,8 @@ public final class TakeSaver {
             if (!fin.getAbsolutePath().equals(raw.getAbsolutePath())) {
                 if (!raw.renameTo(fin)) {
                     fin = raw;
+                } else {
+                    ConversionJobs.recordAdopted(raw, fin);
                 }
             } else {
                 fin = raw;
@@ -160,6 +162,8 @@ public final class TakeSaver {
                 eff = SaveFormat.WAV24;
                 CrashLog.breadcrumb(ctx, "flac ineffective ("
                         + bloated + " bytes), fell back to wav24");
+                postToast(ctx,
+                        "FLAC unavailable on this device; saved as 24-bit WAV instead");
             }
             // Validate the finished .part container before exposing it under a
             // real audio extension in takes/.
@@ -173,6 +177,7 @@ public final class TakeSaver {
             if (!part.renameTo(fin)) {
                 throw new IllegalStateException("adopt part failed");
             }
+            ConversionJobs.recordAdopted(raw, fin);
         } catch (Throwable t) {
             // Preserve the .part on an Android 15 FGS timeout for resumable
             // WAV formats so the restarted job can pick up where it stopped.
@@ -239,5 +244,16 @@ public final class TakeSaver {
             if (!n.exists()) return n;
             i++;
         }
+    }
+
+
+    /** Shows a toast on the UI thread from a worker. */
+    private static void postToast(Context ctx, String text) {
+        if (ctx == null || text == null) return;
+        try {
+            new android.os.Handler(android.os.Looper.getMainLooper()).post(() ->
+                    android.widget.Toast.makeText(ctx, text,
+                            android.widget.Toast.LENGTH_LONG).show());
+        } catch (Throwable ignored) {}
     }
 }

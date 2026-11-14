@@ -213,7 +213,11 @@ final class NormalizeProcessor extends AudioProcessor {
                 float out = v * gain[c];
                 if (rmsMode && Math.abs(out) > 0.99f) {
                     float a = Math.abs(out);
-                    out = Math.copySign(0.90f + 0.09f * ((a - 0.90f) / (1.0f + (a - 0.90f))), out);
+                    // Continuous knee anchored at 0.99: pass-through just below,
+                    // asymptotic approach to 0.99+ above (no step at onset).
+                    float k = (a - 0.99f) / (1.0f - 0.99f);
+                    float mapped = 0.99f + (1.0f - 0.99f) * (k / (1.0f + k));
+                    out = Math.copySign(mapped, out);
                 }
                 buf[base + c] = out;
             }

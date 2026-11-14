@@ -253,7 +253,7 @@ final class FadeProcessor extends AudioProcessor {
             float g;
             if (fadeIn) {
                 if (f < fadeFrames) {
-                    float u = fadeFrames <= 1 ? 1f : f / (float) (fadeFrames - 1);
+                    float u = fadeFrames <= 1 ? 0f : f / (float) (fadeFrames - 1);
                     float shaped = shapeCurve(u);
                     g = gStart + (gEnd - gStart) * shaped;
                 } else {

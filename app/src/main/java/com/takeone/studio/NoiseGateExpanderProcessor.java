@@ -85,6 +85,8 @@ final class NoiseGateExpanderProcessor extends AudioProcessor {
         open = false;
     }
 
+    private float[] scScratch;
+
     @Override
     public void processInPlace(float[] buf, int frames, int channels) {
         if (!isEnabled() || buf == null || frames <= 0) return;
@@ -92,7 +94,11 @@ final class NoiseGateExpanderProcessor extends AudioProcessor {
         int sr = Math.max(8000, sampleRate);
         rebuildSidechain(ch);
 
-        float[] sc = buf.clone();
+        if (scScratch == null || scScratch.length < buf.length) {
+            scScratch = new float[buf.length];
+        }
+        float[] sc = scScratch;
+        System.arraycopy(buf, 0, sc, 0, buf.length);
         if (scFilter.sectionCount() > 0) {
             scFilter.process(sc, frames, ch);
         }

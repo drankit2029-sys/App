@@ -43,14 +43,25 @@ public final class FormatConverter {
      */
     static int toInt16(java.nio.FloatBuffer src, int n,
                        java.nio.ShortBuffer dst) {
+        int[] rng = {0x1234ABC};
         for (int i = 0; i < n; i++) {
             float s = src.get(i);
             if (s > 1f) s = 1f;
             else if (s < -1f) s = -1f;
-            float t = s * 32767f;
+            // TPDF dither at ±1 LSB: decorrelates quantization from the
+            // waveform (inaudible; stops correlated distortion on quiet tones).
+            float d1 = lcgFloat(rng);
+            float d2 = lcgFloat(rng);
+            float t = s * 32767f + (d1 + d2) * 0.5f;
             dst.put(i, (short) (t >= 0f ? t + 0.5f : t - 0.5f));
         }
         return n;
+    }
+
+    /** Deterministic LCG mapped to (-1, 1): keeps saves reproducible. */
+    private static float lcgFloat(int[] s) {
+        s[0] = s[0] * 1103515245 + 12345;
+        return (((s[0] >>> 16) & 0x7FFF) / 16384f) - 1f;
     }
 
     /** Same clamp into 24-bit range, ready to be split into 3 bytes LE. */

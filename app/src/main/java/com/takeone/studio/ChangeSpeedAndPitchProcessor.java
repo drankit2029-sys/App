@@ -67,9 +67,7 @@ final class ChangeSpeedAndPitchProcessor extends AudioProcessor {
         double s = speed.getFloat();
         double pct = percent.getFloat();
         double pctFactor = Math.max(0.20, 1.0 + pct / 100.0);
-        double factor = Math.abs(s - pctFactor) < 1e-2
-                ? s
-                : s * pctFactor;
+        double factor = Math.abs(pct) > 1e-3 ? pctFactor : s;
         return Math.max(0.1, Math.min(8.0, factor));
     }
 

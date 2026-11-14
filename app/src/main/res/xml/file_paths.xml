@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Least privilege: crash sharing reads only the two crash files, take
+     sharing reads only the takes directory. -->
 <paths>
-    <external-files-path name="takes" path="." />
-    <files-path name="internal" path="." />
-    <cache-path name="cache" path="." />
+    <external-files-path name="takes" path="takes/" />
+    <files-path name="crash" path="takeone-crash.txt" />
+    <files-path name="breadcrumbs" path="takeone-breadcrumbs.txt" />
+    <files-path name="redacted" path="takeone-crash-redacted.txt" />
 </paths>

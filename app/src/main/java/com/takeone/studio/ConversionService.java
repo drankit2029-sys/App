@@ -300,6 +300,9 @@ public class ConversionService extends Service {
             if (!startFg(resolveCurrent())) return;
         }
         if (workerAlive) return;
+        // A dataSync budget timeout is deliberate and must not be retried in
+        // a loop: the runtime reclaimed us. The watchdog (15 min) resumes.
+        if (serviceTimedOut) return;
         if (queue.isEmpty()) {
             ConversionWatchdog.cancel(this);
             stopSelf();
@@ -540,6 +543,8 @@ public class ConversionService extends Service {
                 if (!fin.getAbsolutePath().equals(raw.getAbsolutePath())) {
                     if (!raw.renameTo(fin)) {
                         fin = raw;
+                    } else {
+                        ConversionJobs.recordAdopted(raw, fin);
                     }
                 } else {
                     fin = raw;
@@ -671,7 +676,13 @@ public class ConversionService extends Service {
             ConversionJobs.markFailed(job, String.valueOf(t));
             // Keep the raw and re-arm its pending marker so the next launch
             // offers the usual continue/discard recovery for the take.
-            RecordingEngine.writePendingMarker(raw, job.title, job.channels);
+            try {
+                RecordingEngine.writePendingMarker(raw, job.title,
+                        job.channels);
+            } catch (Exception markerError) {
+                CrashLog.breadcrumb(getApplicationContext(),
+                        "pending re-arm failed: " + markerError);
+            }
             doneNotif(false, job.title, null,
                     getString(R.string.convert_failed_msg, job.title));
             broadcast(false, job, null, String.valueOf(t));
@@ -839,6 +850,7 @@ public class ConversionService extends Service {
         FormatConverter.validateFinal(part, eff);
         File fin = TakeSaver.uniqueFinal(raw, "wav");
         if (!part.renameTo(fin)) throw new IllegalStateException("adopt");
+        ConversionJobs.recordAdopted(raw, fin);
         // AUDIT-3-01 fix: `fin` may be integer PCM16/PCM24 (audioFormat 1)
         // or raw float WAV32 (audioFormat 3), so `TakeSaver.durationOf(fin)`
         // cannot read it uniformly. Read duration via `Dsp.wavDurationMs`.

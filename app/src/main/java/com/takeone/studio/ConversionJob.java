@@ -63,6 +63,10 @@ public final class ConversionJob {
     public volatile long replaceTakeId = -1;
     /** Original title to restore when replacing (null = keep job title). */
     public volatile String replaceTitle = null;
+    /** Consecutive crash-runs seen at sweep time; 3 strikes stop the loop. */
+    public volatile int attempts = 0;
+    /** Path of the final file produced by a completed-but-not-yet-marked rename. */
+    public volatile String adoptedPath = null;
     /**
      * True when this conversion job was superseded by an Edit -> Replace save,
      * so the worker aborts it silently and deletes its raw file.
@@ -130,6 +134,8 @@ public final class ConversionJob {
             o.put("progress", progress);
             o.put("framesDone", framesDone);
             o.put("updatedAt", updatedAt);
+            o.put("attempts", attempts);
+            if (adoptedPath != null) o.put("adoptedPath", adoptedPath);
             o.put("error", error != null ? error : "");
             o.put("recordingId", recordingId);
             o.put("replaceTakeId", replaceTakeId);
@@ -189,9 +195,12 @@ public final class ConversionJob {
         if (file == null || !file.exists()) return null;
         try {
             byte[] buf = new byte[(int) Math.min(file.length(), 8192)];
-            int n;
+            int n = 0;
             try (FileInputStream in = new FileInputStream(file)) {
-                n = in.read(buf);
+                int read;
+                while (n < buf.length && (read = in.read(buf, n, buf.length - n)) > 0) {
+                    n += read;
+                }
             }
             if (n <= 0) return null;
             JSONObject o = new JSONObject(new String(buf, 0, n, "UTF-8"));
@@ -217,6 +226,9 @@ public final class ConversionJob {
             j.replaceTakeId = o.optLong("replaceTakeId", -1);
             String rt = o.optString("replaceTitle", "");
             j.replaceTitle = rt.isEmpty() ? null : rt;
+            j.attempts = o.optInt("attempts", 0);
+            String ap = o.optString("adoptedPath", "");
+            j.adoptedPath = ap.isEmpty() ? null : ap;
             return j;
         } catch (Exception e) {
             return null;

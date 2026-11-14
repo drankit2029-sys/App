@@ -35,6 +35,16 @@ public class TeleprompterView extends View {
 
     private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint maskPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final android.graphics.Xfermode dstInXfermode =
+            new PorterDuffXfermode(PorterDuff.Mode.DST_IN);
+    private String[] windowScratch;
+    private Shader maskShader;
+    private float maskOpaqueTop = -1f;
+    private float maskOpaqueBottom = -1f;
+    private int maskH = -1;
+    private static final int[] MASK_COLORS =
+            {0x00000000, 0xFF000000, 0xFF000000, 0x00000000};
+    private static final String[] EMPTY_WINDOW = new String[0];
 
     /** One entry per display line. Never null; blank lines are "". */
     private final List<String> segments = new ArrayList<>();
@@ -81,6 +91,41 @@ public class TeleprompterView extends View {
         // Without this the view never receives touch events for dragging.
         setClickable(true);
         setFocusable(true);
+        setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_YES);
+        setContentDescription("Teleprompter script");
+    }
+
+    @Override
+    public void onInitializeAccessibilityNodeInfo(
+            android.view.accessibility.AccessibilityNodeInfo info) {
+        super.onInitializeAccessibilityNodeInfo(info);
+        info.setClassName("android.widget.ScrollView");
+        info.setScrollable(true);
+        info.addAction(android.view.accessibility.AccessibilityNodeInfo
+                .ACTION_SCROLL_FORWARD);
+        info.addAction(android.view.accessibility.AccessibilityNodeInfo
+                .ACTION_SCROLL_BACKWARD);
+        StringBuilder sb = new StringBuilder(script == null ? "" : script);
+        if (sb.length() > 2000) {
+            sb.setLength(2000);
+            sb.append("\u2026");
+        }
+        info.setContentDescription("Teleprompter script. " + sb);
+    }
+
+    @Override
+    public boolean performAccessibilityAction(int action, android.os.Bundle arguments) {
+        if (action == android.view.accessibility.AccessibilityNodeInfo
+                .ACTION_SCROLL_FORWARD) {
+            scrollBy(Math.max(100f, getHeight() * 0.75f));
+            return true;
+        }
+        if (action == android.view.accessibility.AccessibilityNodeInfo
+                .ACTION_SCROLL_BACKWARD) {
+            scrollBy(-Math.max(100f, getHeight() * 0.75f));
+            return true;
+        }
+        return super.performAccessibilityAction(action, arguments);
     }
 
     public void setTextColor(int color) {
@@ -108,6 +153,9 @@ public class TeleprompterView extends View {
     }
 
     public void setTextSizePx(float px) {
+        // A 240 sp ceiling keeps pathological programmatic callers from
+        // forcing the wrap loop into one word per line at absurd sizes.
+        px = Math.min(px, 240f * getResources().getDisplayMetrics().density);
         if (px > 0f && Math.abs(px - textSizePx) > 0.5f) {
             float linePosition = linePosition();
             textSizePx = px;
@@ -242,6 +290,35 @@ public class TeleprompterView extends View {
         }
     }
 
+    private static final String SPLIT_REGEX =
+            "[\\s\\u00A0\\u1680\\u2000-\\u200A\\u202F\\u205F\\u3000\\uFEFF]+";
+
+    private String[] splitWords(String trimmed, float avail) {
+        String[] raw = trimmed.split(SPLIT_REGEX);
+        java.util.List<String> pieces = new ArrayList<>();
+        for (String w : raw) {
+            if (w.isEmpty()) continue;
+            if (textPaint.measureText(w) <= avail) {
+                pieces.add(w);
+                continue;
+            }
+            // Overlong unbreakable token (URL, path, compound): cut at the
+            // widest character boundary that fits the panel width.
+            int start = 0;
+            while (start < w.length()) {
+                int end = start + 1;
+                while (end <= w.length()
+                        && textPaint.measureText(w.substring(start, end)) <= avail) {
+                    end++;
+                }
+                int fit = Math.max(start + 1, end - 1);
+                pieces.add(w.substring(start, fit));
+                start = fit;
+            }
+        }
+        return pieces.toArray(new String[0]);
+    }
+
     /**
      * Splits the script into display-line segments.
      *
@@ -290,7 +367,7 @@ public class TeleprompterView extends View {
                 segments.add("");
                 continue;
             }
-            String[] words = trimmed.split("\\s+");
+            String[] words = splitWords(trimmed, avail);
             int i = 0;
             while (i < words.length) {
                 StringBuilder line = new StringBuilder(words[i]);
@@ -382,6 +459,7 @@ public class TeleprompterView extends View {
      * {@code firstSegment}, substituting {@code ""} for any index outside the
      * script.
      */
+    /** Static form used by tests and layout helpers (fresh array). */
     static String[] windowForScroll(List<String> segments, int visibleLines,
                                     int firstSegment) {
         if (visibleLines <= 0) return new String[0];
@@ -392,6 +470,21 @@ public class TeleprompterView extends View {
             out[i] = (idx < 0 || idx >= segments.size()) ? "" : segments.get(idx);
         }
         return out;
+    }
+
+    /** Allocation-free form for the VSYNC path; prefix of the buffer is the window. */
+    private String[] cachedWindowForScroll(List<String> segments,
+                                           int visibleLines,
+                                           int firstSegment) {
+        if (visibleLines <= 0) return EMPTY_WINDOW;
+        if (windowScratch == null || windowScratch.length < visibleLines) {
+            windowScratch = new String[Math.max(visibleLines, 8)];
+        }
+        for (int i = 0; i < visibleLines; i++) {
+            int idx = firstSegment + i;
+            windowScratch[i] = (idx < 0 || idx >= segments.size()) ? "" : segments.get(idx);
+        }
+        return windowScratch;
     }
 
     @Override
@@ -429,7 +522,7 @@ public class TeleprompterView extends View {
                     drawFrom, lh);
             drawCount = drawCountForScroll(drawBaseline, lh, h);
         }
-        String[] window = windowForScroll(segments, drawCount, drawFrom);
+        String[] window = cachedWindowForScroll(segments, drawCount, drawFrom);
 
         int save = canvas.save();
         if (mirror) {
@@ -447,7 +540,8 @@ public class TeleprompterView extends View {
         float centreX = w / 2f;
         float baseline = drawBaseline;
         float baselineAlphaFloor = 0.30f;
-        for (String line : window) {
+        for (int i = 0; i < drawCount; i++) {
+            String line = window[i];
             // Fade is symmetric about the reading centre, not the view
             // centre, so the brightest line is always the middle one.
             float a = TeleMath.fadeAlpha(baseline - centerShiftPx, h, fadePx);
@@ -460,15 +554,22 @@ public class TeleprompterView extends View {
         }
         textPaint.setAlpha(255);
 
-        maskPaint.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.DST_IN));
+        maskPaint.setXfermode(dstInXfermode);
         // Opaque band follows the reading centre: 30% of the height each
         // side, clamped into the view.
         float opaqueTop = Math.max(0f, (centreY - h * 0.30f) / h);
         float opaqueBottom = Math.min(1f, (centreY + h * 0.30f) / h);
-        maskPaint.setShader(new LinearGradient(0, 0, 0, h,
-                new int[]{0x00000000, 0xFF000000, 0xFF000000, 0x00000000},
-                new float[]{0f, opaqueTop, opaqueBottom, 1f},
-                Shader.TileMode.CLAMP));
+        if (maskShader == null || maskH != h
+                || Math.abs(opaqueTop - maskOpaqueTop) > 1e-4f
+                || Math.abs(opaqueBottom - maskOpaqueBottom) > 1e-4f) {
+            maskShader = new LinearGradient(0, 0, 0, h, MASK_COLORS,
+                    new float[]{0f, opaqueTop, opaqueBottom, 1f},
+                    Shader.TileMode.CLAMP);
+            maskH = h;
+            maskOpaqueTop = opaqueTop;
+            maskOpaqueBottom = opaqueBottom;
+        }
+        maskPaint.setShader(maskShader);
         canvas.drawRect(0, 0, w, h, maskPaint);
         maskPaint.setShader(null);
         maskPaint.setXfermode(null);
@@ -477,10 +578,10 @@ public class TeleprompterView extends View {
     }
 
     /**
-     * True when the whole script is shorter than the viewport.
+     * True when every wrapped segment fits the viewport.
      */
-    private boolean totalLinesFits(int count) {
-        return segments.size() <= 1 && scrollOffset <= 0.01f;
+    private boolean totalLinesFits(int visibleCount) {
+        return segments.size() <= visibleCount && scrollOffset <= 0.01f;
     }
 
     // ---- dragging the script by hand ----

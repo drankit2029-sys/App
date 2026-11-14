@@ -79,8 +79,9 @@ final class MultibandCompressorProcessor extends AudioProcessor {
             float slope = (1.0f - 1.0f / Math.max(1.1f, ratio)) * amt;
             grDb = -slope * over;
         }
-        float makeupDb = Math.min(6f, Math.max(0f, -threshDb * 0.12f * amt))
-                + (ratio - 2.5f) * 0.25f * amt;
+        float gate = Math.max(0f, Math.min(1f, (db + 62f) / 14f));
+        float makeupDb = (Math.min(6f, Math.max(0f, -threshDb * 0.12f * amt))
+                + (ratio - 2.5f) * 0.25f * amt) * gate;
         return DspChain.fastDbToLin(grDb + makeupDb);
     }
 

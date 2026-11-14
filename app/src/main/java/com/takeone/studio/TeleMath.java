@@ -92,7 +92,7 @@ public final class TeleMath {
         boolean inWord = false;
         for (int i = 0; i < text.length(); i++) {
             char c = text.charAt(i);
-            boolean sep = Character.isWhitespace(c);
+            boolean sep = Character.isWhitespace(c) || Character.isSpaceChar(c);
             if (sep) {
                 inWord = false;
             } else if (!inWord) {
@@ -109,7 +109,13 @@ public final class TeleMath {
      */
     public static int estimatedSeconds(String text, int wpm) {
         if (wpm <= 0) return 0;
-        return Math.round(wordCount(text) * 60f / wpm);
+        return estimatedSeconds(wordCount(text), wpm);
+    }
+
+    /** Count-based form so callers doing one pass compute both at once. */
+    public static int estimatedSeconds(int wordCount, int wpm) {
+        if (wpm <= 0) return 0;
+        return Math.round(wordCount * 60f / wpm);
     }
 
     /**

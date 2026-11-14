@@ -49,11 +49,20 @@ public final class Dsp {
         return String.format(Locale.US, "%.1f MB", mbTenths / 10f);
     }
 
+    // RIFF size fields are unsigned 32-bit; 0xFFFFFFFF is the "unknown
+    // size" convention used by streaming/broadcast files. Writers clamp to
+    // this value instead of a bogus value; readers treat it (and the legacy
+    // 0x7FFFFFFF clamp) as "use the on-disk length". This keeps 44-byte
+    // headers correct for files of arbitrary size.
+    private static final long RIFF_UNKNOWN_SIZE = 0xFFFFFFFFL;
+
     /** 44-byte IEEE-float WAV header (audioFormat 3, 32-bit). */
     public static byte[] wavFloatHeader(int ch, int sampleRate, long bytes) {
+        boolean unknown = bytes >= RIFF_UNKNOWN_SIZE - 36;
         ByteBuffer b = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN);
         b.put(new byte[]{'R', 'I', 'F', 'F'});
-        b.putInt((int) Math.min(Integer.MAX_VALUE, 36 + bytes));
+        b.putInt(unknown ? (int) RIFF_UNKNOWN_SIZE
+                : (int) (36 + bytes));
         b.put(new byte[]{'W', 'A', 'V', 'E'});
         b.put(new byte[]{'f', 'm', 't', ' '});
         b.putInt(16);
@@ -64,7 +73,7 @@ public final class Dsp {
         b.putShort((short) (ch * 4));
         b.putShort((short) 32);
         b.put(new byte[]{'d', 'a', 't', 'a'});
-        b.putInt((int) Math.min(Integer.MAX_VALUE, bytes));
+        b.putInt(unknown ? (int) RIFF_UNKNOWN_SIZE : (int) bytes);
         return b.array();
     }
 
@@ -73,11 +82,13 @@ public final class Dsp {
         if (bits != 16 && bits != 24) {
             throw new IllegalArgumentException("unsupported pcm depth: " + bits);
         }
+        boolean unknown = pcmBytes >= RIFF_UNKNOWN_SIZE - 36;
         int bytesPerSample = bits / 8;
         int blockAlign = ch * bytesPerSample;
         ByteBuffer b = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN);
         b.put(new byte[]{'R', 'I', 'F', 'F'});
-        b.putInt((int) Math.min(Integer.MAX_VALUE, 36 + pcmBytes));
+        b.putInt(unknown ? (int) RIFF_UNKNOWN_SIZE
+                : (int) (36 + pcmBytes));
         b.put(new byte[]{'W', 'A', 'V', 'E'});
         b.put(new byte[]{'f', 'm', 't', ' '});
         b.putInt(16);
@@ -88,7 +99,7 @@ public final class Dsp {
         b.putShort((short) blockAlign);
         b.putShort((short) bits);
         b.put(new byte[]{'d', 'a', 't', 'a'});
-        b.putInt((int) Math.min(Integer.MAX_VALUE, pcmBytes));
+        b.putInt(unknown ? (int) RIFF_UNKNOWN_SIZE : (int) pcmBytes);
         return b.array();
     }
 
@@ -227,7 +238,14 @@ public final class Dsp {
             } else if (hdr[0] == 'd' && hdr[1] == 'a'
                     && hdr[2] == 't' && hdr[3] == 'a') {
                 dataStart = payload;
-                dataBytes = Math.min(size, Math.max(0, len - payload));
+                // 0xFFFFFFFF (broadcast/streaming convention) and the legacy
+                // 0x7FFFFFFF clamp both mean "unknown"; trust on-disk length.
+                if (size == 0xFFFFFFFFL || size == 0x7FFFFFFFL
+                        || size > Math.max(0, len - payload)) {
+                    dataBytes = Math.max(0, len - payload);
+                } else {
+                    dataBytes = size;
+                }
                 if (audioFormat != -1) break;
             }
             long step = 8 + size + (size & 1L);

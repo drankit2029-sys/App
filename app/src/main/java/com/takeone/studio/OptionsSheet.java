@@ -38,7 +38,7 @@ public final class OptionsSheet {
 
     private OptionsSheet() {}
 
-    private static Dialog activeTopPopup;
+    private static java.lang.ref.WeakReference<Dialog> activeTopPopup;
     private static final Handler TOP_POPUP_HANDLER =
             new Handler(Looper.getMainLooper());
 
@@ -220,7 +220,10 @@ public final class OptionsSheet {
             check.setVisibility(item.checked ? View.VISIBLE : View.GONE);
 
             PressAnim.apply(row);
+            final boolean[] settled = {false};
             row.setOnClickListener(v -> {
+                if (settled[0]) return;
+                settled[0] = true;
                 v.animate().scaleX(0.96f).scaleY(0.96f).setDuration(70).withEndAction(() -> {
                     dialog.dismiss();
                     if (item.action != null) item.action.run();
@@ -737,7 +740,10 @@ public final class OptionsSheet {
         PressAnim.apply(confirm);
 
         cancel.setOnClickListener(v -> dialog.dismiss());
+        final boolean[] settled = {false};
         confirm.setOnClickListener(v -> {
+            if (settled[0]) return;
+            settled[0] = true;
             v.animate().scaleX(0.94f).scaleY(0.94f).setDuration(70).withEndAction(() -> {
                 dialog.dismiss();
                 if (onConfirm != null) onConfirm.run();
@@ -747,6 +753,20 @@ public final class OptionsSheet {
         styleAsCentered(dialog);
         dialog.show();
         if (iconBg != null) PressAnim.pop(iconBg);
+    }
+
+    /** Non-compact modal with a scrollable body for long text. */
+    public static void showInfo(Context ctx, String title, String body) {
+        Dialog dialog = new Dialog(ctx, R.style.TakeOneCenterDialog);
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        View root = LayoutInflater.from(ctx).inflate(R.layout.dialog_privacy, null);
+        dialog.setContentView(root);
+        ((TextView) root.findViewById(R.id.privacyTitle)).setText(title);
+        ((TextView) root.findViewById(R.id.privacyBody)).setText(body);
+        root.findViewById(R.id.privacyOk)
+                .setOnClickListener(v -> dialog.dismiss());
+        styleAsCentered(dialog);
+        dialog.show();
     }
 
     // ---- success / failure result popup ----
@@ -760,12 +780,13 @@ public final class OptionsSheet {
     public static android.app.Dialog showResult(Context ctx, boolean success,
                                   String title, String message,
                                   Runnable onOk) {
-        if (activeTopPopup != null) {
+        Dialog liveActive = activeTopPopup != null ? activeTopPopup.get() : null;
+        if (liveActive != null) {
             try {
-                if (activeTopPopup.isShowing()) activeTopPopup.dismiss();
+                if (liveActive.isShowing()) liveActive.dismiss();
             } catch (Exception ignored) {}
-            activeTopPopup = null;
         }
+        activeTopPopup = null;
         TOP_POPUP_HANDLER.removeCallbacksAndMessages(null);
 
         Dialog dialog = new Dialog(ctx, R.style.TakeOneCenterDialog);
@@ -812,13 +833,15 @@ public final class OptionsSheet {
             fire.run();
         });
         dialog.setOnDismissListener(dd -> {
-            if (activeTopPopup == dialog) activeTopPopup = null;
+            if (activeTopPopup != null && activeTopPopup.get() == dialog) {
+                activeTopPopup = null;
+            }
             fire.run();
         });
 
         dialog.setCancelable(true);
         styleAsTopPopup(dialog);
-        activeTopPopup = dialog;
+        activeTopPopup = new java.lang.ref.WeakReference<>(dialog);
         dialog.show();
         styleAsTopPopup(dialog);
         root.setTranslationY(-dp(ctx, 24));

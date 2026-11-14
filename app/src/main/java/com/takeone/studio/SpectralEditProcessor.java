@@ -37,16 +37,20 @@ final class SpectralEditProcessor extends AudioProcessor {
             float width = (streamF2 - streamF1) / centre;
             for (int b = 0; b < binCount; b++) {
                 float hz = (float) b * sampleRate / FFT_SIZE;
-                if ((streamMode == 1 || streamMode == 2)
-                        && (hz < streamF1 || hz > streamF2)) continue;
+                if (streamMode == 2 && (hz < streamF1 || hz > streamF2)) continue;
                 float weight = 1f;
                 if (streamMode == 0) {
                     float d = (hz - centre) / (centre * Math.max(0.05f, width));
                     weight = (float) Math.exp(-d * d);
                 } else if (streamMode == 1) {
-                    float u = Math.min(1f,
-                            (hz - streamF1) / Math.max(1f, streamF2 - streamF1));
-                    weight = 0.5f * (1f - (float) Math.cos(Math.PI * u));
+                    if (hz < streamF1) {
+                        weight = 0f;
+                    } else if (hz <= streamF2) {
+                        float u = (hz - streamF1) / Math.max(1f, streamF2 - streamF1);
+                        weight = 0.5f * (1f - (float) Math.cos(Math.PI * u));
+                    } else {
+                        weight = 1f;
+                    }
                 }
                 float targetDb = streamMode == 2 ? -48.0f : streamGain;
                 float factor = (float) Math.pow(10.0,

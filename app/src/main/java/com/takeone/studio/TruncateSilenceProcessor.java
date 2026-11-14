@@ -219,9 +219,20 @@ final class TruncateSilenceProcessor extends AudioProcessor {
         int window = Math.max(1, (int) (sr * 0.01));
         int rawMinMs = minDuration.getCurrentRaw();
         long minSilent = Math.max(1L, Math.round(rawMinMs * 0.001 * sr));
+        // Mirror the in-memory path: on very short regions, scale the
+        // detection minimum so short clips still yield truncated silence.
+        if (frames < minSilent * 2L) {
+            minSilent = Math.max(window,
+                    Math.min(frames / 6, window + rawMinMs / 50L));
+        }
         boolean compressMode = action.getEnumIndex() == 1;
         long truncTargetFrames = Math.max(1L,
                 Math.round(truncateTo.getCurrentRaw() * 0.001 * sr));
+        if (frames < truncTargetFrames * 3L) {
+            truncTargetFrames = Math.max(1L,
+                    Math.min(frames / 8,
+                            truncateTo.getCurrentRaw() * frames / 4000));
+        }
         float compRatio = compressTo.getCurrentRaw() / 100f;
 
         // Pass 1: Stream 10 ms RMS windows to locate silent spans without loading file in RAM

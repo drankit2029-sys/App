@@ -20,8 +20,8 @@
 
         <ImageView
             android:id="@+id/backBtn"
-            android:layout_width="40dp"
-            android:layout_height="36dp"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
             android:contentDescription="@string/cd_back"
             android:padding="10dp"
             android:src="@drawable/ic_arrow_left" />
@@ -214,8 +214,8 @@
                 <!-- Icon-only teleprompter action buttons (TextView kept for test compat) -->
                 <TextView
                     android:id="@+id/teleEditBtn"
-                    android:layout_width="30dp"
-                    android:layout_height="30dp"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
                     android:background="@drawable/bg_round_btn"
                     android:clickable="true"
                     android:contentDescription="@string/tele_edit"
@@ -236,8 +236,8 @@
 
                 <TextView
                     android:id="@+id/telePauseBtn"
-                    android:layout_width="30dp"
-                    android:layout_height="30dp"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
                     android:layout_marginStart="6dp"
                     android:background="@drawable/bg_round_btn"
                     android:clickable="true"
@@ -253,8 +253,8 @@
 
                 <TextView
                     android:id="@+id/teleMirrorBtn"
-                    android:layout_width="30dp"
-                    android:layout_height="30dp"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
                     android:layout_marginStart="6dp"
                     android:background="@drawable/bg_round_btn"
                     android:clickable="true"
