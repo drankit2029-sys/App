@@ -43,38 +43,14 @@ public final class FormatConverter {
      */
     static int toInt16(java.nio.FloatBuffer src, int n,
                        java.nio.ShortBuffer dst) {
-        return toInt16(src, n, dst, 0L);
-    }
-
-    /**
-     * Same conversion, with the absolute sample index of {@code src.get(0)} so
-     * the TPDF dither is a pure function of position (resumable, chunk-size
-     * independent, and byte-identical for identical input).
-     */
-    static int toInt16(java.nio.FloatBuffer src, int n,
-                       java.nio.ShortBuffer dst, long baseSample) {
         for (int i = 0; i < n; i++) {
             float s = src.get(i);
             if (s > 1f) s = 1f;
             else if (s < -1f) s = -1f;
-            // TPDF dither at ±1 LSB: decorrelates quantization from the
-            // waveform (inaudible; stops correlated distortion on quiet tones).
-            long idx = baseSample + i;
-            float d1 = phaseHash(idx, 0x9E3779B97F4A7C15L);
-            float d2 = phaseHash(idx ^ 0x5DEECE66DL, 0xC2B2AE3D27D4EB4FL);
-            float t = s * 32767f + (d1 + d2) * 0.5f;
+            float t = s * 32767f;
             dst.put(i, (short) (t >= 0f ? t + 0.5f : t - 0.5f));
         }
         return n;
-    }
-
-    /** 64-bit mix hash-mapped onto [-1, 1): plenty for 16-bit TPDF dither. */
-    private static float phaseHash(long x, long seed) {
-        long h = x + seed;
-        h = (h ^ (h >>> 30)) * 0xBF58476D1CE4E5B9L;
-        h = (h ^ (h >>> 27)) * 0x94D049BB133111EBL;
-        h ^= (h >>> 31);
-        return ((int) (h >>> 40) / 8388608f) - 1f;
     }
 
     /** Same clamp into 24-bit range, ready to be split into 3 bytes LE. */
@@ -210,7 +186,7 @@ public final class FormatConverter {
             while (done < totalSamples) {
                 int want = (int) Math.min(chunk, totalSamples - done);
                 r.readFully(in, 0, want * 4);
-                toInt16(fb, want, sb, done);
+                toInt16(fb, want, sb);
                 w.write(out, 0, want * 2);
                 done += want;
                 if (cb != null) {
@@ -406,7 +382,7 @@ public final class FormatConverter {
                             java.nio.ShortBuffer sb = dstBuf
                                     .order(ByteOrder.LITTLE_ENDIAN)
                                     .asShortBuffer();
-                            toInt16(fb, shorts, sb, framesDone * ch);
+                            toInt16(fb, shorts, sb);
                             dstBuf.position(0);
                             dstBuf.limit(shorts * 2);
                             long pts = framesDone * 1_000_000L / sr;
@@ -1103,7 +1079,7 @@ public final class FormatConverter {
                                 java.nio.ShortBuffer sb = dstBuf
                                         .order(ByteOrder.LITTLE_ENDIAN)
                                         .asShortBuffer();
-                                toInt16(fb, shorts, sb, framesDone * ch);
+                                toInt16(fb, shorts, sb);
                                 dstBuf.position(0);
                                 dstBuf.limit(shorts * 2);
                                 long pts = framesDone * 1_000_000L / sr;

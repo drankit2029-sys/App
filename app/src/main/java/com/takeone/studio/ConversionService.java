@@ -794,7 +794,7 @@ public class ConversionService extends Service {
                     }
                     w.write(out, 0, want * 3);
                 } else {
-                    FormatConverter.toInt16(fb, want, sb, doneSamples);
+                    FormatConverter.toInt16(fb, want, sb);
                     w.write(out, 0, want * 2);
                 }
                 doneSamples += want;
