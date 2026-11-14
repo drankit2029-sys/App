@@ -202,8 +202,16 @@ public final class CrashLog {
      */
     private static File redactForShare(Context ctx, File crash) {
         try {
-            byte[] bytes = java.nio.file.Files.readAllBytes(crash.toPath());
-            String txt = new String(bytes, "UTF-8");
+            byte[] bytes = new byte[(int) Math.min(crash.length(), 256 * 1024)];
+            int n = 0;
+            try (java.io.FileInputStream in = new java.io.FileInputStream(crash)) {
+                int read;
+                while (n < bytes.length
+                        && (read = in.read(bytes, n, bytes.length - n)) > 0) {
+                    n += read;
+                }
+            }
+            String txt = new String(bytes, 0, n, "UTF-8");
             String redacted = txt.replaceAll(
                     "(/[^\\s\\[]{1,160}/[^\\s\\]{1,160})",
                     "<path>");
