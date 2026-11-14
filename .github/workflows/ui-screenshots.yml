@@ -14,6 +14,7 @@ on:
       - 'app/src/main/java/com/takeone/studio/MainActivity.java'
       - 'app/src/main/AndroidManifest.xml'
       - 'app/src/main/res/layout-land/**'
+      - 'app/src/main/res/layout-sw600dp/**'
       - '.github/workflows/ui-screenshots.yml'
 
 concurrency:
@@ -62,6 +63,13 @@ jobs:
           - { id: api26_phone_360x740, api: 26, arch: x86_64, target: default, profile: 'Nexus 5', width: 720, height: 1480, density: 320, orientation: portrait }
           - { id: api27_phone_393x786, api: 27, arch: x86_64, target: default, profile: 'Nexus 5', width: 688, height: 1376, density: 280, orientation: portrait }
           - { id: api28_phone_412x732, api: 28, arch: x86_64, target: default, profile: 'Nexus 5', width: 1080, height: 1920, density: 420, orientation: portrait }
+          # API 36 (Android 16): same coverage as the API 35 line.
+          - { id: api36_phone_720x1280, api: 36, arch: x86_64, target: google_apis, profile: 'Nexus 5', width: 720, height: 1280, density: 320, orientation: portrait }
+          - { id: api36_phone_1080x2400, api: 36, arch: x86_64, target: google_apis, profile: 'Nexus 5', width: 1080, height: 2400, density: 420, orientation: portrait }
+          - { id: api36_phone_1440x2960, api: 36, arch: x86_64, target: google_apis, profile: pixel_3_xl, width: 1440, height: 2960, density: 560, orientation: portrait }
+          - { id: api36_foldable_unfolded_1840x2208, api: 36, arch: x86_64, target: google_apis, profile: 'Nexus 5', width: 1840, height: 2208, density: 420, orientation: portrait }
+          - { id: api36_tablet_1600x2560, api: 36, arch: x86_64, target: google_apis, profile: 'Nexus 10', width: 1600, height: 2560, density: 320, orientation: landscape }
+          - { id: api36_tablet_1600x2560_portrait, api: 36, arch: x86_64, target: google_apis, profile: 'Nexus 10', width: 1600, height: 2560, density: 320, orientation: portrait }
           - { id: api29_phone_360x800, api: 29, arch: x86_64, target: default, profile: 'Nexus 5', width: 900, height: 2000, density: 400, orientation: portrait }
           - { id: api30_phone_412x915, api: 30, arch: x86_64, target: google_apis, profile: 'Nexus 5', width: 1080, height: 2400, density: 420, orientation: portrait }
           - { id: api31_phone_393x873, api: 31, arch: x86_64, target: google_apis, profile: 'Nexus 5', width: 1080, height: 2400, density: 440, orientation: portrait }
