@@ -68,13 +68,13 @@ public final class FormatConverter {
         return n;
     }
 
-    /** 64-bit mix hash-mapped onto (-1, 1): plenty for 16-bit TPDF dither. */
+    /** 64-bit mix hash-mapped onto [-1, 1): plenty for 16-bit TPDF dither. */
     private static float phaseHash(long x, long seed) {
         long h = x + seed;
         h = (h ^ (h >>> 30)) * 0xBF58476D1CE4E5B9L;
         h = (h ^ (h >>> 27)) * 0x94D049BB133111EBL;
         h ^= (h >>> 31);
-        return ((int) (h >>> 40) / 4194304f) - 1f;
+        return ((int) (h >>> 40) / 8388608f) - 1f;
     }
 
     /** Same clamp into 24-bit range, ready to be split into 3 bytes LE. */
