@@ -12,12 +12,11 @@
         android:layout_height="match_parent"
         android:orientation="horizontal">
 
-        <!-- Library pane: takes list + record FAB -->
+        <!-- Library pane: phone-optimised fixed columns width; studio flexes -->
         <LinearLayout
             android:id="@+id/libraryPane"
-            android:layout_width="0dp"
+            android:layout_width="360dp"
             android:layout_height="match_parent"
-            android:layout_weight="2"
             android:orientation="vertical">
 
             <FrameLayout
@@ -98,7 +97,7 @@
             android:id="@+id/studioContainer"
             android:layout_width="0dp"
             android:layout_height="match_parent"
-            android:layout_weight="3">
+            android:layout_weight="1">
 
             <FrameLayout
                 android:id="@+id/studioEmpty"
