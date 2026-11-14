@@ -98,7 +98,8 @@ public final class TeleDialogs {
         EditText already = openInput != null ? openInput.get() : null;
         if (already != null && already.isAttachedToWindow()) {
             android.widget.Toast.makeText(ctx,
-                    R.string.tele_editor_open, Toast.LENGTH_SHORT).show();
+                    R.string.tele_editor_open,
+                    android.widget.Toast.LENGTH_SHORT).show();
             return null;
         }
         Dialog d = new Dialog(ctx, R.style.TakeOneCenterDialog);

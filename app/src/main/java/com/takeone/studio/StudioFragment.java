@@ -3933,6 +3933,7 @@ public class StudioFragment extends Fragment {
                 handler.post(this::refreshFxPreviewPeaks);
             }
         }, "takeone-fx-region").start();
+    };
 
     private void paintFxPanelControls() {
         if (fxPanel == null || !isAdded()) return;

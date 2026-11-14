@@ -1163,7 +1163,6 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             snackText(getString(R.string.no_audio_file));
             return;
         }
-        finalizePlaybackStart(take.id, startPos);
     }
 
     private void finalizePlaybackStart(long takeId, long startPos) {
@@ -1172,7 +1171,7 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         // Drop any stale near-end position so replay starts exactly at startPos
         // instead of snapping to where the last playthrough left off.
         adapter.setProgress(list, takeId, startPos);
-        adapter.expandDirectIfNeeded(list, take.id);
+        adapter.expandDirectIfNeeded(list, takeId);
         adapter.paintPlayState(list, playingId, false);
         AdMobManager.get(requireContext()).setAudioPlaybackActive(true);
         handler.post(progressTick);

@@ -219,12 +219,10 @@ final class TruncateSilenceProcessor extends AudioProcessor {
         int window = Math.max(1, (int) (sr * 0.01));
         int rawMinMs = minDuration.getCurrentRaw();
         long minSilent = Math.max(1L, Math.round(rawMinMs * 0.001 * sr));
-        // Mirror the in-memory path: on very short regions, scale the
-        // detection minimum so short clips still yield truncated silence.
-        if (frames < minSilent * 2L) {
-            minSilent = Math.max(window,
-                    Math.min(frames / 6, window + rawMinMs / 50L));
-        }
+        final long effMinSilent = frames < minSilent * 2L
+                ? Math.max(window,
+                        Math.min(frames / 6, window + rawMinMs / 50L))
+                : minSilent;
         boolean compressMode = action.getEnumIndex() == 1;
         long truncTargetFrames = Math.max(1L,
                 Math.round(truncateTo.getCurrentRaw() * 0.001 * sr));
@@ -262,7 +260,7 @@ final class TruncateSilenceProcessor extends AudioProcessor {
                             if (silent && silentStart[0] < 0) {
                                 silentStart[0] = winStartPos[0];
                             } else if (!silent && silentStart[0] >= 0) {
-                                if (winEnd - silentStart[0] >= minSilent) {
+                                if (winEnd - silentStart[0] >= effMinSilent) {
                                     spans.add(new long[]{silentStart[0], winEnd});
                                 }
                                 silentStart[0] = -1L;
@@ -272,7 +270,7 @@ final class TruncateSilenceProcessor extends AudioProcessor {
                         }
                     }
                 });
-        if (silentStart[0] >= 0 && frames - silentStart[0] >= minSilent) {
+        if (silentStart[0] >= 0 && frames - silentStart[0] >= effMinSilent) {
             spans.add(new long[]{silentStart[0], frames});
         }
 

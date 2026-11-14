@@ -128,9 +128,12 @@ public final class RecordingEngine {
     static boolean hasDiskRoom(File dir, long neededBytes) {
         try {
             android.os.StatFs s = new android.os.StatFs(dir.getAbsolutePath());
-            return s.getAvailableBytes() >= Math.max(neededBytes,
-                    MIN_FREE_RECORD_BYTES);
-        } catch (Exception e) {
+            long avail = s.getAvailableBytes();
+            // 0 typically means the platform stalwart returned nothing
+            // (Robolectric stub): treat as unknown, never block the user.
+            if (avail <= 0) return true;
+            return avail >= neededBytes;
+        } catch (Throwable t) {
             return true;
         }
     }

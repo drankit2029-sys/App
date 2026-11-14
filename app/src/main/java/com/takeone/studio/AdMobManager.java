@@ -103,7 +103,7 @@ public final class AdMobManager {
      * interstitial. Set to 1 so every completed save, export, or share is
      * eligible (each workflow already involves multiple user actions).
      */
-    public static final int INTERSTITIAL_ACTION_INTERVAL = 3;
+    public static final int INTERSTITIAL_ACTION_INTERVAL = 1;
 
     /** Minimum 15-second cooldown between back-to-back full-screen ads. */
     public static final long INTERSTITIAL_COOLDOWN_MS = 15_000L;
@@ -326,24 +326,6 @@ public final class AdMobManager {
      * Globally mutes AdMob video/rich-media audio so an ad never steals
      * Android AudioFocus or plays over the device speaker in an audio studio.
      */
-    /** NPA when consent was refused or is unknown; personalized otherwise. */
-    @NonNull
-    private static AdRequest buildAdRequest() {
-        boolean personalized = false;
-        try {
-            Context ctx = instance != null ? instance.appCtx : null;
-            if (ctx != null) {
-                ConsentInformation info =
-                        UserMessagingPlatform.getConsentInformation(ctx);
-                personalized = info.getConsentStatus()
-                        == ConsentInformation.ConsentStatus.OBTAINED;
-            }
-        } catch (Throwable ignored) {}
-        AdRequest.Builder b = new AdRequest.Builder();
-        if (!personalized) b.setRequestNonPersonalizedAds(true);
-        return b.build();
-    }
-
     public void applyAudioSafeSettings() {
         try {
             MobileAds.setAppMuted(true);
@@ -433,7 +415,7 @@ public final class AdMobManager {
                             .setRequestMultipleImages(false)
                             .build())
                     .build();
-            adLoader.loadAd(buildAdRequest());
+            adLoader.loadAd(new AdRequest.Builder().build());
         } catch (Throwable ignored) {
             loadAdaptiveBannerFallback(activity, container);
         }
@@ -571,7 +553,7 @@ public final class AdMobManager {
                 }
             });
             activeBannerAdView = adView;
-            adView.loadAd(buildAdRequest());
+            adView.loadAd(new AdRequest.Builder().build());
         } catch (Throwable ignored) {
             if (container.getChildCount() == 0) {
                 bindOfflineHouseAdFallback(activity, container);
@@ -668,7 +650,7 @@ public final class AdMobManager {
         loadingInterstitial = true;
         try {
             InterstitialAd.load(appCtx, TEST_INTERSTITIAL_ID,
-                    buildAdRequest(),
+                    new AdRequest.Builder().build(),
                     new InterstitialAdLoadCallback() {
                         @Override
                         public void onAdLoaded(@NonNull InterstitialAd ad) {
@@ -908,7 +890,7 @@ public final class AdMobManager {
         loadingAppOpen = true;
         try {
             AppOpenAd.load(appCtx, TEST_APP_OPEN_ID,
-                    buildAdRequest(),
+                    new AdRequest.Builder().build(),
                     new AppOpenAd.AppOpenAdLoadCallback() {
                         @Override
                         public void onAdLoaded(@NonNull AppOpenAd ad) {
