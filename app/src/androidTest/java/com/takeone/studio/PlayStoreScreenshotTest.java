@@ -174,7 +174,9 @@ public class PlayStoreScreenshotTest {
             // Back to the teleprompter (studio main).
             act.runOnUiThread(() -> {
                 if (studio.isFxPanelOpen()) {
-                    click(activity, R.id.fxCloseBtn);
+                    View btn = ((MainActivity) act).findViewById(
+                            R.id.fxCloseBtn);
+                    if (btn != null) btn.performClick();
                 }
             });
             sleep(SETTLE_MS);
