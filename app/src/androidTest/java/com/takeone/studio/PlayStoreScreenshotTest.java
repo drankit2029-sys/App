@@ -68,6 +68,7 @@ public class PlayStoreScreenshotTest {
 
     private static final TakeSpec[] TAKES = {
             new TakeSpec("Interview with Sarah", 162, true),
+
             new TakeSpec("Script Read v2", 57, false),
             new TakeSpec("Field Recording", 118, false),
             new TakeSpec("Meeting Notes", 187, false),
@@ -120,10 +121,13 @@ public class PlayStoreScreenshotTest {
             takesDir.mkdirs();
 
             // Newest first: addRecording inserts at 0, so seed oldest first.
+            // Give the opening take its display name so the studio top bar
+            // reads well in screenshots.
             for (int i = TAKES.length - 1; i >= 0; i--) {
                 TakeSpec spec = TAKES[i];
                 File raw = new File(takesDir,
-                        "store_seed_" + i + ".f32.wav");
+                        i == 0 ? "Interview with Sarah.f32.wav"
+                               : "store_seed_" + i + ".f32.wav");
                 writeTake(raw, spec.seconds, 2);
                 Take t = TakesRepository.addRecording(raw,
                         spec.seconds * 1000L, spec.name, "WAV32");
@@ -137,13 +141,26 @@ public class PlayStoreScreenshotTest {
             cfg.applyPreset(DspChain.Preset.VOICE_POLISH);
             cfg.save(ctx);
 
+            String script = "TakeOne is small-studio magic.\n"
+                    + "Today we're recording the final master for the\n"
+                    + "VoxFi brand film.\n"
+                    + "Ninety seconds, one perfect take,\n"
+                    + "and a brand voice that took two years to find.\n"
+                    + "\n"
+                    + "Take one. Action.";
+            try {
+                ctx.getSharedPreferences("takeone_script", Context.MODE_PRIVATE)
+                        .edit().putString("tele_script", script).apply();
+            } catch (Exception ignored) {
+            }
+
             activity = launch(instrumentation);
             waitForTakes(8000);
             sleep(SETTLE_MS);
             shoot(device, outRoot, "listing", "01_library", shots, issues);
 
             // Open a polished take in the studio.
-            File seed = new File(takesDir, "store_seed_0.f32.wav");
+            File seed = new File(takesDir, "Interview with Sarah.f32.wav");
             final Activity act = activity;
             act.runOnUiThread(() ->
                     ((MainActivity) act).openStudioWithEdit(
