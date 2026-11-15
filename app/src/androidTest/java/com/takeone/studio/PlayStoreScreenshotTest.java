@@ -154,8 +154,16 @@ public class PlayStoreScreenshotTest {
                 write(new File(outRoot, "report.json"), report.toString(2));
                 return;
             }
-            View root = studio.getView();
-            assertNotNull(root);
+            View root = null;
+            for (int i = 0; i < 50 && root == null; i++) {
+                root = studio.getView();
+                sleep(100);
+            }
+            if (root == null) {
+                issues.put("studio view never created");
+                write(new File(outRoot, "report.json"), report.toString(2));
+                return;
+            }
             WaveformView waveform = root.findViewById(R.id.waveform);
             for (int i = 0; i < 100 && waveform.historyCount() <= 1; i++) {
                 sleep(100);
