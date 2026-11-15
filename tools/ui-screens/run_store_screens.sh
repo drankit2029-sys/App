@@ -56,6 +56,10 @@ adb shell cmd window user-rotation lock "$ROTATION" >/dev/null 2>&1 \
 sleep 1
 
 SDK="$(adb shell getprop ro.build.version.sdk | tr -d '\r')"
+
+adb install -r -g "$APK_PATH"
+adb install -r -g "$TEST_APK_PATH"
+
 {
   echo "device=$DEVICE_ID"
   echo "sdk=$SDK"
