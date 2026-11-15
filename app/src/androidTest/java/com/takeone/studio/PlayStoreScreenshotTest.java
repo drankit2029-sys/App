@@ -105,7 +105,7 @@ public class PlayStoreScreenshotTest {
         report.put("displayWidth", device.getDisplayWidth());
         report.put("displayHeight", device.getDisplayHeight());
 
-        androidx.test.platform.app.Instrumentation instrumentation =
+        android.app.Instrumentation instrumentation =
                 InstrumentationRegistry.getInstrumentation();
         Activity activity = null;
         RecordingEngine engine = RecordingEngine.get();
@@ -134,7 +134,7 @@ public class PlayStoreScreenshotTest {
 
             // Preset rack with four Pro effects so FX shots look composed.
             DspChain.Config cfg = DspChain.Config.load(ctx);
-            cfg.applyPreset(DspChain.Config.Preset.VOICE_POLISH);
+            cfg.applyPreset(DspChain.Preset.VOICE_POLISH);
             cfg.save(ctx);
 
             activity = launch(instrumentation);
@@ -239,7 +239,7 @@ public class PlayStoreScreenshotTest {
         sleep(250);
     }
 
-    private static Activity launch(androidx.test.platform.app.Instrumentation instr) {
+    private static Activity launch(android.app.Instrumentation instr) {
         Context ctx = instr.getTargetContext();
         Intent i = new Intent(ctx, MainActivity.class);
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
