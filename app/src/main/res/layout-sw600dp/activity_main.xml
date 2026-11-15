@@ -15,7 +15,7 @@
         <!-- Library pane: phone-optimised fixed columns width; studio flexes -->
         <LinearLayout
             android:id="@+id/libraryPane"
-            android:layout_width="360dp"
+            android:layout_width="400dp"
             android:layout_height="match_parent"
             android:orientation="vertical">
 
