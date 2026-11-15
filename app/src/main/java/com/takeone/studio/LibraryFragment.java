@@ -272,7 +272,9 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         v.findViewById(R.id.infoBtn).setOnClickListener(btn ->
                 OptionsSheet.showInfo(requireContext(),
                         getString(R.string.privacy_title),
-                        getString(R.string.privacy_body)));
+                        getString(R.string.privacy_body),
+                        getString(R.string.privacy_policy_link_label),
+                        getString(R.string.privacy_policy_url)));
         View importBtn = v.findViewById(R.id.importBtn);
         if (importBtn != null) {
             importBtn.setOnClickListener(view -> {

@@ -757,12 +757,40 @@ public final class OptionsSheet {
 
     /** Non-compact modal with a scrollable body for long text. */
     public static void showInfo(Context ctx, String title, String body) {
+        showInfo(ctx, title, body, null, null);
+    }
+
+    /** Same, with an optional external link rendered below the body. */
+    public static void showInfo(Context ctx, String title, String body,
+                                String linkLabel, String linkUrl) {
         Dialog dialog = new Dialog(ctx, R.style.TakeOneCenterDialog);
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
         View root = LayoutInflater.from(ctx).inflate(R.layout.dialog_privacy, null);
         dialog.setContentView(root);
         ((TextView) root.findViewById(R.id.privacyTitle)).setText(title);
         ((TextView) root.findViewById(R.id.privacyBody)).setText(body);
+        android.widget.TextView link = root.findViewById(R.id.privacyLink);
+        if (linkLabel != null && linkUrl != null && !linkUrl.isEmpty()) {
+            link.setText(linkLabel);
+            link.setVisibility(View.VISIBLE);
+            link.setContentDescription(
+                    ctx.getString(R.string.privacy_policy_link));
+            link.setOnClickListener(v -> {
+                try {
+                    android.content.Intent i = new android.content.Intent(
+                            android.content.Intent.ACTION_VIEW,
+                            android.net.Uri.parse(linkUrl));
+                    i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+                    v.getContext().startActivity(i);
+                } catch (Exception ignored) {
+                    android.widget.Toast.makeText(v.getContext(),
+                            R.string.tele_import_failed,
+                            android.widget.Toast.LENGTH_SHORT).show();
+                }
+            });
+        } else {
+            link.setVisibility(View.GONE);
+        }
         root.findViewById(R.id.privacyOk)
                 .setOnClickListener(v -> dialog.dismiss());
         styleAsCentered(dialog);

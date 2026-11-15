@@ -1,0 +1,31 @@
+TakeOne is a complete voice-and-music studio that fits in your pocket — not a
+pocket-sized imitation of one.
+
+RECORD & MASTER
+• 32-bit float recording with true-peak limiting, so quiet performances stay
+  intact and loud ones never clip.
+• Pro noise suppression, de-esser, compressor, EQ, reverb, chorus and more —
+  all processed on-device, in the rack you already know.
+• Loudness normalization to broadcast targets (EBU R128) and one-tap mastering
+  presets.
+
+EDIT LIKE AN EDITOR
+• Non-destructive punch-in edits on the waveform: select, trim, delete,
+  correct pitch and speed, or splice takes.
+• Undo everything. Your takes are never altered invisibly.
+
+TELEPROMPTER BUILT IN
+• A proper scrolling teleprompter with mirror mode for hardware mirrors,
+  word-count and reading-time estimates, and adjustable speed and size.
+
+LIBRARY & EXPORT
+• Organize, favourite, search and filter takes; import audio; export to
+  WAV32/WAV24/WAV16, FLAC, M4A, Opus or AMR; share straight from the app.
+
+PRIVACY FIRST
+• Audio never leaves your device. No cloud uploads, no accounts, no trackers.
+  Ads are never shown during recording or playback.
+• Free tier: supported by thoughtful, interstitial-free-after-action ads.
+  Pro unlocks everything, forever, once.
+
+Privacy policy: https://drankit2029-sys.github.io/App/privacy-policy.html

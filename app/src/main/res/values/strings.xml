@@ -105,6 +105,9 @@
     <string name="tele_editor_open">The script editor is already open</string>
     <string name="close">Close</string>
     <string name="cd_info">Privacy &amp; data</string>
+    <string name="privacy_policy_link">Open the full privacy policy online</string>
+    <string name="privacy_policy_link_label">View full policy online &#8599;</string>
+    <string name="privacy_policy_url">https://drankit2029-sys.github.io/App/privacy-policy.html</string>
     <string name="privacy_title">Privacy &amp; Data</string>
     <string name="privacy_body">TakeOne keeps your audio on this device. Recordings, edits and exports are played and processed on-device only; TakeOne does not upload your audio to any server.
 

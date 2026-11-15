@@ -39,6 +39,20 @@
     </ScrollView>
 
     <TextView
+        android:id="@+id/privacyLink"
+        android:layout_width="match_parent"
+        android:layout_height="38dp"
+        android:layout_marginTop="10dp"
+        android:clickable="true"
+        android:drawablePadding="6dp"
+        android:drawableStart="@drawable/ic_chevron"
+        android:focusable="true"
+        android:gravity="center_vertical"
+        android:paddingStart="12dp"
+        android:textColor="@color/record"
+        android:textSize="13sp" />
+
+    <TextView
         android:id="@+id/privacyOk"
         android:layout_width="match_parent"
         android:layout_height="40dp"

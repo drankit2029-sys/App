@@ -1,0 +1,3 @@
+• Two-pane layout for tablets & foldables (library + studio side by side)
+• Improved long-session recording stability and crash recovery for FX bakes
+• New FX-param and effect handling, multi-hour WAV support, in-app Privacy & Data screen
