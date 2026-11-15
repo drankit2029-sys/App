@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="description" content="TakeOne privacy policy — on-device audio, crash diagnostics, ads, billing and backup scope.">
+<title>TakeOne — Privacy Policy</title>
+<style>
+  :root {
+    --bg: #0E1013;
+    --panel: #16181D;
+    --panel-2: #1E2127;
+    --text: #F2F4F7;
+    --text-2: #8A93A0;
+    --accent: #FF3B30;
+    --line: rgba(255,255,255,0.08);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: radial-gradient(1200px 600px at 70% -10%, #1c1f26 0%, var(--bg) 60%);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+      Helvetica, Arial, sans-serif;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 48px 20px 96px; }
+  .brand { display: flex; align-items: center; gap: 14px; margin-bottom: 36px;
+    text-decoration: none; color: var(--text); }
+  .mark { width: 46px; height: 46px; border-radius: 12px;
+    background: linear-gradient(160deg, #2a2e37, #171a20);
+    display: flex; align-items: center; justify-content: center;
+    border: 1px solid var(--line); flex: none; }
+  .mark svg { width: 26px; height: 26px; stroke: #FF3B30; stroke-width: 2.4;
+    fill: none; stroke-linecap: round; stroke-linejoin: round; }
+  .brand .name { font-size: 17px; font-weight: 700; letter-spacing: .02em; }
+  .brand .name small { display: block; font-size: 12px; font-weight: 500;
+    color: var(--text-2); margin-top: 1px; letter-spacing: .06em; }
+  .card { background: linear-gradient(180deg, var(--panel), #12141a);
+    border: 1px solid var(--line); border-radius: 16px;
+    padding: 28px 26px; box-shadow: 0 24px 64px rgba(0,0,0,.45); }
+  h1 { font-size: 30px; letter-spacing: -0.02em; margin-bottom: 6px; }
+  .updated { color: var(--text-2); font-size: 13px; margin-bottom: 22px;
+    padding-bottom: 18px; border-bottom: 1px solid var(--line); }
+  h2 { font-size: 19px; margin: 26px 0 10px; letter-spacing: -0.01em; }
+  p { color: #d7dbe2; margin-bottom: 12px; }
+  ul { margin: 4px 0 14px 22px; color: #d7dbe2; }
+  li { margin-bottom: 8px; }
+  strong { color: var(--text); font-weight: 650; }
+  .callout { background: var(--panel-2); border: 1px solid var(--line);
+    border-left: 3px solid var(--accent); border-radius: 10px;
+    padding: 12px 14px; margin: 14px 0; font-size: 14px; }
+  a { color: #ff6a62; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: var(--panel-2); padding: 1px 6px; border-radius: 6px;
+    font-size: 0.92em; color: #ffd7d4; }
+  footer { margin-top: 28px; color: var(--text-2); font-size: 13px;
+    padding-top: 18px; border-top: 1px solid var(--line); display:flex;
+    justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  @media (max-width: 560px) {
+    h1 { font-size: 24px; }
+    .card { padding: 22px 18px; }
+    .wrap { padding: 28px 14px 72px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <a class="brand" href="./">
+    <span class="mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24"><path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2"/></svg>
+    </span>
+    <span class="name">TakeOne<small>STUDIO</small></span>
+  </a>
+
+  <div class="card">
+    <h1>Privacy Policy</h1>
+    <p class="updated">Last updated: 15 November 2026 · Applies to the TakeOne app for Android.</p>
+
+    <p><strong>Short version:</strong> Your audio never leaves your device. TakeOne does
+    not have accounts, servers, or analytics SDKs that upload recordings, scripts,
+    or file metadata. Crash diagnostics stay on the device unless <em>you</em> choose
+    to share them. The app shows ads only in the free tier; Pro customers see no ads.</p>
+
+    <h2>1. Audio, scripts and files</h2>
+    <ul>
+      <li><strong>Recordings, edits and exports never leave your device.</strong> All
+        processing — recording, DSP, time stretch/pitch, noise removal, compression,
+        normalization, conversion and export — runs locally.</li>
+      <li>Records are stored only in the app's private storage (scoped storage on
+        Android 10+). Uninstalling the app removes them, exactly like any other file
+        your device deletes.</li>
+      <li><strong>Teleprompter scripts</strong> you write are stored locally and are never
+        uploaded, backed up to Google Auto Backup, or transmitted anywhere.</li>
+      <li><strong>Exports</strong> (m4a/mp3/wav/flac/opus/amr/wav32) are saved to the folder
+        you pick via the system file picker, or shared through the app you choose.
+        TakeOne does not receive copies of exported files.</li>
+      <li><strong>Auto Backup:</strong> TakeOne excludes all take files and library metadata
+        from Android Auto Backup and device transfer; restoring a backup will not
+        restore your recordings. It will never include your audio.</li>
+    </ul>
+
+    <h2>2. Microphone and storage access</h2>
+    <ul>
+      <li><strong>Microphone</strong> — used strictly to record takes. No audio is ever
+        streamed, transmitted, or processed off-device, and never while paused or
+        between takes. You can revoke the permission at any time in system settings.</li>
+      <li><strong>Storage / SAF</strong> — used for importing files you explicitly pick,
+        and for saving or sharing files you explicitly ask to export.</li>
+      <li>No camera, no precise location, no contacts, no SMS, no call logs, no
+        accessibility services, no background location — ever.</li>
+    </ul>
+
+    <h2>3. Advertising</h2>
+    <p>TakeOne contains ads provided by Google AdMob; ad requests are mediated by
+    Google on your behalf. Ads are <strong>never</strong> shown while recording or
+    while audio plays.</p>
+    <ul>
+      <li><strong>EEA / UK / Switzerland</strong> — a Google-certified consent form
+        (UMP) is shown on first run; ads are personalised only with your consent,
+        otherwise they are non-personalised.</li>
+      <li><strong>Other regions</strong> — Google may use your device's advertising ID
+        to serve and measure ads. You can reset or limit ad tracking in
+        <em>Settings → Privacy → Ads</em>.</li>
+      <li><strong>Pro customers</strong> see no ads at all once entitled. (Free tier
+        shows one post-action interstitial per completed save/export/share and one
+        banner/card at most.)</li>
+    </ul>
+    <div class="callout">
+      Google's ad technology may also process device data (such as the advertising
+      identifier) to personalise, measure and report ads. See Google's
+      <a href="https://policies.google.com/technologies/ads" rel="noopener noreferrer">Ads Privacy</a>
+      and your system's advertising settings to limit that.
+    </div>
+
+    <h2>4. In-app purchases and billing</h2>
+    <ul>
+      <li>TakeOne Pro is a subscription/one-time purchase processed by <strong>Google Play
+        Billing</strong>. TakeOne's servers never see your payment method; Google
+        handles payment and entitlement resolution.</li>
+      <li>The app stores only an “entitled” flag (and the SKU) in local preferences to
+        remember Pro status; it is re-checked against Google Play whenever the app
+        can reach it. It is never uploaded elsewhere.</li>
+      <li>No free-tier trial abuse: trial eligibility is managed by Google Play on a
+        per-Google-account basis.</li>
+    </ul>
+
+    <h2>5. Diagnostics and crash logs</h2>
+    <ul>
+      <li>Crash stack traces and a small set of “breadcrumbs” are kept <strong>on your
+        device</strong>. They are never uploaded automatically.</li>
+      <li>If a crash happens, the app may offer to share the log; the share sheet
+        always shows you the full contents first, paths are redacted, and breadcrumbs
+        are capped at 64 KB and overwritten on the next crash.</li>
+      <li>You may export-or-delete crash data from the app at any time.</li>
+    </ul>
+
+    <h2>6. Data practices in one table</h2>
+    <ul>
+      <li><strong>Uploaded audio / recordings:</strong> never.</li>
+      <li><strong>Analytics SDKs (Firebase, Mixpanel, Amplitude…):</strong> none bundled.</li>
+      <li><strong>Crash reporting SDKs:</strong> none; crash logs are on-device only.</li>
+      <li><strong>Advertising:</strong> Google AdMob (ads only in free tier), with UMP consent.</li>
+      <li><strong>Billing:</strong> Google Play Billing only.</li>
+      <li><strong>Android Auto Backup:</strong> all take files, library DB and scripts excluded.</li>
+    </ul>
+
+    <h2>7. Children</h2>
+    <p>TakeOne is not directed at children. No content is targeted at users under 13
+    (or under the applicable age of consent).</p>
+
+    <h2>8. Your choices</h2>
+    <ul>
+      <li>Revoke mic permission any time: <span class="mono">Settings → Apps → TakeOne → Permissions</span>.</li>
+      <li>Reset ad ID / limit ad personalization: <span class="mono">Settings → Privacy → Ads</span>.</li>
+      <li>Delete everything: uninstall the app or clear its storage in system settings —
+        takes, scripts, preferences and crash logs are deleted.</li>
+    </ul>
+
+    <h2>9. Changes and contact</h2>
+    <p>If this policy changes, the “Last updated” date at the top of this page changes
+    too, and significant changes will be announced in the app's release notes.</p>
+    <p>Questions about this policy or your data? Contact:
+      <a href="mailto:support@takeone.app">support@takeone.app</a></p>
+  </div>
+
+  <footer>
+    <span>© 2026 TakeOne Studio</span>
+    <span><a href="https://github.com/drankit2029-sys/App">GitHub</a></span>
+  </footer>
+</div>
+</body>
+</html>
