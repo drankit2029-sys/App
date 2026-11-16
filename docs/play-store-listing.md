@@ -7,6 +7,8 @@ Everything to paste into Play Console, plus assets still owed before pressing
 
 | Field | Value |
 |---|---|
+| Developer | Nexdert |
+| Developer / support email | Noxedus2008@gmail.com |
 | App name | TakeOne (`com.takeone.studio`) |
 | Default language | English (United States) |
 | Category | Tools (alt. Video Players & Editors) |
