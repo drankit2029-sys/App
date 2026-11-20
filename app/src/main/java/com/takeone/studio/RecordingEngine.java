@@ -64,6 +64,9 @@ public final class RecordingEngine {
     public int channels = 2;
     public long dataBytes = 0;
     public volatile float level = 0f;
+    /** Live waveform interpolation pacing (prevents post-resume speed spikes). */
+    private volatile long lastLiveInterpNs;
+    private volatile long lastLiveInterpFrames;
     /** Set by capLoop when the take ends unexpectedly (disk full, mic lost). */
     public volatile String captureError;
     private volatile long lastChunkElapsedNanos = 0L;
@@ -219,16 +222,39 @@ public final class RecordingEngine {
             if (state != State.RECORDING || lastChunkElapsedNanos <= 0L) {
                 return base;
             }
-            long elapsedNs = Math.max(0L,
-                    android.os.SystemClock.elapsedRealtimeNanos()
-                            - lastChunkElapsedNanos);
+            long now = android.os.SystemClock.elapsedRealtimeNanos();
+            long elapsedNs = Math.max(0L, now - lastChunkElapsedNanos);
             long extraFrames = (elapsedNs * SAMPLE_RATE) / 1_000_000_000L;
             long maxExtra = Math.max(1L, SAMPLE_RATE / 50L);
             long interp = base + Math.min(extraFrames, maxExtra);
+            // Cap the *visible* advance to the real time elapsed between
+            // display frames. A short stall (backgrounded app, recents swipe,
+            // notification re-entry) makes capture write a burst of buffered
+            // chunks; without this cap the waveform races ahead for a second
+            // or two, then appears to “slow down” as the buffer drains.
+            // Long gaps legitimately snap forward (allowed is then huge).
+            if (lastLiveInterpNs > 0L) {
+                long allowed = ((now - lastLiveInterpNs) * SAMPLE_RATE
+                        * 3L) / (1_000_000_000L * 2L) + SAMPLE_RATE / 100L;
+                if (allowed >= 0L && interp - lastLiveInterpFrames > allowed) {
+                    interp = lastLiveInterpFrames + allowed;
+                }
+            }
+            lastLiveInterpNs = now;
+            lastLiveInterpFrames = interp;
             if (punchOutFrame > 0 && interp > punchOutFrame) {
                 interp = punchOutFrame;
             }
             return interp;
+        }
+    }
+
+    /** Called when the studio returns to foreground: restart visual pacing. */
+    public void resetLiveInterpolation() {
+        synchronized (lock) {
+            lastChunkElapsedNanos = 0L;
+            lastLiveInterpNs = 0L;
+            lastLiveInterpFrames = 0L;
         }
     }
 

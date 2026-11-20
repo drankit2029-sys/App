@@ -223,6 +223,9 @@ public class StudioFragment extends Fragment {
         try {
             Choreographer.getInstance().postFrameCallback(teleFrameCallback);
             teleChoreographerActive = true;
+            if (lastTeleFrameNanos <= 0L) {
+                lastTeleFrameNanos = System.nanoTime();
+            }
         } catch (Throwable ignored) {
             teleChoreographerActive = false;
         }
@@ -918,6 +921,13 @@ public class StudioFragment extends Fragment {
         super.onResume();
         handler.removeCallbacks(tick);
         handler.post(tick);
+        // Clear stale frame/timing baselines after a background/notification
+        // re-entry: without this the first VSYNC/tick step uses a multi-minute
+        // delta and both teleprompter and waveform appear to speed up briefly.
+        lastTeleAdvanceMs = 0L;
+        lastTeleFrameNanos = 0L;
+        RecordingEngine.get().resetLiveInterpolation();
+        lastPushedCursorFrame = -1L;
         scheduleWaveFrame();
         if (!telePaused) scheduleTeleFrame();
         paint();
