@@ -527,16 +527,13 @@ public class TakesAdapter extends RecyclerView.Adapter<TakesAdapter.Vh> {
         // Renaming is a pure metadata change, so it is safe while the take
         // converts: the worker inserts the finished file under this title.
         h.btnRename.setVisibility(View.VISIBLE);
-        h.convStatus.setVisibility(t.converting ? View.VISIBLE : View.GONE);
+        // The card meta line already carries the conversion status in both
+        // collapsed and expanded states; the expanded-only convStatus view
+        // would print the same text a second time.
+        h.convStatus.setVisibility(View.GONE);
+        h.convStatus.setText("");
         h.convProgress.setVisibility(t.converting ? View.VISIBLE : View.GONE);
-        if (t.converting) {
-            h.convStatus.setText(h.itemView.getContext().getString(
-                    R.string.conv_card_status, t.convFormat, t.convProgress));
-            h.convProgress.setProgress(t.convProgress);
-        } else {
-            h.convProgress.setProgress(0);
-            h.convStatus.setText("");
-        }
+        h.convProgress.setProgress(t.converting ? t.convProgress : 0);
 
         h.cardRoot.setOnClickListener(v -> listener.onCardClick(t));
         h.cardRoot.setOnLongClickListener(v -> {

@@ -1,5 +1,6 @@
 package com.takeone.studio;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 import android.app.Activity;
@@ -101,6 +102,44 @@ public class ConvertingCardsBindTest {
         layout(rv);
 
         assertTrue("survived all layouts", rv.getChildCount() > 0);
+    }
+
+
+    @Test
+    public void expandedConvertingCardShowsStatusOnce() {
+        Activity a = activity();
+        RecyclerView rv = new RecyclerView(a);
+        a.setContentView(rv);
+        rv.setLayoutManager(new LinearLayoutManager(a));
+        TakesAdapter adapter = new TakesAdapter(new NopListener());
+        rv.setAdapter(adapter);
+        Take conv = convertingTake(-7L);
+        adapter.setTakes(new ArrayList<>(java.util.Collections.singletonList(conv)));
+        adapter.setExpandedId(conv.id);
+        layout(rv);
+
+        int occurrences = 0;
+        for (int i = 0; i < rv.getChildCount(); i++) {
+            View card = rv.getChildAt(i);
+            occurrences += countText(card, "Converting to M4A");
+        }
+        assertEquals("conversion status must appear once on an expanded card",
+                1, occurrences);
+    }
+
+    private static int countText(View v, String needle) {
+        int hits = 0;
+        if (v instanceof android.widget.TextView) {
+            CharSequence t = ((android.widget.TextView) v).getText();
+            if (t != null && t.toString().contains(needle)) hits++;
+        }
+        if (v instanceof android.view.ViewGroup) {
+            android.view.ViewGroup g = (android.view.ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) {
+                hits += countText(g.getChildAt(i), needle);
+            }
+        }
+        return hits;
     }
 
     private static void layout(RecyclerView rv) {
