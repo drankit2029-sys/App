@@ -31,7 +31,7 @@ Device is connected to itself via adb. Screen stay-awake enabled via
 - [x] Fixed: RecordingEngine live interpolation paced to real time; StudioFragment resets tele/wave baselines on resume; tele buttons 36dp; singular "take" count; FormatSpeedAuditTest made device-agnostic.
 - [x] Device instrumentation suite run on phone: StudioFlow (9), LibraryFlow (7), Tele* (20), FxPanelDial, SaveWhileConverting (2), RawPreview (2), AudioImport(4)+Resample(2), AudioEditor(2), ConversionConcurrency(5), EncodeFormats(10), FormatMatrix, FormatRoundTrip, ConversionBench, etc. All OK except FormatSpeedAuditTest (device-specific AMR performance assertion, fixed to informational).
 - [x] CI build + device install done; fixes verified visually and via suite.
-- [x] Commits pushed: 4e5c48d, 5e5d7bc, 35a041b. Final APK/AAB refresh pending CI run.
+- [x] Commits pushed: 4e5c48d, 5e5d7bc, 35a041b, 846f8b7. Final APKs/AAB refreshed from build-apk run 44850619203 ✅ (all device tests green).
 
 ## Exhaustive UI checklist ("rampant user")
 Library: search (empty/garbage/long), sort menu, all 10 filter chips, multi-select,
@@ -56,3 +56,10 @@ round-trips, FLAC fallback, file-name collisions, storage full (where testable).
 System: rotate tablet-safe (phone portrait-locked), notification shade, back
 stack, process death / "Don't keep activities", auto-backup exclusions, TalkBack
 focus basics, multi-window on emulator later if needed.
+
+
+## Final result (Nov 21)
+- All 3 reported/observed bugs fixed and verified on the physical device.
+- CI verify.yml green for every fix; build-apk.yml 44850619203 green (compile, lint, unit tests, instrumentation on API 35 emulator).
+- Installed APK on phone is the fixed build from ui-apks run 44836867645; repo app-debug.apk/app-release.apk refreshed from the final CI build.
+- User's original 51-minute take backed up locally at /tmp/opencode/takes-backup (606 MB) and a recovered M4A copy in /sdcard/Download/Take 1 (recovered).m4a.
