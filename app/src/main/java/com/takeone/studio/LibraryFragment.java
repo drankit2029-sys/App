@@ -779,7 +779,8 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
         // Room set, so counting them made "3 of 2 takes" appear.
         String base = scoped
                 ? getString(R.string.search_count, out.size() - conv, total)
-                : getString(R.string.take_count, total);
+                : getString(total == 1 ? R.string.take_count_one
+                        : R.string.take_count, total);
         subtitle.setText(base + "  •  " + sortLabel(sort)
                 + (conv > 0 ? "  •  " + getString(R.string.conv_active, conv)
                         : ""));
