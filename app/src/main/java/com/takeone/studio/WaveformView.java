@@ -2314,12 +2314,12 @@ public class WaveformView extends View {
             hist = history;
             n = Math.min(count, hist != null ? hist.length : 0);
             det = liveDetail;
+            repInPlace = replacingInPlace;
             detCount = (!repInPlace && savedReplaceTailPeaks == null && !fxRegionActive)
                     ? Math.min(liveDetailCount, det != null ? det.length : 0) : 0;
             detBaseFrame = liveDetailBaseFrame;
             curFpb = framesPerBar > 0f ? framesPerBar : 2400f;
             isLive = live;
-            repInPlace = replacingInPlace;
             pIdx = playheadIndex;
             headPos = (playheadPos >= 0f && playheadPos <= n)
                     ? playheadPos
