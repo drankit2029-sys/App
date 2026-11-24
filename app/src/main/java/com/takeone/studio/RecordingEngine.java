@@ -71,6 +71,47 @@ public final class RecordingEngine {
     public volatile String captureError;
     private volatile long lastChunkElapsedNanos = 0L;
     private volatile float lastSmoothedPeak = 0.02f;
+    private volatile float lastRawPeak = 0f;
+
+    /**
+     * Live waveform peaks accumulated continuously inside {@code capLoop()},
+     * including while the app is backgrounded under {@link RecordingService}.
+     * Lets {@link WaveformView} restore the exact live waveform in <1 ms on
+     * notification tap / resume with zero WAV rescanning and identical shape.
+     */
+    public static final class LivePeaksSnapshot {
+        public final float[] overview;
+        public final int overviewCount;
+        public final float framesPerBar;
+        public final float[] detail;
+        public final int detailCount;
+        public final long detailBaseFrame;
+        public final long curFrame;
+
+        LivePeaksSnapshot(float[] overview, int overviewCount, float framesPerBar,
+                          float[] detail, int detailCount, long detailBaseFrame,
+                          long curFrame) {
+            this.overview = overview;
+            this.overviewCount = overviewCount;
+            this.framesPerBar = framesPerBar;
+            this.detail = detail;
+            this.detailCount = detailCount;
+            this.detailBaseFrame = detailBaseFrame;
+            this.curFrame = curFrame;
+        }
+    }
+
+    private static final int REC_MAX_OVERVIEW = 8192;
+    private static final int REC_DETAIL_CAP = 2048;
+    private static final float REC_DETAIL_FPB = 1200f;
+    private final Object peaksLock = new Object();
+    private float[] recOverview = new float[256];
+    private int recOverviewCount = 0;
+    private float recFramesPerBar = 2400f;
+    private float[] recDetail = new float[REC_DETAIL_CAP];
+    private int recDetailCount = 0;
+    private long recDetailBaseFrame = 0L;
+    private long recCurFrame = 0L;
     /** Audio source used for the current capture (MIC or UNPROCESSED). */
     public int audioSource = MediaRecorder.AudioSource.MIC;
     /** True when stereo was requested but the hardware only gave mono. */
@@ -260,6 +301,139 @@ public final class RecordingEngine {
 
     public float lastSmoothedPeak() {
         return lastSmoothedPeak;
+    }
+
+    public float lastRawPeak() {
+        return lastRawPeak;
+    }
+
+    public void clearLivePeaks() {
+        synchronized (peaksLock) {
+            recOverviewCount = 0;
+            recFramesPerBar = 2400f;
+            recDetailCount = 0;
+            recDetailBaseFrame = 0L;
+            recCurFrame = 0L;
+        }
+    }
+
+    public void seedLivePeaks(float[] overview, int count, float fpb, long totalFrames) {
+        if (overview == null || count <= 0) return;
+        synchronized (peaksLock) {
+            int n = Math.min(count, Math.min(overview.length, REC_MAX_OVERVIEW));
+            if (recOverview.length < n) {
+                int cap = recOverview.length;
+                while (cap < n && cap < REC_MAX_OVERVIEW) cap = Math.min(REC_MAX_OVERVIEW, cap * 2);
+                recOverview = new float[Math.max(cap, n)];
+            }
+            System.arraycopy(overview, 0, recOverview, 0, n);
+            recOverviewCount = n;
+            recFramesPerBar = fpb > 0f ? fpb : 2400f;
+            recCurFrame = Math.max(0L, totalFrames);
+        }
+    }
+
+    public LivePeaksSnapshot snapshotLivePeaks() {
+        synchronized (peaksLock) {
+            if (recOverviewCount <= 0) return null;
+            float[] ov = new float[recOverviewCount];
+            System.arraycopy(recOverview, 0, ov, 0, recOverviewCount);
+            float[] dt = new float[recDetailCount];
+            if (recDetailCount > 0) {
+                System.arraycopy(recDetail, 0, dt, 0, recDetailCount);
+            }
+            return new LivePeaksSnapshot(ov, recOverviewCount, recFramesPerBar,
+                    dt, recDetailCount, recDetailBaseFrame, recCurFrame);
+        }
+    }
+
+    private void recordLivePeakChunk(float clampedPeak, long chunkStartFrame, long chunkEndFrame) {
+        if (chunkEndFrame <= 0L) return;
+        synchronized (peaksLock) {
+            if (recFramesPerBar <= 0f) recFramesPerBar = 2400f;
+            int idxStart = Math.max(0, (int) Math.floor(chunkStartFrame / recFramesPerBar));
+            int idxEnd = Math.max(idxStart, (int) Math.floor((chunkEndFrame - 1L) / recFramesPerBar));
+            while (idxEnd >= REC_MAX_OVERVIEW) {
+                int half = recOverviewCount / 2;
+                for (int i = 0; i < half; i++) {
+                    recOverview[i] = Math.max(recOverview[i * 2], recOverview[i * 2 + 1]);
+                }
+                recOverviewCount = half;
+                recFramesPerBar *= 2f;
+                idxStart = Math.max(0, (int) Math.floor(chunkStartFrame / recFramesPerBar));
+                idxEnd = Math.max(idxStart, (int) Math.floor((chunkEndFrame - 1L) / recFramesPerBar));
+            }
+            int needed = idxEnd + 1;
+            if (needed > recOverview.length) {
+                int cap = recOverview.length;
+                while (cap < needed && cap < REC_MAX_OVERVIEW) cap = Math.min(REC_MAX_OVERVIEW, cap * 2);
+                float[] bigger = new float[Math.max(cap, needed)];
+                System.arraycopy(recOverview, 0, bigger, 0, recOverviewCount);
+                recOverview = bigger;
+            }
+            if (idxStart > recOverviewCount) {
+                java.util.Arrays.fill(recOverview, recOverviewCount, idxStart, 0f);
+            }
+            for (int i = idxStart; i <= idxEnd && i < recOverview.length; i++) {
+                if (i >= recOverviewCount || clampedPeak > recOverview[i]) {
+                    recOverview[i] = clampedPeak;
+                }
+            }
+            if (needed > recOverviewCount) {
+                recOverviewCount = Math.min(needed, recOverview.length);
+            }
+
+            // Update constant 25 ms (1200-frame) detail ring buffer
+            if (recDetailCount == 0 || chunkStartFrame < recDetailBaseFrame) {
+                long slot = Math.max(0L, (long) Math.floor(chunkStartFrame / REC_DETAIL_FPB));
+                recDetailBaseFrame = Math.round(slot * REC_DETAIL_FPB);
+                recDetail[0] = clampedPeak;
+                recDetailCount = 1;
+            } else {
+                int dStart = Math.max(0, (int) ((chunkStartFrame - recDetailBaseFrame) / REC_DETAIL_FPB));
+                int dEnd = Math.max(dStart, (int) (((chunkEndFrame - 1L) - recDetailBaseFrame) / REC_DETAIL_FPB));
+                if (dStart - recDetailCount > 320) {
+                    long slot = Math.max(0L, (long) Math.floor(chunkStartFrame / REC_DETAIL_FPB));
+                    recDetailBaseFrame = Math.round(slot * REC_DETAIL_FPB);
+                    recDetail[0] = clampedPeak;
+                    recDetailCount = 1;
+                } else {
+                    while (dEnd >= REC_DETAIL_CAP) {
+                        int drop = 512;
+                        int remain = Math.max(0, recDetailCount - drop);
+                        if (remain > 0) {
+                            System.arraycopy(recDetail, drop, recDetail, 0, remain);
+                        }
+                        recDetailCount = remain;
+                        recDetailBaseFrame += Math.round(drop * REC_DETAIL_FPB);
+                        dStart = Math.max(0, dStart - drop);
+                        dEnd = Math.max(dStart, dEnd - drop);
+                    }
+                    for (int i = recDetailCount; i < dStart && i < REC_DETAIL_CAP; i++) {
+                        recDetail[i] = 0f;
+                    }
+                    for (int i = dStart; i <= dEnd && i < REC_DETAIL_CAP; i++) {
+                        if (i >= recDetailCount || clampedPeak > recDetail[i]) {
+                            recDetail[i] = clampedPeak;
+                        }
+                    }
+                    if (dEnd + 1 > recDetailCount) {
+                        recDetailCount = Math.min(dEnd + 1, REC_DETAIL_CAP);
+                    }
+                }
+            }
+            if (chunkEndFrame > recCurFrame) {
+                recCurFrame = chunkEndFrame;
+            }
+        }
+    }
+
+    private void persistLivePeaksSidecar(File wav) {
+        if (wav == null || !wav.exists()) return;
+        LivePeaksSnapshot snap = snapshotLivePeaks();
+        if (snap == null || snap.overviewCount <= 0) return;
+        WaveformView.writePeaksSidecar(wav, snap.overview, snap.overviewCount,
+                snap.framesPerBar, snap.curFrame);
     }
 
     /**
@@ -511,6 +685,8 @@ public final class RecordingEngine {
             fellBackToMono = false;
             state = State.IDLE;
             level = 0f;
+            lastRawPeak = 0f;
+            clearLivePeaks();
         }
     }
 
@@ -553,6 +729,8 @@ public final class RecordingEngine {
             if (!pendingFor(raw).exists()) writePending(raw, takeName, channels);
             state = State.IDLE;
             level = 0f;
+            lastRawPeak = 0f;
+            clearLivePeaks();
             // A kill mid-write can leave the RIFF size fields stale even when
             // the payload is intact; normalise them before the editor opens.
             patchHeaderLocked();
@@ -810,7 +988,9 @@ public final class RecordingEngine {
                 patchHeaderLocked();
                 state = State.PAUSED;
                 level = 0f;
+                lastRawPeak = 0f;
                 lastChunkElapsedNanos = 0L;
+                persistLivePeaksSidecar(rawFile);
             }
         }
         ConversionService.onRecordingStateChanged();
@@ -948,8 +1128,11 @@ public final class RecordingEngine {
         synchronized (lock) {
             closeRafLocked();
             patchHeaderLocked();
+            persistLivePeaksSidecar(rawFile);
+            clearLivePeaks();
             state = State.IDLE;
             level = 0f;
+            lastRawPeak = 0f;
             lastChunkElapsedNanos = 0L;
             out = rawFile;
             if (out != null && !keepPending) {
@@ -1004,8 +1187,10 @@ public final class RecordingEngine {
             parentDataBytes = 0L;
             sess = streaming;
             streaming = null;
+            clearLivePeaks();
         }
         stopThenJoinThenRelease(rec, th);
+        WaveformView.deletePeaksSidecar(raw);
         if (sess != null) {
             try {
                 sess.abort();
@@ -1348,11 +1533,15 @@ public final class RecordingEngine {
                 }
 
                 int bytes = frames * outCh * 4;
+                long writtenStartFrame;
+                long writtenEndFrame;
                 synchronized (lock) {
                     if (raf != null && capRun) {
                         try {
+                            writtenStartFrame = cursorFrame;
                             raf.write(out, 0, bytes);
                             cursorFrame += frames;
+                            writtenEndFrame = cursorFrame;
                             long endBytes = cursorFrame * outCh * 4L;
                             if (endBytes > dataBytes) dataBytes = endBytes;
                             lastChunkElapsedNanos =
@@ -1365,11 +1554,13 @@ public final class RecordingEngine {
                         break;
                     }
                 }
+                float clampedPeak = Math.max(0f, Math.min(1f, peak));
+                lastRawPeak = clampedPeak;
+                recordLivePeakChunk(clampedPeak, writtenStartFrame, writtenEndFrame);
                 if (reachedPunchOut) {
                     break;
                 }
-                lastSmoothedPeak = lastSmoothedPeak * 0.65f
-                        + Math.max(0f, Math.min(1f, peak)) * 0.35f;
+                lastSmoothedPeak = lastSmoothedPeak * 0.65f + clampedPeak * 0.35f;
                 level = lastSmoothedPeak;
                 if (++sincePatch >= 60) {
                     sincePatch = 0;

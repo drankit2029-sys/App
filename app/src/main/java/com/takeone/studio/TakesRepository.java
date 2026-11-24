@@ -334,9 +334,12 @@ public final class TakesRepository {
                 }
             }
             if (rawFloatWav.renameTo(master)) {
+                WaveformView.copyPeaksSidecar(rawFloatWav, master);
+                WaveformView.deletePeaksSidecar(rawFloatWav);
                 return;
             }
             copyFileContents(rawFloatWav, master);
+            WaveformView.copyPeaksSidecar(rawFloatWav, master);
         } catch (Exception ignored) {
             try {
                 if (master.exists()) {
@@ -349,6 +352,7 @@ public final class TakesRepository {
                 // noinspection ResultOfMethodCallIgnored
                 rawFloatWav.delete();
             }
+            WaveformView.deletePeaksSidecar(rawFloatWav);
         }
     }
 
@@ -395,6 +399,8 @@ public final class TakesRepository {
             if (!tmp.renameTo(master)) {
                 // noinspection ResultOfMethodCallIgnored
                 tmp.delete();
+            } else {
+                WaveformView.copyPeaksSidecar(floatWavSession, master);
             }
         } catch (Exception ignored) {
             try {

@@ -282,6 +282,7 @@ public final class EditEngine {
         /** Restores the most recent snapshot over `raw` and pushes current state to redo. */
         public synchronized boolean undo(File raw) {
             if (!canUndo() || raw == null) return false;
+            WaveformView.deletePeaksSidecar(raw);
             File snap = stack.pollFirst();
             if (snap == null || !snap.exists()) return false;
 
@@ -330,6 +331,7 @@ public final class EditEngine {
         /** Re-applies the most recently undone edit over `raw` and pushes current state to undo. */
         public synchronized boolean redo(File raw) {
             if (!canRedo() || raw == null) return false;
+            WaveformView.deletePeaksSidecar(raw);
             File redoSnap = redoStack.pollFirst();
             if (redoSnap == null || !redoSnap.exists()) return false;
 
@@ -1221,6 +1223,7 @@ public final class EditEngine {
         endFrame = Math.max(startFrame, Math.min(totalFrames, endFrame));
         long selFrames = endFrame - startFrame;
         if (selFrames <= 0) return false;
+        WaveformView.deletePeaksSidecar(raw);
 
         long frameBytes = ch * 4L;
         int tailFrames = Math.max(0, chain.getTailFrames());

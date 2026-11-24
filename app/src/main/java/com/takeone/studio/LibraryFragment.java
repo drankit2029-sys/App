@@ -1782,6 +1782,9 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                 // For imported recordings (or any legacy take without a float32
                 // master), persist the newly created 32-bit float file on the
                 // first Edit so subsequent edits reuse it without converting.
+                if (alreadyFloat && floatSrc != null) {
+                    WaveformView.copyPeaksSidecar(floatSrc, session);
+                }
                 if (!alreadyFloat && immutableRecordingId > 0 && src.exists()) {
                     TakesRepository.saveFloatMasterCopy(
                             immutableRecordingId, session, src);

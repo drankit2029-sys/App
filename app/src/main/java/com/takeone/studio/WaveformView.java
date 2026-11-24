@@ -43,6 +43,7 @@ public class WaveformView extends View {
     public static final int SCREEN_BARS = 300;
     private static final int MAX_HISTORY = 8192;
     private static final long COARSE_PREVIEW_MIN_FRAMES = 960_000L;
+    private static final int PEAKS_SIDECAR_MAGIC = 0x544F504B; // "TOPK"
     private static final int PEAK_CACHE_MAX = 16;
     private static final java.util.LinkedHashMap<String, float[]> PEAK_CACHE =
             new java.util.LinkedHashMap<String, float[]>(PEAK_CACHE_MAX + 1, 0.75f, true) {
@@ -1259,6 +1260,141 @@ public class WaveformView extends View {
         postInvalidateOnAnimation();
     }
 
+    /**
+     * Adopts the live peaks recorded continuously by {@link RecordingEngine}
+     * (including while backgrounded) in <0.1 ms with zero disk I/O.
+     */
+    public synchronized boolean adoptLivePeaksSnapshot(RecordingEngine.LivePeaksSnapshot snap) {
+        if (snap == null || snap.overview == null || snap.overviewCount <= 0) return false;
+        waveLoadGen.incrementAndGet();
+        dropFxBaseLocked();
+        int n = Math.min(snap.overviewCount, Math.min(snap.overview.length, MAX_HISTORY));
+        if (history.length < n) {
+            int cap = history.length;
+            while (cap < n && cap < MAX_HISTORY) cap = Math.min(MAX_HISTORY, cap * 2);
+            history = new float[Math.max(cap, n)];
+        }
+        Arrays.fill(history, 0f);
+        System.arraycopy(snap.overview, 0, history, 0, n);
+        count = n;
+        framesPerBar = snap.framesPerBar > 0f ? snap.framesPerBar : 2400f;
+        playheadPos = Math.min(count, Math.max(0f, snap.curFrame / framesPerBar));
+        playheadIndex = Math.round(playheadPos);
+        if (snap.detail != null && snap.detailCount > 0) {
+            int dn = Math.min(snap.detailCount, Math.min(snap.detail.length, LIVE_DETAIL_CAP));
+            System.arraycopy(snap.detail, 0, liveDetail, 0, dn);
+            liveDetailCount = dn;
+            liveDetailBaseFrame = snap.detailBaseFrame;
+            liveDetailCurFrame = snap.curFrame;
+        } else {
+            clearLiveDetailLocked();
+        }
+        zoom = Math.max(minimumZoom(), Math.min(zoom, ZOOM_STEPS[ZOOM_STEPS.length - 1]));
+        postInvalidate();
+        return true;
+    }
+
+    public synchronized float[] copyHistorySnapshot() {
+        if (count <= 0) return new float[0];
+        return Arrays.copyOf(history, count);
+    }
+
+    public synchronized float getFramesPerBar() {
+        return framesPerBar;
+    }
+
+    public static java.io.File peaksFileFor(java.io.File wav) {
+        if (wav == null) return null;
+        return new java.io.File(wav.getAbsolutePath() + ".peaks");
+    }
+
+    public static void deletePeaksSidecar(java.io.File wav) {
+        java.io.File f = peaksFileFor(wav);
+        if (f != null && f.exists()) {
+            // noinspection ResultOfMethodCallIgnored
+            f.delete();
+        }
+    }
+
+    public static void writePeaksSidecar(java.io.File wav, float[] peaks, int count,
+                                         float fpb, long totalFrames) {
+        if (wav == null || !wav.exists() || peaks == null || count <= 0) return;
+        java.io.File out = peaksFileFor(wav);
+        if (out == null) return;
+        int n = Math.min(count, Math.min(peaks.length, MAX_HISTORY));
+        java.io.File tmp = new java.io.File(out.getAbsolutePath() + ".tmp");
+        try (java.io.DataOutputStream dos = new java.io.DataOutputStream(
+                new java.io.BufferedOutputStream(new java.io.FileOutputStream(tmp)))) {
+            dos.writeInt(PEAKS_SIDECAR_MAGIC);
+            dos.writeLong(wav.length());
+            dos.writeLong(wav.lastModified());
+            dos.writeLong(totalFrames);
+            dos.writeFloat(fpb > 0f ? fpb : 2400f);
+            dos.writeInt(n);
+            for (int i = 0; i < n; i++) {
+                dos.writeFloat(peaks[i]);
+            }
+            dos.flush();
+        } catch (Exception ignored) {
+            // noinspection ResultOfMethodCallIgnored
+            tmp.delete();
+            return;
+        }
+        if (out.exists()) {
+            // noinspection ResultOfMethodCallIgnored
+            out.delete();
+        }
+        if (!tmp.renameTo(out)) {
+            // noinspection ResultOfMethodCallIgnored
+            tmp.delete();
+        }
+    }
+
+    public static void copyPeaksSidecar(java.io.File srcWav, java.io.File dstWav) {
+        if (srcWav == null || dstWav == null || !dstWav.exists()) return;
+        java.io.File srcSidecar = peaksFileFor(srcWav);
+        if (srcSidecar == null || !srcSidecar.exists()) return;
+        try (java.io.DataInputStream dis = new java.io.DataInputStream(
+                new java.io.BufferedInputStream(new java.io.FileInputStream(srcSidecar)))) {
+            int magic = dis.readInt();
+            if (magic != PEAKS_SIDECAR_MAGIC) return;
+            long srcSize = dis.readLong();
+            dis.readLong(); // old mtime
+            long totalFrames = dis.readLong();
+            float fpb = dis.readFloat();
+            int n = dis.readInt();
+            if (n <= 0 || n > MAX_HISTORY) return;
+            if (srcSize != dstWav.length()) return;
+            float[] peaks = new float[n];
+            for (int i = 0; i < n; i++) peaks[i] = dis.readFloat();
+            writePeaksSidecar(dstWav, peaks, n, fpb, totalFrames);
+        } catch (Exception ignored) {}
+    }
+
+    private static float[] readPeaksSidecar(java.io.File wav, int minBuckets) {
+        if (wav == null || !wav.exists()) return null;
+        java.io.File f = peaksFileFor(wav);
+        if (f == null || !f.exists()) return null;
+        try (java.io.DataInputStream dis = new java.io.DataInputStream(
+                new java.io.BufferedInputStream(new java.io.FileInputStream(f)))) {
+            if (dis.readInt() != PEAKS_SIDECAR_MAGIC) return null;
+            long storedSize = dis.readLong();
+            long storedMtime = dis.readLong();
+            dis.readLong(); // totalFrames
+            dis.readFloat(); // fpb
+            int n = dis.readInt();
+            if (storedSize != wav.length()) return null;
+            if (Math.abs(storedMtime - wav.lastModified()) > 3000L) return null;
+            if (n <= 0 || n > MAX_HISTORY) return null;
+            if (minBuckets > 0 && n < Math.min(minBuckets, 8)) return null;
+            float[] peaks = new float[n];
+            for (int i = 0; i < n; i++) peaks[i] = dis.readFloat();
+            return peaks;
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
     private void clearLiveDetailLocked() {
         liveDetailCount = 0;
         liveDetailBaseFrame = 0L;
@@ -1678,6 +1814,14 @@ public class WaveformView extends View {
                 long totalFrames = payload / 4 / Math.max(1, info.channels);
                 int buckets20Hz = (int) Math.max(8,
                         Math.min(MAX_HISTORY, (totalFrames + 1200) / 2400));
+                float[] sidecar = readPeaksSidecar(raw, buckets20Hz);
+                if (sidecar != null && sidecar.length > 0) {
+                    putCachedPeaks(raw, buckets20Hz, sidecar);
+                    if (waveLoadGen.get() == myGen) {
+                        applyLoadedPeaks(sidecar, totalFrames, onLoaded);
+                    }
+                    return;
+                }
                 float[] cached = getCachedPeaks(raw, buckets20Hz);
                 if (cached != null && cached.length > 0) {
                     if (waveLoadGen.get() == myGen) {
@@ -1713,6 +1857,14 @@ public class WaveformView extends View {
                 long totalFrames = payload / 4 / Math.max(1, info.channels);
                 int buckets20Hz = (int) Math.max(8,
                         Math.min(MAX_HISTORY, (totalFrames + 1200) / 2400));
+                float[] sidecar = readPeaksSidecar(raw, buckets20Hz);
+                if (sidecar != null && sidecar.length > 0) {
+                    putCachedPeaks(raw, buckets20Hz, sidecar);
+                    if (waveLoadGen.get() == myGen) {
+                        applyTwentyHzPeaks(sidecar, totalFrames, onLoaded);
+                    }
+                    return;
+                }
                 float[] cached = getCachedPeaks(raw, buckets20Hz);
                 if (cached != null && cached.length > 0) {
                     if (waveLoadGen.get() == myGen) {
@@ -1892,6 +2044,9 @@ public class WaveformView extends View {
                 frame += want;
             }
             putCachedPeaks(wav, buckets, peaks);
+            writePeaksSidecar(wav, peaks, peaks.length,
+                    totalFrames > 0 ? Math.max(240f, totalFrames / (float) Math.max(1, peaks.length)) : 2400f,
+                    totalFrames);
             return peaks;
         }
     }

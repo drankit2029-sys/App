@@ -266,7 +266,7 @@ public class StudioFragment extends Fragment {
                             if (cur > 0 && cur != lastPushedCursorFrame) {
                                 lastPushedCursorFrame = cur;
                                 waveform.updateLiveFromFrames(
-                                        engine.lastSmoothedPeak(), cur,
+                                        engine.lastRawPeak(), cur,
                                         replaceTargetEndFrame);
                             }
                         } else if (preview) {
@@ -937,10 +937,13 @@ public class StudioFragment extends Fragment {
         lastTeleFrameNanos = 0L;
         RecordingEngine.get().resetLiveInterpolation();
         lastPushedCursorFrame = -1L;
-        if (engine.state == RecordingEngine.State.RECORDING
-                && engine.rawFile != null && engine.rawFile.exists()
-                && waveform != null) {
-            waveform.backfillLiveGapFromWav(engine.rawFile, engine.cursorFrames());
+        if (engine.state == RecordingEngine.State.RECORDING && waveform != null) {
+            RecordingEngine.LivePeaksSnapshot snap = engine.snapshotLivePeaks();
+            if (snap != null && snap.overviewCount > 0) {
+                waveform.adoptLivePeaksSnapshot(snap);
+            } else if (engine.rawFile != null && engine.rawFile.exists()) {
+                waveform.backfillLiveGapFromWav(engine.rawFile, engine.cursorFrames());
+            }
         }
         scheduleWaveFrame();
         if (!telePaused) scheduleTeleFrame();
@@ -2850,12 +2853,34 @@ public class StudioFragment extends Fragment {
             if (raw == null || !raw.exists()) return;
             if (RecordingEngine.payloadBytesOf(raw) <= 0) return;
             if (waveform.historyCount() > 0) return;
-            waveform.loadFromFloatWavTwentyHz(raw, () -> {
-                if (isAdded() && getView() != null) {
+            RecordingEngine.LivePeaksSnapshot snap = engine.snapshotLivePeaks();
+            if (snap != null && snap.overviewCount > 0) {
+                waveform.adoptLivePeaksSnapshot(snap);
+                if (engine.state != RecordingEngine.State.RECORDING) {
                     long total = engine.totalFrames();
                     waveform.syncFramesPerBar(total);
                     engine.seekCursorFrame(total);
                     waveform.setPlayheadFraction(1f);
+                }
+                refreshZoomValue();
+                if (pendingModeRestore != null) {
+                    Bundle pending = pendingModeRestore;
+                    pendingModeRestore = null;
+                    restoreEditingMode(pending);
+                }
+                paintEditorStrip();
+                return;
+            }
+            waveform.loadFromFloatWavTwentyHz(raw, () -> {
+                if (isAdded() && getView() != null) {
+                    long total = engine.totalFrames();
+                    waveform.syncFramesPerBar(total);
+                    engine.seedLivePeaks(waveform.copyHistorySnapshot(),
+                            waveform.historyCount(), waveform.getFramesPerBar(), total);
+                    if (engine.state != RecordingEngine.State.RECORDING) {
+                        engine.seekCursorFrame(total);
+                        waveform.setPlayheadFraction(1f);
+                    }
                     refreshZoomValue();
                     // A rotation restores the editing mode only once the bars
                     // exist: selection ranges need a bucket count.
