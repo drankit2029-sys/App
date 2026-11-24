@@ -937,6 +937,11 @@ public class StudioFragment extends Fragment {
         lastTeleFrameNanos = 0L;
         RecordingEngine.get().resetLiveInterpolation();
         lastPushedCursorFrame = -1L;
+        if (engine.state == RecordingEngine.State.RECORDING
+                && engine.rawFile != null && engine.rawFile.exists()
+                && waveform != null) {
+            waveform.backfillLiveGapFromWav(engine.rawFile, engine.cursorFrames());
+        }
         scheduleWaveFrame();
         if (!telePaused) scheduleTeleFrame();
         paint();

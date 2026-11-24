@@ -111,6 +111,16 @@ public class WaveformView extends View {
     private float morphAlpha = 0f;
     private float framesPerBar = 2400f; // 2400 frames @ 48 kHz = 50 ms (20 bars/sec)
 
+    // High-resolution sliding live tail buffer (1200 frames = 25 ms / 40 bars/sec,
+    // covering the last ~51 seconds at constant crisp resolution even at 400% zoom
+    // on multi-hour recordings where overview history[] has halved).
+    private static final float LIVE_DETAIL_FPB = 1200f;
+    private static final int LIVE_DETAIL_CAP = 2048;
+    private float[] liveDetail = new float[LIVE_DETAIL_CAP];
+    private int liveDetailCount = 0;
+    private long liveDetailBaseFrame = 0L;
+    private long liveDetailCurFrame = 0L;
+
     private float downX = 0f;
     private float downY = 0f;
     private float lastTouchX = 0f;
@@ -304,6 +314,7 @@ public class WaveformView extends View {
     public synchronized boolean popUndoPeaks() {
         if (undoPeakStack.isEmpty()) return false;
         waveLoadGen.incrementAndGet();
+        clearLiveDetailLocked();
         float[] snap = undoPeakStack.pollFirst();
         Float snapFrames = undoFramesPerBar.pollFirst();
         if (snap == null) return false;
@@ -340,6 +351,7 @@ public class WaveformView extends View {
     public synchronized boolean popRedoPeaks() {
         if (redoPeakStack.isEmpty()) return false;
         waveLoadGen.incrementAndGet();
+        clearLiveDetailLocked();
         float[] snap = redoPeakStack.pollFirst();
         Float snapFrames = redoFramesPerBar.pollFirst();
         if (snap == null) return false;
@@ -376,6 +388,7 @@ public class WaveformView extends View {
     public synchronized void cropToSelectionBuckets() {
         if (!hasSelection()) return;
         waveLoadGen.incrementAndGet();
+        clearLiveDetailLocked();
         int s = Math.max(0, Math.min(count - 1, selStartIdx));
         int e = Math.max(s + 1, Math.min(count, selEndIdx));
         int keep = e - s;
@@ -392,6 +405,7 @@ public class WaveformView extends View {
     public synchronized void deleteSelectionBuckets() {
         if (!hasSelection()) return;
         waveLoadGen.incrementAndGet();
+        clearLiveDetailLocked();
         int s = Math.max(0, Math.min(count - 1, selStartIdx));
         int e = Math.max(s + 1, Math.min(count, selEndIdx));
         int tail = count - e;
@@ -1216,6 +1230,10 @@ public class WaveformView extends View {
             return;
         }
         replacingInPlace = false;
+        // Update constant-resolution (25 ms / 40 Hz) live detail tail so 200%-400%
+        // zoom stays crisp and smooth even on long takes after overview halving.
+        updateLiveDetailLocked(clampedV, curFrames);
+
         // Appending (either a fresh recording or Replace after passing replaceEndFrame):
         // Advance strictly by audio frame position (curFrames / framesPerBar)
         // so the speed is 100% identical to pre-end Replace and independent of UI tick rate!
@@ -1239,6 +1257,187 @@ public class WaveformView extends View {
         lastMorphIdx = -1;
         morphAlpha = 0f;
         postInvalidateOnAnimation();
+    }
+
+    private void clearLiveDetailLocked() {
+        liveDetailCount = 0;
+        liveDetailBaseFrame = 0L;
+        liveDetailCurFrame = 0L;
+    }
+
+    private void updateLiveDetailLocked(float clampedV, long curFrames) {
+        if (curFrames <= 0L) return;
+        if (liveDetailCount == 0 || curFrames < liveDetailBaseFrame) {
+            long startSlot = Math.max(0L, (long) Math.floor(curFrames / LIVE_DETAIL_FPB));
+            liveDetailBaseFrame = Math.round(startSlot * LIVE_DETAIL_FPB);
+            liveDetail[0] = clampedV;
+            liveDetailCount = 1;
+            liveDetailCurFrame = curFrames;
+            return;
+        }
+        long relFrames = curFrames - liveDetailBaseFrame;
+        int targetIdx = (int) (relFrames / LIVE_DETAIL_FPB);
+        if (targetIdx < 0) targetIdx = 0;
+        // If we jumped far ahead (e.g. returned from background), reset window
+        // so backfillLiveGapFromWav can populate real peaks cleanly.
+        if (targetIdx - liveDetailCount > 160) {
+            long startSlot = Math.max(0L, (long) Math.floor(curFrames / LIVE_DETAIL_FPB));
+            liveDetailBaseFrame = Math.round(startSlot * LIVE_DETAIL_FPB);
+            liveDetail[0] = clampedV;
+            liveDetailCount = 1;
+            liveDetailCurFrame = curFrames;
+            return;
+        }
+        while (targetIdx >= LIVE_DETAIL_CAP) {
+            int drop = 512;
+            int remain = Math.max(0, liveDetailCount - drop);
+            if (remain > 0) {
+                System.arraycopy(liveDetail, drop, liveDetail, 0, remain);
+            }
+            liveDetailCount = remain;
+            liveDetailBaseFrame += Math.round(drop * LIVE_DETAIL_FPB);
+            targetIdx -= drop;
+        }
+        if (targetIdx >= liveDetailCount) {
+            for (int i = liveDetailCount; i <= targetIdx; i++) {
+                liveDetail[i] = clampedV;
+            }
+            liveDetailCount = targetIdx + 1;
+        } else if (clampedV > liveDetail[targetIdx]) {
+            liveDetail[targetIdx] = clampedV;
+        }
+        liveDetailCurFrame = curFrames;
+    }
+
+    /**
+     * Backfills waveform buckets missed while the app was backgrounded during
+     * live recording by reading ONLY the missed frame range from {@code raw}.
+     * Prevents flat silence plateaus and sudden catch-up snaps on resume.
+     */
+    public void backfillLiveGapFromWav(final java.io.File raw, final long targetFrame) {
+        if (raw == null || !raw.exists() || targetFrame <= 0L) return;
+        final long gapStartFrame;
+        final int startBucket;
+        final int endBucket;
+        final float fpbSnapshot;
+        final int myGen;
+        synchronized (this) {
+            if (replacingInPlace || count <= 0) return;
+            if (framesPerBar <= 0f) framesPerBar = 2400f;
+            gapStartFrame = Math.round(count * framesPerBar);
+            if (targetFrame - gapStartFrame <= (long) (framesPerBar * 4f)) {
+                return;
+            }
+            int targetCount = Math.max(count + 1, (int) Math.ceil(targetFrame / framesPerBar));
+            while (targetCount > MAX_HISTORY) {
+                halveHistory();
+                targetCount = Math.max(count + 1, (int) Math.ceil(targetFrame / framesPerBar));
+            }
+            startBucket = count;
+            if (history.length < targetCount) {
+                int nextCap = history.length;
+                while (nextCap < targetCount && nextCap < MAX_HISTORY) {
+                    nextCap = Math.min(MAX_HISTORY, nextCap * 2);
+                }
+                float[] bigger = new float[Math.max(nextCap, targetCount)];
+                System.arraycopy(history, 0, bigger, 0, count);
+                history = bigger;
+            }
+            endBucket = Math.min(history.length, targetCount);
+            fpbSnapshot = framesPerBar;
+            // Advance count & playhead cleanly right away so live frames don't smear silence
+            for (int i = count; i < endBucket; i++) {
+                history[i] = 0f;
+            }
+            count = endBucket;
+            playheadPos = Math.min(count, targetFrame / framesPerBar);
+            playheadIndex = Math.round(playheadPos);
+            myGen = waveLoadGen.get();
+        }
+        postInvalidateOnAnimation();
+
+        new Thread(() -> {
+            try (RandomAccessFile r = new RandomAccessFile(raw, "r")) {
+                Dsp.WavHeader h = Dsp.parseWavHeader(r);
+                int ch = Math.max(1, h.channels);
+                long onDisk = Math.max(0L, r.length() - h.dataStart);
+                long fileFrames = onDisk / (4L * ch);
+                long readEnd = Math.min(fileFrames, targetFrame);
+                long readStart = Math.max(0L, Math.min(gapStartFrame, readEnd));
+                if (readEnd <= readStart) return;
+
+                int fillBuckets = endBucket - startBucket;
+                float[] gapPeaks = new float[Math.max(1, fillBuckets)];
+
+                // Also populate the trailing high-res liveDetail window (last ~20s)
+                long detailSpanFrames = Math.round((LIVE_DETAIL_CAP / 2) * LIVE_DETAIL_FPB);
+                long detailStart = Math.max(readStart, readEnd - detailSpanFrames);
+                int detailSlots = (int) Math.max(1,
+                        Math.min(LIVE_DETAIL_CAP - 64,
+                                Math.ceil((readEnd - detailStart) / LIVE_DETAIL_FPB)));
+                float[] detailPeaks = new float[detailSlots];
+
+                int framesPerRead = Math.max(1, 262144 / (4 * ch));
+                byte[] in = new byte[framesPerRead * ch * 4];
+                float[] fBuf = new float[framesPerRead * ch];
+                java.nio.FloatBuffer fb = ByteBuffer.wrap(in)
+                        .order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer();
+                r.seek(h.dataStart + readStart * ch * 4L);
+                long frame = readStart;
+                while (frame < readEnd) {
+                    if (waveLoadGen.get() != myGen) return;
+                    int want = (int) Math.min(framesPerRead, readEnd - frame);
+                    int samples = want * ch;
+                    r.readFully(in, 0, samples * 4);
+                    fb.clear();
+                    fb.get(fBuf, 0, samples);
+                    for (int f = 0; f < want; f++) {
+                        float pk = 0f;
+                        int base = f * ch;
+                        for (int c = 0; c < ch; c++) {
+                            float a = Math.abs(fBuf[base + c]);
+                            if (a > pk) pk = a;
+                        }
+                        long absF = frame + f;
+                        int gb = (int) ((absF - readStart) / fpbSnapshot);
+                        if (gb >= 0 && gb < gapPeaks.length && pk > gapPeaks[gb]) {
+                            gapPeaks[gb] = pk;
+                        }
+                        if (absF >= detailStart) {
+                            int ds = (int) ((absF - detailStart) / LIVE_DETAIL_FPB);
+                            if (ds >= 0 && ds < detailSlots && pk > detailPeaks[ds]) {
+                                detailPeaks[ds] = pk;
+                            }
+                        }
+                    }
+                    frame += want;
+                }
+
+                synchronized (WaveformView.this) {
+                    if (waveLoadGen.get() != myGen) return;
+                    if (Math.abs(framesPerBar - fpbSnapshot) < 1f && count >= endBucket) {
+                        int n = Math.min(gapPeaks.length, endBucket - startBucket);
+                        if (n > 0 && startBucket + n <= history.length) {
+                            System.arraycopy(gapPeaks, 0, history, startBucket, n);
+                        }
+                    }
+                    if (detailSlots > 0 && liveDetailCurFrame <= readEnd + Math.round(LIVE_DETAIL_FPB * 80)) {
+                        // Prepend backfilled detail peaks cleanly behind any newly pushed live frames
+                        int liveExtra = (liveDetailCount > 0 && liveDetailBaseFrame >= readEnd)
+                                ? Math.min(liveDetailCount, LIVE_DETAIL_CAP - detailSlots)
+                                : 0;
+                        if (liveExtra > 0) {
+                            System.arraycopy(liveDetail, 0, liveDetail, detailSlots, liveExtra);
+                        }
+                        System.arraycopy(detailPeaks, 0, liveDetail, 0, detailSlots);
+                        liveDetailBaseFrame = detailStart;
+                        liveDetailCount = detailSlots + liveExtra;
+                        if (liveDetailCurFrame < readEnd) liveDetailCurFrame = readEnd;
+                    }
+                }
+                postInvalidateOnAnimation();
+            } catch (Exception ignored) {}
+        }, "takeone-wave-backfill").start();
     }
 
     /** Max-pools peaks so a splice matches the parent's bucket density. */
@@ -1368,6 +1567,7 @@ public class WaveformView extends View {
 
     public synchronized void clear() {
         waveLoadGen.incrementAndGet();
+        clearLiveDetailLocked();
         Arrays.fill(history, 0f);
         count = 0;
         playheadPos = 0f;
@@ -1434,6 +1634,7 @@ public class WaveformView extends View {
     void applyFullPeaksImmediate(float[] peaks, long totalFrames) {
         if (peaks == null || peaks.length == 0) return;
         synchronized (WaveformView.this) {
+            clearLiveDetailLocked();
             dropFxBaseLocked();
             if (history.length < peaks.length) {
                 history = new float[Math.min(MAX_HISTORY,
@@ -2105,9 +2306,18 @@ public class WaveformView extends View {
         float fxS;
         float fxE;
         final float[] hist;
+        final float[] det;
+        final int detCount;
+        final long detBaseFrame;
+        final float curFpb;
         synchronized (this) {
             hist = history;
             n = Math.min(count, hist != null ? hist.length : 0);
+            det = liveDetail;
+            detCount = (!repInPlace && savedReplaceTailPeaks == null && !fxRegionActive)
+                    ? Math.min(liveDetailCount, det != null ? det.length : 0) : 0;
+            detBaseFrame = liveDetailBaseFrame;
+            curFpb = framesPerBar > 0f ? framesPerBar : 2400f;
             isLive = live;
             repInPlace = replacingInPlace;
             pIdx = playheadIndex;
@@ -2126,6 +2336,7 @@ public class WaveformView extends View {
             fxS = fxRegionStartFrac;
             fxE = fxRegionEndFrac;
         }
+        final long detEndFrame = detBaseFrame + Math.round(detCount * LIVE_DETAIL_FPB);
 
         // Constant high concentration of bars on screen regardless of zoom:
         // Exactly SCREEN_BARS (300) bars fit across the full width `w`
@@ -2188,6 +2399,25 @@ public class WaveformView extends View {
                         float hv = hist[idx];
                         if (hv > v) v = hv;
                     }
+                } else if (detCount > 1 && curFpb > LIVE_DETAIL_FPB * 1.1f) {
+                    float barFrame = barCenterBucket * curFpb;
+                    if (barFrame >= detBaseFrame && barFrame < detEndFrame) {
+                        float dPos = (barFrame - detBaseFrame) / LIVE_DETAIL_FPB;
+                        int d0 = Math.max(0, Math.min(detCount - 1, (int) Math.floor(dPos)));
+                        int d1 = Math.min(detCount - 1, d0 + 1);
+                        float frac = dPos - d0;
+                        v = det[d0] + (det[d1] - det[d0]) * frac;
+                    } else {
+                        int idx = Math.max(0, Math.min(n - 1, (int) Math.floor(barCenterBucket)));
+                        float fracInBucket = barCenterBucket - idx;
+                        float v0 = hist[idx];
+                        float vPrev = (idx - 1 >= 0) ? hist[idx - 1] : v0;
+                        float vNext = (idx + 1 < n) ? hist[idx + 1] : v0;
+                        float targetNeighbor = (fracInBucket < 0.5f) ? vPrev : vNext;
+                        float t = Math.abs(fracInBucket - 0.5f) * 2f;
+                        float weight = t * t * (3f - 2f * t) * 0.42f;
+                        v = v0 + (targetNeighbor - v0) * weight;
+                    }
                 } else {
                     int idx = Math.max(0, Math.min(n - 1, (int) Math.floor(barCenterBucket)));
                     float fracInBucket = barCenterBucket - idx;
@@ -2195,9 +2425,9 @@ public class WaveformView extends View {
                     float vPrev = (idx - 1 >= 0) ? hist[idx - 1] : v0;
                     float vNext = (idx + 1 < n) ? hist[idx + 1] : v0;
                     float targetNeighbor = (fracInBucket < 0.5f) ? vPrev : vNext;
-                    float distFromCenter = Math.abs(fracInBucket - 0.5f) * 2f;
-                    float weight = 0.5f * (1f - (float) Math.cos(Math.PI * distFromCenter)) * 0.42f;
-                    v = v0 * (1f - weight) + targetNeighbor * weight;
+                    float t = Math.abs(fracInBucket - 0.5f) * 2f;
+                    float weight = t * t * (3f - 2f * t) * 0.42f;
+                    v = v0 + (targetNeighbor - v0) * weight;
                 }
 
                 float dispV = v <= 0.85f ? v
