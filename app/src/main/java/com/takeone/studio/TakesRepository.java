@@ -448,10 +448,23 @@ public final class TakesRepository {
     private static void copyFileContents(File src, File dst) throws Exception {
         try (FileInputStream in = new FileInputStream(src);
              FileOutputStream out = new FileOutputStream(dst)) {
-            byte[] buf = new byte[65536];
-            int n;
-            while ((n = in.read(buf)) > 0) {
-                out.write(buf, 0, n);
+            java.nio.channels.FileChannel srcCh = in.getChannel();
+            java.nio.channels.FileChannel dstCh = out.getChannel();
+            long size = srcCh.size();
+            long pos = 0L;
+            final long chunk = 4L * 1024L * 1024L;
+            while (pos < size) {
+                long moved = srcCh.transferTo(pos, Math.min(chunk, size - pos), dstCh);
+                if (moved <= 0L) {
+                    byte[] buf = new byte[262144];
+                    srcCh.position(pos);
+                    int n;
+                    while ((n = in.read(buf)) > 0) {
+                        out.write(buf, 0, n);
+                    }
+                    break;
+                }
+                pos += moved;
             }
             out.getFD().sync();
         }

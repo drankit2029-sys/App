@@ -100,9 +100,18 @@ public class StudioFragment extends Fragment {
      * it so a slow render built from an older rack is discarded instead of
      * painting stale bars.
      */
+    private static final long ASYNC_FX_THRESHOLD_FRAMES = 240_000L;
+    private static final long ASYNC_EDIT_THRESHOLD_BYTES = 4L * 1024L * 1024L;
     private int fxPreviewGeneration = 0;
-    private volatile boolean fxPreviewRendering = false;
-    private volatile boolean fxPreviewRenderPending = false;
+    private volatile java.util.concurrent.atomic.AtomicBoolean activeFxPreviewCancel;
+    private final java.util.concurrent.ExecutorService fxPreviewExecutor =
+            java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+                Thread t = new Thread(r, "takeone-fx-region");
+                t.setDaemon(true);
+                return t;
+            });
+    private boolean applyingFx = false;
+    private boolean editOpRunning = false;
     /**
      * Peak (dBFS) of the frozen FX apply target, measured off the UI thread
      * when the rack opens. Amplify uses it to keep Gain and New Peak in step.
@@ -949,6 +958,7 @@ public class StudioFragment extends Fragment {
         cancelWaveFrame();
         cancelTeleFrame();
         stopDotPulse();
+        cancelActiveFxPreview();
         stopStudioPreview();
         pendingModeRestore = null;
         persistTeleScript();
@@ -1887,10 +1897,8 @@ public class StudioFragment extends Fragment {
      * effect-applied audio.
      */
     void applyEffectsToSelection() {
-        if (!isAdded()) return;
-        if (commitDspFx()) {
-            setFxPanelVisible(false);
-        }
+        if (!isAdded() || applyingFx) return;
+        commitDspFx(true);
     }
 
     /** True while the FX rack is open (effects mode). */
@@ -3540,16 +3548,33 @@ public class StudioFragment extends Fragment {
         } catch (Exception ignored) {}
     }
 
+    private android.app.Dialog showStudioProgress(String title, String message, boolean indeterminate) {
+        try {
+            android.app.Dialog dialog = new android.app.Dialog(requireContext(), R.style.TakeOneCenterDialog);
+            dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE);
+            View root = LayoutInflater.from(requireContext())
+                    .inflate(R.layout.dialog_progress, null);
+            dialog.setContentView(root);
+            ((TextView) root.findViewById(R.id.progressTitle)).setText(title);
+            ((TextView) root.findViewById(R.id.progressMessage)).setText(message);
+            android.widget.ProgressBar bar = root.findViewById(R.id.progressBar);
+            if (bar != null) bar.setIndeterminate(indeterminate);
+            dialog.setCancelable(false);
+            OptionsSheet.styleAsCentered(dialog);
+            dialog.show();
+            return dialog;
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
     private void runEditOperation(boolean isTrim) {
-        if (!isAdded()) return;
+        if (!isAdded() || editOpRunning || applyingFx) return;
         stopStudioPreview();
         if (engine.state == RecordingEngine.State.RECORDING) return;
-        File raw = engine.rawFile;
+        final File raw = engine.rawFile;
         if (raw == null || !raw.exists() || waveform == null) return;
-        boolean undoRecorded = false;
         if (!waveform.hasSelection()) {
-            // Auto-activate selection on the waveform so the user immediately
-            // sees the red [ ] handles instead of a dead error toast!
             waveform.toggleSelectionAtPlayhead();
             paintEditorStrip();
             Toast.makeText(requireContext(),
@@ -3558,126 +3583,207 @@ public class StudioFragment extends Fragment {
                     Toast.LENGTH_SHORT).show();
             return;
         }
+        final FormatConverter.WavInfo info;
         try {
-            FormatConverter.WavInfo info = FormatConverter.readFloatWav(raw);
-            long totalFrames = info.dataBytes / 4 / Math.max(1, info.channels);
-            long start = Math.round(
-                    waveform.selectionStartFraction() * totalFrames);
-            long end = Math.round(
-                    waveform.selectionEndFraction() * totalFrames);
-            EditEngine.UndoJournal uj = activeUndoJournal();
-            // Only mirror the edit into the waveform peak stack when the audio
-            // snapshot will actually land (takes over 30 MB are never
-            // snapshotted), otherwise the two undo stacks desynchronise. The
-            // snapshot itself is still taken by crop/delete AFTER they
-            // validate the range, so a rejected edit leaves no orphan.
-            undoRecorded = uj == null || uj.wouldRecord(raw);
-            if (isTrim) {
-                EditEngine.cropToSelection(raw, start, end, uj);
-                if (undoRecorded) waveform.recordUndoPeaks();
-                waveform.cropToSelectionBuckets();
-            } else {
-                EditEngine.deleteSelection(raw, start, end, uj);
-                if (undoRecorded) waveform.recordUndoPeaks();
-                waveform.deleteSelectionBuckets();
-            }
-            dspBakedToRaw = false;
-            dspSubRangeBaked = false;
-            lastEditWasSubRangeBake = false;
-            userScrolledWhilePaused = false;
-            engine.abortStreaming();
-            engine.dataBytes = RecordingEngine.payloadBytesOf(raw);
-            long newTotal = engine.totalFrames();
-            waveform.syncFramesPerBar(newTotal);
-            long nextCursor = isTrim ? newTotal : Math.min(start, newTotal);
-            engine.seekCursorFrame(nextCursor);
-            if (newTotal > 0) {
-                waveform.setPlayheadFraction(nextCursor / (float) newTotal);
-            }
-            refreshZoomValue();
-            timerText.setText(formatTimer(engine.cursorMs()));
-            OptionsSheet.showTopPopup(requireContext(),
-                    isTrim ? "Audio trimmed" : "Selection deleted");
-        } catch (IllegalArgumentException iae) {
-            Toast.makeText(requireContext(), iae.getMessage(),
-                    Toast.LENGTH_SHORT).show();
+            info = FormatConverter.readFloatWav(raw);
         } catch (Exception e) {
             Toast.makeText(requireContext(), "Edit failed",
                     Toast.LENGTH_SHORT).show();
+            return;
         }
-        paint();
+        final long totalFrames = info.dataBytes / 4 / Math.max(1, info.channels);
+        final long start = Math.round(waveform.selectionStartFraction() * totalFrames);
+        final long end = Math.round(waveform.selectionEndFraction() * totalFrames);
+        final EditEngine.UndoJournal uj = activeUndoJournal();
+        final boolean undoRecorded = uj == null || uj.wouldRecord(raw);
+
+        if (raw.length() <= ASYNC_EDIT_THRESHOLD_BYTES) {
+            try {
+                if (isTrim) {
+                    EditEngine.cropToSelection(raw, start, end, uj);
+                } else {
+                    EditEngine.deleteSelection(raw, start, end, uj);
+                }
+                finishEditOperationOnUi(raw, isTrim, start, undoRecorded);
+            } catch (IllegalArgumentException iae) {
+                Toast.makeText(requireContext(), iae.getMessage(),
+                        Toast.LENGTH_SHORT).show();
+            } catch (Exception e) {
+                Toast.makeText(requireContext(), "Edit failed",
+                        Toast.LENGTH_SHORT).show();
+            }
+            paint();
+            return;
+        }
+
+        editOpRunning = true;
+        final android.app.Dialog dlg = showStudioProgress(
+                isTrim ? "Trimming audio" : "Deleting selection",
+                "Processing audio…", true);
+        new Thread(() -> {
+            Exception err = null;
+            try {
+                if (isTrim) {
+                    EditEngine.cropToSelection(raw, start, end, uj);
+                } else {
+                    EditEngine.deleteSelection(raw, start, end, uj);
+                }
+            } catch (Exception e) {
+                err = e;
+            }
+            final Exception finalErr = err;
+            handler.post(() -> {
+                editOpRunning = false;
+                if (dlg != null) {
+                    try { dlg.dismiss(); } catch (Exception ignored) {}
+                }
+                if (!isAdded()) return;
+                if (finalErr instanceof IllegalArgumentException) {
+                    Toast.makeText(requireContext(), finalErr.getMessage(),
+                            Toast.LENGTH_SHORT).show();
+                } else if (finalErr != null) {
+                    Toast.makeText(requireContext(), "Edit failed",
+                            Toast.LENGTH_SHORT).show();
+                } else {
+                    finishEditOperationOnUi(raw, isTrim, start, undoRecorded);
+                }
+                paint();
+            });
+        }, "takeone-edit-op").start();
+    }
+
+    private void finishEditOperationOnUi(File raw, boolean isTrim, long start,
+                                         boolean undoRecorded) {
+        if (waveform != null) {
+            if (undoRecorded) waveform.recordUndoPeaks();
+            if (isTrim) {
+                waveform.cropToSelectionBuckets();
+            } else {
+                waveform.deleteSelectionBuckets();
+            }
+        }
+        dspBakedToRaw = false;
+        dspSubRangeBaked = false;
+        lastEditWasSubRangeBake = false;
+        userScrolledWhilePaused = false;
+        engine.abortStreaming();
+        engine.dataBytes = RecordingEngine.payloadBytesOf(raw);
+        long newTotal = engine.totalFrames();
+        if (waveform != null) {
+            waveform.syncFramesPerBar(newTotal);
+        }
+        long nextCursor = isTrim ? newTotal : Math.min(start, newTotal);
+        engine.seekCursorFrame(nextCursor);
+        if (newTotal > 0 && waveform != null) {
+            waveform.setPlayheadFraction(nextCursor / (float) newTotal);
+        }
+        refreshZoomValue();
+        if (timerText != null) {
+            timerText.setText(formatTimer(engine.cursorMs()));
+        }
+        OptionsSheet.showTopPopup(requireContext(),
+                isTrim ? "Audio trimmed" : "Selection deleted");
     }
 
     private void performStudioUndo() {
-        if (!isAdded()) return;
+        if (!isAdded() || editOpRunning || applyingFx) return;
         stopStudioPreview();
-        File raw = engine.rawFile;
-        EditEngine.UndoJournal uj = activeUndoJournal();
+        final File raw = engine.rawFile;
+        final EditEngine.UndoJournal uj = activeUndoJournal();
         if (raw == null || uj == null || !uj.canUndo()) return;
-        try {
-            if (uj.undo(raw)) {
-                dspBakedToRaw = false;
-                dspSubRangeBaked = false;
-                lastEditWasSubRangeBake = false;
-                userScrolledWhilePaused = false;
-                engine.abortStreaming();
-                engine.dataBytes = RecordingEngine.payloadBytesOf(raw);
-                long total = engine.totalFrames();
-                engine.seekCursorFrame(total);
-                if (waveform != null) {
-                    if (!waveform.popUndoPeaks()) {
-                        waveform.loadFromFloatWavTwentyHz(raw, () -> {
-                            waveform.syncFramesPerBar(engine.totalFrames());
-                            refreshZoomValue();
-                        });
-                    } else {
-                        waveform.syncFramesPerBar(total);
-                        waveform.setPlayheadFraction(1f);
-                        refreshZoomValue();
-                    }
+        if (raw.length() <= ASYNC_EDIT_THRESHOLD_BYTES) {
+            try {
+                if (uj.undo(raw)) {
+                    finishUndoRedoOnUi(raw, true);
                 }
-                if (timerText != null) {
-                    timerText.setText(formatTimer(engine.durationMs()));
+            } catch (Exception ignored) {}
+            paint();
+            return;
+        }
+        editOpRunning = true;
+        final android.app.Dialog dlg = showStudioProgress("Undoing", "Restoring audio…", true);
+        new Thread(() -> {
+            boolean ok = false;
+            try {
+                ok = uj.undo(raw);
+            } catch (Exception ignored) {}
+            final boolean restored = ok;
+            handler.post(() -> {
+                editOpRunning = false;
+                if (dlg != null) {
+                    try { dlg.dismiss(); } catch (Exception ignored) {}
                 }
-            }
-        } catch (Exception ignored) {}
-        paint();
+                if (!isAdded()) return;
+                if (restored) {
+                    finishUndoRedoOnUi(raw, true);
+                }
+                paint();
+            });
+        }, "takeone-undo").start();
     }
 
     private void performStudioRedo() {
-        if (!isAdded()) return;
+        if (!isAdded() || editOpRunning || applyingFx) return;
         stopStudioPreview();
-        File raw = engine.rawFile;
-        EditEngine.UndoJournal uj = activeUndoJournal();
+        final File raw = engine.rawFile;
+        final EditEngine.UndoJournal uj = activeUndoJournal();
         if (raw == null || uj == null || !uj.canRedo()) return;
-        try {
-            if (uj.redo(raw)) {
-                dspBakedToRaw = false;
-                dspSubRangeBaked = false;
-                lastEditWasSubRangeBake = false;
-                userScrolledWhilePaused = false;
-                engine.abortStreaming();
-                engine.dataBytes = RecordingEngine.payloadBytesOf(raw);
-                long total = engine.totalFrames();
-                engine.seekCursorFrame(total);
-                if (waveform != null) {
-                    if (!waveform.popRedoPeaks()) {
-                        waveform.loadFromFloatWavTwentyHz(raw, () -> {
-                            waveform.syncFramesPerBar(engine.totalFrames());
-                            refreshZoomValue();
-                        });
-                    } else {
-                        waveform.syncFramesPerBar(total);
-                        waveform.setPlayheadFraction(1f);
-                        refreshZoomValue();
-                    }
+        if (raw.length() <= ASYNC_EDIT_THRESHOLD_BYTES) {
+            try {
+                if (uj.redo(raw)) {
+                    finishUndoRedoOnUi(raw, false);
                 }
-                if (timerText != null) {
-                    timerText.setText(formatTimer(engine.durationMs()));
+            } catch (Exception ignored) {}
+            paint();
+            return;
+        }
+        editOpRunning = true;
+        final android.app.Dialog dlg = showStudioProgress("Redoing", "Restoring audio…", true);
+        new Thread(() -> {
+            boolean ok = false;
+            try {
+                ok = uj.redo(raw);
+            } catch (Exception ignored) {}
+            final boolean restored = ok;
+            handler.post(() -> {
+                editOpRunning = false;
+                if (dlg != null) {
+                    try { dlg.dismiss(); } catch (Exception ignored) {}
                 }
+                if (!isAdded()) return;
+                if (restored) {
+                    finishUndoRedoOnUi(raw, false);
+                }
+                paint();
+            });
+        }, "takeone-redo").start();
+    }
+
+    private void finishUndoRedoOnUi(File raw, boolean isUndo) {
+        dspBakedToRaw = false;
+        dspSubRangeBaked = false;
+        lastEditWasSubRangeBake = false;
+        userScrolledWhilePaused = false;
+        engine.abortStreaming();
+        engine.dataBytes = RecordingEngine.payloadBytesOf(raw);
+        long total = engine.totalFrames();
+        engine.seekCursorFrame(total);
+        if (waveform != null) {
+            boolean popped = isUndo ? waveform.popUndoPeaks() : waveform.popRedoPeaks();
+            if (!popped) {
+                waveform.loadFromFloatWavTwentyHz(raw, () -> {
+                    waveform.syncFramesPerBar(engine.totalFrames());
+                    refreshZoomValue();
+                });
+            } else {
+                waveform.syncFramesPerBar(total);
+                waveform.setPlayheadFraction(1f);
+                refreshZoomValue();
             }
-        } catch (Exception ignored) {}
-        paint();
+        }
+        if (timerText != null) {
+            timerText.setText(formatTimer(engine.durationMs()));
+        }
     }
 
     /**
@@ -3740,8 +3846,7 @@ public class StudioFragment extends Fragment {
             // effect-applied bars only exist inside effects mode.
             stopStudioPreview();
             discardRenderedFxPreview();
-            fxPreviewGeneration++;
-            handler.removeCallbacks(fxPreviewRefresh);
+            cancelActiveFxPreview();
             fxPanel.setVisibility(View.GONE);
             telePanel.setVisibility(teleWasVisibleBeforeFx
                     ? View.VISIBLE : View.GONE);
@@ -3774,13 +3879,43 @@ public class StudioFragment extends Fragment {
         new Thread(() -> {
             final float[] peak = {0f};
             try {
-                EditEngine.forEachFloatChunk(raw, start, end,
-                        AudioProcessor.DEFAULT_DSP_CHUNK_FRAMES,
-                        (chunk, frames, ch, frameOffset) -> {
+                long span = end - start;
+                if (span > 1_440_000L) {
+                    try (java.io.RandomAccessFile raf = new java.io.RandomAccessFile(raw, "r")) {
+                        Dsp.WavHeader h = Dsp.parseWavHeader(raf);
+                        int ch = Math.max(1, h.channels);
+                        int probes = 256;
+                        int win = 1024;
+                        byte[] rawBuf = new byte[win * ch * 4];
+                        float[] fBuf = new float[win * ch];
+                        java.nio.FloatBuffer fb = java.nio.ByteBuffer.wrap(rawBuf)
+                                .order(java.nio.ByteOrder.LITTLE_ENDIAN).asFloatBuffer();
+                        for (int i = 0; i < probes; i++) {
+                            if (gen != fxSelectionPeakScanGeneration) return;
+                            long pos = start + (long) i * span / probes;
+                            int want = (int) Math.min(win, end - pos);
+                            if (want <= 0) continue;
+                            raf.seek(h.dataStart + pos * ch * 4L);
+                            raf.readFully(rawBuf, 0, want * ch * 4);
+                            fb.clear();
+                            fb.get(fBuf, 0, want * ch);
                             float p = HardwareApiManager.get()
-                                    .computeChunkPeak(chunk, frames * ch);
+                                    .computeChunkPeak(fBuf, want * ch);
                             if (p > peak[0]) peak[0] = p;
-                        });
+                        }
+                    }
+                } else {
+                    EditEngine.forEachFloatChunk(raw, start, end,
+                            MemoryBudget.chunkFrames(32768, Math.max(1, engine.channels)),
+                            (chunk, frames, ch, frameOffset) -> {
+                                if (gen != fxSelectionPeakScanGeneration) {
+                                    throw new InterruptedException("cancelled");
+                                }
+                                float p = HardwareApiManager.get()
+                                        .computeChunkPeak(chunk, frames * ch);
+                                if (p > peak[0]) peak[0] = p;
+                            });
+                }
             } catch (Exception ignored) {
                 return;
             }
@@ -3805,20 +3940,19 @@ public class StudioFragment extends Fragment {
      * paint over a newer one. The render runs off the UI thread and only
      * covers the target region, which keeps it responsive on long takes.
      */
-    private void refreshFxPreviewPeaks() {
-        // Coalesce: knob turns during an in-flight render schedule exactly
-        // one follow-up with the latest rack state instead of a pile of
-        // full-file renders.
-        if (fxPreviewRendering) {
-            fxPreviewRenderPending = true;
-            return;
-        }
+    private void cancelActiveFxPreview() {
+        fxPreviewGeneration++;
         handler.removeCallbacks(fxPreviewRefresh);
+        java.util.concurrent.atomic.AtomicBoolean prev = activeFxPreviewCancel;
+        if (prev != null) {
+            prev.set(true);
+        }
+    }
+
+    private void refreshFxPreviewPeaks() {
+        cancelActiveFxPreview();
         if (!isAdded() || waveform == null) return;
         if (previewPlaysRenderedFx && studioPreviewPlayer != null) {
-            // Pause active rendered playback when a parameter changes; the
-            // live refresh below will atomically swap in the newly stretched
-            // timeline and preview WAV without snapping back to raw first.
             stopStudioPreview();
         }
         if (!fxPanelOpen) {
@@ -3826,13 +3960,13 @@ public class StudioFragment extends Fragment {
             waveform.clearFxRegion();
             return;
         }
-        handler.postDelayed(fxPreviewRefresh, 70L);
+        handler.postDelayed(fxPreviewRefresh, 80L);
     }
 
     private final Runnable fxPreviewRefresh = () -> {
         if (!isAdded() || waveform == null || !fxPanelOpen) return;
         if (dspConfig == null || !dspConfig.isActive()) {
-            fxPreviewGeneration++;
+            cancelActiveFxPreview();
             discardRenderedFxPreview();
             waveform.clearFxRegionPeaks();
             return;
@@ -3850,11 +3984,15 @@ public class StudioFragment extends Fragment {
             return;
         }
         final int gen = ++fxPreviewGeneration;
+        final java.util.concurrent.atomic.AtomicBoolean cancelToken =
+                new java.util.concurrent.atomic.AtomicBoolean(false);
+        java.util.concurrent.atomic.AtomicBoolean prev = activeFxPreviewCancel;
+        if (prev != null) prev.set(true);
+        activeFxPreviewCancel = cancelToken;
+
         final float startFrac = fxApplyTargetStart;
         final float endFrac = fxApplyTargetEnd;
         final int channels = Math.max(1, engine.channels);
-        // Snapshot the chain on the UI thread: the worker gets an immutable
-        // rack while the user keeps turning knobs.
         final DspChain chain = new DspChain(channels, dspConfig);
         if (!chain.isActive()) {
             discardRenderedFxPreview();
@@ -3863,8 +4001,8 @@ public class StudioFragment extends Fragment {
         }
         final File cacheDir = requireContext().getCacheDir();
         final boolean hasOffline = !chain.offlineProcessors().isEmpty();
-        fxPreviewRendering = true;
-        new Thread(() -> {
+        fxPreviewExecutor.execute(() -> {
+            if (cancelToken.get()) return;
             File tempOut = null;
             if (hasOffline) {
                 try {
@@ -3874,11 +4012,19 @@ public class StudioFragment extends Fragment {
             }
             final FxPreviewPeaks.LiveRegionResult res =
                     FxPreviewPeaks.renderRegionLive(raw, chain, baseBuckets,
-                            DspChain.SAMPLE_RATE, startFrac, endFrac, tempOut);
+                            DspChain.SAMPLE_RATE, startFrac, endFrac, tempOut,
+                            cancelToken);
             final File createdTemp = tempOut;
+            if (cancelToken.get()) {
+                if (createdTemp != null) {
+                    // noinspection ResultOfMethodCallIgnored
+                    createdTemp.delete();
+                }
+                return;
+            }
             handler.post(() -> {
                 if (!isAdded() || waveform == null || !fxPanelOpen
-                        || gen != fxPreviewGeneration) {
+                        || gen != fxPreviewGeneration || cancelToken.get()) {
                     if (createdTemp != null) {
                         // noinspection ResultOfMethodCallIgnored
                         createdTemp.delete();
@@ -3937,12 +4083,7 @@ public class StudioFragment extends Fragment {
                     refreshZoomValue();
                 }
             });
-            fxPreviewRendering = false;
-            if (fxPreviewRenderPending) {
-                fxPreviewRenderPending = false;
-                handler.post(this::refreshFxPreviewPeaks);
-            }
-        }, "takeone-fx-region").start();
+        });
     };
 
     private void paintFxPanelControls() {
@@ -6169,7 +6310,8 @@ public class StudioFragment extends Fragment {
      * selected. Works identically on both the normal recording and the
      * Select & Replace sub-editor recording.
      */
-    private boolean commitDspFx() {
+    private boolean commitDspFx(final boolean closePanelOnSuccess) {
+        if (applyingFx || editOpRunning) return false;
         if (!ensurePausedForEditing()) return false;
         if (replaceModeArmed) {
             Toast.makeText(requireContext(),
@@ -6186,17 +6328,11 @@ public class StudioFragment extends Fragment {
                     Toast.LENGTH_SHORT).show();
             return false;
         }
-        // Apply works on the selection when there is one and on the WHOLE TAKE
-        // otherwise — the old forced "enable selection first" return aborted
-        // silently and made the full-take branch below unreachable.
         if (waveform == null) return false;
-        // In effects mode the target is the region that was selected before
-        // the rack opened, so re-selecting a range (to learn a noise profile,
-        // say) cannot silently change what Stop commits to.
-        boolean hadSel = fxPanelOpen
+        final boolean hadSel = fxPanelOpen
                 ? fxApplyTargetHasSelection
                 : waveform.hasSelection();
-        File raw = engine.rawFile;
+        final File raw = engine.rawFile;
         if (raw == null || !raw.exists()) return false;
         if (!hadSel && dspBakedToRaw && !dspSubRangeBaked) {
             Toast.makeText(requireContext(),
@@ -6204,89 +6340,275 @@ public class StudioFragment extends Fragment {
                     Toast.LENGTH_SHORT).show();
             return false;
         }
-        boolean peaksPushed = false;
+        final FormatConverter.WavInfo preInfo;
         try {
-            // Config.isActive() can disagree with the processor chain (e.g. a
-            // Stage 3 slot whose parameters are neutral); probe the real chain
-            // BEFORE any undo bookkeeping so an inaudible rack never pushes a
-            // waveform peak snapshot without a matching audio snapshot.
-            try {
-                FormatConverter.WavInfo preInfo =
-                        FormatConverter.readFloatWav(raw);
-                DspChain probeChain = new DspChain(preInfo.channels, dspConfig);
-                if (!probeChain.isActive()) {
-                    Toast.makeText(requireContext(),
-                            "Adjust an effect parameter away from 0 dB first",
-                            Toast.LENGTH_SHORT).show();
-                    return false;
-                }
-            } catch (Exception e) {
+            preInfo = FormatConverter.readFloatWav(raw);
+            DspChain probeChain = new DspChain(preInfo.channels, dspConfig);
+            if (!probeChain.isActive()) {
+                Toast.makeText(requireContext(),
+                        "Adjust an effect parameter away from 0 dB first",
+                        Toast.LENGTH_SHORT).show();
                 return false;
             }
-            EditEngine.UndoJournal uj = activeUndoJournal();
-            // If a sub-selection was just baked with this exact rack — even if
-            // a knob tweak has since cleared dspSubRangeBaked — restore the
-            // pre-sub-bake snapshot first so the selected region is not baked
-            // twice!
-            if (!hadSel && (dspSubRangeBaked || lastEditWasSubRangeBake)
-                    && uj != null && uj.canUndo()) {
-                if (uj.undo(raw)) {
-                    waveform.popUndoPeaks();
-                    engine.dataBytes = RecordingEngine.payloadBytesOf(raw);
-                    dspBakedToRaw = false;
-                    dspSubRangeBaked = false;
-                    lastEditWasSubRangeBake = false;
+        } catch (Exception e) {
+            return false;
+        }
+
+        final EditEngine.UndoJournal uj = activeUndoJournal();
+        final boolean needRollbackSubBake = !hadSel
+                && (dspSubRangeBaked || lastEditWasSubRangeBake)
+                && uj != null && uj.canUndo();
+
+        final long preTotalFrames = preInfo.dataBytes / 4 / Math.max(1, preInfo.channels);
+        if (preTotalFrames <= 0) return false;
+        final float selStartFrac = hadSel
+                ? (fxPanelOpen ? fxApplyTargetStart : waveform.selectionStartFraction())
+                : 0f;
+        final float selEndFrac = hadSel
+                ? (fxPanelOpen ? fxApplyTargetEnd : waveform.selectionEndFraction())
+                : 1f;
+        final long estStart = hadSel ? Math.round(selStartFrac * preTotalFrames) : 0L;
+        final long estEnd = hadSel ? Math.round(selEndFrac * preTotalFrames) : preTotalFrames;
+        if (hadSel && estEnd <= estStart) {
+            Toast.makeText(requireContext(),
+                    "Select a valid audio region first",
+                    Toast.LENGTH_SHORT).show();
+            return false;
+        }
+
+        final boolean runAsync = (estEnd - estStart) > ASYNC_FX_THRESHOLD_FRAMES
+                || (needRollbackSubBake && raw.length() > ASYNC_EDIT_THRESHOLD_BYTES);
+
+        if (!runAsync) {
+            return commitDspFxSync(raw, uj, hadSel, needRollbackSubBake,
+                    selStartFrac, selEndFrac, closePanelOnSuccess);
+        }
+
+        applyingFx = true;
+        cancelActiveFxPreview();
+        waveform.clearFxRegionPeaks();
+        waveform.recordUndoPeaks();
+        final DspChain chain = new DspChain(preInfo.channels, dspConfig);
+        final DspChain inPlaceChain = chain.hasInPlaceProcessors()
+                ? new DspChain(preInfo.channels, dspConfig) : null;
+        if (inPlaceChain != null) inPlaceChain.clearOfflineProcessors();
+
+        final android.app.Dialog progress = showStudioProgress(
+                "Applying effects", "Processing audio… 0%", false);
+        final android.widget.ProgressBar bar = progress != null ? progress.findViewById(R.id.progressBar) : null;
+        final TextView msg = progress != null ? progress.findViewById(R.id.progressMessage) : null;
+        final int[] lastPct = {-1};
+        final EditEngine.Progress progressCb = pct -> {
+            if (pct == lastPct[0]) return;
+            lastPct[0] = pct;
+            handler.post(() -> {
+                try {
+                    if (bar != null) bar.setProgress(pct);
+                    if (msg != null) msg.setText("Processing audio… " + pct + "%");
+                } catch (Exception ignored) {}
+            });
+        };
+
+        new Thread(() -> {
+            boolean rolledBackSub = false;
+            boolean ok = false;
+            boolean snapshotRecorded = true;
+            boolean usedOffline = false;
+            long finalRegionEnd = estEnd;
+            float[] fullOfflinePeaks = null;
+            String errMsg = null;
+            try {
+                if (needRollbackSubBake && uj.undo(raw)) {
+                    rolledBackSub = true;
                 }
+                FormatConverter.WavInfo info = FormatConverter.readFloatWav(raw);
+                long totalFrames = info.dataBytes / 4 / Math.max(1, info.channels);
+                long start = hadSel ? Math.round(selStartFrac * totalFrames) : 0L;
+                long end = hadSel ? Math.round(selEndFrac * totalFrames) : totalFrames;
+                java.util.List<AudioProcessor> offline = chain.offlineProcessors();
+                if (!offline.isEmpty()) {
+                    usedOffline = true;
+                    int inPlaceTail = inPlaceChain != null
+                            ? Math.max(0, inPlaceChain.getTailFrames()) : 0;
+                    if (uj != null) {
+                        long snapStart = Math.max(0L, start - Dsp.CROSSFADE_FRAMES);
+                        long snapEnd = Math.min(totalFrames,
+                                end + Dsp.CROSSFADE_FRAMES + inPlaceTail);
+                        boolean recorded = uj.recordRangeSnapshot(raw,
+                                info.dataStart + snapStart * info.channels * 4L,
+                                Math.max(0L, (snapEnd - snapStart) * info.channels * 4L));
+                        if (!recorded) {
+                            snapshotRecorded = false;
+                            errMsg = "Could not record undo for these effects";
+                        }
+                    }
+                    if (errMsg == null) {
+                        long regionEnd = end;
+                        int stepIdx = 0;
+                        int totalSteps = offline.size() + (inPlaceChain != null ? 1 : 0);
+                        for (AudioProcessor proc : offline) {
+                            FormatConverter.WavInfo curInfo = FormatConverter.readFloatWav(raw);
+                            long curTotalBefore = curInfo.dataBytes / 4 / Math.max(1, curInfo.channels);
+                            long newTotal = EditEngine.applyLengthChangingEffectToRange(
+                                    raw, start, regionEnd, proc, null);
+                            if (newTotal < 0) {
+                                if (uj != null && uj.canUndo()) {
+                                    uj.undo(raw);
+                                }
+                                snapshotRecorded = false;
+                                errMsg = "This effect could not be applied here";
+                                break;
+                            }
+                            regionEnd = start + (newTotal - (curTotalBefore - regionEnd));
+                            stepIdx++;
+                            progressCb.onProgress(Math.min(90, stepIdx * 85 / Math.max(1, totalSteps)));
+                        }
+                        if (errMsg == null) {
+                            if (inPlaceChain != null) {
+                                EditEngine.applyDspToRangeWithProgress(
+                                        raw, start, regionEnd, inPlaceChain,
+                                        p -> progressCb.onProgress(50 + p / 2));
+                            }
+                            finalRegionEnd = regionEnd;
+                            fullOfflinePeaks = WaveformView.computeFullPeaksForWav(raw);
+                            ok = true;
+                        }
+                    }
+                } else {
+                    if (uj != null) {
+                        long frameBytes = info.channels * 4L;
+                        int tailFrames = Math.max(0, chain.getTailFrames());
+                        long maxTouchedEndFrame = Math.min(totalFrames, end + tailFrames);
+                        snapshotRecorded = uj.recordRangeSnapshot(
+                                raw,
+                                info.dataStart + start * frameBytes,
+                                Math.max(0L, (maxTouchedEndFrame - start) * frameBytes));
+                    }
+                    progressCb.onProgress(10);
+                    EditEngine.applyDspToRangeWithProgress(
+                            raw, start, end, chain,
+                            p -> progressCb.onProgress(10 + (p * 90) / 100));
+                    ok = true;
+                }
+            } catch (Exception e) {
+                errMsg = "FX failed";
+            }
+
+            final boolean fRolledBackSub = rolledBackSub;
+            final boolean fOk = ok;
+            final boolean fSnapshotRecorded = snapshotRecorded;
+            final boolean fUsedOffline = usedOffline;
+            final long fRegionEnd = finalRegionEnd;
+            final float[] fFullOfflinePeaks = fullOfflinePeaks;
+            final String fErrMsg = errMsg;
+
+            handler.post(() -> {
+                applyingFx = false;
+                if (progress != null) {
+                    try { progress.dismiss(); } catch (Exception ignored) {}
+                }
+                if (!isAdded()) return;
+                if (fRolledBackSub && waveform != null) {
+                    waveform.popUndoPeaks();
+                }
+                if (!fOk) {
+                    if (waveform != null) waveform.discardTopUndoPeaks();
+                    Toast.makeText(requireContext(),
+                            fErrMsg != null ? fErrMsg : "FX failed",
+                            Toast.LENGTH_SHORT).show();
+                    paint();
+                    paintFxPanelControls();
+                    return;
+                }
+                if (!fSnapshotRecorded && waveform != null) {
+                    waveform.discardTopUndoPeaks();
+                }
+                engine.abortStreaming();
+                engine.dataBytes = RecordingEngine.payloadBytesOf(raw);
+                lastEditWasSubRangeBake = false;
+                if (fUsedOffline) {
+                    long newTotalFrames = engine.totalFrames();
+                    long nextCursor = Math.min(newTotalFrames, Math.max(0L, fRegionEnd));
+                    engine.seekCursorFrame(nextCursor);
+                    dspBakedToRaw = true;
+                    dspSubRangeBaked = hadSel;
+                    if (waveform != null) {
+                        if (fFullOfflinePeaks != null && fFullOfflinePeaks.length > 0) {
+                            waveform.applyFullPeaksImmediate(fFullOfflinePeaks, newTotalFrames);
+                        } else {
+                            waveform.loadFromFloatWavTwentyHz(raw, null);
+                        }
+                        waveform.syncFramesPerBar(newTotalFrames);
+                        if (newTotalFrames > 0) {
+                            waveform.setPlayheadFraction(nextCursor / (float) newTotalFrames);
+                        }
+                        waveform.clearSelection();
+                    }
+                    refreshZoomValue();
+                    if (timerText != null) {
+                        timerText.setText(formatTimer(engine.cursorMs()));
+                    }
+                } else {
+                    dspBakedToRaw = true;
+                    dspSubRangeBaked = hadSel;
+                    if (waveform != null) {
+                        waveform.reloadSelectionPeaksFromWav(raw,
+                                hadSel ? selStartFrac : 0f,
+                                hadSel ? selEndFrac : 1f);
+                        waveform.clearSelection();
+                    }
+                }
+                resetFxRackAfterApply(!closePanelOnSuccess);
+                syncFxBakeRequired();
+                OptionsSheet.showTopPopup(requireContext(), "Effects applied");
+                if (closePanelOnSuccess) {
+                    setFxPanelVisible(false);
+                }
+                paint();
+                paintFxPanelControls();
+            });
+        }, "takeone-fx-apply").start();
+        return true;
+    }
+
+    private boolean commitDspFxSync(File raw, EditEngine.UndoJournal uj,
+                                    boolean hadSel, boolean needRollbackSubBake,
+                                    float selStartFrac, float selEndFrac,
+                                    boolean closePanelOnSuccess) {
+        boolean peaksPushed = false;
+        try {
+            if (needRollbackSubBake && uj.undo(raw)) {
+                waveform.popUndoPeaks();
+                engine.dataBytes = RecordingEngine.payloadBytesOf(raw);
+                dspBakedToRaw = false;
+                dspSubRangeBaked = false;
+                lastEditWasSubRangeBake = false;
             }
             FormatConverter.WavInfo info = FormatConverter.readFloatWav(raw);
             long totalFrames = info.dataBytes / 4 / Math.max(1, info.channels);
             if (totalFrames <= 0) return false;
-            long start = 0L;
-            long end = totalFrames;
-            if (hadSel) {
-                float startFrac = fxPanelOpen
-                        ? fxApplyTargetStart
-                        : waveform.selectionStartFraction();
-                float endFrac = fxPanelOpen
-                        ? fxApplyTargetEnd
-                        : waveform.selectionEndFraction();
-                start = Math.round(startFrac * totalFrames);
-                end = Math.round(endFrac * totalFrames);
-                if (end <= start) {
-                    Toast.makeText(requireContext(),
-                            "Select a valid audio region first",
-                            Toast.LENGTH_SHORT).show();
-                    return false;
-                }
+            long start = hadSel ? Math.round(selStartFrac * totalFrames) : 0L;
+            long end = hadSel ? Math.round(selEndFrac * totalFrames) : totalFrames;
+            if (hadSel && end <= start) {
+                Toast.makeText(requireContext(),
+                        "Select a valid audio region first",
+                        Toast.LENGTH_SHORT).show();
+                return false;
             }
-            // The file is about to change: stop the live region render and
-            // drop its dry baseline so the reloaded bars become the new truth.
-            fxPreviewGeneration++;
-            handler.removeCallbacks(fxPreviewRefresh);
+            cancelActiveFxPreview();
             waveform.clearFxRegionPeaks();
             waveform.recordUndoPeaks();
             peaksPushed = true;
             DspChain chain = new DspChain(info.channels, dspConfig);
-            // Duration-changing tools (Change Tempo, Change Speed, Repeat,
-            // Truncate Silence, ...) render the region offline and rewrite the
-            // file, so they take a different path than the in-place chain.
-            // They run first; the in-place chain then processes whatever
-            // region came out of them.
-            java.util.List<AudioProcessor> offline =
-                    chain.offlineProcessors();
+            java.util.List<AudioProcessor> offline = chain.offlineProcessors();
             if (!offline.isEmpty()) {
-                // Snapshot once for the whole commit, including the in-place
-                // tail (reverb/echo/delay) that will be written after the
-                // offline region.  Passing null below prevents each step from
-                // pushing its own overlapping snapshot.
                 DspChain inPlaceProbe = chain.hasInPlaceProcessors()
                         ? new DspChain(info.channels, dspConfig) : null;
                 if (inPlaceProbe != null) inPlaceProbe.clearOfflineProcessors();
                 int inPlaceTail = inPlaceProbe != null
                         ? Math.max(0, inPlaceProbe.getTailFrames()) : 0;
                 if (uj != null) {
-                    long snapStart = Math.max(0L,
-                            start - Dsp.CROSSFADE_FRAMES);
+                    long snapStart = Math.max(0L, start - Dsp.CROSSFADE_FRAMES);
                     long snapEnd = Math.min(totalFrames,
                             end + Dsp.CROSSFADE_FRAMES + inPlaceTail);
                     boolean recorded = uj.recordRangeSnapshot(raw,
@@ -6309,8 +6631,6 @@ public class StudioFragment extends Fragment {
                     long newTotal = EditEngine.applyLengthChangingEffectToRange(
                             raw, start, regionEnd, proc, null);
                     if (newTotal < 0) {
-                        // The upfront B.2 snapshot is already on the journal,
-                        // even when the FIRST offline processor fails.
                         if (uj != null && uj.canUndo()) {
                             uj.undo(raw);
                         }
@@ -6323,8 +6643,6 @@ public class StudioFragment extends Fragment {
                     }
                     regionEnd = start + (newTotal - (curTotalBefore - regionEnd));
                 }
-                // The offline pass rewrote the region: run the remaining
-                // in-place processors over the new boundaries.
                 if (chain.hasInPlaceProcessors()) {
                     DspChain inPlace = new DspChain(info.channels, dspConfig);
                     inPlace.clearOfflineProcessors();
@@ -6348,10 +6666,13 @@ public class StudioFragment extends Fragment {
                 if (timerText != null) {
                     timerText.setText(formatTimer(engine.cursorMs()));
                 }
-                resetFxRackAfterApply();
+                resetFxRackAfterApply(!closePanelOnSuccess);
                 waveform.clearSelection();
                 syncFxBakeRequired();
                 OptionsSheet.showTopPopup(requireContext(), "Effects applied");
+                if (closePanelOnSuccess) {
+                    setFxPanelVisible(false);
+                }
                 paint();
                 paintFxPanelControls();
                 return true;
@@ -6363,37 +6684,24 @@ public class StudioFragment extends Fragment {
                 peaksPushed = false;
             }
             lastEditWasSubRangeBake = false;
-            // The raw now carries the chain for the applied range: the
-            // incremental pump must not keep encoding unprocessed audio, and
-            // neither preview nor save may process these samples a second time.
             engine.abortStreaming();
             engine.dataBytes = RecordingEngine.payloadBytesOf(raw);
             if (!hadSel) {
-                // Whole take baked: mark it so preview (livePreviewDsp) and
-                // save never process these samples a second time.
                 dspBakedToRaw = true;
                 dspSubRangeBaked = false;
                 waveform.reloadSelectionPeaksFromWav(raw, 0f, 1f);
             } else {
-                waveform.reloadSelectionPeaksFromWav(raw,
-                        fxPanelOpen ? fxApplyTargetStart
-                                : waveform.selectionStartFraction(),
-                        fxPanelOpen ? fxApplyTargetEnd
-                                : waveform.selectionEndFraction());
-                // Only the selected region was baked. The raw file now carries
-                // that bake, so preview/save must not process it again even
-                // though the rest of the take remains dry.
+                waveform.reloadSelectionPeaksFromWav(raw, selStartFrac, selEndFrac);
                 dspBakedToRaw = true;
                 dspSubRangeBaked = true;
             }
-            // Apply is the single commit point: the raw file and waveform now
-            // carry the processed audio, so start a fresh, blank rack. Keeping
-            // the old slots enabled would leave the UI implying the effects
-            // are still pending and invite a second bake.
-            resetFxRackAfterApply();
+            resetFxRackAfterApply(!closePanelOnSuccess);
             syncFxBakeRequired();
             waveform.clearSelection();
             OptionsSheet.showTopPopup(requireContext(), "Effects applied");
+            if (closePanelOnSuccess) {
+                setFxPanelVisible(false);
+            }
         } catch (Exception e) {
             if (peaksPushed && waveform != null) waveform.discardTopUndoPeaks();
             Toast.makeText(requireContext(), "FX failed",
@@ -6406,7 +6714,7 @@ public class StudioFragment extends Fragment {
     }
 
     /** Preserves the user's FX rack after a bake while marking the audio committed. */
-    private void resetFxRackAfterApply() {
+    private void resetFxRackAfterApply(boolean refreshPreview) {
         if (dspConfig == null) return;
         try {
             dspConfig.save(requireContext());
@@ -6414,7 +6722,9 @@ public class StudioFragment extends Fragment {
         if (livePreviewDsp != null) {
             livePreviewDsp.updateConfig(dspConfig);
         }
-        refreshFxPreviewPeaks();
+        if (refreshPreview) {
+            refreshFxPreviewPeaks();
+        }
         rebuildFxRackList();
     }
 

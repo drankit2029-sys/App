@@ -42,6 +42,17 @@ public class WaveformView extends View {
      */
     public static final int SCREEN_BARS = 300;
     private static final int MAX_HISTORY = 8192;
+    private static final long COARSE_PREVIEW_MIN_FRAMES = 960_000L;
+    private static final int PEAK_CACHE_MAX = 16;
+    private static final java.util.LinkedHashMap<String, float[]> PEAK_CACHE =
+            new java.util.LinkedHashMap<String, float[]>(PEAK_CACHE_MAX + 1, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(java.util.Map.Entry<String, float[]> eldest) {
+                    return size() > PEAK_CACHE_MAX;
+                }
+            };
+    private final java.util.concurrent.atomic.AtomicInteger waveLoadGen =
+            new java.util.concurrent.atomic.AtomicInteger(0);
 
     private final Paint barPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint linePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -292,6 +303,7 @@ public class WaveformView extends View {
     /** Restores the most recent in-memory waveform peak snapshot on Undo and saves current peaks for Redo. */
     public synchronized boolean popUndoPeaks() {
         if (undoPeakStack.isEmpty()) return false;
+        waveLoadGen.incrementAndGet();
         float[] snap = undoPeakStack.pollFirst();
         Float snapFrames = undoFramesPerBar.pollFirst();
         if (snap == null) return false;
@@ -327,6 +339,7 @@ public class WaveformView extends View {
     /** Restores the most recent in-memory waveform peak snapshot on Redo and saves current peaks for Undo. */
     public synchronized boolean popRedoPeaks() {
         if (redoPeakStack.isEmpty()) return false;
+        waveLoadGen.incrementAndGet();
         float[] snap = redoPeakStack.pollFirst();
         Float snapFrames = redoFramesPerBar.pollFirst();
         if (snap == null) return false;
@@ -362,6 +375,7 @@ public class WaveformView extends View {
     /** Crops the in-memory waveform bars to the current selection `[selStartIdx, selEndIdx)` in-place. */
     public synchronized void cropToSelectionBuckets() {
         if (!hasSelection()) return;
+        waveLoadGen.incrementAndGet();
         int s = Math.max(0, Math.min(count - 1, selStartIdx));
         int e = Math.max(s + 1, Math.min(count, selEndIdx));
         int keep = e - s;
@@ -377,6 +391,7 @@ public class WaveformView extends View {
     /** Deletes the selected buckets `[selStartIdx, selEndIdx)` in-place and shifts the tail left. */
     public synchronized void deleteSelectionBuckets() {
         if (!hasSelection()) return;
+        waveLoadGen.incrementAndGet();
         int s = Math.max(0, Math.min(count - 1, selStartIdx));
         int e = Math.max(s + 1, Math.min(count, selEndIdx));
         int tail = count - e;
@@ -751,7 +766,9 @@ public class WaveformView extends View {
      */
     public void reloadSelectionPeaksFromWav(final java.io.File raw,
                                             final float startFrac,
-                                            final float endFrac) {        if (raw == null || !raw.exists()) return;
+                                            final float endFrac) {
+        if (raw == null || !raw.exists()) return;
+        final int myGen = waveLoadGen.incrementAndGet();
         new Thread(() -> {
             try {
                 int curCount;
@@ -759,18 +776,16 @@ public class WaveformView extends View {
                     curCount = count;
                 }
                 if (curCount <= 0) return;
-                float[] updated = loadPeaksExactBuckets(raw, curCount);
-                if (updated.length != curCount) return;
+                int s = Math.max(0, Math.min(curCount - 1,
+                        Math.round(startFrac * curCount)));
+                int e = Math.max(s + 1, Math.min(curCount,
+                        Math.round(endFrac * curCount)));
+                float[] rangePeaks = loadPeaksForRange(raw, curCount, s, e, waveLoadGen, myGen);
+                if (rangePeaks == null || rangePeaks.length != (e - s)) return;
                 synchronized (WaveformView.this) {
-                    if (count == curCount) {
+                    if (count == curCount && waveLoadGen.get() == myGen) {
                         dropFxBaseLocked();
-                        int s = Math.max(0, Math.min(count - 1,
-                                Math.round(startFrac * count)));
-                        int e = Math.max(s + 1, Math.min(count,
-                                Math.round(endFrac * count)));
-                        for (int i = s; i < e; i++) {
-                            history[i] = updated[i];
-                        }
+                        System.arraycopy(rangePeaks, 0, history, s, e - s);
                     }
                 }
                 postInvalidateOnAnimation();
@@ -1352,6 +1367,7 @@ public class WaveformView extends View {
     }
 
     public synchronized void clear() {
+        waveLoadGen.incrementAndGet();
         Arrays.fill(history, 0f);
         count = 0;
         playheadPos = 0f;
@@ -1380,8 +1396,29 @@ public class WaveformView extends View {
      * Timeline Repeat, Paulstretch) immediately reflect their new segment and
      * take duration on the timeline.
      */
+    private static String peakCacheKey(java.io.File wav, int buckets) {
+        return wav.getAbsolutePath() + "|" + wav.length() + "|" + wav.lastModified() + "|" + buckets;
+    }
+
+    private static float[] getCachedPeaks(java.io.File wav, int buckets) {
+        String key = peakCacheKey(wav, buckets);
+        synchronized (PEAK_CACHE) {
+            float[] hit = PEAK_CACHE.get(key);
+            return hit != null ? hit.clone() : null;
+        }
+    }
+
+    private static void putCachedPeaks(java.io.File wav, int buckets, float[] peaks) {
+        if (peaks == null || peaks.length == 0) return;
+        String key = peakCacheKey(wav, buckets);
+        synchronized (PEAK_CACHE) {
+            PEAK_CACHE.put(key, peaks.clone());
+        }
+    }
+
     public void reloadFullFromWavSync(java.io.File raw) {
         if (raw == null || !raw.exists()) return;
+        waveLoadGen.incrementAndGet();
         try {
             long payload = RecordingEngine.payloadBytesOf(raw);
             FormatConverter.WavInfo info = FormatConverter.readFloatWav(raw);
@@ -1390,29 +1427,49 @@ public class WaveformView extends View {
                     Math.min(MAX_HISTORY, (totalFrames + 1200) / 2400));
             float[] peaks = loadPeaksExactBuckets(raw, buckets20Hz);
             if (peaks.length == 0) return;
-            synchronized (WaveformView.this) {
-                dropFxBaseLocked();
-                if (history.length < peaks.length) {
-                    history = new float[Math.min(MAX_HISTORY,
-                            Math.max(COLS, peaks.length))];
-                }
-                Arrays.fill(history, 0f);
-                count = Math.min(peaks.length, history.length);
-                System.arraycopy(peaks, 0, history, 0, count);
-                framesPerBar = totalFrames > 0
-                        ? Math.max(240f, totalFrames / (float) count) : 2400f;
-                playheadIndex = count;
-                playheadPos = count;
-                selectionActive = false;
-                zoom = Math.max(minimumZoom(), Math.min(zoom,
-                        ZOOM_STEPS[ZOOM_STEPS.length - 1]));
-            }
-            postInvalidate();
+            applyFullPeaksImmediate(peaks, totalFrames);
         } catch (Exception ignored) {}
+    }
+
+    void applyFullPeaksImmediate(float[] peaks, long totalFrames) {
+        if (peaks == null || peaks.length == 0) return;
+        synchronized (WaveformView.this) {
+            dropFxBaseLocked();
+            if (history.length < peaks.length) {
+                history = new float[Math.min(MAX_HISTORY,
+                        Math.max(COLS, peaks.length))];
+            }
+            Arrays.fill(history, 0f);
+            count = Math.min(peaks.length, history.length);
+            System.arraycopy(peaks, 0, history, 0, count);
+            framesPerBar = totalFrames > 0
+                    ? Math.max(240f, totalFrames / (float) count) : 2400f;
+            playheadIndex = count;
+            playheadPos = count;
+            selectionActive = false;
+            zoom = Math.max(minimumZoom(), Math.min(zoom,
+                    ZOOM_STEPS[ZOOM_STEPS.length - 1]));
+        }
+        postInvalidate();
+    }
+
+    static float[] computeFullPeaksForWav(java.io.File raw) {
+        if (raw == null || !raw.exists()) return new float[0];
+        try {
+            long payload = RecordingEngine.payloadBytesOf(raw);
+            FormatConverter.WavInfo info = FormatConverter.readFloatWav(raw);
+            long totalFrames = payload / 4 / Math.max(1, info.channels);
+            int buckets20Hz = (int) Math.max(2,
+                    Math.min(MAX_HISTORY, (totalFrames + 1200) / 2400));
+            return loadPeaksExactBuckets(raw, buckets20Hz);
+        } catch (Exception e) {
+            return new float[0];
+        }
     }
 
     public void loadFromFloatWav(java.io.File raw, Runnable onLoaded) {
         if (raw == null) return;
+        final int myGen = waveLoadGen.incrementAndGet();
         new Thread(() -> {
             try {
                 long payload = RecordingEngine.payloadBytesOf(raw);
@@ -1420,8 +1477,26 @@ public class WaveformView extends View {
                 long totalFrames = payload / 4 / Math.max(1, info.channels);
                 int buckets20Hz = (int) Math.max(8,
                         Math.min(MAX_HISTORY, (totalFrames + 1200) / 2400));
-                float[] peaks = loadPeaksExactBuckets(raw, buckets20Hz);
-                if (peaks.length == 0) return;
+                float[] cached = getCachedPeaks(raw, buckets20Hz);
+                if (cached != null && cached.length > 0) {
+                    if (waveLoadGen.get() == myGen) {
+                        applyLoadedPeaks(cached, totalFrames, onLoaded);
+                    }
+                    return;
+                }
+                if (totalFrames > COARSE_PREVIEW_MIN_FRAMES) {
+                    float[] coarse = loadPeaksCoarseFast(raw, buckets20Hz);
+                    if (coarse.length > 0 && waveLoadGen.get() == myGen) {
+                        applyLoadedPeaks(coarse, totalFrames, onLoaded);
+                    }
+                    float[] exact = loadPeaksExactBuckets(raw, buckets20Hz, waveLoadGen, myGen);
+                    if (exact != null && exact.length > 0 && waveLoadGen.get() == myGen) {
+                        refineLoadedPeaksInPlace(exact, myGen);
+                    }
+                    return;
+                }
+                float[] peaks = loadPeaksExactBuckets(raw, buckets20Hz, waveLoadGen, myGen);
+                if (peaks == null || peaks.length == 0 || waveLoadGen.get() != myGen) return;
                 applyLoadedPeaks(peaks, totalFrames, onLoaded);
             } catch (Exception ignored) {}
         }, "takeone-wave-load").start();
@@ -1429,6 +1504,7 @@ public class WaveformView extends View {
 
     public void loadFromFloatWavTwentyHz(java.io.File raw, Runnable onLoaded) {
         if (raw == null) return;
+        final int myGen = waveLoadGen.incrementAndGet();
         new Thread(() -> {
             try {
                 long payload = RecordingEngine.payloadBytesOf(raw);
@@ -1436,61 +1512,241 @@ public class WaveformView extends View {
                 long totalFrames = payload / 4 / Math.max(1, info.channels);
                 int buckets20Hz = (int) Math.max(8,
                         Math.min(MAX_HISTORY, (totalFrames + 1200) / 2400));
-                float[] peaks = loadPeaksExactBuckets(raw, buckets20Hz);
-                if (peaks.length == 0) return;
-                synchronized (WaveformView.this) {
-                    if (history.length < peaks.length) {
-                        history = new float[Math.min(MAX_HISTORY,
-                                Math.max(COLS, peaks.length))];
+                float[] cached = getCachedPeaks(raw, buckets20Hz);
+                if (cached != null && cached.length > 0) {
+                    if (waveLoadGen.get() == myGen) {
+                        applyTwentyHzPeaks(cached, totalFrames, onLoaded);
                     }
-                    Arrays.fill(history, 0f);
-                    count = Math.min(peaks.length, history.length);
-                    System.arraycopy(peaks, 0, history, 0, count);
-                    framesPerBar = totalFrames > 0
-                            ? Math.max(240f, totalFrames / (float) Math.max(1, count))
-                            : 2400f;
-                    playheadIndex = count;
-                    playheadPos = count;
-                    zoom = Math.max(minimumZoom(), Math.min(zoom,
-                            ZOOM_STEPS[ZOOM_STEPS.length - 1]));
+                    return;
                 }
-                postInvalidate();
-                if (onLoaded != null) post(onLoaded);
+                if (totalFrames > COARSE_PREVIEW_MIN_FRAMES) {
+                    float[] coarse = loadPeaksCoarseFast(raw, buckets20Hz);
+                    if (coarse.length > 0 && waveLoadGen.get() == myGen) {
+                        applyTwentyHzPeaks(coarse, totalFrames, onLoaded);
+                    }
+                    float[] exact = loadPeaksExactBuckets(raw, buckets20Hz, waveLoadGen, myGen);
+                    if (exact != null && exact.length > 0 && waveLoadGen.get() == myGen) {
+                        refineLoadedPeaksInPlace(exact, myGen);
+                    }
+                    return;
+                }
+                float[] peaks = loadPeaksExactBuckets(raw, buckets20Hz, waveLoadGen, myGen);
+                if (peaks == null || peaks.length == 0 || waveLoadGen.get() != myGen) return;
+                applyTwentyHzPeaks(peaks, totalFrames, onLoaded);
             } catch (Exception ignored) {}
         }, "takeone-wave-load-20hz").start();
     }
 
-    private static float[] loadPeaksExactBuckets(java.io.File wav, int buckets)
+    private void applyTwentyHzPeaks(float[] peaks, long totalFrames, Runnable onLoaded) {
+        synchronized (WaveformView.this) {
+            if (history.length < peaks.length) {
+                history = new float[Math.min(MAX_HISTORY,
+                        Math.max(COLS, peaks.length))];
+            }
+            Arrays.fill(history, 0f);
+            count = Math.min(peaks.length, history.length);
+            System.arraycopy(peaks, 0, history, 0, count);
+            framesPerBar = totalFrames > 0
+                    ? Math.max(240f, totalFrames / (float) Math.max(1, count))
+                    : 2400f;
+            playheadIndex = count;
+            playheadPos = count;
+            zoom = Math.max(minimumZoom(), Math.min(zoom,
+                    ZOOM_STEPS[ZOOM_STEPS.length - 1]));
+        }
+        postInvalidate();
+        if (onLoaded != null) post(onLoaded);
+    }
+
+    private void refineLoadedPeaksInPlace(float[] exact, int expectedGen) {
+        synchronized (WaveformView.this) {
+            if (waveLoadGen.get() != expectedGen) return;
+            int n = Math.min(exact.length, Math.min(count, history.length));
+            if (n <= 0) return;
+            if (fxBaseHistory != null && fxBaseCount >= n) {
+                System.arraycopy(exact, 0, fxBaseHistory, 0, n);
+            } else {
+                System.arraycopy(exact, 0, history, 0, n);
+            }
+        }
+        postInvalidate();
+    }
+
+    private static float[] loadPeaksCoarseFast(java.io.File wav, int buckets)
             throws Exception {
         try (RandomAccessFile r = new RandomAccessFile(wav, "r")) {
             Dsp.WavHeader h = Dsp.parseWavHeader(r);
             long onDisk = Math.max(0, r.length() - h.dataStart);
             long dataBytes = (h.dataBytes <= 0 || h.dataBytes > onDisk)
                     ? onDisk : h.dataBytes;
-            long totalFrames = dataBytes / 4 / Math.max(1, h.channels);
+            int ch = Math.max(1, h.channels);
+            long totalFrames = dataBytes / 4L / ch;
             if (totalFrames <= 0) return new float[0];
             int bCount = (int) Math.max(1, Math.min(buckets, totalFrames));
             float[] peaks = new float[bCount];
-            int framesPerRead = Math.max(1, 65536 / 4 / h.channels);
-            byte[] in = new byte[framesPerRead * h.channels * 4];
+            int probeCount = Math.min(bCount, 512);
+            int windowFrames = 64;
+            byte[] in = new byte[windowFrames * ch * 4];
+            float[] fBuf = new float[windowFrames * ch];
+            java.nio.FloatBuffer fb = ByteBuffer.wrap(in)
+                    .order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer();
+            long frameBytes = ch * 4L;
+            for (int p = 0; p < probeCount; p++) {
+                int b0 = (int) ((long) p * bCount / probeCount);
+                int b1 = (int) ((long) (p + 1) * bCount / probeCount);
+                if (b1 <= b0) b1 = Math.min(bCount, b0 + 1);
+                long startFrame = (long) p * totalFrames / probeCount;
+                int want = (int) Math.min(windowFrames, totalFrames - startFrame);
+                if (want <= 0) continue;
+                r.seek(h.dataStart + startFrame * frameBytes);
+                r.readFully(in, 0, want * ch * 4);
+                fb.clear();
+                fb.get(fBuf, 0, want * ch);
+                float maxP = 0f;
+                int samples = want * ch;
+                for (int i = 0; i < samples; i++) {
+                    float a = Math.abs(fBuf[i]);
+                    if (a > maxP) maxP = a;
+                }
+                for (int b = b0; b < b1; b++) {
+                    peaks[b] = maxP;
+                }
+            }
+            return peaks;
+        }
+    }
+
+    private static float[] loadPeaksExactBuckets(java.io.File wav, int buckets)
+            throws Exception {
+        return loadPeaksExactBuckets(wav, buckets, null, 0);
+    }
+
+    private static float[] loadPeaksExactBuckets(
+            java.io.File wav, int buckets,
+            java.util.concurrent.atomic.AtomicInteger genRef, int expectedGen)
+            throws Exception {
+        float[] cached = getCachedPeaks(wav, buckets);
+        if (cached != null) return cached;
+        try (RandomAccessFile r = new RandomAccessFile(wav, "r")) {
+            Dsp.WavHeader h = Dsp.parseWavHeader(r);
+            long onDisk = Math.max(0, r.length() - h.dataStart);
+            long dataBytes = (h.dataBytes <= 0 || h.dataBytes > onDisk)
+                    ? onDisk : h.dataBytes;
+            int ch = Math.max(1, h.channels);
+            long totalFrames = dataBytes / 4L / ch;
+            if (totalFrames <= 0) return new float[0];
+            int bCount = (int) Math.max(1, Math.min(buckets, totalFrames));
+            float[] peaks = new float[bCount];
+            int framesPerRead = Math.max(1, 262144 / (4 * ch));
+            byte[] in = new byte[framesPerRead * ch * 4];
+            float[] fBuf = new float[framesPerRead * ch];
             java.nio.FloatBuffer fb = ByteBuffer.wrap(in)
                     .order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer();
             r.seek(h.dataStart);
-            long frame = 0;
+            long frame = 0L;
+            int curBucket = 0;
+            long nextBucketFrame = ((long) (curBucket + 1) * totalFrames + bCount - 1) / bCount;
             while (frame < totalFrames) {
+                if (genRef != null && genRef.get() != expectedGen) return null;
                 int want = (int) Math.min(framesPerRead, totalFrames - frame);
-                r.readFully(in, 0, want * h.channels * 4);
+                int samples = want * ch;
+                r.readFully(in, 0, samples * 4);
                 fb.clear();
-                fb.limit(want * h.channels);
-                for (int f = 0; f < want; f++) {
-                    float peak = 0f;
-                    for (int c = 0; c < h.channels; c++) {
-                        float a = Math.abs(fb.get(f * h.channels + c));
-                        if (a > peak) peak = a;
+                fb.get(fBuf, 0, samples);
+                if (ch == 1) {
+                    int f = 0;
+                    while (f < want) {
+                        while (frame + f >= nextBucketFrame && curBucket + 1 < bCount) {
+                            curBucket++;
+                            nextBucketFrame = ((long) (curBucket + 1) * totalFrames + bCount - 1) / bCount;
+                        }
+                        int runEnd = (int) Math.min(want, Math.max(f + 1L, nextBucketFrame - frame));
+                        float p = peaks[curBucket];
+                        for (int i = f; i < runEnd; i++) {
+                            float a = Math.abs(fBuf[i]);
+                            if (a > p) p = a;
+                        }
+                        peaks[curBucket] = p;
+                        f = runEnd;
                     }
-                    int b = (int) ((frame + f) * bCount / totalFrames);
-                    if (b >= bCount) b = bCount - 1;
-                    if (peak > peaks[b]) peaks[b] = peak;
+                } else {
+                    int f = 0;
+                    while (f < want) {
+                        while (frame + f >= nextBucketFrame && curBucket + 1 < bCount) {
+                            curBucket++;
+                            nextBucketFrame = ((long) (curBucket + 1) * totalFrames + bCount - 1) / bCount;
+                        }
+                        int runEnd = (int) Math.min(want, Math.max(f + 1L, nextBucketFrame - frame));
+                        float p = peaks[curBucket];
+                        int sIdx = f * ch;
+                        int sEnd = runEnd * ch;
+                        for (int i = sIdx; i < sEnd; i++) {
+                            float a = Math.abs(fBuf[i]);
+                            if (a > p) p = a;
+                        }
+                        peaks[curBucket] = p;
+                        f = runEnd;
+                    }
+                }
+                frame += want;
+            }
+            putCachedPeaks(wav, buckets, peaks);
+            return peaks;
+        }
+    }
+
+    private static float[] loadPeaksForRange(
+            java.io.File wav, int totalBuckets, int startBucket, int endBucket,
+            java.util.concurrent.atomic.AtomicInteger genRef, int expectedGen)
+            throws Exception {
+        int rangeBuckets = endBucket - startBucket;
+        if (rangeBuckets <= 0 || totalBuckets <= 0) return new float[0];
+        try (RandomAccessFile r = new RandomAccessFile(wav, "r")) {
+            Dsp.WavHeader h = Dsp.parseWavHeader(r);
+            long onDisk = Math.max(0, r.length() - h.dataStart);
+            long dataBytes = (h.dataBytes <= 0 || h.dataBytes > onDisk)
+                    ? onDisk : h.dataBytes;
+            int ch = Math.max(1, h.channels);
+            long totalFrames = dataBytes / 4L / ch;
+            if (totalFrames <= 0) return new float[0];
+            long startFrame = (long) startBucket * totalFrames / totalBuckets;
+            long endFrame = Math.min(totalFrames,
+                    ((long) endBucket * totalFrames + totalBuckets - 1) / totalBuckets);
+            if (endFrame <= startFrame) return new float[rangeBuckets];
+            float[] peaks = new float[rangeBuckets];
+            int framesPerRead = Math.max(1, 262144 / (4 * ch));
+            byte[] in = new byte[framesPerRead * ch * 4];
+            float[] fBuf = new float[framesPerRead * ch];
+            java.nio.FloatBuffer fb = ByteBuffer.wrap(in)
+                    .order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer();
+            r.seek(h.dataStart + startFrame * ch * 4L);
+            long frame = startFrame;
+            int curBucket = startBucket;
+            long nextBucketFrame = ((long) (curBucket + 1) * totalFrames + totalBuckets - 1) / totalBuckets;
+            while (frame < endFrame) {
+                if (genRef != null && genRef.get() != expectedGen) return null;
+                int want = (int) Math.min(framesPerRead, endFrame - frame);
+                int samples = want * ch;
+                r.readFully(in, 0, samples * 4);
+                fb.clear();
+                fb.get(fBuf, 0, samples);
+                int f = 0;
+                while (f < want) {
+                    while (frame + f >= nextBucketFrame && curBucket + 1 < endBucket) {
+                        curBucket++;
+                        nextBucketFrame = ((long) (curBucket + 1) * totalFrames + totalBuckets - 1) / totalBuckets;
+                    }
+                    int runEnd = (int) Math.min(want, Math.max(f + 1L, nextBucketFrame - frame));
+                    int outIdx = curBucket - startBucket;
+                    float p = peaks[outIdx];
+                    int sIdx = f * ch;
+                    int sEnd = runEnd * ch;
+                    for (int i = sIdx; i < sEnd; i++) {
+                        float a = Math.abs(fBuf[i]);
+                        if (a > p) p = a;
+                    }
+                    peaks[outIdx] = p;
+                    f = runEnd;
                 }
                 frame += want;
             }
@@ -1848,8 +2104,10 @@ public class WaveformView extends View {
         boolean fxOn;
         float fxS;
         float fxE;
+        final float[] hist;
         synchronized (this) {
-            n = count;
+            hist = history;
+            n = Math.min(count, hist != null ? hist.length : 0);
             isLive = live;
             repInPlace = replacingInPlace;
             pIdx = playheadIndex;
@@ -1922,25 +2180,24 @@ public class WaveformView extends View {
                 if (x < -barW || x > w + barW) continue;
 
                 float v = 0f;
-                synchronized (this) {
-                    if (bucketsPerBar >= 1.0f) {
-                        int i0 = Math.max(0, (int) Math.floor(bStart));
-                        int i1 = Math.min(n - 1, (int) Math.ceil(bEnd) - 1);
-                        if (i1 < i0) i1 = i0;
-                        for (int idx = i0; idx <= i1; idx++) {
-                            if (history[idx] > v) v = history[idx];
-                        }
-                    } else {
-                        int idx = Math.max(0, Math.min(n - 1, (int) Math.floor(barCenterBucket)));
-                        float fracInBucket = barCenterBucket - idx;
-                        float v0 = history[idx];
-                        float vPrev = (idx - 1 >= 0) ? history[idx - 1] : v0;
-                        float vNext = (idx + 1 < n) ? history[idx + 1] : v0;
-                        float targetNeighbor = (fracInBucket < 0.5f) ? vPrev : vNext;
-                        float distFromCenter = Math.abs(fracInBucket - 0.5f) * 2f;
-                        float weight = 0.5f * (1f - (float) Math.cos(Math.PI * distFromCenter)) * 0.42f;
-                        v = v0 * (1f - weight) + targetNeighbor * weight;
+                if (bucketsPerBar >= 1.0f) {
+                    int i0 = Math.max(0, (int) Math.floor(bStart));
+                    int i1 = Math.min(n - 1, (int) Math.ceil(bEnd) - 1);
+                    if (i1 < i0) i1 = i0;
+                    for (int idx = i0; idx <= i1; idx++) {
+                        float hv = hist[idx];
+                        if (hv > v) v = hv;
                     }
+                } else {
+                    int idx = Math.max(0, Math.min(n - 1, (int) Math.floor(barCenterBucket)));
+                    float fracInBucket = barCenterBucket - idx;
+                    float v0 = hist[idx];
+                    float vPrev = (idx - 1 >= 0) ? hist[idx - 1] : v0;
+                    float vNext = (idx + 1 < n) ? hist[idx + 1] : v0;
+                    float targetNeighbor = (fracInBucket < 0.5f) ? vPrev : vNext;
+                    float distFromCenter = Math.abs(fracInBucket - 0.5f) * 2f;
+                    float weight = 0.5f * (1f - (float) Math.cos(Math.PI * distFromCenter)) * 0.42f;
+                    v = v0 * (1f - weight) + targetNeighbor * weight;
                 }
 
                 float dispV = v <= 0.85f ? v

@@ -75,9 +75,12 @@ final class FxPreviewPeaks {
      * at {@code peakOffset}) and the perceptual composite envelope without
      * loading the region into RAM.
      */
+    private static final long FAST_SAMPLED_PREVIEW_THRESHOLD_FRAMES = 1_440_000L;
+
     private static float[] computePerceptualBucketsStreaming(
             RandomAccessFile raf, long dataStart, long startFrame, long frames,
-            int ch, int bucketCount, float[] outPeaks, int peakOffset)
+            int ch, int bucketCount, float[] outPeaks, int peakOffset,
+            java.util.concurrent.atomic.AtomicBoolean cancelled)
             throws Exception {
         int bCount = Math.max(1, bucketCount);
         float[] env = new float[bCount];
@@ -88,22 +91,23 @@ final class FxPreviewPeaks {
         double[] bSumDiff = new double[bCount];
         int[] bCountArr = new int[bCount];
 
-        int chunkFrames = AudioProcessor.DEFAULT_DSP_CHUNK_FRAMES;
+        int chunkFrames = MemoryBudget.chunkFrames(32768, cCount);
         byte[] rawBuf = new byte[chunkFrames * cCount * 4];
         float[] fBuf = new float[chunkFrames * cCount];
         ByteBuffer bb = ByteBuffer.wrap(rawBuf).order(ByteOrder.LITTLE_ENDIAN);
+        java.nio.FloatBuffer fb = bb.asFloatBuffer();
         long frameBytes = cCount * 4L;
 
         float prev = 0f;
         int prevBucket = -1;
         long cur = 0L;
+        raf.seek(dataStart + startFrame * frameBytes);
         while (cur < frames) {
+            if (cancelled != null && cancelled.get()) return null;
             int want = (int) Math.min((long) chunkFrames, frames - cur);
-            raf.seek(dataStart + (startFrame + cur) * frameBytes);
             raf.readFully(rawBuf, 0, want * cCount * 4);
-            bb.clear();
-            bb.limit(want * cCount * 4);
-            bb.asFloatBuffer().get(fBuf, 0, want * cCount);
+            fb.clear();
+            fb.get(fBuf, 0, want * cCount);
 
             for (int f = 0; f < want; f++) {
                 long globalF = cur + f;
@@ -173,7 +177,7 @@ final class FxPreviewPeaks {
                                 int sampleRate, float startFrac,
                                 float endFrac) {
         LiveRegionResult res = renderRegionInternal(raw, chain, buckets,
-                sampleRate, startFrac, endFrac, null, false);
+                sampleRate, startFrac, endFrac, null, false, null);
         return res != null ? res.peaks : null;
     }
 
@@ -219,15 +223,26 @@ final class FxPreviewPeaks {
                                              float startFrac, float endFrac,
                                              File previewOutFile) {
         return renderRegionInternal(raw, chain, baseBuckets, sampleRate,
-                startFrac, endFrac, previewOutFile, true);
+                startFrac, endFrac, previewOutFile, true, null);
+    }
+
+    static LiveRegionResult renderRegionLive(File raw, DspChain chain,
+                                             int baseBuckets, int sampleRate,
+                                             float startFrac, float endFrac,
+                                             File previewOutFile,
+                                             java.util.concurrent.atomic.AtomicBoolean cancelled) {
+        return renderRegionInternal(raw, chain, baseBuckets, sampleRate,
+                startFrac, endFrac, previewOutFile, true, cancelled);
     }
 
     private static LiveRegionResult renderRegionInternal(
             File raw, DspChain chain, int buckets, int sampleRate,
             float startFrac, float endFrac, File previewOutFile,
-            boolean isLiveTimeline) {
+            boolean isLiveTimeline,
+            java.util.concurrent.atomic.AtomicBoolean cancelled) {
         if (raw == null || chain == null || buckets <= 0) return null;
         if (!(startFrac < endFrac)) return null;
+        if (cancelled != null && cancelled.get()) return null;
         try (RandomAccessFile raf = new RandomAccessFile(raw, "r")) {
             Dsp.WavHeader h = Dsp.parseWavHeader(raf);
             long onDisk = Math.max(0, raf.length() - h.dataStart);
@@ -267,7 +282,8 @@ final class FxPreviewPeaks {
                 // or 600s Audio Generator) never allocate large arrays in RAM.
                 float[] dryEnv = computePerceptualBucketsStreaming(
                         raf, h.dataStart, start, dryFrames, ch,
-                        origRegionBuckets, null, 0);
+                        origRegionBuckets, null, 0, cancelled);
+                if (dryEnv == null || (cancelled != null && cancelled.get())) return null;
                 File regionTmp = raw.getParentFile() != null
                         ? File.createTempFile("takeone_fxprev_reg_", ".wav",
                                 raw.getParentFile())
@@ -275,7 +291,8 @@ final class FxPreviewPeaks {
                 try {
                     long rFrames = chain.renderRegionToFile(
                             raw, start, end, effSampleRate, regionTmp);
-                    if (rFrames <= 0 || !regionTmp.exists()) return null;
+                    if (rFrames <= 0 || !regionTmp.exists()
+                            || (cancelled != null && cancelled.get())) return null;
                     long tailFrames = Math.max(0L, totalFrames - end);
                     long newTotalFrames = start + rFrames + tailFrames;
 
@@ -285,7 +302,8 @@ final class FxPreviewPeaks {
                             float[] peaks = new float[buckets];
                             float[] wetEnv = computePerceptualBucketsStreaming(
                                     rRaf, rh.dataStart, 0L, rFrames, ch,
-                                    origRegionBuckets, peaks, bStart);
+                                    origRegionBuckets, peaks, bStart, cancelled);
+                            if (wetEnv == null) return null;
                             if (!hasGenerator && !hasReverse) {
                                 for (int i = 0; i < origRegionBuckets; i++) {
                                     int b = bStart + i;
@@ -307,16 +325,20 @@ final class FxPreviewPeaks {
                         float[] regionPeaks = new float[newRegionBuckets];
                         float[] wetEnv = computePerceptualBucketsStreaming(
                                 rRaf, rh.dataStart, 0L, rFrames, ch,
-                                newRegionBuckets, regionPeaks, 0);
+                                newRegionBuckets, regionPeaks, 0, cancelled);
+                        if (wetEnv == null) return null;
                         float[] gainRatios = computeOfflineGainRatios(
                                 dryEnv, wetEnv, regionPeaks, origRegionBuckets,
                                 newRegionBuckets, rFrames == dryFrames,
                                 hasGenerator, hasReverse);
                         File outWav = null;
                         if (previewOutFile != null) {
-                            writeSplicedPreviewWavFromFile(
+                            if (!writeSplicedPreviewWavFromFile(
                                     raf, h, start, end, totalFrames,
-                                    rRaf, rh.dataStart, rFrames, previewOutFile);
+                                    rRaf, rh.dataStart, rFrames, previewOutFile,
+                                    cancelled)) {
+                                return null;
+                            }
                             outWav = previewOutFile;
                         }
                         return new LiveRegionResult(regionPeaks, gainRatios,
@@ -333,6 +355,13 @@ final class FxPreviewPeaks {
 
             chain.reset();
             chain.prepareOffline(raw, start, end, effSampleRate, ch);
+            if (cancelled != null && cancelled.get()) return null;
+
+            long selFrames = end - start;
+            if (isLiveTimeline && selFrames > FAST_SAMPLED_PREVIEW_THRESHOLD_FRAMES) {
+                return renderRegionSampledFast(raf, h, ch, totalFrames, start, end,
+                        buckets, bStart, bEnd, chain, cancelled);
+            }
 
             float[] dryPeaks = new float[buckets];
             float[] wetPeaks = new float[buckets];
@@ -342,7 +371,7 @@ final class FxPreviewPeaks {
             double[] wetSumFlux = new double[buckets];
             int[] bucketFrames = new int[buckets];
 
-            int chunkFrames = AudioProcessor.DEFAULT_DSP_CHUNK_FRAMES;
+            int chunkFrames = MemoryBudget.chunkFrames(32768, ch);
             byte[] rawBuf = new byte[chunkFrames * ch * 4];
             float[] fBuf = new float[chunkFrames * ch];
             float[] dryBuf = new float[chunkFrames * ch];
@@ -408,6 +437,7 @@ final class FxPreviewPeaks {
             float prevWet = 0f;
             long cur = start;
             while (cur < end) {
+                if (cancelled != null && cancelled.get()) return null;
                 int want = (int) Math.min(chunkFrames, end - cur);
                 // Read aligned dry frames for [cur, cur + want)
                 raf.seek(h.dataStart + cur * ch * 4L);
@@ -512,6 +542,138 @@ final class FxPreviewPeaks {
         }
     }
 
+    private static LiveRegionResult renderRegionSampledFast(
+            RandomAccessFile raf, Dsp.WavHeader h, int ch, long totalFrames,
+            long start, long end, int buckets, int bStart, int bEnd,
+            DspChain chain, java.util.concurrent.atomic.AtomicBoolean cancelled)
+            throws Exception {
+        int regionBuckets = Math.max(1, bEnd - bStart);
+        int sampleCount = Math.min(regionBuckets, 240);
+        int winFrames = 2048;
+        int preRollMax = Math.min(Dsp.CROSSFADE_FRAMES, 512);
+        int readCap = preRollMax + winFrames;
+        byte[] rawBuf = new byte[readCap * ch * 4];
+        float[] fBuf = new float[readCap * ch];
+        float[] dryBuf = new float[winFrames * ch];
+        ByteBuffer bb = ByteBuffer.wrap(rawBuf).order(ByteOrder.LITTLE_ENDIAN);
+        java.nio.FloatBuffer fb = bb.asFloatBuffer();
+        long frameBytes = ch * 4L;
+
+        float[] outPeaks = new float[buckets];
+        float[] gainRatios = new float[buckets];
+        java.util.Arrays.fill(gainRatios, -1f);
+        int[] sampledBuckets = new int[sampleCount];
+        float[] sampledRatios = new float[sampleCount];
+        int validSamples = 0;
+
+        for (int s = 0; s < sampleCount; s++) {
+            if (cancelled != null && cancelled.get()) return null;
+            int b = bStart + (int) ((long) s * regionBuckets / sampleCount);
+            if (b >= bEnd) b = bEnd - 1;
+            long winStart = start + (long) s * (end - start) / sampleCount;
+            int want = (int) Math.min(winFrames, end - winStart);
+            if (want <= 0) continue;
+            int preRoll = (int) Math.min(preRollMax, winStart);
+            int totalRead = preRoll + want;
+            raf.seek(h.dataStart + (winStart - preRoll) * frameBytes);
+            raf.readFully(rawBuf, 0, totalRead * ch * 4);
+            fb.clear();
+            fb.get(fBuf, 0, totalRead * ch);
+            System.arraycopy(fBuf, preRoll * ch, dryBuf, 0, want * ch);
+
+            chain.reset();
+            chain.processInPlace(fBuf, totalRead);
+
+            float dPeak = 0f;
+            float wPeak = 0f;
+            double dSumSq = 0d;
+            double wSumSq = 0d;
+            double dSumFlux = 0d;
+            double wSumFlux = 0d;
+            float prevD = 0f;
+            float prevW = 0f;
+            int wetBase = preRoll * ch;
+            for (int f = 0; f < want; f++) {
+                float dp = 0f;
+                float wp = 0f;
+                float dm = 0f;
+                float wm = 0f;
+                int dOff = f * ch;
+                int wOff = wetBase + dOff;
+                for (int c = 0; c < ch; c++) {
+                    float dv = dryBuf[dOff + c];
+                    float wv = fBuf[wOff + c];
+                    float da = Math.abs(dv);
+                    float wa = Math.abs(wv);
+                    if (da > dp) dp = da;
+                    if (wa > wp) wp = wa;
+                    dm += dv;
+                    wm += wv;
+                }
+                dm /= ch;
+                wm /= ch;
+                if (dp > dPeak) dPeak = dp;
+                if (wp > wPeak) wPeak = wp;
+                dSumSq += (double) dm * dm;
+                wSumSq += (double) wm * wm;
+                if (f > 0) {
+                    dSumFlux += Math.abs(dm - prevD);
+                    wSumFlux += Math.abs(wm - prevW);
+                }
+                prevD = dm;
+                prevW = wm;
+            }
+            float dRms = (float) Math.sqrt(dSumSq / want);
+            float wRms = (float) Math.sqrt(wSumSq / want);
+            float dFlux = (float) (dSumFlux / want);
+            float wFlux = (float) (wSumFlux / want);
+            float dEnv = 0.45f * dPeak + 0.35f * (dRms * 1.414f) + 0.20f * (dFlux * 1.85f);
+            float wEnv = 0.45f * wPeak + 0.35f * (wRms * 1.414f) + 0.20f * (wFlux * 1.85f);
+            float ratio;
+            if (dEnv > 1e-4f && dPeak > 1e-4f) {
+                float envRatio = wEnv / dEnv;
+                float peakRatio = wPeak / dPeak;
+                ratio = (Math.abs(peakRatio - 1f) > 0.04f)
+                        ? (0.65f * peakRatio + 0.35f * envRatio)
+                        : envRatio;
+                ratio = Math.max(0f, ratio);
+            } else {
+                ratio = 1f;
+            }
+            gainRatios[b] = ratio;
+            outPeaks[b] = wPeak;
+            sampledBuckets[validSamples] = b;
+            sampledRatios[validSamples] = ratio;
+            validSamples++;
+        }
+
+        if (validSamples > 0) {
+            int firstB = sampledBuckets[0];
+            float firstR = sampledRatios[0];
+            for (int b = bStart; b < firstB; b++) {
+                gainRatios[b] = firstR;
+            }
+            for (int i = 0; i < validSamples - 1; i++) {
+                int b0 = sampledBuckets[i];
+                int b1 = sampledBuckets[i + 1];
+                float r0 = sampledRatios[i];
+                float r1 = sampledRatios[i + 1];
+                int span = b1 - b0;
+                for (int b = b0 + 1; b < b1; b++) {
+                    float t = (b - b0) / (float) Math.max(1, span);
+                    gainRatios[b] = r0 + (r1 - r0) * t;
+                }
+            }
+            int lastB = sampledBuckets[validSamples - 1];
+            float lastR = sampledRatios[validSamples - 1];
+            for (int b = lastB + 1; b < bEnd; b++) {
+                gainRatios[b] = lastR;
+            }
+        }
+        return new LiveRegionResult(outPeaks, gainRatios, false,
+                totalFrames, start, end, null);
+    }
+
     private static float[] computeOfflineGainRatios(
             float[] dryEnv, float[] wetEnv, float[] regionPeaks,
             int origRegionBuckets, int newRegionBuckets,
@@ -592,10 +754,45 @@ final class FxPreviewPeaks {
         }
     }
 
-    private static void writeSplicedPreviewWavFromFile(
+    private static boolean copyChannelRange(
+            RandomAccessFile src, long srcOffset, long byteCount,
+            RandomAccessFile dst, long dstOffset,
+            java.util.concurrent.atomic.AtomicBoolean cancelled) throws Exception {
+        if (byteCount <= 0L) return true;
+        java.nio.channels.FileChannel srcCh = src.getChannel();
+        java.nio.channels.FileChannel dstCh = dst.getChannel();
+        dstCh.position(dstOffset);
+        long copied = 0L;
+        final long chunk = 4L * 1024L * 1024L;
+        while (copied < byteCount) {
+            if (cancelled != null && cancelled.get()) return false;
+            long step = Math.min(chunk, byteCount - copied);
+            long moved = srcCh.transferTo(srcOffset + copied, step, dstCh);
+            if (moved <= 0L) {
+                byte[] buf = new byte[262144];
+                src.seek(srcOffset + copied);
+                dst.seek(dstOffset + copied);
+                long left = byteCount - copied;
+                while (left > 0L) {
+                    if (cancelled != null && cancelled.get()) return false;
+                    int want = (int) Math.min(buf.length, left);
+                    int n = src.read(buf, 0, want);
+                    if (n <= 0) break;
+                    dst.write(buf, 0, n);
+                    left -= n;
+                }
+                break;
+            }
+            copied += moved;
+        }
+        return true;
+    }
+
+    private static boolean writeSplicedPreviewWavFromFile(
             RandomAccessFile rawRaf, Dsp.WavHeader h, long startFrame,
             long endFrame, long totalFrames, RandomAccessFile regRaf,
-            long regDataStart, long rFrames, File outFile) throws Exception {
+            long regDataStart, long rFrames, File outFile,
+            java.util.concurrent.atomic.AtomicBoolean cancelled) throws Exception {
         int ch = Math.max(1, h.channels);
         long frameBytes = ch * 4L;
         long prefixFrames = Math.max(0L, startFrame);
@@ -606,46 +803,26 @@ final class FxPreviewPeaks {
         try (RandomAccessFile out = new RandomAccessFile(outFile, "rw")) {
             out.setLength(0);
             out.write(Dsp.wavFloatHeader(ch, h.sampleRate, payloadBytes));
-            byte[] buf = new byte[65536];
+            long outPos = 44L;
 
             long prefixBytes = prefixFrames * frameBytes;
-            if (prefixBytes > 0) {
-                rawRaf.seek(h.dataStart);
-                long left = prefixBytes;
-                while (left > 0) {
-                    int want = (int) Math.min(buf.length, left);
-                    int n = rawRaf.read(buf, 0, want);
-                    if (n <= 0) break;
-                    out.write(buf, 0, n);
-                    left -= n;
-                }
+            if (!copyChannelRange(rawRaf, h.dataStart, prefixBytes, out, outPos, cancelled)) {
+                return false;
             }
+            outPos += prefixBytes;
 
             long regBytes = rFrames * frameBytes;
-            if (regBytes > 0) {
-                regRaf.seek(regDataStart);
-                long left = regBytes;
-                while (left > 0) {
-                    int want = (int) Math.min(buf.length, left);
-                    int n = regRaf.read(buf, 0, want);
-                    if (n <= 0) break;
-                    out.write(buf, 0, n);
-                    left -= n;
-                }
+            if (!copyChannelRange(regRaf, regDataStart, regBytes, out, outPos, cancelled)) {
+                return false;
             }
+            outPos += regBytes;
 
             long suffixBytes = suffixFrames * frameBytes;
-            if (suffixBytes > 0) {
-                rawRaf.seek(h.dataStart + endFrame * frameBytes);
-                long left = suffixBytes;
-                while (left > 0) {
-                    int want = (int) Math.min(buf.length, left);
-                    int n = rawRaf.read(buf, 0, want);
-                    if (n <= 0) break;
-                    out.write(buf, 0, n);
-                    left -= n;
-                }
+            if (!copyChannelRange(rawRaf, h.dataStart + endFrame * frameBytes,
+                    suffixBytes, out, outPos, cancelled)) {
+                return false;
             }
         }
+        return true;
     }
 }

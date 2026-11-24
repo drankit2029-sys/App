@@ -268,13 +268,15 @@ public final class Dsp {
      */
     public static void writeFloatsLE(RandomAccessFile w, float[] v, int off,
                                      int n) throws Exception {
-        byte[] tmp = new byte[8192 * 4];
+        int bufFloats = Math.min(16384, Math.max(1, n));
+        byte[] tmp = new byte[bufFloats * 4];
         ByteBuffer bb = ByteBuffer.wrap(tmp).order(ByteOrder.LITTLE_ENDIAN);
+        java.nio.FloatBuffer fb = bb.asFloatBuffer();
         int done = 0;
         while (done < n) {
-            int want = Math.min(8192, n - done);
-            bb.clear();
-            for (int i = 0; i < want; i++) bb.putFloat(v[off + done + i]);
+            int want = Math.min(bufFloats, n - done);
+            fb.clear();
+            fb.put(v, off + done, want);
             w.write(tmp, 0, want * 4);
             done += want;
         }
@@ -289,8 +291,8 @@ public final class Dsp {
      */
     public static byte[] toBytes(float[] v, int off, int n) {
         byte[] out = new byte[n * 4];
-        ByteBuffer bb = ByteBuffer.wrap(out).order(ByteOrder.LITTLE_ENDIAN);
-        for (int i = 0; i < n; i++) bb.putFloat(v[off + i]);
+        ByteBuffer.wrap(out).order(ByteOrder.LITTLE_ENDIAN)
+                .asFloatBuffer().put(v, off, n);
         return out;
     }    private static final float[] COS_FADE_IN = new float[CROSSFADE_FRAMES];
     static {

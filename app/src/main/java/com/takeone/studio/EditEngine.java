@@ -39,6 +39,8 @@ public final class EditEngine {
     private static final byte SNAP_MAGIC_3 = (byte) 1;
     private static final byte SNAP_MODE_FULL = 0;
     private static final byte SNAP_MODE_DELTA = 1;
+    private static final byte SNAP_MODE_FULL_RAW = 2;
+    private static final byte SNAP_MODE_DELTA_RAW = 3;
 
     private EditEngine() {}
 
@@ -52,9 +54,22 @@ public final class EditEngine {
     public static void copyFile(File src, File dst) throws Exception {
         try (FileInputStream in = new FileInputStream(src);
              FileOutputStream out = new FileOutputStream(dst)) {
-            byte[] buf = new byte[CHUNK_BYTES];
-            int n;
-            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+            java.nio.channels.FileChannel srcCh = in.getChannel();
+            java.nio.channels.FileChannel dstCh = out.getChannel();
+            long size = srcCh.size();
+            long pos = 0L;
+            final long chunk = 4L * 1024L * 1024L;
+            while (pos < size) {
+                long moved = srcCh.transferTo(pos, Math.min(chunk, size - pos), dstCh);
+                if (moved <= 0L) {
+                    byte[] buf = new byte[262144];
+                    srcCh.position(pos);
+                    int n;
+                    while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                    break;
+                }
+                pos += moved;
+            }
         }
     }
 
@@ -86,7 +101,7 @@ public final class EditEngine {
      * length across all 5 undo/redo steps.
      */
     public static final class UndoJournal {
-        private static final int IO_BUF_BYTES = 16384;
+        private static final int IO_BUF_BYTES = 262144;
         private static final int MAX_HEADER_BYTES = 64;
 
         private final File undoDir;
@@ -398,6 +413,35 @@ public final class EditEngine {
             }
         }
 
+        private void copyRangeRaw(RandomAccessFile src, long startPos,
+                                  long byteCount, RandomAccessFile dst,
+                                  long dstStartPos) throws Exception {
+            if (byteCount <= 0L) return;
+            java.nio.channels.FileChannel srcCh = src.getChannel();
+            java.nio.channels.FileChannel dstCh = dst.getChannel();
+            dstCh.position(dstStartPos);
+            long copied = 0L;
+            final long chunk = 4L * 1024L * 1024L;
+            while (copied < byteCount) {
+                long step = Math.min(chunk, byteCount - copied);
+                long moved = srcCh.transferTo(startPos + copied, step, dstCh);
+                if (moved <= 0L) {
+                    src.seek(startPos + copied);
+                    dst.seek(dstStartPos + copied);
+                    long rem = byteCount - copied;
+                    while (rem > 0L) {
+                        int want = (int) Math.min((long) ioBuf.length, rem);
+                        int n = src.read(ioBuf, 0, want);
+                        if (n <= 0) break;
+                        dst.write(ioBuf, 0, n);
+                        rem -= n;
+                    }
+                    break;
+                }
+                copied += moved;
+            }
+        }
+
         private void inflateStream(RandomAccessFile srcSnap,
                                    RandomAccessFile dstRaw,
                                    long dstStartPos,
@@ -437,7 +481,7 @@ public final class EditEngine {
                             && b2 == SNAP_MAGIC_2 && b3 == SNAP_MAGIC_3) {
                         byte mode = in.readByte();
                         long origLen = in.readLong();
-                        if (mode == SNAP_MODE_DELTA) {
+                        if (mode == SNAP_MODE_DELTA || mode == SNAP_MODE_DELTA_RAW) {
                             int hdrLen = in.readInt();
                             if (hdrLen > 0 && hdrLen <= MAX_HEADER_BYTES) {
                                 in.seek(in.getFilePointer() + hdrLen);
@@ -470,9 +514,9 @@ public final class EditEngine {
                 out.writeByte(SNAP_MAGIC_1);
                 out.writeByte(SNAP_MAGIC_2);
                 out.writeByte(SNAP_MAGIC_3);
-                out.writeByte(SNAP_MODE_FULL);
+                out.writeByte(SNAP_MODE_FULL_RAW);
                 out.writeLong(origLen);
-                deflateStream(in, 0L, origLen, out);
+                copyRangeRaw(in, 0L, origLen, out, out.getFilePointer());
                 return true;
             } catch (Throwable t) {
                 return false;
@@ -493,7 +537,7 @@ public final class EditEngine {
                 out.writeByte(SNAP_MAGIC_1);
                 out.writeByte(SNAP_MAGIC_2);
                 out.writeByte(SNAP_MAGIC_3);
-                out.writeByte(SNAP_MODE_DELTA);
+                out.writeByte(SNAP_MODE_DELTA_RAW);
                 out.writeLong(origLen);
                 out.writeInt(hdrLen);
                 out.write(hdrBuf, 0, hdrLen);
@@ -501,7 +545,7 @@ public final class EditEngine {
                 out.writeLong(deltaLen);
 
                 if (deltaLen > 0L) {
-                    deflateStream(raf, deltaOff, deltaLen, out);
+                    copyRangeRaw(raf, deltaOff, deltaLen, out, out.getFilePointer());
                 }
                 return true;
             } catch (Throwable t) {
@@ -523,12 +567,16 @@ public final class EditEngine {
                             && b2 == SNAP_MAGIC_2 && b3 == SNAP_MAGIC_3) {
                         byte mode = in.readByte();
                         long origLen = in.readLong();
-                        if (mode == SNAP_MODE_FULL) {
+                        if (mode == SNAP_MODE_FULL || mode == SNAP_MODE_FULL_RAW) {
                             out.setLength(0L);
-                            inflateStream(in, out, 0L, origLen);
+                            if (mode == SNAP_MODE_FULL_RAW) {
+                                copyRangeRaw(in, in.getFilePointer(), origLen, out, 0L);
+                            } else {
+                                inflateStream(in, out, 0L, origLen);
+                            }
                             out.setLength(origLen);
                             return true;
-                        } else if (mode == SNAP_MODE_DELTA) {
+                        } else if (mode == SNAP_MODE_DELTA || mode == SNAP_MODE_DELTA_RAW) {
                             int hdrLen = in.readInt();
                             if (hdrLen < 0 || hdrLen > MAX_HEADER_BYTES) {
                                 return false;
@@ -580,8 +628,12 @@ public final class EditEngine {
                             out.seek(0L);
                             out.write(hdrBuf, 0, hdrLen);
                             if (origDeltaLen > 0L) {
-                                in.seek(snapDataPos);
-                                inflateStream(in, out, deltaOff, origDeltaLen);
+                                if (mode == SNAP_MODE_DELTA_RAW) {
+                                    copyRangeRaw(in, snapDataPos, origDeltaLen, out, deltaOff);
+                                } else {
+                                    in.seek(snapDataPos);
+                                    inflateStream(in, out, deltaOff, origDeltaLen);
+                                }
                             }
                             out.setLength(origLen);
                             return true;
@@ -1257,7 +1309,7 @@ public final class EditEngine {
                 }
             }
 
-            int chunkFrames = AudioProcessor.DEFAULT_DSP_CHUNK_FRAMES;
+            int chunkFrames = MemoryBudget.chunkFrames(32768, ch);
             byte[] rawBuf = new byte[chunkFrames * ch * 4];
             float[] fBuf = new float[chunkFrames * ch];
             ByteBuffer bb = ByteBuffer.wrap(rawBuf).order(ByteOrder.LITTLE_ENDIAN);

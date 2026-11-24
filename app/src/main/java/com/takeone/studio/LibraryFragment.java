@@ -58,6 +58,7 @@ import java.util.Set;
 public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
 
     /** A4-12: focus holder for library playback; released in stopPlayback(). */
+    private boolean openingEdit = false;
     private android.media.AudioManager playAudioManager;
     private android.media.AudioFocusRequest playFocusRequest;
     private android.media.AudioManager.OnAudioFocusChangeListener
@@ -1711,6 +1712,8 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
     }
 
     private void startEditFromFile(File src, long sourceId, String sourceTitle) {
+        if (openingEdit) return;
+        openingEdit = true;
         // A4-02: capture the application context now (we are on the UI
         // thread). The worker below must not call requireContext(): a
         // fragment detached mid-import would otherwise abort after having
@@ -1719,29 +1722,31 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                 requireContext().getApplicationContext();
         // Resolve the persistent 32-bit float master for this take (available
         // for all recordings and for any imported take already edited once).
-        // When present, preparing the edit session is a fast byte copy with no
-        // "Converting to 32-bit float" modal.
+        // When present, preparing the edit session is a fast kernel-level copy.
         final long immutableRecordingId =
                 ConversionJobs.resolveRecordingId(sourceId);
         final File floatSrc = TakesRepository.resolveFloatMaster(
                 immutableRecordingId, src);
         final boolean alreadyFloat = AudioImporter.isNativeFloatWav(floatSrc);
+        final boolean showProgress = !alreadyFloat
+                || (floatSrc != null && floatSrc.length() > 16L * 1024L * 1024L);
         // Decode a copy to 32-bit float (or fast-copy from the stored 32-bit
         // float master) and punch in from its end. The original stays in the
         // library until the user picks replace/new.
         final Dialog progress;
         final ProgressBar bar;
         final TextView msg;
-        if (!alreadyFloat) {
+        if (showProgress) {
             progress = showDeterminateProgress(
-                    getString(R.string.importing_title),
-                    getString(R.string.importing_msg, 0));
+                    alreadyFloat ? "Opening editor" : getString(R.string.importing_title),
+                    alreadyFloat ? "Preparing audio… 0%" : getString(R.string.importing_msg, 0));
             ProgressBar b;
             TextView m;
             try {
                 b = progress.findViewById(R.id.progressBar);
                 m = progress.findViewById(R.id.progressMessage);
             } catch (Exception e) {
+                openingEdit = false;
                 try {
                     progress.dismiss();
                 } catch (Exception ignored) {}
@@ -1764,12 +1769,13 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
                 session = AudioImporter.takeToFloatWav(floatSrc,
                         RecordingEngine.takesDir(appCtx),
                         RecordingEngine.sanitize(sourceTitle),
-                        alreadyFloat ? null : pct -> handler.post(() -> {
+                        !showProgress ? null : pct -> handler.post(() -> {
                             try {
                                 if (bar != null) bar.setProgress(pct);
                                 if (msg != null) {
-                                    msg.setText(getString(
-                                            R.string.importing_msg, pct));
+                                    msg.setText(alreadyFloat
+                                            ? ("Preparing audio… " + pct + "%")
+                                            : getString(R.string.importing_msg, pct));
                                 }
                             } catch (Exception ignored) {}
                         }));
@@ -1802,6 +1808,7 @@ public class LibraryFragment extends Fragment implements TakesAdapter.Listener {
             final File done = session;
             final String failure = fail;
             handler.post(() -> {
+                openingEdit = false;
                 if (progress != null) {
                     try {
                         progress.dismiss();

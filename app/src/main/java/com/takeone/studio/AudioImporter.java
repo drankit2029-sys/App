@@ -136,7 +136,7 @@ public final class AudioImporter {
                  java.io.FileOutputStream out =
                          new java.io.FileOutputStream(dst)) {
                 if (in == null) throw new java.io.IOException("cannot open uri");
-                byte[] buf = new byte[65536];
+                byte[] buf = new byte[262144];
                 int n;
                 while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
                 out.getFD().sync();
@@ -308,7 +308,7 @@ public final class AudioImporter {
                  java.io.FileOutputStream out =
                          new java.io.FileOutputStream(temp)) {
                 if (in == null) throw new java.io.IOException("cannot open uri");
-                byte[] buf = new byte[65536];
+                byte[] buf = new byte[262144];
                 int n;
                 while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
             }
@@ -449,15 +449,45 @@ public final class AudioImporter {
                 try (RandomAccessFile w = new RandomAccessFile(dst, "rw")) {
                     w.setLength(0);
                     w.write(RecordingEngine.wavHeader(ch, payloadBytes));
-                    r.seek(h.dataStart);
-                    byte[] buf = new byte[65536];
-                    long left = payloadBytes;
-                    while (left > 0) {
-                        int n = r.read(buf, 0,
-                                (int) Math.min(buf.length, left));
-                        if (n <= 0) break;
-                        w.write(buf, 0, n);
-                        left -= n;
+                    java.nio.channels.FileChannel srcCh = r.getChannel();
+                    java.nio.channels.FileChannel dstCh = w.getChannel();
+                    dstCh.position(44L);
+                    long srcPos = h.dataStart;
+                    long copied = 0L;
+                    int lastPct = -1;
+                    final long chunkBytes = 4L * 1024L * 1024L;
+                    while (copied < payloadBytes) {
+                        long step = Math.min(chunkBytes, payloadBytes - copied);
+                        long moved = srcCh.transferTo(srcPos + copied, step, dstCh);
+                        if (moved <= 0L) {
+                            byte[] buf = new byte[262144];
+                            r.seek(srcPos + copied);
+                            w.seek(44L + copied);
+                            long left = payloadBytes - copied;
+                            while (left > 0L) {
+                                int n = r.read(buf, 0, (int) Math.min(buf.length, left));
+                                if (n <= 0) break;
+                                w.write(buf, 0, n);
+                                copied += n;
+                                left -= n;
+                                if (cb != null) {
+                                    int pct = (int) (copied * 100L / Math.max(1L, payloadBytes));
+                                    if (pct != lastPct) {
+                                        lastPct = pct;
+                                        cb.onProgress(pct);
+                                    }
+                                }
+                            }
+                            break;
+                        }
+                        copied += moved;
+                        if (cb != null) {
+                            int pct = (int) (copied * 100L / Math.max(1L, payloadBytes));
+                            if (pct != lastPct) {
+                                lastPct = pct;
+                                cb.onProgress(pct);
+                            }
+                        }
                     }
                     long actual = Math.max(0L, w.length() - 44L);
                     if (actual != payloadBytes) {
@@ -469,8 +499,10 @@ public final class AudioImporter {
             }
             // Mono stays mono; foreign rates are resampled to the session
             // rate instead of being stamped with a lying header.
-            Dsp.Resampler resampler =
-                    new Dsp.Resampler(sr, RecordingEngine.SAMPLE_RATE, ch);
+            boolean needResample = (sr != RecordingEngine.SAMPLE_RATE);
+            Dsp.Resampler resampler = needResample
+                    ? new Dsp.Resampler(sr, RecordingEngine.SAMPLE_RATE, ch)
+                    : null;
             RandomAccessFile w = new RandomAccessFile(dst, "rw");
             try {
                 w.setLength(0);
@@ -480,7 +512,10 @@ public final class AudioImporter {
                 byte[] in = new byte[32768 * 2 * 4];
                 ByteBuffer ib = ByteBuffer.wrap(in)
                         .order(ByteOrder.LITTLE_ENDIAN);
+                java.nio.FloatBuffer ifb = ib.asFloatBuffer();
+                java.nio.ShortBuffer isb = ib.asShortBuffer();
                 float[] fbuf = new float[32768 * 2];
+                short[] sbuf = new short[32768 * 2];
                 long done = 0;
                 long payloadBytes = 0;
                 int lastPct = -1;
@@ -489,40 +524,39 @@ public final class AudioImporter {
                     // NEW-01 fix: `want` is in frames, so read `want * ch`
                     // samples (`samplesToRead * bytesPerSample` bytes).
                     int samplesToRead = want * ch;
-                    float[] samples;
                     if (h.audioFormat == 3) {
                         r.readFully(in, 0, samplesToRead * 4);
-                        ib.clear();
-                        ib.limit(samplesToRead * 4);
-                        for (int i = 0; i < samplesToRead; i++) {
-                            fbuf[i] = ib.getFloat();
-                        }
-                        samples = resampler.push(fbuf, want);
+                        ifb.clear();
+                        ifb.get(fbuf, 0, samplesToRead);
                     } else if (h.bits == 24) {
                         r.readFully(in, 0, samplesToRead * 3);
-                        ib.clear();
-                        ib.limit(samplesToRead * 3);
+                        int p = 0;
                         for (int i = 0; i < samplesToRead; i++) {
-                            int v = (ib.get() & 0xFF)
-                                    | ((ib.get() & 0xFF) << 8)
-                                    | (ib.get() << 16);
+                            int v = (in[p] & 0xFF)
+                                    | ((in[p + 1] & 0xFF) << 8)
+                                    | (in[p + 2] << 16);
+                            p += 3;
                             if ((v & 0x800000) != 0) v |= 0xFF000000;
-                            fbuf[i] = v / 8388608f;
+                            fbuf[i] = v * (1f / 8388608f);
                         }
-                        samples = resampler.push(fbuf, want);
                     } else {
                         r.readFully(in, 0, samplesToRead * 2);
-                        ib.clear();
-                        ib.limit(samplesToRead * 2);
+                        isb.clear();
+                        isb.get(sbuf, 0, samplesToRead);
                         for (int i = 0; i < samplesToRead; i++) {
-                            fbuf[i] = ib.getShort() / 32768f;
+                            fbuf[i] = sbuf[i] * (1f / 32768f);
                         }
-                        samples = resampler.push(fbuf, want);
                     }
-                    int outFrames = samples.length / ch;
-                    if (outFrames > 0) {
-                        Dsp.writeFloatsLE(w, samples, 0, samples.length);
-                        payloadBytes += (long) outFrames * ch * 4;
+                    if (!needResample) {
+                        Dsp.writeFloatsLE(w, fbuf, 0, samplesToRead);
+                        payloadBytes += (long) samplesToRead * 4L;
+                    } else {
+                        float[] samples = resampler.push(fbuf, want);
+                        int outFrames = samples.length / ch;
+                        if (outFrames > 0) {
+                            Dsp.writeFloatsLE(w, samples, 0, samples.length);
+                            payloadBytes += (long) outFrames * ch * 4;
+                        }
                     }
                     done += want;
                     if (cb != null) {
@@ -534,10 +568,12 @@ public final class AudioImporter {
                         }
                     }
                 }
-                float[] tail = resampler.flush();
-                if (tail.length > 0) {
-                    Dsp.writeFloatsLE(w, tail, 0, tail.length);
-                    payloadBytes += tail.length * 4L;
+                if (resampler != null) {
+                    float[] tail = resampler.flush();
+                    if (tail.length > 0) {
+                        Dsp.writeFloatsLE(w, tail, 0, tail.length);
+                        payloadBytes += tail.length * 4L;
+                    }
                 }
                 w.seek(0);
                 w.write(RecordingEngine.wavHeader(ch, payloadBytes));
