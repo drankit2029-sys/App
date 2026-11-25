@@ -527,6 +527,45 @@ public class ConversionService extends Service {
             // A4-08: judge the partial by its bytes, not by job.framesDone,
             // which is only flushed every 5% of progress. A kill at 2% left a
             // perfectly resumable part that this gate threw away.
+            final boolean hadDeferredFxBake = job.needsFxBake;
+            if (hadDeferredFxBake) {
+                DspChain.Config cfg = DspChain.Config.load(app);
+                if (cfg != null && cfg.isActive()) {
+                    FormatConverter.WavInfo info = FormatConverter.readFloatWav(raw);
+                    long totalFrames = info.dataBytes / 4 / Math.max(1, info.channels);
+                    if (totalFrames > 0) {
+                        DspChain chain = new DspChain(info.channels, cfg);
+                        chain.setSampleRate(info.sampleRate);
+                        long regionEnd = totalFrames;
+                        java.util.List<AudioProcessor> offline = chain.offlineProcessors();
+                        int offIdx = 0;
+                        for (AudioProcessor proc : offline) {
+                            if (job.cancelled) throw new CancellationException();
+                            long next = EditEngine.applyLengthChangingEffectToRange(
+                                    raw, 0, regionEnd, proc, null);
+                            if (next > 0) regionEnd = next;
+                            offIdx++;
+                            cb.onProgress(Math.min(40, offIdx * 35 / Math.max(1, offline.size())));
+                        }
+                        if (chain.hasInPlaceProcessors()) {
+                            DspChain inPlace = new DspChain(info.channels, cfg);
+                            inPlace.setSampleRate(info.sampleRate);
+                            inPlace.clearOfflineProcessors();
+                            int basePct = offline.isEmpty() ? 0 : 20;
+                            int spanPct = 45 - basePct;
+                            EditEngine.applyDspToRangeWithProgress(
+                                    raw, 0, regionEnd, inPlace, pct -> {
+                                        cb.onProgress(basePct + (pct * spanPct) / 100);
+                                    });
+                        }
+                    }
+                }
+                job.needsFxBake = false;
+                job.write();
+            }
+            final TakeSaver.Progress convCb = hadDeferredFxBake
+                    ? pct -> cb.onProgress(45 + (pct * 55) / 100)
+                    : cb;
             String initialTitle = ConversionJobs.latestTitle(job, job.title);
             job.title = initialTitle;
             SaveFormat effFormat = format.effective(preset);
@@ -538,7 +577,7 @@ public class ConversionService extends Service {
                     part.delete();
                 }
                 FormatConverter.validateFinal(raw, SaveFormat.WAV32);
-                cb.onProgress(100);
+                convCb.onProgress(100);
                 File fin = TakeSaver.uniqueFinal(raw, effFormat.extension());
                 if (!fin.getAbsolutePath().equals(raw.getAbsolutePath())) {
                     if (!raw.renameTo(fin)) {
@@ -554,14 +593,14 @@ public class ConversionService extends Service {
                 r = new TakeSaver.Result(fin, effFormat.badge, dur, initialTitle);
             } else if (part.exists() && part.length() > 44
                     && isWavFormat(effFormat)) {
-                r = resumeWav(app, job, raw, part, preset, format, cb);
+                r = resumeWav(app, job, raw, part, preset, format, convCb);
             } else {
                 if (part.exists()) {
                     // noinspection ResultOfMethodCallIgnored
                     part.delete();
                 }
                 r = TakeSaver.convertRaw(app, raw, initialTitle, preset,
-                        format, cb);
+                        format, convCb);
             }
             if (job.cancelled) throw new CancellationException();
             // A rename can arrive after encoding finished but before the

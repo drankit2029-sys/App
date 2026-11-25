@@ -72,6 +72,11 @@ public final class ConversionJob {
      * so the worker aborts it silently and deletes its raw file.
      */
     public volatile boolean superseded;
+    /**
+     * True when an enabled FX rack still needs to be baked into {@code rawPath}
+     * inside {@link ConversionService} before format encoding begins.
+     */
+    public volatile boolean needsFxBake = false;
 
     public ConversionJob(String jobId, String title, String rawPath,
                          String partPath, String presetId, String formatId,
@@ -140,6 +145,7 @@ public final class ConversionJob {
             o.put("recordingId", recordingId);
             o.put("replaceTakeId", replaceTakeId);
             o.put("replaceTitle", replaceTitle != null ? replaceTitle : "");
+            if (needsFxBake) o.put("needsFxBake", true);
 
             byte[] payload = o.toString().getBytes("UTF-8");
             File target = sidecar();
@@ -229,6 +235,7 @@ public final class ConversionJob {
             j.attempts = o.optInt("attempts", 0);
             String ap = o.optString("adoptedPath", "");
             j.adoptedPath = ap.isEmpty() ? null : ap;
+            j.needsFxBake = o.optBoolean("needsFxBake", false);
             return j;
         } catch (Exception e) {
             return null;

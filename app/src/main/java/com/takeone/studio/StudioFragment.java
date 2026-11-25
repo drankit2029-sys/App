@@ -2484,19 +2484,16 @@ public class StudioFragment extends Fragment {
         // Only now that the user actually chose Replace/Save-as-new is it safe
         // to roll back the pre-sub-bake snapshot; doing it before the modal
         // destroyed the edit when the sheet was dismissed.
-        if (lastEditWasSubRangeBake && dspConfig != null
-                && dspConfig.isActive()) {
-            File raw = engine.rawFile;
-            EditEngine.UndoJournal uj = activeUndoJournal();
-            if (raw != null && uj != null && uj.canUndo() && uj.undo(raw)) {
-                if (waveform != null) waveform.popUndoPeaks();
-                engine.abortStreaming();
-                engine.dataBytes = RecordingEngine.payloadBytesOf(raw);
-                dspBakedToRaw = false;
-                dspSubRangeBaked = false;
-            }
+        final boolean rollbackSubBake = lastEditWasSubRangeBake
+                && dspConfig != null && dspConfig.isActive();
+        final EditEngine.UndoJournal rollbackJournal =
+                rollbackSubBake ? activeUndoJournal() : null;
+        if (rollbackSubBake) {
+            if (waveform != null) waveform.popUndoPeaks();
+            dspBakedToRaw = false;
+            dspSubRangeBaked = false;
             lastEditWasSubRangeBake = false;
-            syncFxBakeRequired();
+            engine.setFxBakeRequired(true);
         }
         saving = true;
         engine.setSaving(true);
@@ -2520,6 +2517,12 @@ public class StudioFragment extends Fragment {
             ConversionJobs.SaveResult r = null;
             String fail = null;
             try {
+                if (rollbackSubBake && saveRaw != null
+                        && rollbackJournal != null && rollbackJournal.canUndo()
+                        && rollbackJournal.undo(saveRaw)) {
+                    engine.abortStreaming();
+                    engine.dataBytes = RecordingEngine.payloadBytesOf(saveRaw);
+                }
                 r = ConversionJobs.dispatchSave(
                         appCtx, p, s, null,
                         replacing ? editId : -1,
@@ -2527,8 +2530,8 @@ public class StudioFragment extends Fragment {
                 if (r != null && !r.adopted && r.job != null) {
                     ConversionService.startJob(appCtx, r.job.jobId);
                 }
-            } catch (Exception e) {
-                fail = e.getMessage();
+            } catch (Throwable e) {
+                fail = e.getMessage() != null ? e.getMessage() : e.toString();
             }
             final ConversionJobs.SaveResult res = r;
             final String failure = fail;

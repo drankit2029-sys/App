@@ -906,7 +906,8 @@ public final class ConversionJobs {
         // the 48 kHz 32-bit IEEE float WAV. Adopt `raw` directly in-place
         // without creating a duplicate .part file, a duplicate .float32 copy,
         // or a redundant background conversion job.
-        if (eff == SaveFormat.WAV32 && AudioImporter.isNativeFloatWav(raw)) {
+        final boolean deferLargeFxBake = needsFxBake && raw.length() > 4L * 1024L * 1024L;
+        if (eff == SaveFormat.WAV32 && !deferLargeFxBake && AudioImporter.isNativeFloatWav(raw)) {
             if (sess != null) {
                 try {
                     sess.abort();
@@ -1000,8 +1001,23 @@ public final class ConversionJobs {
                 } catch (Exception ignored) {}
                 sess = null;
             }
-            // Bake FIRST; only then enqueue the job. The worker can never
-            // convert the unbaked raw, even if the process dies mid-bake.
+            if (deferLargeFxBake) {
+                // Defer large-file FX baking into ConversionService (foreground
+                // service + WakeLock + live progress bar + Throwable safety) so
+                // Save returns in <5 ms and the Converting card appears right away
+                // instead of hanging silently for minutes before converting starts.
+                e.setFxBakeRequired(false);
+                ConversionJob prequeued = enqueue(ctx, raw, title, preset, format,
+                        Math.max(e.durationMs(), 1000), replaceTakeId,
+                        replaceTitle, recordingId);
+                prequeued.needsFxBake = true;
+                prequeued.write();
+                // noinspection ResultOfMethodCallIgnored
+                new File(raw.getAbsolutePath() + ".pending").delete();
+                if (cb != null) cb.onProgress(0);
+                return SaveResult.background(prequeued);
+            }
+            // Small files: bake inline (<20 ms) before enqueuing.
             try {
                 if (ctx != null) {
                     DspChain.Config cfg = DspChain.Config.load(ctx);
