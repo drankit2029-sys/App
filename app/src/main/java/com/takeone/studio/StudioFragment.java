@@ -1780,10 +1780,15 @@ public class StudioFragment extends Fragment {
         long totalFrames = engine.totalFrames();
         long curFrames = engine.cursorFrames();
         if (waveform != null && totalFrames > 0) {
-            long wfFrame = Math.round(waveform.playheadFraction() * totalFrames);
-            if (Math.abs(wfFrame - curFrames) > 240) {
-                curFrames = wfFrame;
-                engine.seekCursorFrame(curFrames);
+            if (!userScrolledWhilePaused && curFrames >= totalFrames - 480) {
+                curFrames = totalFrames;
+                waveform.setPlayheadFraction(1f);
+            } else {
+                long wfFrame = Math.round(waveform.playheadFraction() * totalFrames);
+                if (Math.abs(wfFrame - curFrames) > 240) {
+                    curFrames = wfFrame;
+                    engine.seekCursorFrame(curFrames);
+                }
             }
         }
         boolean atEnd = (curFrames >= totalFrames - 480);
@@ -2308,6 +2313,20 @@ public class StudioFragment extends Fragment {
                     waveform.syncFramesPerBar(0L);
                 }
             }
+            // Reclaim audio focus BEFORE reopening AudioRecord so any app
+            // that previously engaged the speaker releases the route on the
+            // very first resume tap.
+            try {
+                android.media.AudioManager am = (android.media.AudioManager)
+                        requireContext().getApplicationContext()
+                                .getSystemService(Context.AUDIO_SERVICE);
+                if (am != null) {
+                    HardwareApiManager.get().requestAudioFocus(
+                            am, focus -> {}, handler,
+                            android.media.AudioManager.AUDIOFOCUS_GAIN,
+                            android.media.AudioAttributes.CONTENT_TYPE_SPEECH);
+                }
+            } catch (Throwable ignored) {}
             if (wasPaused) {
                 engine.resumeCapture(requireContext(), preset.audioSource);
             } else if (engine.state != RecordingEngine.State.RECORDING) {

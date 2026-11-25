@@ -1278,7 +1278,8 @@ public class WaveformView extends View {
         System.arraycopy(snap.overview, 0, history, 0, n);
         count = n;
         framesPerBar = snap.framesPerBar > 0f ? snap.framesPerBar : 2400f;
-        playheadPos = Math.min(count, Math.max(0f, snap.curFrame / framesPerBar));
+        float rawPos = Math.min(count, Math.max(0f, snap.curFrame / framesPerBar));
+        playheadPos = (rawPos >= count - 1.5f) ? (float) count : rawPos;
         playheadIndex = Math.round(playheadPos);
         if (snap.detail != null && snap.detailCount > 0) {
             int dn = Math.min(snap.detailCount, Math.min(snap.detail.length, LIVE_DETAIL_CAP));
@@ -1433,6 +1434,12 @@ public class WaveformView extends View {
             liveDetailCount = remain;
             liveDetailBaseFrame += Math.round(drop * LIVE_DETAIL_FPB);
             targetIdx -= drop;
+        }
+        // Avoid stamping 0.0 into detail slots during post-resume interpolation
+        // before the first post-warmup audio chunk arrives from capLoop().
+        if (clampedV <= 0f && liveDetailCount > 0 && targetIdx >= liveDetailCount) {
+            liveDetailCurFrame = curFrames;
+            return;
         }
         if (targetIdx >= liveDetailCount) {
             for (int i = liveDetailCount; i <= targetIdx; i++) {
