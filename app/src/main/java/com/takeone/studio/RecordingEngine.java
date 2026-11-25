@@ -1359,7 +1359,8 @@ public final class RecordingEngine {
         // still scrolls at 60 FPS.
         final int framesPerRead = 960;
         final int maxWarmupSkipFrames = SAMPLE_RATE / 3; // bound warmup skip to ~333 ms
-        final float warmupSilenceFloor = 0.0008f;        // ~ -62 dBFS hardware mute floor
+        final float warmupSilenceFloor = 0.004f;         // ~ -48 dBFS hardware preamp ramp floor
+        int warmupSettleChunks = 2;                      // skip ~40 ms AGC settle after first signal
         final int outCh;
         synchronized (lock) {
             outCh = Math.max(1, channels);
@@ -1398,23 +1399,27 @@ public final class RecordingEngine {
                     int rawFrames = n / actualChannels;
                     int firstValid = 0;
                     if (micWarmupActive) {
-                        while (firstValid < rawFrames) {
-                            float s0 = fReadBuf[firstValid * actualChannels];
+                        boolean sawSignal = false;
+                        for (int idx = 0; idx < rawFrames; idx++) {
+                            float s0 = fReadBuf[idx * actualChannels];
                             float s1 = actualChannels > 1
-                                    ? fReadBuf[firstValid * actualChannels + 1] : s0;
+                                    ? fReadBuf[idx * actualChannels + 1] : s0;
                             if (Math.max(Math.abs(s0), Math.abs(s1)) > warmupSilenceFloor) {
-                                micWarmupActive = false;
+                                sawSignal = true;
                                 break;
                             }
-                            firstValid++;
                         }
-                        if (micWarmupActive) {
-                            warmupSkippedFrames += rawFrames;
-                            if (warmupSkippedFrames < maxWarmupSkipFrames) {
+                        warmupSkippedFrames += rawFrames;
+                        if (sawSignal) {
+                            if (warmupSettleChunks > 0 && warmupSkippedFrames < maxWarmupSkipFrames) {
+                                warmupSettleChunks--;
                                 continue;
                             }
                             micWarmupActive = false;
-                            firstValid = 0;
+                        } else if (warmupSkippedFrames < maxWarmupSkipFrames) {
+                            continue;
+                        } else {
+                            micWarmupActive = false;
                         }
                     }
                     frames = rawFrames - firstValid;
@@ -1445,23 +1450,27 @@ public final class RecordingEngine {
                     int rawFrames = n / actualChannels;
                     int firstValid = 0;
                     if (micWarmupActive) {
-                        while (firstValid < rawFrames) {
-                            float s0 = sReadBuf[firstValid * actualChannels] / 32768f;
+                        boolean sawSignal = false;
+                        for (int idx = 0; idx < rawFrames; idx++) {
+                            float s0 = sReadBuf[idx * actualChannels] / 32768f;
                             float s1 = actualChannels > 1
-                                    ? sReadBuf[firstValid * actualChannels + 1] / 32768f : s0;
+                                    ? sReadBuf[idx * actualChannels + 1] / 32768f : s0;
                             if (Math.max(Math.abs(s0), Math.abs(s1)) > warmupSilenceFloor) {
-                                micWarmupActive = false;
+                                sawSignal = true;
                                 break;
                             }
-                            firstValid++;
                         }
-                        if (micWarmupActive) {
-                            warmupSkippedFrames += rawFrames;
-                            if (warmupSkippedFrames < maxWarmupSkipFrames) {
+                        warmupSkippedFrames += rawFrames;
+                        if (sawSignal) {
+                            if (warmupSettleChunks > 0 && warmupSkippedFrames < maxWarmupSkipFrames) {
+                                warmupSettleChunks--;
                                 continue;
                             }
                             micWarmupActive = false;
-                            firstValid = 0;
+                        } else if (warmupSkippedFrames < maxWarmupSkipFrames) {
+                            continue;
+                        } else {
+                            micWarmupActive = false;
                         }
                     }
                     frames = rawFrames - firstValid;

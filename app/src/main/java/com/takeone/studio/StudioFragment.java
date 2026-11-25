@@ -263,10 +263,12 @@ public class StudioFragment extends Fragment {
                         boolean preview = studioPreviewPlayer != null;
                         if (live) {
                             long cur = engine.liveInterpolatedFrames();
-                            if (cur > 0 && cur != lastPushedCursorFrame) {
+                            float rawPk = engine.lastRawPeak();
+                            if (cur > 0 && cur != lastPushedCursorFrame
+                                    && (rawPk > 0f || cur - lastPushedCursorFrame >= 2400L)) {
                                 lastPushedCursorFrame = cur;
                                 waveform.updateLiveFromFrames(
-                                        engine.lastRawPeak(), cur,
+                                        rawPk, cur,
                                         replaceTargetEndFrame);
                             }
                         } else if (preview) {
@@ -2313,20 +2315,6 @@ public class StudioFragment extends Fragment {
                     waveform.syncFramesPerBar(0L);
                 }
             }
-            // Reclaim audio focus BEFORE reopening AudioRecord so any app
-            // that previously engaged the speaker releases the route on the
-            // very first resume tap.
-            try {
-                android.media.AudioManager am = (android.media.AudioManager)
-                        requireContext().getApplicationContext()
-                                .getSystemService(Context.AUDIO_SERVICE);
-                if (am != null) {
-                    HardwareApiManager.get().requestAudioFocus(
-                            am, focus -> {}, handler,
-                            android.media.AudioManager.AUDIOFOCUS_GAIN,
-                            android.media.AudioAttributes.CONTENT_TYPE_SPEECH);
-                }
-            } catch (Throwable ignored) {}
             if (wasPaused) {
                 engine.resumeCapture(requireContext(), preset.audioSource);
             } else if (engine.state != RecordingEngine.State.RECORDING) {
